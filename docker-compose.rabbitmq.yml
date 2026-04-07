@@ -1,0 +1,97 @@
+
+version: '3.8'
+
+services:
+  rabbitmq-node1:
+    image: rabbitmq:3.12-management
+    container_name: epms-rabbitmq-node1
+    hostname: rabbitmq-node1
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=secret_cookie
+      - RABBITMQ_DEFAULT_USER=epms_user
+      - RABBITMQ_DEFAULT_PASS=epms_password
+    volumes:
+      - ./rabbitmq-config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - rabbitmq_data1:/var/lib/rabbitmq
+    ports:
+      - "15672:15672"
+      - "5672:5672"
+    networks:
+      - epms-network
+
+  rabbitmq-node2:
+    image: rabbitmq:3.12-management
+    container_name: epms-rabbitmq-node2
+    hostname: rabbitmq-node2
+    depends_on:
+      - rabbitmq-node1
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=secret_cookie
+      - RABBITMQ_DEFAULT_USER=epms_user
+      - RABBITMQ_DEFAULT_PASS=epms_password
+    volumes:
+      - ./rabbitmq-config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - rabbitmq_data2:/var/lib/rabbitmq
+    networks:
+      - epms-network
+    command: >
+      bash -c "
+      rabbitmq-server -detached
+      sleep 10
+      rabbitmqctl stop_app
+      rabbitmqctl join_cluster rabbit@rabbitmq-node1
+      rabbitmqctl start_app
+      rabbitmqctl wait /var/lib/rabbitmq/mnesia/rabbit@rabbitmq-node2.pid
+      tail -f /dev/null
+      "
+
+  rabbitmq-node3:
+    image: rabbitmq:3.12-management
+    container_name: epms-rabbitmq-node3
+    hostname: rabbitmq-node3
+    depends_on:
+      - rabbitmq-node1
+    environment:
+      - RABBITMQ_ERLANG_COOKIE=secret_cookie
+      - RABBITMQ_DEFAULT_USER=epms_user
+      - RABBITMQ_DEFAULT_PASS=epms_password
+    volumes:
+      - ./rabbitmq-config/rabbitmq.conf:/etc/rabbitmq/rabbitmq.conf
+      - rabbitmq_data3:/var/lib/rabbitmq
+    networks:
+      - epms-network
+    command: >
+      bash -c "
+      rabbitmq-server -detached
+      sleep 10
+      rabbitmqctl stop_app
+      rabbitmqctl join_cluster rabbit@rabbitmq-node1
+      rabbitmqctl start_app
+      rabbitmqctl wait /var/lib/rabbitmq/mnesia/rabbit@rabbitmq-node3.pid
+      tail -f /dev/null
+      "
+
+  haproxy:
+    image: haproxy:latest
+    container_name: epms-haproxy
+    depends_on:
+      - rabbitmq-node1
+      - rabbitmq-node2
+      - rabbitmq-node3
+    volumes:
+      - ./rabbitmq-config/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    ports:
+      - "5670:5672"   # Load balanced AMQP
+      - "15670:15672" # Load balanced Management
+      - "8404:8404"   # HAProxy Stats
+    networks:
+      - epms-network
+
+networks:
+  epms-network:
+    driver: bridge
+
+volumes:
+  rabbitmq_data1:
+  rabbitmq_data2:
+  rabbitmq_data3:

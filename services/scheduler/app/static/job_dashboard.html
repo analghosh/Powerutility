@@ -1,0 +1,2911 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPMS Job Dashboard</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .auth-loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            flex-direction: column;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            font-size: 1.2em;
+        }
+
+        .auth-loading .spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid rgba(255, 255, 255, 0.3);
+            border-top: 4px solid white;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 20px;
+        }
+
+        .dashboard-content {
+            display: none;
+        }
+
+        .dashboard-content.authenticated {
+            display: block;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-top: 15px;
+            flex-wrap: wrap;
+        }
+
+        .auto-refresh {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: white;
+            font-size: 14px;
+        }
+
+        .auto-refresh input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .view-toggle {
+            display: flex;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 25px;
+            padding: 4px;
+            gap: 2px;
+        }
+
+        .view-btn {
+            background: transparent;
+            border: none;
+            color: white;
+            padding: 8px 16px;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .view-btn:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .view-btn.active {
+            background: white;
+            color: #667eea;
+            font-weight: bold;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+
+        .stat-number {
+            font-size: 2.5em;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+
+        .stat-label {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .running-jobs {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            margin-bottom: 20px;
+        }
+
+        .job-item {
+            border: 1px solid #eee;
+            border-radius: 8px;
+            padding: 15px;
+            margin-bottom: 10px;
+            background: #fafafa;
+        }
+
+        .job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .job-name {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .job-status {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .status-running {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4caf50, #8bc34a);
+            transition: width 0.3s ease;
+        }
+
+        .job-details {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .refresh-btn {
+            background: #4caf50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 1em;
+            margin-bottom: 20px;
+        }
+
+        .refresh-btn:hover {
+            background: #45a049;
+        }
+
+        .loading {
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+
+        .error {
+            background: #ffebee;
+            color: #c62828;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+        }
+
+        .last-updated {
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+            margin-top: 20px;
+        }
+
+        .job-details-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0, 0, 0, 0.5);
+        }
+
+        .modal-content {
+            background-color: white;
+            margin: 5% auto;
+            padding: 20px;
+            border-radius: 10px;
+            width: 90%;
+            max-width: 1200px;
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .close {
+            color: #aaa;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+
+        .close:hover {
+            color: #000;
+        }
+
+        .job-detail-section {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f9f9f9;
+            border-radius: 8px;
+        }
+
+        .job-detail-section h3 {
+            margin-top: 0;
+            color: #333;
+        }
+
+        .detail-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .detail-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .detail-label {
+            font-weight: bold;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .detail-value {
+            color: #333;
+            margin-top: 2px;
+        }
+
+        .logs-container {
+            max-height: 300px;
+            overflow-y: auto;
+            background: #1e1e1e;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+
+        .log-entry {
+            margin-bottom: 5px;
+            padding: 2px 0;
+        }
+
+        .log-timestamp {
+            color: #888;
+        }
+
+        .log-level-info {
+            color: #4CAF50;
+        }
+
+        .log-level-warning {
+            color: #FF9800;
+        }
+
+        .log-level-error {
+            color: #F44336;
+        }
+
+        .log-level-debug {
+            color: #2196F3;
+        }
+
+        .execution-history {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .history-item {
+            border: 1px solid #ddd;
+            border-radius: 5px;
+            padding: 10px;
+            margin-bottom: 10px;
+            background: white;
+        }
+
+        .history-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 5px;
+        }
+
+        .history-status {
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .status-success {
+            background: #e8f5e8;
+            color: #2e7d32;
+        }
+
+        .status-failed {
+            color: #c62828;
+        }
+
+        .status-running {
+            background: #e3f2fd;
+            color: #1976d2;
+        }
+
+        .view-details-btn {
+            background: #2196F3;
+            color: white;
+            border: none;
+            padding: 5px 10px;
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 0.8em;
+        }
+
+        .view-details-btn:hover {
+            background: #1976D2;
+        }
+
+        .tabs {
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+        }
+
+        .tab.active {
+            border-bottom-color: #2196F3;
+            color: #2196F3;
+            font-weight: bold;
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .job-overview-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .job-overview-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .job-overview-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+        }
+
+        .job-overview-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 15px;
+        }
+
+        .job-overview-title {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .job-overview-count {
+            font-size: 2em;
+            font-weight: bold;
+            color: #2196F3;
+        }
+
+        .job-overview-stats {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .job-overview-stat {
+            text-align: center;
+            padding: 10px;
+            background: #f5f5f5;
+            border-radius: 5px;
+        }
+
+        .job-overview-stat-label {
+            font-size: 0.9em;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .job-overview-stat-value {
+            font-size: 1.2em;
+            font-weight: bold;
+            color: #333;
+        }
+
+        .success-rate {
+            color: #4CAF50;
+        }
+
+        .failure-rate {
+            color: #F44336;
+        }
+
+        .job-overview-footer {
+            text-align: center;
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .service-jobs-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 15px;
+        }
+
+        .service-job-card {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+
+        .service-job-card:hover {
+            transform: translateY(-1px);
+        }
+
+        /* Execution Pairs Styles */
+        .execution-pairs-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+
+        .execution-pairs-info {
+            color: #666;
+            font-size: 14px;
+        }
+
+        /* Audit Logs Styles */
+        .audit-logs-controls {
+            margin-bottom: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 8px;
+            border: 1px solid #e9ecef;
+        }
+
+        .audit-filter-controls {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .filter-select {
+            padding: 8px 12px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            background: white;
+            font-size: 14px;
+        }
+
+        .audit-logs-container {
+            max-height: 600px;
+            overflow-y: auto;
+            border: 1px solid #e9ecef;
+            border-radius: 8px;
+            background: white;
+        }
+
+        .audit-log-entry {
+            padding: 15px;
+            border-bottom: 1px solid #f1f3f4;
+            transition: background-color 0.2s;
+        }
+
+        .audit-log-entry:hover {
+            background-color: #f8f9fa;
+        }
+
+        .audit-log-entry:last-child {
+            border-bottom: none;
+        }
+
+        .audit-log-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 8px;
+        }
+
+        .audit-log-timestamp {
+            color: #666;
+            font-size: 0.9em;
+        }
+
+        .audit-log-priority {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .audit-log-priority.critical {
+            background: #dc3545;
+            color: white;
+        }
+
+        .audit-log-priority.high {
+            background: #fd7e14;
+            color: white;
+        }
+
+        .audit-log-priority.medium {
+            background: #ffc107;
+            color: #212529;
+        }
+
+        .audit-log-priority.low {
+            background: #6c757d;
+            color: white;
+        }
+
+        .audit-log-message {
+            font-weight: 500;
+            margin-bottom: 8px;
+            color: #333;
+        }
+
+        .audit-log-details {
+            display: flex;
+            gap: 15px;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .audit-log-detail-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .audit-log-status {
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .audit-log-status.started {
+            background: #17a2b8;
+            color: white;
+        }
+
+        .audit-log-status.completed {
+            background: #28a745;
+            color: white;
+        }
+
+        .audit-log-status.failed {
+            background: #dc3545;
+            color: white;
+        }
+
+        .audit-log-data {
+            margin-top: 10px;
+            padding: 10px;
+            background: #f8f9fa;
+            border-radius: 4px;
+            font-family: monospace;
+            font-size: 0.85em;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .execution-pairs-list {
+            max-height: 600px;
+            overflow-y: auto;
+        }
+
+        .execution-pair {
+            background: #f8f9fa;
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            overflow: hidden;
+        }
+
+        .execution-pair-header {
+            background: #fff;
+            padding: 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e0e0e0;
+        }
+
+        .execution-id {
+            font-weight: bold;
+            color: #333;
+            font-family: monospace;
+        }
+
+        .execution-status {
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .execution-duration {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .execution-pair-details {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+            padding: 20px;
+        }
+
+        .execution-start,
+        .execution-completion {
+            background: #fff;
+            padding: 15px;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .execution-start h5,
+        .execution-completion h5 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 14px;
+        }
+
+        .execution-record {
+            font-size: 13px;
+            line-height: 1.4;
+        }
+
+        .execution-record div {
+            margin-bottom: 5px;
+        }
+
+        .execution-record strong {
+            color: #555;
+        }
+
+        .no-record {
+            color: #999;
+            font-style: italic;
+            text-align: center;
+            padding: 20px;
+        }
+
+        /* Job Info Grid Styles */
+        .job-info-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .job-info-item {
+            display: flex;
+            flex-direction: column;
+        }
+
+        .job-info-item label {
+            font-weight: bold;
+            color: #555;
+            margin-bottom: 5px;
+            font-size: 12px;
+            text-transform: uppercase;
+        }
+
+        .job-info-item span {
+            color: #333;
+            font-size: 14px;
+        }
+
+        .job-description {
+            margin-top: 20px;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border-left: 4px solid #2196F3;
+        }
+
+        .job-description label {
+            font-weight: bold;
+            color: #555;
+            margin-bottom: 10px;
+            display: block;
+        }
+
+        .job-description p {
+            margin: 0;
+            color: #666;
+            line-height: 1.5;
+        }
+
+        .execution-stats-section {
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 2px solid #e0e0e0;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-top: 15px;
+        }
+
+        .stat-item {
+            text-align: center;
+            padding: 15px;
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .stat-value {
+            font-size: 24px;
+            font-weight: bold;
+            color: #333;
+            margin-bottom: 5px;
+        }
+
+        .stat-value.success {
+            color: #4CAF50;
+        }
+
+        .stat-value.stat-error {
+            color: #f44336;
+        }
+
+        .stat-value.warning {
+            color: #ff9800;
+        }
+
+        .statistic-value.success {
+            color: #4CAF50;
+        }
+
+        .statistic-value.stat-error {
+            color: #f44336;
+        }
+
+        .statistic-value.warning {
+            color: #ff9800;
+        }
+
+        .stat-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+        }
+
+        /* Tile View Styles */
+        .tile-view {
+            display: none;
+        }
+
+        .tile-view.active {
+            display: block;
+        }
+
+        .tile-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .tile-item {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-left: 4px solid #2196F3;
+        }
+
+        .tile-item:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .tile-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .tile-title {
+            font-weight: bold;
+            color: #333;
+            font-size: 14px;
+            line-height: 1.2;
+        }
+
+        .tile-status {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 10px;
+            font-weight: bold;
+            text-transform: uppercase;
+        }
+
+        .tile-details {
+            font-size: 12px;
+            color: #666;
+            line-height: 1.3;
+        }
+
+        .tile-details div {
+            margin-bottom: 3px;
+        }
+
+        .tile-details strong {
+            color: #555;
+        }
+
+        .tile-meta {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #eee;
+            font-size: 11px;
+            color: #888;
+        }
+
+        /* Service-specific tile colors */
+        .tile-item.scheduler {
+            border-left-color: #4CAF50;
+        }
+
+        .tile-item.ingestion {
+            border-left-color: #2196F3;
+        }
+
+        .tile-item.processing {
+            border-left-color: #FF9800;
+        }
+
+        .tile-item.auth {
+            border-left-color: #9C27B0;
+        }
+
+        .tile-item.job-data {
+            border-left-color: #607D8B;
+        }
+
+        /* Status colors for tiles */
+        .tile-status.status-success {
+            background: #E8F5E8;
+            color: #4CAF50;
+        }
+
+        .tile-status.status-failed {
+            background: #FFEBEE;
+            color: #f44336;
+        }
+
+        .tile-status.status-running {
+            background: #FFF3E0;
+            color: #FF9800;
+        }
+
+        .tile-status.status-warning {
+            background: #FFF8E1;
+            color: #FFC107;
+        }
+
+        .tile-status.status-unknown {
+            background: #F5F5F5;
+            color: #666;
+        }
+
+        /* Status colors for execution status */
+        .execution-status.status-success {
+            background: #E8F5E8;
+            color: #4CAF50;
+        }
+
+        .execution-status.status-failed {
+            background: #FFEBEE;
+            color: #f44336;
+        }
+
+        .execution-status.status-running {
+            background: #FFF3E0;
+            color: #FF9800;
+        }
+
+        .execution-status.status-warning {
+            background: #FFF8E1;
+            color: #FFC107;
+        }
+
+        .execution-status.status-unknown {
+            background: #F5F5F5;
+            color: #666;
+        }
+
+        /* General status colors */
+        .status-success {
+            color: #4CAF50 !important;
+        }
+
+        .status-failed {
+            color: #f44336 !important;
+        }
+
+        .status-running {
+            color: #FF9800 !important;
+        }
+
+        .status-warning {
+            color: #FFC107 !important;
+        }
+
+        .status-unknown {
+            color: #666 !important;
+        }
+
+        /* Card/Tile View Switching */
+        .card-view {
+            display: block;
+        }
+
+        .card-view.hidden {
+            display: none;
+        }
+
+        .tile-view {
+            display: none;
+        }
+
+        .tile-view.active {
+            display: block;
+        }
+
+        .service-job-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .service-job-name {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .service-job-status {
+            padding: 2px 8px;
+            border-radius: 3px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .service-job-details {
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        /* Expandable execution details styles */
+        .execution-pair-expandable {
+            border: 1px solid #e0e0e0;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            background: white;
+            overflow: hidden;
+        }
+
+        .execution-pair-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 16px;
+            background: #f8f9fa;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .execution-pair-header:hover {
+            background: #e9ecef;
+        }
+
+        .execution-header-left {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .execution-header-right {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .expand-icon {
+            font-size: 12px;
+            color: #666;
+            transition: transform 0.2s;
+        }
+
+        .execution-id {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .execution-status {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.8em;
+            font-weight: bold;
+        }
+
+        .execution-duration {
+            font-weight: bold;
+            color: #333;
+        }
+
+        .execution-date {
+            color: #666;
+        }
+
+        .execution-pair-details {
+            border-top: 1px solid #e0e0e0;
+            background: white;
+        }
+
+        .execution-details-content {
+            padding: 16px;
+        }
+
+        .execution-start,
+        .execution-completion,
+        .execution-logs {
+            margin-bottom: 20px;
+        }
+
+        .execution-start h5,
+        .execution-completion h5,
+        .execution-logs h5 {
+            margin: 0 0 10px 0;
+            color: #333;
+            font-size: 1em;
+        }
+
+        .execution-record {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 4px solid #007bff;
+        }
+
+        .execution-record div {
+            margin-bottom: 5px;
+        }
+
+        .execution-record div:last-child {
+            margin-bottom: 0;
+        }
+
+        .no-record {
+            color: #666;
+            font-style: italic;
+            padding: 12px;
+            background: #f8f9fa;
+            border-radius: 6px;
+        }
+
+        /* Logs styles */
+        .logs-container {
+            background: #f8f9fa;
+            border-radius: 6px;
+            border: 1px solid #e0e0e0;
+        }
+
+        .logs-header {
+            padding: 8px 12px;
+            background: #e9ecef;
+            border-bottom: 1px solid #e0e0e0;
+            font-size: 0.9em;
+            color: #666;
+        }
+
+        .logs-content {
+            max-height: 300px;
+            overflow-y: auto;
+            padding: 8px;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 10px;
+            padding: 6px 8px;
+            margin-bottom: 4px;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+        }
+
+        .log-entry:last-child {
+            margin-bottom: 0;
+        }
+
+        .log-timestamp {
+            color: #666;
+            min-width: 150px;
+            flex-shrink: 0;
+        }
+
+        .log-level {
+            min-width: 60px;
+            font-weight: bold;
+            flex-shrink: 0;
+        }
+
+        .log-message {
+            flex: 1;
+            word-break: break-word;
+        }
+
+        .log-info {
+            background: #e7f3ff;
+            border-left: 3px solid #007bff;
+        }
+
+        .log-error {
+            background: #ffeaea;
+            border-left: 3px solid #dc3545;
+        }
+
+        .log-warning {
+            background: #fff8e1;
+            border-left: 3px solid #ffc107;
+        }
+
+        .log-debug {
+            background: #f0f0f0;
+            border-left: 3px solid #6c757d;
+        }
+
+        .no-logs {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+            font-style: italic;
+        }
+
+        .logs-loading {
+            padding: 20px;
+            text-align: center;
+            color: #666;
+        }
+    </style>
+</head>
+
+<body>
+    <!-- Authentication Loading Screen -->
+    <div class="auth-loading" id="authLoading">
+        <div class="spinner"></div>
+        <div>Verifying authentication...</div>
+    </div>
+
+    <!-- Dashboard Content (hidden until authenticated) -->
+    <div class="dashboard-content" id="dashboardContent">
+        <div class="container">
+            <div class="header">
+                <h1>EPMS Job Dashboard</h1>
+                <p>Real-time monitoring of cron jobs from Scheduler, Ingestion, Processing, and Auth services</p>
+                <div class="controls">
+                    <button class="refresh-btn" onclick="refreshDashboard()">🔄 Refresh</button>
+                    <label class="auto-refresh">
+                        <input type="checkbox" id="auto-refresh" checked>
+                        Auto-refresh (30s)
+                    </label>
+                    <div class="view-toggle">
+                        <button class="view-btn active" id="card-view-btn" onclick="switchView('card')">📋
+                            Cards</button>
+                        <button class="view-btn" id="tile-view-btn" onclick="switchView('tile')">🔲 Tiles</button>
+                    </div>
+                </div>
+            </div>
+
+            <div id="error-container"></div>
+
+            <div class="stats-grid" id="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="running-jobs-count">-</div>
+                    <div class="stat-label">Running Jobs</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="total-jobs-24h">-</div>
+                    <div class="stat-label">Total Jobs (24h)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="success-rate">-</div>
+                    <div class="stat-label">Success Rate (24h)</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="avg-execution-time">-</div>
+                    <div class="stat-label">Avg Execution Time</div>
+                </div>
+            </div>
+
+            <div class="running-jobs">
+                <h2>Job Overview</h2>
+                <div id="job-overview-container" class="card-view active">
+                    <div class="loading">Loading job overview...</div>
+                </div>
+                <div id="job-overview-tiles" class="tile-view">
+                    <div class="loading">Loading job overview...</div>
+                </div>
+            </div>
+
+            <div class="running-jobs" id="all-jobs-container" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 id="all-jobs-title">All Jobs from Job Data</h2>
+                    <button class="refresh-btn" onclick="showJobOverview()" style="margin-bottom: 0;">← Back to
+                        Overview</button>
+                </div>
+                <div id="all-jobs-list" class="card-view active">
+                    <div class="loading">Loading all jobs...</div>
+                </div>
+                <div id="all-jobs-tiles" class="tile-view">
+                    <div class="loading">Loading all jobs...</div>
+                </div>
+            </div>
+
+            <div class="running-jobs" id="jobs-list-container" style="display: none;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+                    <h2 id="jobs-list-title">Jobs</h2>
+                    <button class="refresh-btn" onclick="showJobOverview()" style="margin-bottom: 0;">← Back to
+                        Overview</button>
+                </div>
+                <div id="jobs-list" class="card-view active">
+                    <div class="loading">Loading jobs...</div>
+                </div>
+                <div id="jobs-tiles" class="tile-view">
+                    <div class="loading">Loading jobs...</div>
+                </div>
+            </div>
+
+            <div class="last-updated" id="last-updated">
+                Last updated: Never
+            </div>
+        </div>
+
+        <!-- Job Details Modal -->
+        <div id="job-details-modal" class="job-details-modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h2 id="modal-job-name">Job Details</h2>
+                    <span class="close" onclick="closeJobDetailsModal()">&times;</span>
+                </div>
+
+                <div class="tabs">
+                    <div class="tab active" onclick="switchTab('overview')">Overview</div>
+                    <div class="tab" onclick="switchTab('execution')">Execution History</div>
+                    <div class="tab" onclick="switchTab('audit-logs')">Audit Logs</div>
+                </div>
+
+                <!-- Overview Tab -->
+                <div id="overview-tab" class="tab-content active">
+                    <div class="job-detail-section">
+                        <h3>Job Information</h3>
+                        <div class="detail-grid" id="job-info-grid">
+                            <!-- Job details will be populated here -->
+                        </div>
+                    </div>
+
+                    <div class="job-detail-section">
+                        <h3>Current Execution</h3>
+                        <div class="detail-grid" id="current-execution-grid">
+                            <!-- Current execution details will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Execution History Tab -->
+                <div id="execution-tab" class="tab-content">
+                    <div class="job-detail-section">
+                        <h3>Execution History</h3>
+                        <div class="execution-history" id="execution-history-list">
+                            <!-- Execution history will be populated here -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Audit Logs Tab -->
+                <div id="audit-logs-tab" class="tab-content">
+                    <div class="job-detail-section">
+                        <h3>Audit Logs</h3>
+                        <div class="audit-logs-controls">
+                            <div class="audit-filter-controls">
+                                <select id="audit-log-priority" class="filter-select">
+                                    <option value="">All Priorities</option>
+                                    <option value="critical">Critical</option>
+                                    <option value="high">High</option>
+                                    <option value="medium">Medium</option>
+                                    <option value="low">Low</option>
+                                </select>
+                                <select id="audit-log-status" class="filter-select">
+                                    <option value="">All Statuses</option>
+                                    <option value="started">Started</option>
+                                    <option value="completed">Completed</option>
+                                    <option value="failed">Failed</option>
+                                </select>
+                                <button onclick="loadAuditLogs()" class="btn btn-primary">Refresh Logs</button>
+                            </div>
+                        </div>
+                        <div class="audit-logs-container" id="audit-logs-list">
+                            <div class="loading-spinner">Loading audit logs...</div>
+                        </div>
+                    </div>
+                </div>
+
+
+            </div>
+        </div>
+    </div> <!-- End dashboard-content -->
+
+    <script>
+        // Configuration - loaded from /config endpoint
+        let AUTH_SERVICE_URL = ''; // set by loadConfig()
+        let BASE_PATH = ''; // set by loadConfig() or detectBasePath()
+        let currentUser = null;
+        let refreshInterval;
+        
+        // Detect base path from current URL
+        function detectBasePath() {
+            const path = window.location.pathname;
+            if (path.startsWith('/scheduler/')) {
+                return '/scheduler';
+            }
+            return '';
+        }
+        
+        // Load configuration from server
+        async function loadConfig() {
+            try {
+                const detectedBasePath = detectBasePath();
+                const response = await fetch(`${detectedBasePath}/config`);
+                if (response.ok) {
+                    const config = await response.json();
+                    // Normalize: take everything up to and including the first /api/v1
+                    // This guards against doubled paths when env already contains /api/v1 suffix
+                    const rawUrl = (config.auth_service_url || '').replace(/\/$/, '');
+                    const apiV1Pos = rawUrl.indexOf('/api/v1');
+                    AUTH_SERVICE_URL = apiV1Pos !== -1
+                        ? rawUrl.substring(0, apiV1Pos + '/api/v1'.length)
+                        : rawUrl;
+                    BASE_PATH = config.base_path || detectedBasePath;
+                } else {
+                    BASE_PATH = detectBasePath();
+                }
+            } catch (error) {
+                console.warn('Failed to load config:', error);
+                BASE_PATH = detectBasePath();
+            }
+        }
+
+        // Immediate authentication check - redirect if no session
+        (async function () {
+            // Load configuration first
+            await loadConfig();
+            
+            const token = localStorage.getItem('access_token');
+            if (!token) {
+                // No token at all, redirect immediately
+                window.location.href = `${BASE_PATH}/login`;
+                return;
+            }
+
+            // Check if token is expired
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                const currentTime = Math.floor(Date.now() / 1000);
+                if (payload.exp < currentTime) {
+                    // Token expired, clear storage and redirect
+                    localStorage.clear();
+                    window.location.href = `${BASE_PATH}/login`;
+                    return;
+                }
+            } catch (error) {
+                // Invalid token, clear storage and redirect
+                localStorage.clear();
+                window.location.href = `${BASE_PATH}/login`;
+                return;
+            }
+        })();
+
+        // Authentication functions
+        function isTokenExpired(token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                const currentTime = Math.floor(Date.now() / 1000);
+                return payload.exp < currentTime;
+            } catch (error) {
+                return true;
+            }
+        }
+
+        function checkAuthentication() {
+            const token = localStorage.getItem('access_token');
+            if (!token || isTokenExpired(token)) {
+                // Token missing or expired, redirect to login
+                localStorage.clear();
+                window.location.href = `${BASE_PATH}/login`;
+                return false;
+            }
+            return true;
+        }
+
+        async function getCurrentUser() {
+            try {
+                const response = await makeAuthenticatedRequest(`${AUTH_SERVICE_URL}/auth/me`);
+
+                if (response && response.ok) {
+                    return await response.json();
+                } else {
+                    // Token invalid, redirect to login
+                    logout();
+                    return null;
+                }
+            } catch (error) {
+                console.error('Error fetching user info:', error);
+                return null;
+            }
+        }
+
+        async function refreshToken() {
+            const refreshToken = localStorage.getItem('refresh_token');
+            if (!refreshToken) {
+                logout();
+                return null;
+            }
+
+            try {
+                const response = await fetch(`${AUTH_SERVICE_URL}/auth/refresh`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        refresh_token: refreshToken
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    localStorage.setItem('access_token', data.access_token);
+                    localStorage.setItem('token_expires_at', data.expires_at);
+                    return data.access_token;
+                } else {
+                    logout();
+                    return null;
+                }
+            } catch (error) {
+                console.error('Token refresh failed:', error);
+                logout();
+                return null;
+            }
+        }
+
+        async function makeAuthenticatedRequest(url, options = {}) {
+            let token = localStorage.getItem('access_token');
+
+            // Check if token is expired and refresh if needed
+            if (isTokenExpired(token)) {
+                token = await refreshToken();
+                if (!token) {
+                    return null; // Will redirect to login
+                }
+            }
+
+            const headers = {
+                'Authorization': `Bearer ${token}`,
+                ...options.headers
+            };
+
+            try {
+                const response = await fetch(url, {
+                    ...options,
+                    headers
+                });
+
+                if (response.status === 401) {
+                    // Token invalid, try to refresh
+                    token = await refreshToken();
+                    if (token) {
+                        // Retry with new token
+                        headers['Authorization'] = `Bearer ${token}`;
+                        return await fetch(url, {
+                            ...options,
+                            headers
+                        });
+                    }
+                }
+
+                return response;
+            } catch (error) {
+                console.error('Authenticated request failed:', error);
+                return null;
+            }
+        }
+
+        function logout() {
+            localStorage.clear();
+            window.location.href = `${BASE_PATH}/login`;
+        }
+
+        // Load audit logs for the current job
+        async function loadAuditLogs() {
+            const currentJobId = window.currentJobId;
+            if (!currentJobId) {
+                document.getElementById('audit-logs-list').innerHTML =
+                    '<div class="error">No job selected</div>';
+                return;
+            }
+
+            try {
+                const priorityFilter = document.getElementById('audit-log-priority').value;
+                const statusFilter = document.getElementById('audit-log-status').value;
+
+                // Build query parameters
+                const params = new URLSearchParams({
+                    job_id: currentJobId,
+                    limit: '50'
+                });
+
+                if (priorityFilter) params.append('priority', priorityFilter);
+                if (statusFilter) params.append('status', statusFilter);
+
+                const response = await fetch(`${BASE_PATH}/jobs/audit-logs/by-job?${params}`, {
+                    headers: {
+                        'Authorization': `Bearer ${localStorage.getItem('access_token')}`
+                    }
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const auditLogs = await response.json();
+                displayAuditLogs(auditLogs);
+
+            } catch (error) {
+                console.error('Error loading audit logs:', error);
+                document.getElementById('audit-logs-list').innerHTML =
+                    `<div class="error">Failed to load audit logs: ${error.message}</div>`;
+            }
+        }
+
+        function displayAuditLogs(auditLogs) {
+            const container = document.getElementById('audit-logs-list');
+
+            if (!auditLogs || auditLogs.length === 0) {
+                container.innerHTML = '<div class="no-data">No audit logs found for this job</div>';
+                return;
+            }
+
+            const logsHtml = auditLogs.map(log => {
+                const timestamp = new Date(log.ts || log.timestamp).toLocaleString();
+                const priority = log.meta?.priority || log.priority || 'medium';
+                const status = log.status || 'unknown';
+                const message = log.message || 'No message';
+                const duration = log.durationMs ? `${log.durationMs}ms` : null;
+                const jobDetailId = log.trace?.jobId || log.job_id;
+                const sessionId = log.trace?.sessionId;
+
+                return `
+                    <div class="audit-log-entry">
+                        <div class="audit-log-header">
+                            <span class="audit-log-timestamp">${timestamp}</span>
+                            <span class="audit-log-priority ${priority.toLowerCase()}">${priority}</span>
+                        </div>
+                        <div class="audit-log-message">${message}</div>
+                        <div class="audit-log-details">
+                            <div class="audit-log-detail-item">
+                                <span class="audit-log-status ${status.toLowerCase()}">${status}</span>
+                            </div>
+                            ${duration ? `<div class="audit-log-detail-item">⏱️ ${duration}</div>` : ''}
+                            ${jobDetailId ? `<div class="audit-log-detail-item">🔗 Job: ${jobDetailId}</div>` : ''}
+                            ${sessionId ? `<div class="audit-log-detail-item">👤 Session: ${sessionId.substring(0, 8)}...</div>` : ''}
+                        </div>
+                        ${log.data ? `
+                            <div class="audit-log-data">
+                                <strong>Additional Data:</strong><br>
+                                ${JSON.stringify(log.data, null, 2)}
+                            </div>
+                        ` : ''}
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = logsHtml;
+        }
+
+        // Initialize authentication
+        document.addEventListener('DOMContentLoaded', async function () {
+            const authLoading = document.getElementById('authLoading');
+            const dashboardContent = document.getElementById('dashboardContent');
+
+            try {
+                // Check authentication first
+                if (!checkAuthentication()) {
+                    // checkAuthentication already redirects to login, but ensure we don't continue
+                    return;
+                }
+
+                // Get current user info
+                currentUser = await getCurrentUser();
+                if (!currentUser) {
+                    // getCurrentUser already handles logout/redirect, but ensure we don't continue
+                    return;
+                }
+
+                // Hide loading screen and show dashboard
+                authLoading.style.display = 'none';
+                dashboardContent.classList.add('authenticated');
+
+                // Update header with user info
+                updateHeaderWithUserInfo();
+
+                // Initialize dashboard
+                initializeDashboard();
+
+            } catch (error) {
+                console.error('Authentication error:', error);
+                // On any error, redirect to login
+                logout();
+            }
+        });
+
+        // Additional check on page visibility change to catch expired sessions
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) {
+                // When page becomes visible, check if session is still valid
+                if (!checkAuthentication()) {
+                    return;
+                }
+            }
+        });
+
+        // Check authentication on window focus
+        window.addEventListener('focus', function () {
+            if (!checkAuthentication()) {
+                return;
+            }
+        });
+
+        function updateHeaderWithUserInfo() {
+            const header = document.querySelector('.header h1');
+            if (header && currentUser) {
+                const userName = currentUser.first_name || currentUser.username;
+                header.innerHTML = `EPMS Job Dashboard <span style="font-size: 0.6em; opacity: 0.8;">Welcome, ${userName}</span>`;
+            }
+
+            // Add logout button to controls
+            const controls = document.querySelector('.controls');
+            if (controls && !document.getElementById('logoutBtn')) {
+                const logoutBtn = document.createElement('button');
+                logoutBtn.id = 'logoutBtn';
+                logoutBtn.className = 'view-btn';
+                logoutBtn.innerHTML = '🚪 Logout';
+                logoutBtn.onclick = logout;
+                logoutBtn.style.marginLeft = '20px';
+                controls.appendChild(logoutBtn);
+            }
+        }
+
+        function initializeDashboard() {
+            // Start the dashboard functionality
+            refreshDashboard();
+            startAutoRefresh();
+        }
+
+        async function fetchDashboardData() {
+            try {
+                // Use authenticated request for dashboard data
+                const response = await makeAuthenticatedRequest('/jobs/dashboard');
+                if (!response || !response.ok) {
+                    if (response && response.status === 401) {
+                        // Unauthorized - redirect to login
+                        logout();
+                        return null;
+                    }
+                    throw new Error(`HTTP error! status: ${response ? response.status : 'No response'}`);
+                }
+                const data = await response.json();
+                return data.dashboard;
+            } catch (error) {
+                console.error('Error fetching dashboard data:', error);
+                // If it's an authentication error, redirect to login
+                if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+                    logout();
+                    return null;
+                }
+                throw error;
+            }
+        }
+
+        function updateStats(dashboard) {
+            const overview = dashboard.overview;
+
+            document.getElementById('running-jobs-count').textContent = overview.running_jobs || 0;
+            document.getElementById('total-jobs-24h').textContent = overview.total_jobs_24h || 0;
+            document.getElementById('success-rate').textContent = `${overview.success_rate_24h || 0}%`;
+            document.getElementById('avg-execution-time').textContent = `${overview.average_execution_time || overview.average_duration_seconds || 0}s`;
+        }
+
+        function updateJobOverview(dashboard) {
+            const cardContainer = document.getElementById('job-overview-container');
+            const tileContainer = document.getElementById('job-overview-tiles');
+            const stats = dashboard.statistics_24h;
+            const serviceBreakdown = stats.service_breakdown || {};
+
+            // Create overview cards for each service
+            const serviceCards = Object.entries(serviceBreakdown).map(([service, data]) => `
+                <div class="job-overview-card" onclick="showServiceJobs('${service}')">
+                    <div class="job-overview-header">
+                        <div class="job-overview-title">${service.charAt(0).toUpperCase() + service.slice(1)} Service</div>
+                        <div class="job-overview-count">${data.total}</div>
+                    </div>
+                    <div class="job-overview-stats">
+                        <div class="job-overview-stat">
+                            <div class="job-overview-stat-label">Success Rate</div>
+                            <div class="job-overview-stat-value success-rate">${data.success_rate}%</div>
+                        </div>
+                        <div class="job-overview-stat">
+                            <div class="job-overview-stat-label">Failed Jobs</div>
+                            <div class="job-overview-stat-value failure-rate">${data.failed}</div>
+                        </div>
+                    </div>
+                    <div class="job-overview-footer">
+                        Click to view all ${service} jobs
+                    </div>
+                </div>
+            `).join('');
+
+            // Update card view (removed All Jobs and Job Data Collection)
+            cardContainer.innerHTML = `
+                <div class="job-overview-grid">
+                    ${serviceCards}
+                </div>
+            `;
+
+            // Create tile view (removed All Jobs and Job Data Collection)
+            const tiles = [
+                ...Object.entries(serviceBreakdown).map(([service, data]) => ({
+                    title: `${service.charAt(0).toUpperCase() + service.slice(1)} Service`,
+                    count: data.total,
+                    status: data.success_rate > 80 ? 'success' : 'warning',
+                    service: service,
+                    details: [
+                        `Success Rate: ${data.success_rate}%`,
+                        `Failed: ${data.failed}`,
+                        `Total: ${data.total}`
+                    ],
+                    onclick: `showServiceJobs('${service}')`
+                }))
+            ];
+
+            // Update tile view
+            tileContainer.innerHTML = `
+                <div class="tile-grid">
+                    ${tiles.map(tile => `
+                        <div class="tile-item ${tile.service}" onclick="${tile.onclick}">
+                            <div class="tile-header">
+                                <div class="tile-title">${tile.title}</div>
+                                <div class="tile-status status-${tile.status}">${tile.count}</div>
+                            </div>
+                            <div class="tile-details">
+                                ${tile.details.map(detail => `<div>${detail}</div>`).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        async function updateServiceJobs(service, jobs) {
+            const container = document.getElementById('jobs-list');
+            const title = document.getElementById('jobs-list-title');
+
+            title.textContent = `${service.charAt(0).toUpperCase() + service.slice(1)} Service - Available Jobs (${jobs.length})`;
+
+            if (jobs.length === 0) {
+                container.innerHTML = '<div class="loading">No enabled jobs found for this service</div>';
+                return;
+            }
+
+            // Show loading state
+            container.innerHTML = '<div class="loading">Loading job execution status...</div>';
+
+            // Fetch last execution status for each job
+            const jobsWithStatus = await Promise.all(jobs.map(async (job) => {
+                console.log('Processing job:', job);
+
+                // Use _id field from job_data collection
+                const jobId = job._id;
+                console.log('Job ID field:', jobId);
+
+                if (!jobId) {
+                    console.error('No valid ID found for job:', job);
+                    return {
+                        ...job,
+                        lastExecution: null,
+                        executionStats: null
+                    };
+                }
+
+                try {
+                    const response = await fetch(`${BASE_PATH}/jobs/execution-details/${jobId}`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        const executionDetails = data.execution_details;
+                        const latestExecution = executionDetails.latest_execution;
+
+                        return {
+                            ...job,
+                            lastExecution: latestExecution,
+                            executionStats: executionDetails.statistics
+                        };
+                    }
+                } catch (error) {
+                    console.warn(`Failed to get execution details for job ${jobId}:`, error);
+                }
+
+                return {
+                    ...job,
+                    lastExecution: null,
+                    executionStats: null
+                };
+            }));
+
+            // Render jobs with execution status
+            container.innerHTML = `
+                <div class="service-jobs-grid">
+                    ${jobsWithStatus.map(job => {
+                const lastExec = job.lastExecution;
+                const stats = job.executionStats;
+
+                // Determine status and color
+                let status = 'ENABLED';
+                let statusClass = 'status-success';
+
+                if (lastExec) {
+                    if (lastExec.status === 'processing') {
+                        status = 'PROCESSING';
+                        statusClass = 'status-running';
+                    } else if (lastExec.status === 'failed') {
+                        status = 'FAILED';
+                        statusClass = 'status-failed';
+                    } else if (lastExec.status === 'success') {
+                        status = 'SUCCESS';
+                        statusClass = 'status-success';
+                    }
+                } else if (!job.enabled) {
+                    status = 'DISABLED';
+                    statusClass = 'status-failed';
+                }
+
+                const jobId = job._id;
+                return `
+                            <div class="service-job-card" onclick="showJobExecutionDetails('${jobId}')">
+                            <div class="service-job-header">
+                                    <div class="service-job-name">${job.name || job.job_type || 'Unknown Job'}</div>
+                                    <div class="service-job-status ${statusClass}">
+                                        ${status}
+                                </div>
+                            </div>
+                            <div class="service-job-details">
+                                    <div><strong>Job Type:</strong> ${job.job_type || 'N/A'}</div>
+                                    <div><strong>Schedule:</strong> ${job.schedule || 'N/A'}</div>
+                                    ${lastExec ? `
+                                        <div><strong>Last Run:</strong> ${new Date(lastExec.started_at).toLocaleString()}</div>
+                                        ${lastExec.completed_at ? `<div><strong>Duration:</strong> ${lastExec.duration_seconds}s</div>` : ''}
+                                        ${lastExec.error_message ? `<div><strong>Error:</strong> ${lastExec.error_message.substring(0, 50)}${lastExec.error_message.length > 50 ? '...' : ''}</div>` : ''}
+                                    ` : ''}
+                                    ${stats ? `
+                                        <div><strong>Success Rate:</strong> ${stats.success_rate.toFixed(1)}%</div>
+                                        <div><strong>Total Runs:</strong> ${stats.total_executions}</div>
+                                    ` : ''}
+                                    <div><strong>Created:</strong> ${new Date(job.created_at).toLocaleString()}</div>
+                            </div>
+                        </div>
+                        `;
+            }).join('')}
+                </div>
+            `;
+        }
+
+        function showError(message) {
+            const errorContainer = document.getElementById('error-container');
+            errorContainer.innerHTML = `<div class="error">Error: ${message}</div>`;
+        }
+
+        // Test function to verify modal works
+        function testModal() {
+            console.log('Testing modal...');
+            const modal = document.getElementById('job-details-modal');
+            if (modal) {
+                console.log('Modal found, showing...');
+                modal.style.display = 'block';
+
+                // Set test content
+                document.getElementById('modal-job-name').textContent = 'Test Job Details';
+                document.getElementById('overview-tab').innerHTML = '<p>Test modal content</p>';
+            } else {
+                console.error('Modal not found!');
+            }
+        }
+
+        // Expandable execution details functions
+        function toggleExecutionDetails(executionId) {
+            const detailsElement = document.getElementById(`execution-details-${executionId}`);
+            const expandIcon = document.getElementById(`expand-icon-${executionId}`);
+
+            if (detailsElement.style.display === 'none') {
+                // Expand
+                detailsElement.style.display = 'block';
+                expandIcon.textContent = '▼';
+
+                // Load logs if not already loaded
+                loadExecutionLogs(executionId);
+            } else {
+                // Collapse
+                detailsElement.style.display = 'none';
+                expandIcon.textContent = '▶';
+            }
+        }
+
+        async function loadExecutionLogs(executionId) {
+            const logsContainer = document.getElementById(`logs-${executionId}`);
+
+            try {
+                // Try to fetch logs from the execution details endpoint
+                // Use the current job ID from the modal context
+                const jobId = window.currentJobId || executionId;
+                const response = await fetch(`${BASE_PATH}/jobs/execution-details/${jobId}`);
+                if (response.ok) {
+                    const data = await response.json();
+                    const executionDetails = data.execution_details;
+
+                    // Look for logs in execution pairs first (preferred method)
+                    const executionPairs = executionDetails.execution_pairs || [];
+                    const currentPair = executionPairs.find(pair => pair.execution_id === executionId);
+
+                    if (currentPair) {
+                        // Check completion record first (most likely to have logs)
+                        if (currentPair.completion_record && currentPair.completion_record.logs && currentPair.completion_record.logs.length > 0) {
+                            displayLogs(logsContainer, currentPair.completion_record.logs);
+                            return;
+                        }
+                        
+                        // Check start record if completion record has no logs
+                        if (currentPair.start_record && currentPair.start_record.logs && currentPair.start_record.logs.length > 0) {
+                            displayLogs(logsContainer, currentPair.start_record.logs);
+                            return;
+                        }
+                    }
+
+                    // Fallback: Get logs from execution history
+                    const executionHistory = executionDetails.execution_history || [];
+                    const currentExecution = executionHistory.find(exec => exec.execution_id === executionId);
+
+                    if (currentExecution && currentExecution.logs && currentExecution.logs.length > 0) {
+                        displayLogs(logsContainer, currentExecution.logs);
+                        return;
+                    }
+
+                    // If no logs found, create basic logs from execution records
+                    const logs = [];
+
+                    if (currentPair) {
+                        // Add start record log
+                        if (currentPair.start_record) {
+                            logs.push({
+                                timestamp: currentPair.start_record.execution_start,
+                                level: 'INFO',
+                                message: `Job started - Status: ${currentPair.start_record.status}`
+                            });
+                        }
+
+                        // Add completion record log
+                        if (currentPair.completion_record) {
+                            logs.push({
+                                timestamp: currentPair.completion_record.execution_end,
+                                level: currentPair.completion_record.success ? 'INFO' : 'ERROR',
+                                message: currentPair.completion_record.success ?
+                                    'Job completed successfully' :
+                                    `Job failed: ${currentPair.completion_record.error_message || 'Unknown error'}`
+                            });
+                        }
+                    }
+
+                    if (logs.length > 0) {
+                        displayLogs(logsContainer, logs);
+                    } else {
+                        logsContainer.innerHTML = '<div class="no-logs">No logs available for this execution</div>';
+                    }
+                } else {
+                    logsContainer.innerHTML = '<div class="no-logs">Unable to load logs</div>';
+                }
+            } catch (error) {
+                console.error('Error loading logs:', error);
+                logsContainer.innerHTML = '<div class="no-logs">Error loading logs</div>';
+            }
+        }
+
+        function displayLogs(container, logs) {
+            if (!logs || logs.length === 0) {
+                container.innerHTML = '<div class="no-logs">No logs available</div>';
+                return;
+            }
+
+            const logsHtml = logs.map(log => {
+                const timestamp = new Date(log.timestamp).toLocaleString();
+                const levelClass = log.level.toLowerCase();
+
+                return `
+                    <div class="log-entry log-${levelClass}">
+                        <div class="log-timestamp">${timestamp}</div>
+                        <div class="log-level">${log.level}</div>
+                        <div class="log-message">${log.message}</div>
+                    </div>
+                `;
+            }).join('');
+
+            container.innerHTML = `
+                <div class="logs-header">
+                    <span>${logs.length} log entries</span>
+                </div>
+                <div class="logs-content">
+                    ${logsHtml}
+                </div>
+            `;
+        }
+
+        function clearError() {
+            document.getElementById('error-container').innerHTML = '';
+        }
+
+        function updateLastUpdated() {
+            document.getElementById('last-updated').textContent =
+                `Last updated: ${new Date().toLocaleString()}`;
+        }
+
+        async function refreshDashboard() {
+            try {
+                clearError();
+                const dashboard = await fetchDashboardData();
+
+                updateStats(dashboard);
+                updateJobOverview(dashboard);
+                updateLastUpdated();
+
+            } catch (error) {
+                showError(error.message);
+            }
+        }
+
+        function startAutoRefresh() {
+            // Refresh every 5 seconds
+            refreshInterval = setInterval(refreshDashboard, 5000);
+        }
+
+        function stopAutoRefresh() {
+            if (refreshInterval) {
+                clearInterval(refreshInterval);
+            }
+        }
+
+        // Dashboard initialization is now handled in the authentication flow
+
+        // Stop auto-refresh when page is hidden, resume when visible
+        document.addEventListener('visibilitychange', function () {
+            if (document.hidden) {
+                stopAutoRefresh();
+            } else {
+                startAutoRefresh();
+            }
+        });
+
+        // Job Details Modal Functions
+        async function showJobDetails(jobId) {
+            // Set current job ID for audit logs
+            window.currentJobId = jobId;
+
+            try {
+                const response = await fetch(`${BASE_PATH}/jobs/trace/${jobId}`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                const jobTrace = data.job_trace;
+
+                // Update modal title
+                document.getElementById('modal-job-name').textContent =
+                    `${jobTrace.current_status === 'running' ? '🟢' : '🔴'} ${jobTrace.job_id}`;
+
+                // Populate overview tab
+                populateJobOverview(jobTrace);
+
+                // Populate execution history tab
+                populateExecutionHistory(jobTrace.execution_history);
+
+                // Populate statistics tab
+                populateJobStatistics(jobTrace.statistics);
+
+                // Populate logs tab (mock data for now)
+
+                // Show modal
+                document.getElementById('job-details-modal').style.display = 'block';
+
+            } catch (error) {
+                console.error('Error fetching job details:', error);
+                showError(`Failed to load job details: ${error.message}`);
+            }
+        }
+
+        async function showJobExecutionDetails(jobId) {
+            console.log('showJobExecutionDetails called with jobId:', jobId);
+
+            // Check if jobId is valid
+            if (!jobId || jobId === 'undefined') {
+                console.error('Invalid jobId:', jobId);
+                showError('Invalid job ID provided');
+                return;
+            }
+
+            try {
+                console.log('Fetching execution details for job:', jobId);
+                const response = await fetch(`${BASE_PATH}/jobs/execution-details/${jobId}`);
+                console.log('Response status:', response.status);
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+                console.log('Execution details data:', data);
+                const executionDetails = data.execution_details;
+
+                // Update modal title
+                const jobInfo = executionDetails.job_info;
+                document.getElementById('modal-job-name').textContent =
+                    `📋 ${jobInfo ? jobInfo.name : jobId}`;
+
+                // Populate execution details
+                populateJobExecutionDetails(executionDetails);
+
+                // Show modal
+                console.log('Showing modal...');
+                document.getElementById('job-details-modal').style.display = 'block';
+                console.log('Modal should be visible now');
+
+            } catch (error) {
+                console.error('Error fetching job execution details:', error);
+                showError(`Failed to load job execution details: ${error.message}`);
+
+                // Show modal with error message
+                document.getElementById('modal-job-name').textContent = `Error - ${jobId}`;
+                document.getElementById('overview-tab').innerHTML = `
+                    <div class="error">
+                        <h4>Error Loading Job Details</h4>
+                        <p>Failed to load execution details for job: ${jobId}</p>
+                        <p>Error: ${error.message}</p>
+                        <p>This might be because the scheduler service needs to be restarted.</p>
+                    </div>
+                `;
+                document.getElementById('job-details-modal').style.display = 'block';
+            }
+        }
+
+        function closeJobDetailsModal() {
+            document.getElementById('job-details-modal').style.display = 'none';
+        }
+
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Show selected tab content
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+
+            // Load audit logs when switching to audit logs tab
+            if (tabName === 'audit-logs') {
+                loadAuditLogs();
+            }
+        }
+
+        function populateJobOverview(jobTrace) {
+            const jobInfoGrid = document.getElementById('job-info-grid');
+            const currentExecutionGrid = document.getElementById('current-execution-grid');
+
+            // Job Information
+            jobInfoGrid.innerHTML = `
+                <div class="detail-item">
+                    <div class="detail-label">Job ID</div>
+                    <div class="detail-value">${jobTrace.job_id}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Current Status</div>
+                    <div class="detail-value">
+                        <span class="history-status ${jobTrace.current_status === 'running' ? 'status-running' :
+                    jobTrace.current_status === 'completed' ? 'status-success' : 'status-failed'}">
+                            ${jobTrace.current_status.toUpperCase()}
+                        </span>
+                    </div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Total Executions</div>
+                    <div class="detail-value">${jobTrace.statistics.total_executions}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Success Rate</div>
+                    <div class="detail-value">${jobTrace.statistics.success_rate}%</div>
+                </div>
+            `;
+
+            // Current Execution (if running)
+            if (jobTrace.current_execution) {
+                currentExecutionGrid.innerHTML = `
+                    <div class="detail-item">
+                        <div class="detail-label">Started At</div>
+                        <div class="detail-value">${new Date(jobTrace.current_execution.started_at).toLocaleString()}</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Runtime</div>
+                        <div class="detail-value">${Math.round(jobTrace.current_execution.runtime_seconds)}s</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Progress</div>
+                        <div class="detail-value">${jobTrace.current_execution.progress}%</div>
+                    </div>
+                    <div class="detail-item">
+                        <div class="detail-label">Current Step</div>
+                        <div class="detail-value">${jobTrace.current_execution.current_step || 'N/A'}</div>
+                    </div>
+                    ${jobTrace.current_execution.estimated_completion ? `
+                    <div class="detail-item">
+                        <div class="detail-label">Estimated Completion</div>
+                        <div class="detail-value">${new Date(jobTrace.current_execution.estimated_completion).toLocaleString()}</div>
+                    </div>
+                    ` : ''}
+                `;
+            } else {
+                currentExecutionGrid.innerHTML = '<div class="detail-value">No current execution</div>';
+            }
+        }
+
+        function populateExecutionHistory(history) {
+            const historyList = document.getElementById('execution-history-list');
+
+            if (!history || history.length === 0) {
+                historyList.innerHTML = '<div class="detail-value">No execution history available</div>';
+                return;
+            }
+
+            historyList.innerHTML = history.map(execution => `
+                <div class="history-item">
+                    <div class="history-header">
+                        <div>
+                            <strong>${new Date(execution.execution_start).toLocaleString()}</strong>
+                            ${execution.execution_end ? ` - ${new Date(execution.execution_end).toLocaleString()}` : ''}
+                        </div>
+                        <div>
+                            <span class="history-status ${execution.success ? 'status-success' : 'status-failed'}">
+                                ${execution.success ? 'SUCCESS' : 'FAILED'}
+                            </span>
+                        </div>
+                    </div>
+                    <div class="detail-grid">
+                        <div class="detail-item">
+                            <div class="detail-label">Duration</div>
+                            <div class="detail-value">${execution.execution_duration || 0}s</div>
+                        </div>
+                        <div class="detail-item">
+                            <div class="detail-label">Status</div>
+                            <div class="detail-value">${execution.status || 'N/A'}</div>
+                        </div>
+                        ${execution.error_message ? `
+                        <div class="detail-item" style="grid-column: 1 / -1;">
+                            <div class="detail-label">Error Message</div>
+                            <div class="detail-value" style="color: #c62828;">${execution.error_message}</div>
+                        </div>
+                        ` : ''}
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function populateJobStatistics(statistics) {
+            const statsGrid = document.getElementById('job-statistics-grid');
+
+            statsGrid.innerHTML = `
+                <div class="detail-item">
+                    <div class="detail-label">Total Executions</div>
+                    <div class="detail-value">${statistics.total_executions}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Successful Executions</div>
+                    <div class="detail-value">${statistics.successful_executions}</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Success Rate</div>
+                    <div class="detail-value">${statistics.success_rate}%</div>
+                </div>
+                <div class="detail-item">
+                    <div class="detail-label">Average Execution Time</div>
+                    <div class="detail-value">${statistics.average_execution_time || statistics.average_duration_seconds || 0}s</div>
+                </div>
+                ${statistics.last_successful_execution ? `
+                <div class="detail-item" style="grid-column: 1 / -1;">
+                    <div class="detail-label">Last Successful Execution</div>
+                    <div class="detail-value">${new Date(statistics.last_successful_execution.execution_start).toLocaleString()}</div>
+                </div>
+                ` : ''}
+            `;
+        }
+
+
+        // Navigation Functions
+        async function showServiceJobs(service) {
+            try {
+                // Fetch enabled jobs from job_data collection for the specific service
+                const response = await fetch(`${BASE_PATH}/jobs/service-jobs/${service}?enabled_only=true`);
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+                const data = await response.json();
+
+                // Show jobs list container and hide overview
+                document.getElementById('job-overview-container').style.display = 'none';
+                document.getElementById('jobs-list-container').style.display = 'block';
+
+                updateServiceJobs(service, data.jobs);
+
+            } catch (error) {
+                console.error('Error fetching service jobs:', error);
+                showError(`Failed to load ${service} jobs: ${error.message}`);
+            }
+        }
+
+        async function showAllJobs() {
+            try {
+                // Fetch jobs from all services through centralized scheduler service
+                const services = ['scheduler', 'ingestion', 'processing', 'auth'];
+                const allJobs = [];
+                const serviceResults = {};
+
+                for (const service of services) {
+                    try {
+                        // All services now use the centralized scheduler service endpoints
+                        const serviceUrl = `/jobs/service/${service}?limit=50`;
+
+                        console.log(`Fetching jobs from ${service} at ${serviceUrl}`);
+                        const response = await fetch(serviceUrl);
+
+                        if (response.ok) {
+                            const data = await response.json();
+                            serviceResults[service] = data.jobs || [];
+                            allJobs.push(...(data.jobs || []));
+                            console.log(`✅ ${service}: ${data.jobs?.length || 0} jobs`);
+                        } else {
+                            console.warn(`❌ ${service}: HTTP ${response.status} - ${response.statusText}`);
+                            serviceResults[service] = [];
+                        }
+                    } catch (error) {
+                        console.warn(`❌ Failed to fetch jobs for ${service}:`, error);
+                        serviceResults[service] = [];
+                    }
+                }
+
+                console.log('Service results:', serviceResults);
+                console.log('Total jobs collected:', allJobs.length);
+
+                // Sort by execution start time (newest first)
+                allJobs.sort((a, b) => new Date(b.execution_start) - new Date(a.execution_start));
+
+                // Show jobs list container and hide overview
+                document.getElementById('job-overview-container').style.display = 'none';
+                document.getElementById('jobs-list-container').style.display = 'block';
+
+                updateAllJobs(allJobs);
+
+            } catch (error) {
+                console.error('Error fetching all jobs:', error);
+                showError(`Failed to load all jobs: ${error.message}`);
+            }
+        }
+
+        function showJobOverview() {
+            // Show overview container and hide other containers
+            document.getElementById('job-overview-container').style.display = 'block';
+            document.getElementById('jobs-list-container').style.display = 'none';
+            document.getElementById('all-jobs-container').style.display = 'none';
+        }
+
+        // View switching functionality
+        let currentView = 'card'; // Default view
+
+        function switchView(viewType) {
+            currentView = viewType;
+
+            // Update button states
+            document.getElementById('card-view-btn').classList.toggle('active', viewType === 'card');
+            document.getElementById('tile-view-btn').classList.toggle('active', viewType === 'tile');
+
+            // Switch views for all containers
+            const cardViews = document.querySelectorAll('.card-view');
+            const tileViews = document.querySelectorAll('.tile-view');
+
+            cardViews.forEach(view => {
+                view.classList.toggle('hidden', viewType === 'tile');
+                view.classList.toggle('active', viewType === 'card');
+            });
+
+            tileViews.forEach(view => {
+                view.classList.toggle('active', viewType === 'tile');
+            });
+
+            // Re-render current content in the new view
+            refreshCurrentView();
+        }
+
+        function refreshCurrentView() {
+            // Re-render the currently visible content in the selected view
+            if (document.getElementById('job-overview-container').style.display !== 'none') {
+                // We're in the overview, refresh it
+                fetchDashboardData();
+            } else if (document.getElementById('all-jobs-container').style.display !== 'none') {
+                // We're viewing all jobs, refresh it
+                showAllJobs();
+            } else if (document.getElementById('jobs-list-container').style.display !== 'none') {
+                // We're viewing service jobs, refresh it
+                const title = document.getElementById('jobs-list-title').textContent;
+                if (title.includes('All Jobs')) {
+                    showAllJobs();
+                } else {
+                    // Extract service name from title
+                    const serviceMatch = title.match(/(\w+) Service/);
+                    if (serviceMatch) {
+                        showServiceJobs(serviceMatch[1].toLowerCase());
+                    }
+                }
+            }
+        }
+
+
+
+        function updateAllJobs(jobs) {
+            const cardContainer = document.getElementById('jobs-list');
+            const tileContainer = document.getElementById('jobs-tiles');
+            const title = document.getElementById('jobs-list-title');
+
+            title.textContent = `All Jobs (${jobs.length} total)`;
+
+            if (jobs.length === 0) {
+                cardContainer.innerHTML = '<div class="loading">No jobs found</div>';
+                tileContainer.innerHTML = '<div class="loading">No jobs found</div>';
+                return;
+            }
+
+            // Group jobs by service for better organization (treat blank service as 'scheduler')
+            const jobsByService = {};
+            jobs.forEach(job => {
+                const service = job.service && job.service.trim() ? job.service : 'scheduler';
+                if (!jobsByService[service]) {
+                    jobsByService[service] = [];
+                }
+                jobsByService[service].push(job);
+            });
+
+            // Update card view
+            cardContainer.innerHTML = Object.entries(jobsByService).map(([service, serviceJobs]) => `
+                <div style="margin-bottom: 30px;">
+                    <h3 style="color: #333; margin-bottom: 15px; padding-bottom: 5px; border-bottom: 2px solid #2196F3;">
+                        ${service.charAt(0).toUpperCase() + service.slice(1)} Service (${serviceJobs.length} jobs)
+                    </h3>
+                    <div class="service-jobs-grid">
+                        ${serviceJobs.map(job => `
+                            <div class="service-job-card" onclick="showJobDetails('${job.job_id}')">
+                                <div class="service-job-header">
+                                    <div class="service-job-name">${job.job_name || job.job_id}</div>
+                                    <div class="service-job-status ${job.status === 'running' ? 'status-running' :
+                    job.status === 'completed' ? 'status-success' :
+                        job.status === 'failed' ? 'status-failed' : 'status-running'}">
+                                        ${job.status ? job.status.toUpperCase() : 'UNKNOWN'}
+                                    </div>
+                                </div>
+                                <div class="service-job-details">
+                                    <div><strong>Service:</strong> ${job.service && job.service.trim() ? job.service : 'scheduler'}</div>
+                                    <div><strong>Started:</strong> ${new Date(job.execution_start).toLocaleString()}</div>
+                                    ${job.execution_duration ? `<div><strong>Duration:</strong> ${job.execution_duration}s</div>` : ''}
+                                    ${job.progress ? `<div><strong>Progress:</strong> ${job.progress}%</div>` : ''}
+                                    ${job.current_step ? `<div><strong>Current Step:</strong> ${job.current_step}</div>` : ''}
+                                    ${job.runtime_formatted ? `<div><strong>Runtime:</strong> ${job.runtime_formatted}</div>` : ''}
+                                    ${job.success !== undefined ? `<div><strong>Success:</strong> ${job.success ? 'Yes' : 'No'}</div>` : ''}
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `).join('');
+
+            // Update tile view
+            const allTiles = [];
+            Object.entries(jobsByService).forEach(([service, serviceJobs]) => {
+                serviceJobs.forEach(job => {
+                    allTiles.push({
+                        title: job.job_name || job.job_id,
+                        count: job.status || 'UNKNOWN',
+                        status: job.status === 'running' ? 'running' :
+                            job.status === 'completed' ? 'success' :
+                                job.status === 'failed' ? 'failed' : 'unknown',
+                        service: service,
+                        details: [
+                            `Service: ${job.service && job.service.trim() ? job.service : 'scheduler'}`,
+                            `Started: ${new Date(job.execution_start).toLocaleDateString()}`,
+                            job.execution_duration ? `Duration: ${job.execution_duration}s` : '',
+                            job.progress ? `Progress: ${job.progress}%` : '',
+                            job.runtime_formatted ? `Runtime: ${job.runtime_formatted}` : ''
+                        ].filter(d => d),
+                        onclick: `showJobDetails('${job.job_id}')`
+                    });
+                });
+            });
+
+            tileContainer.innerHTML = `
+                <div class="tile-grid">
+                    ${allTiles.map(tile => `
+                        <div class="tile-item ${tile.service}" onclick="${tile.onclick}">
+                            <div class="tile-header">
+                                <div class="tile-title">${tile.title}</div>
+                                <div class="tile-status status-${tile.status}">${tile.count}</div>
+                            </div>
+                            <div class="tile-details">
+                                ${tile.details.map(detail => `<div>${detail}</div>`).join('')}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        function populateJobExecutionDetails(executionDetails) {
+            console.log('populateJobExecutionDetails called with:', executionDetails);
+
+            // Add null checks for all required properties
+            if (!executionDetails) {
+                console.error('executionDetails is null or undefined');
+                return;
+            }
+
+            const jobInfo = executionDetails.job_info || {};
+            const executionPairs = executionDetails.execution_pairs || [];
+            const statistics = executionDetails.statistics || {};
+
+            console.log('jobInfo:', jobInfo);
+            console.log('executionPairs:', executionPairs);
+            console.log('statistics:', statistics);
+
+            // Update overview tab
+            const overviewContainer = document.getElementById('overview-tab');
+            overviewContainer.innerHTML = `
+                <div class="job-info-section">
+                    <h4>Job Information</h4>
+                    <div class="job-info-grid">
+                        <div class="job-info-item">
+                            <label>Job ID:</label>
+                            <span>${jobInfo ? jobInfo.job_id : 'N/A'}</span>
+                        </div>
+                        <div class="job-info-item">
+                            <label>Job Type:</label>
+                            <span>${jobInfo ? jobInfo.job_type : 'N/A'}</span>
+                        </div>
+                        <div class="job-info-item">
+                            <label>Name:</label>
+                            <span>${jobInfo ? jobInfo.name : 'N/A'}</span>
+                        </div>
+                        <div class="job-info-item">
+                            <label>Schedule:</label>
+                            <span>${jobInfo ? jobInfo.schedule : 'N/A'}</span>
+                        </div>
+                        <div class="job-info-item">
+                            <label>Status:</label>
+                            <span class="status-badge ${jobInfo && jobInfo.enabled ? 'status-success' : 'status-failed'}">
+                                ${jobInfo && jobInfo.enabled ? 'ENABLED' : 'DISABLED'}
+                            </span>
+                        </div>
+                        <div class="job-info-item">
+                            <label>Type:</label>
+                            <span>${jobInfo ? jobInfo.type : 'N/A'}</span>
+                        </div>
+                        <div class="job-info-item">
+                            <label>Priority:</label>
+                            <span>${jobInfo ? jobInfo.priority : 'N/A'}</span>
+                        </div>
+                        <div class="job-info-item">
+                            <label>Created:</label>
+                            <span>${jobInfo && jobInfo.created_at ? new Date(jobInfo.created_at).toLocaleString() : 'N/A'}</span>
+                        </div>
+                    </div>
+                    ${jobInfo && jobInfo.description ? `
+                        <div class="job-description">
+                            <label>Description:</label>
+                            <p>${jobInfo.description}</p>
+                        </div>
+                    ` : ''}
+                </div>
+                
+                <div class="execution-stats-section">
+                    <h4>Execution Statistics</h4>
+                    <div class="stats-grid">
+                        <div class="stat-item">
+                            <div class="stat-value">${statistics.total_executions}</div>
+                            <div class="stat-label">Total Executions</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value success">${statistics.successful_executions}</div>
+                            <div class="stat-label">Successful</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value stat-error">${statistics.failed_executions}</div>
+                            <div class="stat-label">Failed</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value warning">${statistics.running_executions}</div>
+                            <div class="stat-label">Running</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${statistics.success_rate}%</div>
+                            <div class="stat-label">Success Rate</div>
+                        </div>
+                        <div class="stat-item">
+                            <div class="stat-value">${statistics.average_execution_time || statistics.average_duration_seconds || 0}s</div>
+                            <div class="stat-label">Avg Duration</div>
+                        </div>
+                    </div>
+                </div>
+            `;
+
+            // Update execution history tab with expandable format
+            const historyContainer = document.getElementById('execution-tab');
+            historyContainer.innerHTML = `
+                <div class="execution-pairs-header">
+                    <h4>Execution History (${executionPairs.length} runs)</h4>
+                    <div class="execution-pairs-info">
+                        <span class="execution-count">Click on any execution to expand details and view logs</span>
+                    </div>
+                </div>
+                <div class="execution-pairs-list">
+                    ${executionPairs.map((pair, index) => {
+                const startRecord = pair.start_record;
+                const completionRecord = pair.completion_record;
+                const executionId = pair.execution_id;
+
+                let status = 'unknown';
+                let statusClass = 'status-unknown';
+                let duration = 'N/A';
+                let statusIcon = '❓';
+
+                if (startRecord && completionRecord) {
+                    // Use the actual status field instead of success attribute
+                    status = completionRecord.status || (completionRecord.success ? 'completed' : 'failed');
+
+                    // Set status class and icon based on status
+                    if (completionRecord.status === 'success' || completionRecord.status === 'completed') {
+                        statusClass = 'status-success';
+                        statusIcon = '✅';
+                    } else if (completionRecord.status === 'processing') {
+                        statusClass = 'status-warning';
+                        statusIcon = '⚙️';
+                    } else {
+                        statusClass = 'status-failed';
+                        statusIcon = '❌';
+                    }
+
+                    // Calculate duration
+                    const startTime = new Date(startRecord.execution_start);
+                    const endTime = new Date(completionRecord.execution_end);
+                    const durationMs = endTime - startTime;
+                    duration = formatDuration(durationMs / 1000);
+                } else if (startRecord && !completionRecord) {
+                    status = 'processing';
+                    statusClass = 'status-warning';
+                    statusIcon = '⚙️';
+
+                    // Calculate current runtime
+                    const startTime = new Date(startRecord.execution_start);
+                    const currentTime = new Date();
+                    const durationMs = currentTime - startTime;
+                    duration = formatDuration(durationMs / 1000) + ' (running)';
+                }
+
+                return `
+                            <div class="execution-pair-expandable" data-execution-id="${executionId}">
+                                <div class="execution-pair-header" onclick="toggleExecutionDetails('${executionId}')">
+                                    <div class="execution-header-left">
+                                        <span class="expand-icon" id="expand-icon-${executionId}">▶</span>
+                                        <span class="execution-id">${executionId}</span>
+                                        <span class="execution-status ${statusClass}">${statusIcon} ${status.toUpperCase()}</span>
+                                </div>
+                                    <div class="execution-header-right">
+                                        <span class="execution-duration">${duration}</span>
+                                        <span class="execution-date">${startRecord ? new Date(startRecord.execution_start).toLocaleDateString() : 'N/A'}</span>
+                                    </div>
+                                </div>
+                                <div class="execution-pair-details" id="execution-details-${executionId}" style="display: none;">
+                                    <div class="execution-details-content">
+                                    <div class="execution-start">
+                                        <h5>🚀 Start Record</h5>
+                                        ${startRecord ? `
+                                            <div class="execution-record">
+                                                <div><strong>Started:</strong> ${new Date(startRecord.execution_start).toLocaleString()}</div>
+                                                <div><strong>Status:</strong> ${startRecord.status}</div>
+                                                    <div><strong>Service:</strong> ${startRecord.service && startRecord.service.trim() ? startRecord.service : 'scheduler'}</div>
+                                                ${startRecord.metadata ? `
+                                                    <div><strong>Metadata:</strong> ${JSON.stringify(startRecord.metadata, null, 2)}</div>
+                                                ` : ''}
+                                            </div>
+                                        ` : '<div class="no-record">No start record found</div>'}
+                                    </div>
+                                    <div class="execution-completion">
+                                        <h5>${completionRecord ? (
+                        completionRecord.status === 'success' || completionRecord.status === 'completed' ? '✅' :
+                            completionRecord.status === 'processing' ? '⚙️' : '❌'
+                    ) : '❓'} Completion Record</h5>
+                                        ${completionRecord ? `
+                                            <div class="execution-record">
+                                                <div><strong>Completed:</strong> ${new Date(completionRecord.execution_end).toLocaleString()}</div>
+                                                <div><strong>Status:</strong> ${completionRecord.status}</div>
+                                                <div><strong>Success:</strong> ${completionRecord.success ? 'Yes' : 'No'}</div>
+                                                    <div><strong>Service:</strong> ${completionRecord.service && completionRecord.service.trim() ? completionRecord.service : 'scheduler'}</div>
+                                                ${completionRecord.error_message ? `
+                                                    <div><strong>Error:</strong> ${completionRecord.error_message}</div>
+                                                ` : ''}
+                                                ${completionRecord.result_data ? `
+                                                    <div><strong>Result:</strong> ${JSON.stringify(completionRecord.result_data, null, 2)}</div>
+                                                ` : ''}
+                                            </div>
+                                        ` : '<div class="no-record">No completion record found (job may still be running)</div>'}
+                                        </div>
+                                        <div class="execution-logs">
+                                            <h5>📋 Job Logs</h5>
+                                            <div class="logs-container" id="logs-${executionId}">
+                                                <div class="logs-loading">Loading logs...</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        `;
+            }).join('')}
+                </div>
+            `;
+
+        }
+
+        function formatDuration(seconds) {
+            if (seconds < 60) {
+                return `${Math.round(seconds)}s`;
+            } else if (seconds < 3600) {
+                const minutes = Math.floor(seconds / 60);
+                const secs = Math.round(seconds % 60);
+                return `${minutes}m ${secs}s`;
+            } else {
+                const hours = Math.floor(seconds / 3600);
+                const minutes = Math.floor((seconds % 3600) / 60);
+                return `${hours}h ${minutes}m`;
+            }
+        }
+
+        // Close modal when clicking outside of it
+        window.onclick = function (event) {
+            const modal = document.getElementById('job-details-modal');
+            if (event.target === modal) {
+                closeJobDetailsModal();
+            }
+        }
+    </script>
+</body>
+
+</html>

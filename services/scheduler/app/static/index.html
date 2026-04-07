@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPMS - Energy Portfolio Management System</title>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 0;
+            padding: 0;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        .container {
+            text-align: center;
+            color: white;
+            max-width: 600px;
+            padding: 40px;
+        }
+        
+        .logo {
+            font-size: 4em;
+            font-weight: bold;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        
+        .subtitle {
+            font-size: 1.5em;
+            margin-bottom: 30px;
+            opacity: 0.9;
+        }
+        
+        .description {
+            font-size: 1.1em;
+            margin-bottom: 40px;
+            opacity: 0.8;
+            line-height: 1.6;
+        }
+        
+        .login-button {
+            display: inline-block;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 15px 30px;
+            border-radius: 25px;
+            text-decoration: none;
+            font-size: 1.2em;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .login-button:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(0,0,0,0.2);
+        }
+        
+        .loading {
+            margin-top: 20px;
+            font-size: 0.9em;
+            opacity: 0.7;
+        }
+        
+        .spinner {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 2px solid rgba(255,255,255,0.3);
+            border-radius: 50%;
+            border-top-color: white;
+            animation: spin 1s ease-in-out infinite;
+            margin-right: 10px;
+        }
+        
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">EPMS</div>
+        <div class="subtitle">Energy Portfolio Management System</div>
+        <div class="description">
+            Comprehensive monitoring and management platform for energy portfolio operations, 
+            job scheduling, and data processing across multiple services.
+        </div>
+        
+        <a href="login.html" class="login-button" id="loginBtn">
+            Access Admin Dashboard
+        </a>
+        
+        <div class="loading" id="loading" style="display: none;">
+            <div class="spinner"></div>
+            Redirecting to login...
+        </div>
+    </div>
+
+    <script>
+        // Configuration - will be loaded dynamically
+        let BASE_PATH = ''; // fallback
+        
+        // Detect base path from current URL
+        function detectBasePath() {
+            const path = window.location.pathname;
+            if (path.startsWith('/scheduler/')) {
+                return '/scheduler';
+            }
+            return '';
+        }
+        
+        // Load configuration from server
+        async function loadConfig() {
+            try {
+                // Use detected base path for config request
+                const detectedBasePath = detectBasePath();
+                const response = await fetch(`${detectedBasePath}/config`);
+                if (response.ok) {
+                    const config = await response.json();
+                    BASE_PATH = config.base_path || detectedBasePath;
+                }
+            } catch (error) {
+                console.warn('Failed to load config, using fallback:', error);
+                BASE_PATH = detectBasePath(); // fallback to detected path
+            }
+        }
+        
+        // Check if user is already logged in
+        document.addEventListener('DOMContentLoaded', async function() {
+            // Load configuration first
+            await loadConfig();
+            const token = localStorage.getItem('access_token');
+            const loginBtn = document.getElementById('loginBtn');
+            const loading = document.getElementById('loading');
+            
+            if (token) {
+                // Check if token is still valid
+                try {
+                    const payload = JSON.parse(atob(token.split('.')[1]));
+                    const currentTime = Math.floor(Date.now() / 1000);
+                    
+                    if (payload.exp > currentTime) {
+                        // Token is valid, redirect to dashboard
+                        loading.style.display = 'block';
+                        loginBtn.style.display = 'none';
+                        setTimeout(() => {
+                            window.location.href = `${BASE_PATH}/dashboard`;
+                        }, 1000);
+                    }
+                } catch (error) {
+                    // Invalid token, clear it
+                    localStorage.clear();
+                }
+            }
+        });
+    </script>
+</body>
+</html>

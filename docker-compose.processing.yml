@@ -1,0 +1,32 @@
+services:
+  processing-service:
+    build:
+      context: .
+      dockerfile: services/processing/Dockerfile
+    container_name: processing-service
+    ports:
+      - "8003:8003"                     # Fixed dev/staging port
+    volumes:
+      - .:/app
+      - /var/log/epms/processing-service:/var/log/processing-service
+      - ${ENV_DIR}:/tmp/jenkins_env/staging  # Jenkins .env files
+    env_file:
+      - ${ENV_FILE}                     # Injected from Jenkins
+    environment:
+      - PROCESSING_PORT=8003            # Explicit port for app
+    user: "${UID}:${GID}"               # Must export UID/GID in Jenkins
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - my_custom_bridge
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8003/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  my_custom_bridge:
+    external: true

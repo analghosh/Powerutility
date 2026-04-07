@@ -1,0 +1,1160 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "EPMS Processing Service",
+    "description": "\n    ## EPMS Processing Service\n    \n    This service handles data processing, transformation, and user management operations.\n    \n    ### Features:\n    - **Data Processing**: Data validation, transformation, and quality assessment\n    - **User Management**: Complete user CRUD operations with RBAC integration\n    - **Role Assignment**: Assign and manage user roles and permissions\n    - **Service Integration**: Communicates with Auth Service for authentication and authorization\n    \n    ### Authentication:\n    All endpoints require authentication using JWT Bearer tokens from the Auth Service.\n    \n    ### User Management:\n    The Processing Service handles all user management operations while delegating authentication to the Auth Service.\n    ",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/api/v1/process/data": {
+      "post": {
+        "tags": [
+          "Data Processing"
+        ],
+        "summary": "Process Data",
+        "description": "Process data endpoint\n\nReturns:\n    Processing confirmation with transformed data",
+        "operationId": "process_data_api_v1_process_data_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProcessingRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProcessingResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/process/quality-check": {
+      "post": {
+        "tags": [
+          "Data Processing"
+        ],
+        "summary": "Quality Check",
+        "description": "Quality check endpoint\n\nReturns:\n    Quality check result",
+        "operationId": "quality_check_api_v1_process_quality_check_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QualityCheckRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QualityCheckResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/process/status": {
+      "get": {
+        "tags": [
+          "Data Processing"
+        ],
+        "summary": "Get Processing Status",
+        "description": "Get processing status endpoint\n\nReturns:\n    Current processing status",
+        "operationId": "get_processing_status_api_v1_process_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/": {
+      "get": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "List Users",
+        "description": "List all users with optional filtering\n\nThis endpoint retrieves a paginated list of users with optional filtering by role and active status.\n\n**Permissions Required**: `users:read`\n\n**Parameters**:\n- `skip`: Number of records to skip for pagination\n- `limit`: Maximum number of records to return (1-1000)\n- `role`: Optional role filter\n- `is_active`: Optional active status filter\n\n**Returns**: List of user information (excluding sensitive data like passwords)",
+        "operationId": "list_users_api_v1_users__get",
+        "parameters": [
+          {
+            "name": "skip",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Number of records to skip",
+              "default": 0,
+              "title": "Skip"
+            },
+            "description": "Number of records to skip"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 1000,
+              "minimum": 1,
+              "description": "Maximum number of records to return",
+              "default": 100,
+              "title": "Limit"
+            },
+            "description": "Maximum number of records to return"
+          },
+          {
+            "name": "role",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by role",
+              "title": "Role"
+            },
+            "description": "Filter by role"
+          },
+          {
+            "name": "is_active",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Filter by active status",
+              "title": "Is Active"
+            },
+            "description": "Filter by active status"
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UserResponse"
+                  },
+                  "title": "Response List Users Api V1 Users  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Create User",
+        "description": "Create a new user\n\nThis endpoint creates a new user with the specified roles and permissions.\n\n**Permissions Required**: `users:create`\n\n**Request Body**:\n- `username`: Unique username for the user\n- `email`: User's email address\n- `password`: User's password (will be hashed)\n- `roles`: List of roles to assign (default: [\"user\"])\n- `permissions`: List of specific permissions (optional)\n- `profile`: Additional user profile information\n- `is_active`: Whether the user account is active\n- `is_verified`: Whether the user email is verified\n\n**Returns**: Created user information (excluding password)",
+        "operationId": "create_user_api_v1_users__post",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}": {
+      "get": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Get User",
+        "description": "Get user by ID\n\nThis endpoint retrieves detailed information about a specific user.\n\n**Permissions Required**: `users:read`\n\n**Parameters**:\n- `user_id`: Unique identifier of the user\n\n**Returns**: User information (excluding sensitive data like passwords)",
+        "operationId": "get_user_api_v1_users__user_id__get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Update User",
+        "description": "Update user information\n\nThis endpoint updates user information. Only provided fields will be updated.\n\n**Permissions Required**: `users:update`\n\n**Parameters**:\n- `user_id`: Unique identifier of the user to update\n\n**Request Body**: All fields are optional\n- `username`: New username\n- `email`: New email address\n- `roles`: New list of roles\n- `permissions`: New list of permissions\n- `profile`: Updated profile information\n- `is_active`: Account active status\n- `is_verified`: Email verification status\n\n**Returns**: Updated user information",
+        "operationId": "update_user_api_v1_users__user_id__put",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserUpdateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Delete User",
+        "description": "Delete user (soft delete)\n\nThis endpoint performs a soft delete of the user account. The user data is marked as deleted\nbut not physically removed from the database.\n\n**Permissions Required**: `users:delete`\n\n**Parameters**:\n- `user_id`: Unique identifier of the user to delete\n\n**Returns**: Success message confirming deletion",
+        "operationId": "delete_user_api_v1_users__user_id__delete",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/roles": {
+      "put": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Assign Roles To User",
+        "description": "Assign roles to a user\n\nThis endpoint assigns roles to a specific user. The roles will be validated against\navailable roles from the Auth Service.\n\n**Permissions Required**: `roles:assign`\n\n**Parameters**:\n- `user_id`: Unique identifier of the user\n\n**Request Body**:\n- `roles`: List of role names to assign\n\n**Returns**: Success message confirming role assignment",
+        "operationId": "assign_roles_to_user_api_v1_users__user_id__roles_put",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RoleAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Get User Roles",
+        "description": "Get roles assigned to a user\n\nThis endpoint retrieves all roles currently assigned to a specific user.\n\n**Permissions Required**: `users:read`\n\n**Parameters**:\n- `user_id`: Unique identifier of the user\n\n**Returns**: User ID and list of assigned roles",
+        "operationId": "get_user_roles_api_v1_users__user_id__roles_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/users/{user_id}/permissions": {
+      "put": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Assign Permissions To User",
+        "description": "Assign permissions to a user\n\nThis endpoint assigns specific permissions to a user. The permissions will be validated\nagainst available permissions from the Auth Service.\n\n**Permissions Required**: `permissions:assign`\n\n**Parameters**:\n- `user_id`: Unique identifier of the user\n\n**Request Body**:\n- `permissions`: List of permission names to assign\n\n**Returns**: Success message confirming permission assignment",
+        "operationId": "assign_permissions_to_user_api_v1_users__user_id__permissions_put",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PermissionAssignmentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "user-management"
+        ],
+        "summary": "Get User Permissions",
+        "description": "Get permissions assigned to a user\n\nThis endpoint retrieves all permissions currently assigned to a specific user.\n\n**Permissions Required**: `users:read`\n\n**Parameters**:\n- `user_id`: Unique identifier of the user\n\n**Returns**: User ID and list of assigned permissions",
+        "operationId": "get_user_permissions_api_v1_users__user_id__permissions_get",
+        "parameters": [
+          {
+            "name": "user_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "User Id"
+            }
+          },
+          {
+            "name": "token",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "JWT token",
+              "title": "Token"
+            },
+            "description": "JWT token"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "summary": "Health Check",
+        "description": "Health check endpoint",
+        "operationId": "health_check_health_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "type": "array",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "title": "HTTPValidationError"
+      },
+      "HealthResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "service": {
+            "type": "string",
+            "title": "Service"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "service",
+          "version",
+          "timestamp"
+        ],
+        "title": "HealthResponse",
+        "description": "Health check response model"
+      },
+      "PermissionAssignmentRequest": {
+        "properties": {
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions"
+          }
+        },
+        "type": "object",
+        "required": [
+          "permissions"
+        ],
+        "title": "PermissionAssignmentRequest"
+      },
+      "ProcessingRequest": {
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          },
+          "transformation_rules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Transformation Rules",
+            "default": []
+          },
+          "quality_checks": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Quality Checks",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "ProcessingRequest",
+        "description": "Data processing request model"
+      },
+      "ProcessingResponse": {
+        "properties": {
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "processing_id": {
+            "type": "string",
+            "title": "Processing Id"
+          },
+          "timestamp": {
+            "type": "string",
+            "title": "Timestamp"
+          },
+          "transformed_data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Transformed Data"
+          }
+        },
+        "type": "object",
+        "required": [
+          "message",
+          "processing_id",
+          "timestamp",
+          "transformed_data"
+        ],
+        "title": "ProcessingResponse",
+        "description": "Data processing response model"
+      },
+      "QualityCheckRequest": {
+        "properties": {
+          "data": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Data"
+          },
+          "quality_rules": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Quality Rules",
+            "default": []
+          }
+        },
+        "type": "object",
+        "required": [
+          "data"
+        ],
+        "title": "QualityCheckRequest",
+        "description": "Quality check request model"
+      },
+      "QualityCheckResponse": {
+        "properties": {
+          "passed": {
+            "type": "boolean",
+            "title": "Passed"
+          },
+          "quality_score": {
+            "type": "number",
+            "title": "Quality Score"
+          },
+          "issues": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Issues"
+          }
+        },
+        "type": "object",
+        "required": [
+          "passed",
+          "quality_score",
+          "issues"
+        ],
+        "title": "QualityCheckResponse",
+        "description": "Quality check response model"
+      },
+      "RoleAssignmentRequest": {
+        "properties": {
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          }
+        },
+        "type": "object",
+        "required": [
+          "roles"
+        ],
+        "title": "RoleAssignmentRequest"
+      },
+      "StatusResponse": {
+        "properties": {
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "last_processing": {
+            "type": "string",
+            "title": "Last Processing"
+          },
+          "total_processed": {
+            "type": "integer",
+            "title": "Total Processed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "status",
+          "last_processing",
+          "total_processed"
+        ],
+        "title": "StatusResponse",
+        "description": "Processing status response model"
+      },
+      "UserCreateRequest": {
+        "properties": {
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "password": {
+            "type": "string",
+            "title": "Password"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles",
+            "default": [
+              "user"
+            ]
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions",
+            "default": []
+          },
+          "profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Profile",
+            "default": {}
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          },
+          "is_verified": {
+            "type": "boolean",
+            "title": "Is Verified",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "username",
+          "email",
+          "password"
+        ],
+        "title": "UserCreateRequest"
+      },
+      "UserResponse": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "username": {
+            "type": "string",
+            "title": "Username"
+          },
+          "email": {
+            "type": "string",
+            "title": "Email"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "is_verified": {
+            "type": "boolean",
+            "title": "Is Verified"
+          },
+          "roles": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "permissions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Permissions"
+          },
+          "profile": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Profile"
+          },
+          "created_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created At"
+          },
+          "last_login": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Login"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "username",
+          "email",
+          "is_active",
+          "is_verified",
+          "roles",
+          "permissions",
+          "profile"
+        ],
+        "title": "UserResponse"
+      },
+      "UserUpdateRequest": {
+        "properties": {
+          "username": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Username"
+          },
+          "email": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Email"
+          },
+          "roles": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Roles"
+          },
+          "permissions": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Permissions"
+          },
+          "profile": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Profile"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          },
+          "is_verified": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Verified"
+          }
+        },
+        "type": "object",
+        "title": "UserUpdateRequest"
+      },
+      "ValidationError": {
+        "properties": {
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "type": "array",
+            "title": "Location"
+          },
+          "msg": {
+            "type": "string",
+            "title": "Message"
+          },
+          "type": {
+            "type": "string",
+            "title": "Error Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError"
+      }
+    }
+  }
+}
