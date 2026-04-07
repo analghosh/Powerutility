@@ -1,0 +1,12 @@
+-e ./libs
+black==24.2.0
+flake8==7.0.0
+pylint==3.0.3
+mypy==1.8.0
+pytest==8.0.1
+pytest-asyncio==0.23.5
+isort==5.13.2
+autopep8==2.0.4
+PyJWT==2.8.0
+celery[redis]==5.3.4
+redis==5.0.1

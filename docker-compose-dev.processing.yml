@@ -1,0 +1,34 @@
+services:
+  processing-service:
+    build:
+      context: .
+      dockerfile: services/processing/Dockerfile
+    container_name: dev-processing-service
+    ports:
+      - "8103:8103"  # external:internal
+    command: >
+      sh -c "uvicorn services.processing.app.main:app --host 0.0.0.0 --port ${PROCESSING_PORT} --root-path /processing"
+    volumes:
+      - .:/app
+      - /var/log/epms/processing-service:/var/log/processing-service
+      - ${ENV_DIR}:/tmp/jenkins_env/dev  # Jenkins env files
+    env_file:
+      - ${ENV_FILE}  # injected from Jenkins
+    environment:
+      - PROCESSING_PORT=8103  # internal port for Uvicorn
+    user: "${UID}:${GID}"  # make sure Jenkins exports these
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - my_custom_bridge
+    restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${PROCESSING_PORT}/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+networks:
+  my_custom_bridge:
+    external: true

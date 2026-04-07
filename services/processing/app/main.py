@@ -1,0 +1,568 @@
+"""
+EPMS Processing Service - Clean Structure
+Maintains essential functionality with clean router organization
+"""
+
+# Auto-install libs package if not available
+import sys
+import os
+from pathlib import Path
+
+# Add project root to Python path for development
+project_root = Path(__file__).parent.parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Check if libs package is available and install if needed
+try:
+    import libs.core.cron_manager
+except ImportError as e:
+    # Only auto-install if we're not in a container and haven't already tried recently
+    is_development = not os.environ.get('DOCKER_CONTAINER', False)
+    install_marker = project_root / '.libs_installed'
+    
+    if is_development and not install_marker.exists():
+        print(f"📦 Installing dependencies due to import error: {e}")
+        try:
+            import subprocess
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", "-e", str(project_root)
+            ], timeout=60)
+            print("✅ Dependencies installed successfully")
+            
+            # Create marker file to avoid repeated installations
+            install_marker.touch()
+            
+            # Try importing again to verify
+            import libs.core.cron_manager
+        except subprocess.TimeoutExpired:
+            print("⚠️ Installation timed out, continuing without auto-install")
+        except Exception as install_error:
+            print(f"⚠️ Failed to install dependencies: {install_error}")
+            print("Continuing with manual path setup...")
+    else:
+        if install_marker.exists():
+            print("⚠️ Dependencies were recently installed but import still failing")
+            print("This might be a path issue - continuing with manual path setup...")
+        else:
+            print(f"⚠️ Import error: {e}")
+            print("Continuing with manual path setup...")
+
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.openapi.utils import get_openapi
+from fastapi.security import HTTPBearer
+from pydantic import BaseModel
+import logging
+from starlette.responses import JSONResponse
+
+from .core.config import settings
+# Simple version constant
+APP_VERSION = "2.0.0"
+API_V2_VERSION = "2.0.0"
+from .services.health_service import processing_health_service
+
+# Configure logging with correlation ID support
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware
+
+# Import V2 authentication middleware
+from .v2.middleware.auth import V2AuthMiddleware
+
+# Configure logging based on settings
+configure_logging(
+    level=settings.LOG_LEVEL,
+    format_type=getattr(settings, 'LOG_FORMAT', 'colored'),
+    include_correlation=True,
+    use_colors=getattr(settings, 'LOG_USE_COLORS', True)
+)
+
+
+
+# Initialize logger (uses global config from configure_logging above)
+logger = logging.getLogger("processing_service")
+
+
+class HealthResponse(BaseModel):
+    """Health check response model"""
+    status: str
+    service: str
+    version: str
+    environment: str
+    base_path: str
+    timestamp: str
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Lifespan context manager for startup/shutdown events"""
+    # Startup
+    logger.info("Starting EPMS Processing Service...")
+    from .v2.repository.master_plants_repository import master_plants_repository
+    master_plants_repository.create_indexes()
+    from .v2.repository.bid_trade_serve_repository import BidTradeServeRepository
+    BidTradeServeRepository()
+
+    # One-time migration: encrypt plaintext BearerTokens in exchange_config
+    try:
+        from .v2.migrations.encrypt_bearer_tokens import run_encrypt_bearer_tokens_migration
+        await run_encrypt_bearer_tokens_migration()
+    except Exception as e:
+        logger.error(f"BearerToken encryption migration failed: {e}")
+
+    yield
+    # Shutdown
+    logger.info("Shutting down EPMS Processing Service...")
+
+
+# Import routers using the clean structure
+from .api.v1 import router as v1_router
+
+# Import V2 routers
+from .v2.api.router.dsm_overview import router as dsm_overview_router
+from .v2.api.router.market_overview import router as market_overview_router
+from .v2.api.router.graph_routes import router as graph_router
+from .v2.api.router.demand_forecast_routes import router as demand_forecast_router
+from .v2.api.router.dashboard_routes import router as dashboard_v2_router
+from .v2.api.router.management_snapshot_routes import router as management_snapshot_v2_router
+from .v2.api.router.price_group_routes import router as price_group_router
+from .v2.api.router.supply_routes import router as supply_router
+from .v2.api.router.master_plants_routes import router as master_plant_router
+from .v2.api.router.forecastAnalysis_routes import router as forecast_analysis
+from .v2.api.router.limit_values_routes import router as limit_values_routers
+from .v2.api.router.weather_routes import router as weather_router
+# from .v2.api.router.rtm_bidding_routes import router as rtm_bidding_router
+from .v2.api.router.new_rtm_bidding_routes import (
+    router as new_rtm_bidding_router,
+    public_router as new_rtm_bidding_public_router,
+)
+from .v2.api.router.new_dam_bidding_routes import (
+    router as new_dam_bidding_router,
+    public_router as new_dam_bidding_public_router,
+)
+from .v2.api.router.renewable_routes import router as renewable_routes
+from .v2.api.router.dam_sheduling_routes import router as dam_scheduling_router
+from .v2.api.router.block_bid_routes import router as block_bid_route
+from .v2.api.router.rtm_scheduling_routes import router as rtm_scheduling_router
+from .v2.api.router.dayaheadmarket_routes import router as dayaheadmarket_router
+from .v2.api.router.audit_logger_routes import router as audit_logger_router
+from .v2.api.router.parameter_routes import router as parameter_router
+from .v2.api.router.bid_market_routes import router as bid_market_router
+from .v2.api.router.job_execution_routes import router as job_execution_router
+from .v2.api.router.supply_manual_routes import router as supply_manual_router
+from .v2.api.router.demand_manual_routes import router as demand_manual_router
+from .v2.api.router.power_optimization_routes import router as power_optimization_router
+from .v2.api.router.iex_api_detail_routes import router as iex_api_detail_router
+from .v2.api.router.api_key_management_routes import router as api_key_management_router 
+from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
+from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
+from .v2.api.router.exchange_config_routes import router as exchange_config_router
+
+
+# Get environment from settings (which has proper defaults and validation)
+environment = settings.ENVIRONMENT
+
+# Main FastAPI application
+app = FastAPI(
+    title="EPMS Processing Service - V1",
+    description=f"""
+    ## EPMS Processing Service - V1 Endpoints
+    
+    Core processing functionality (No authentication required).
+    
+    **Environment**: {environment}
+    """,
+    version=APP_VERSION,
+    docs_url="/docs",
+    redoc_url="/redoc",
+    openapi_url="/openapi.json",
+    lifespan=lifespan,
+    root_path=settings.BASE_PATH
+)
+
+# V2 Sub-application with proper swagger configuration for server environments
+v2_docs_url = "/docs"
+v2_redoc_url = "/redoc"
+v2_openapi_url = "/openapi.json"
+
+# For server environments, we need to adjust the swagger URLs to include the base path
+if settings.ENVIRONMENT in ["server", "docker"]:
+    # The swagger URLs will be accessible at /processing/api/v2/docs, etc.
+    v2_docs_url = "/docs"  # Keep relative to the mounted path
+    v2_redoc_url = "/redoc"  # Keep relative to the mounted path
+    v2_openapi_url = "/openapi.json"  # Keep relative to the mounted path
+
+v2_app = FastAPI(
+    title="EPMS Processing Service - V2",
+    description=f"""
+    ## EPMS Processing Service - V2 Endpoints
+    
+    Enhanced processing with JWT authentication (🔒 Bearer token required).
+    
+    **Environment**: {environment}
+    **Base Path**: {settings.BASE_PATH}
+    
+    ### Swagger Access:
+    - **Docs**: `{settings.BASE_PATH}/api/v2/docs`
+    - **ReDoc**: `{settings.BASE_PATH}/api/v2/redoc`
+    - **OpenAPI**: `{settings.BASE_PATH}/api/v2/openapi.json`
+    """,
+    version=API_V2_VERSION,
+    docs_url=v2_docs_url,
+    redoc_url=v2_redoc_url,
+    openapi_url=v2_openapi_url,
+)
+
+# Mount V2 as a sub-application
+app.mount("/api/v2", v2_app)
+
+
+# Add middleware (order matters: last added = first executed)
+
+# Add logging middleware first
+app.add_middleware(
+    LoggingMiddleware,
+    log_requests=getattr(settings, 'LOG_REQUESTS', True),
+    log_responses=getattr(settings, 'LOG_RESPONSES', True),
+    log_body=getattr(settings, 'LOG_BODY', False),
+    exclude_paths=["/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"]
+)
+
+# Add correlation middleware second
+app.add_middleware(CorrelationMiddleware)
+
+# Define paths to exclude from authentication
+exclude_paths = [
+    "/health",
+    "/docs",
+    "/redoc",
+    "/openapi.json",
+    "/api/v2/health",
+    "/api/v2/docs",
+    "/api/v2/redoc",
+    "/api/v2/openapi.json",
+    "/api/v2/rtm-bidding/public",
+    "/rtm-bidding/public",
+    "/api/v2/dam-bidding/public",
+    "/dam-bidding/public",
+    # Exclude power optimization - it uses HMAC authentication instead of JWT
+    "/api/v2/power-optimization",  # Matches /api/v2/power-optimization/*
+    "/api/v2/power-optimization/",  # Also match with trailing slash
+    "/api/v2/power-optimization/power-optimization-input",  # Explicit match
+    "/power-optimization",  # Relative path (for mounted app)
+    "/power-optimization/",  # Relative path with trailing slash
+    # Note: V2 API routes now require authentication - use valid JWT tokens
+    # Exception: power-optimization uses HMAC authentication
+]
+
+# Add v1 paths to exclude list only if v1 API is enabled
+if settings.ENABLE_V1_API:
+    exclude_paths.append("/api/v1")
+
+# If a base path is configured, add prefixed versions to the exclude list
+if settings.BASE_PATH:
+    exclude_paths.extend([f"{settings.BASE_PATH}{p}" for p in exclude_paths])
+     # Also add power-optimization specific paths with BASE_PATH
+    exclude_paths.extend([
+        f"{settings.BASE_PATH}/api/v2/power-optimization",
+        f"{settings.BASE_PATH}/api/v2/power-optimization/",
+        f"{settings.BASE_PATH}/api/v2/power-optimization/power-optimization-input",
+    ])
+# Add Auth Middleware third
+app.add_middleware(
+    AuthMiddleware,
+    auth_service_url=settings.AUTH_SERVICE_URL,
+    exclude_paths=exclude_paths,
+)
+
+# Add CORS middleware last to ensure it runs first
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+# V1 API disabled - comment out to re-enable
+# app.include_router(v1_router)
+logger.info("🚫 V1 API endpoints disabled")
+
+# Include all V2 route modules in the V2 sub-application
+v2_app.include_router(dsm_overview_router)
+v2_app.include_router(market_overview_router)
+v2_app.include_router(graph_router)
+v2_app.include_router(demand_forecast_router)
+v2_app.include_router(dashboard_v2_router)
+v2_app.include_router(management_snapshot_v2_router)
+v2_app.include_router(price_group_router)
+v2_app.include_router(supply_router)
+v2_app.include_router(master_plant_router)
+v2_app.include_router(forecast_analysis)
+v2_app.include_router(limit_values_routers)
+v2_app.include_router(weather_router)
+# v2_app.include_router(rtm_bidding_router)
+v2_app.include_router(new_rtm_bidding_router)
+v2_app.include_router(new_rtm_bidding_public_router)
+v2_app.include_router(new_dam_bidding_router)
+v2_app.include_router(new_dam_bidding_public_router)
+v2_app.include_router(renewable_routes)
+v2_app.include_router(dam_scheduling_router)
+v2_app.include_router(block_bid_route)
+v2_app.include_router(rtm_scheduling_router)
+v2_app.include_router(dayaheadmarket_router)
+v2_app.include_router(audit_logger_router)
+v2_app.include_router(parameter_router)
+v2_app.include_router(bid_market_router)
+v2_app.include_router(job_execution_router)
+v2_app.include_router(supply_manual_router)
+v2_app.include_router(demand_manual_router)
+v2_app.include_router(power_optimization_router)
+v2_app.include_router(iex_api_detail_router)
+v2_app.include_router(api_key_management_router)
+v2_app.include_router(exchange_trade_router)
+v2_app.include_router(exchange_dsm_router)
+v2_app.include_router(exchange_config_router)
+
+
+
+# Add middleware (order matters - last added = first executed)
+logging_config = {
+    "log_requests": getattr(settings, 'LOG_REQUESTS', True),
+    "log_responses": getattr(settings, 'LOG_RESPONSES', True),
+    "log_body": getattr(settings, 'LOG_BODY', False),  # Only log body in debug mode
+    "exclude_paths": ["/health", "/docs", "/redoc", "/openapi.json", "/favicon.ico"]
+}
+
+# Add debugging middleware for URL issues
+@app.middleware("http")
+async def debug_main_app_requests(request: Request, call_next):
+    """Debug middleware to log all requests to main app"""
+    if "processing" in str(request.url):
+        logger.info(f"🔍 MAIN APP REQUEST - Method: {request.method}, URL: {request.url}, Path: {request.url.path}, Query: {request.url.query}")
+    response = await call_next(request)
+    return response
+
+# Simple and robust authentication middleware
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """Handle authentication for V2 routes using auth service validation"""
+    path = request.url.path
+    
+    # Normalize path (remove double slashes, trailing slashes)
+    path = path.replace("//", "/").rstrip("/")
+    
+    # Debug logging
+    logger.info(f"🔍 MAIN AUTH MIDDLEWARE - Path: {path}")
+    
+    # V2 routes should use auth service validation, not local JWT validation
+    # Define paths that need authentication
+    base_path = settings.BASE_PATH
+    v2_paths = ["/api/v2/"]
+    if base_path:
+        v2_paths.append(f"{base_path}/api/v2/")
+    
+    # Define paths to exclude from authentication (swagger docs, health, etc.)
+    exclude_paths = [
+        "/api/v2/health", 
+        "/api/v2/docs", 
+        "/api/v2/redoc", 
+        "/api/v2/openapi.json",
+        # Exclude power optimization - it uses HMAC authentication instead of JWT
+        "/api/v2/power-optimization",  # Matches /api/v2/power-optimization/*
+        "/api/v2/power-optimization/",  # Also match with trailing slash
+        "/api/v2/power-optimization/power-optimization-input",  # Explicit match
+    ]
+    
+    # Add base path prefixed versions for server environments
+    if base_path:
+        exclude_paths.extend([
+            f"{base_path}/api/v2/health",
+            f"{base_path}/api/v2/docs",
+            f"{base_path}/api/v2/redoc", 
+            f"{base_path}/api/v2/openapi.json",
+            # CRITICAL: Add BASE_PATH-prefixed power-optimization paths for server
+            f"{base_path}/api/v2/power-optimization",  # Matches /processing/api/v2/power-optimization/*
+            f"{base_path}/api/v2/power-optimization/",  # With trailing slash
+            f"{base_path}/api/v2/power-optimization/power-optimization-input",  # Explicit match
+        ])
+    
+    # Allow OPTIONS requests to pass through for CORS preflight
+    if request.method == "OPTIONS":
+        logger.info(f"🔓 Bypassing auth for OPTIONS request: {path}")
+        return await call_next(request)
+
+    # Debug: Log the paths being checked
+    logger.info(f"🔍 V2 paths: {v2_paths}")
+    logger.info(f"🔍 Exclude paths: {exclude_paths}")
+
+    # Check if this is a V2 route that needs authentication
+    needs_auth = any(v2_path in path for v2_path in v2_paths)
+    # Improved exclusion check - check if path starts with any exclude path
+    is_excluded = any(
+        path.startswith(exclude_path.rstrip("/")) or 
+        path == exclude_path.rstrip("/") or
+        path.startswith(exclude_path + "/")
+        for exclude_path in exclude_paths
+    )
+    
+    logger.info(f"🔍 Path: {path}, Needs auth: {needs_auth}, Is excluded: {is_excluded}")
+    
+    # CRITICAL: If path is excluded, skip JWT authentication early (HMAC will handle it)
+    if is_excluded:
+        logger.info(f"🔓 SKIPPING JWT AUTH for excluded path: {path}")
+        return await call_next(request)
+    
+    if needs_auth and not is_excluded:
+        logger.info(f"🔐 AUTH REQUIRED for V2 route: {path}")
+        
+        # Get Authorization header
+        auth_header = request.headers.get("authorization") or request.headers.get("Authorization")
+        
+        if not auth_header:
+            logger.warning(f"❌ NO AUTH HEADER for: {path}")
+            return JSONResponse(status_code=401, content={"detail": "Authorization header required"})
+        
+        if not auth_header.startswith("Bearer "):
+            logger.warning(f"❌ INVALID AUTH FORMAT for: {path}")
+            return JSONResponse(status_code=401, content={"detail": "Bearer token required"})
+        
+        # Extract token and validate with auth service
+        try:
+            token = auth_header.split(" ")[1]
+            logger.info(f"✅ TOKEN EXTRACTED for: {path}")
+
+            # Use auth service for validation instead of local JWT validation
+            from libs.auth_client import AuthClient
+            auth_client = AuthClient(settings.AUTH_SERVICE_URL)
+            
+            async with auth_client:
+                validation_result = await auth_client.validate_token(token)
+                
+                if not validation_result.valid:
+                    logger.error(f"❌ AUTH SERVICE VALIDATION FAILED for: {path}")
+                    return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+                
+                # Create user context from auth service response
+                request.state.current_user = {
+                    "user_id": validation_result.user_id,
+                    "username": validation_result.username,
+                    "email": validation_result.email,
+                    "roles": validation_result.roles,
+                    "permissions": validation_result.permissions,
+                    "token": token
+                }
+                logger.info(f"✅ USER CONTEXT SET for: {path} - User: {validation_result.username}")
+            
+        except Exception as e:
+            logger.error(f"❌ AUTH PROCESSING FAILED for: {path} - Error: {e}")
+            return JSONResponse(status_code=401, content={"detail": f"Authentication failed: {str(e)}"})
+    
+    else:
+        logger.info(f"🔓 NO AUTH NEEDED for: {path}")
+    
+    # Continue with request
+    response = await call_next(request)
+    return response
+
+# NOTE: Middleware is already added at lines 207-216
+# DO NOT add duplicate middleware here - it causes "No response returned" errors
+# with mounted sub-applications due to conflicting call_next chains
+
+# Health endpoints
+@app.get("/health", tags=["Health"])
+async def health_check():
+    """Basic health check endpoint"""
+    return await processing_health_service.get_simple_health()
+
+@v2_app.get("/health", tags=["V2 Health"])
+async def v2_health_check():
+    """V2 Health check endpoint with swagger URL information"""
+    base_path = settings.BASE_PATH
+    
+    swagger_urls = {
+        "docs": f"{base_path}/api/v2/docs" if base_path else "/api/v2/docs",
+        "redoc": f"{base_path}/api/v2/redoc" if base_path else "/api/v2/redoc",
+        "openapi": f"{base_path}/api/v2/openapi.json" if base_path else "/api/v2/openapi.json"
+    }
+    
+    return {
+        "status": "healthy",
+        "service": "processing-service-v2",
+        "version": API_V2_VERSION,
+        "environment": environment,
+        "base_path": base_path,
+        "swagger_urls": swagger_urls,
+        "features": [
+            "JWT Authentication",
+            "Correlation ID Tracking", 
+            "Enhanced Error Handling"
+        ]
+    }
+
+
+def custom_openapi_v2():
+    """Custom OpenAPI schema for V2 with security definitions and proper server URLs"""
+    if v2_app.openapi_schema:
+        return v2_app.openapi_schema
+    
+    openapi_schema = get_openapi(
+        title=v2_app.title,
+        version=v2_app.version,
+        description=v2_app.description,
+        routes=v2_app.routes,
+    )
+    
+    # Add server URLs with base path for proper OpenAPI documentation
+    base_path = settings.BASE_PATH
+    
+    servers = []
+    
+    # For server environments, add the full server URL with base path
+    if base_path:
+        servers.append({
+            "url": f"{base_path}/api/v2", 
+            "description": f"Server environment ({environment}) - Use this for server deployment"
+        })
+    
+    # Always add local development URL
+    servers.append({
+        "url": "/api/v2", 
+        "description": "Local development - Use this for local testing"
+    })
+    
+    openapi_schema["servers"] = servers
+    
+    # Add security scheme for JWT Bearer token
+    openapi_schema["components"]["securitySchemes"] = {
+        "HTTPBearer": {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "JWT",
+            "description": "Enter your JWT token for V2 API endpoints (e.g., 'Bearer eyJhbGciOiJIUzI1NiI9...)"
+        }
+    }
+    
+    # Add security to all V2 endpoints except health
+    for path, path_item in openapi_schema["paths"].items():
+        if not path.endswith("/health"):
+            for operation in path_item.values():
+                if isinstance(operation, dict) and "operationId" in operation:
+                    operation["security"] = [{"HTTPBearer": []}]
+    
+    v2_app.openapi_schema = openapi_schema
+    return v2_app.openapi_schema
+
+# Set custom OpenAPI function for V2 app
+v2_app.openapi = custom_openapi_v2
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(
+        "app.main:app",
+        host=settings.SERVICE_HOST,
+        port=settings.SERVICE_PORT,
+        reload=settings.DEBUG
+    )
