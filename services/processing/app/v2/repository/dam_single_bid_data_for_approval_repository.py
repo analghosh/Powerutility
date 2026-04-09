@@ -43,7 +43,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
 
             logger.info(f"Inserting {len(documents)} documents into DAM single bid collection...")
             
-            result = self.collection.insert_many(documents, ordered=False)
+            result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
 
             logger.info("DAM single bid bulk insert successful")
@@ -58,7 +58,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             query = self.collection.find(filters, projection or {})
-            return list(query)
+            return await query.to_list(None)
         except Exception as e:
             logger.error("Failed to find DAM single bid records: %s", str(e))
             return []
@@ -68,7 +68,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         Update a single document matching the filter.
         """
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error("Failed to update DAM single bid record: %s", str(e))
@@ -79,7 +79,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         Update multiple documents matching the filter.
         """
         try:
-            result = self.collection.update_many(filter_query, update_query)
+            result = await self.collection.update_many(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error("Failed to update DAM single bid records: %s", str(e))
@@ -91,7 +91,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return list(cursor)
+            return await cursor.to_list(None)
         except Exception as e:
             logger.error("Failed to aggregate DAM single bid records: %s", str(e))
             return []

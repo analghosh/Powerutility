@@ -13,16 +13,16 @@ class DashboardRepository(BaseRepository):
         logger.info(f"DashboardRepository initialized with collection: {collection_name}")
 
 
-    def get_current_block(self, schedule_date: str, block_id: int) -> Optional[Dict[str, Any]]:
+    async def get_current_block(self, schedule_date: str, block_id: int) -> Optional[Dict[str, Any]]:
         query = {
             "schedule_date": schedule_date,
             "time_block": block_id,
             "data_type": "demand"
         }
-        return self.collection.find_one(query)
+        return await self.collection.find_one(query)
 
 
-    def get_blocks_by_ids(self, schedule_date: str, block_ids: List[int], data_type="demand", dc_sg_type=None):
+    async def get_blocks_by_ids(self, schedule_date: str, block_ids: List[int], data_type="demand", dc_sg_type=None):
         query = {
             "schedule_date": schedule_date,
             "time_block": {"$in": [b for b in block_ids if b is not None]},
@@ -33,7 +33,7 @@ class DashboardRepository(BaseRepository):
 
         return self.collection.find(query).sort("time_block", 1)
     
-    def get_acp_data_by_time_blocks(self, schedule_date: str, full_time_list: List[str]) -> List[Dict[str, Any]]:
+    async def get_acp_data_by_time_blocks(self, schedule_date: str, full_time_list: List[str]) -> List[Dict[str, Any]]:
         query = {
             "schedule_date": schedule_date,
             "cronJob_time": {"$in": full_time_list}
@@ -45,12 +45,12 @@ class DashboardRepository(BaseRepository):
         }
         cursor = self.collection.find(query, projection)
         try:
-            return list(cursor)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
 
 
-    def get_demand(self, schedule_date: str):
+    async def get_demand(self, schedule_date: str):
         pipeline = [
             {"$match": {"schedule_date": schedule_date, "type": "IDF"}},
             {"$project": {
@@ -63,15 +63,15 @@ class DashboardRepository(BaseRepository):
         ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return list(cursor)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
     
     
-    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         try:
             cursor = self.collection.aggregate(pipeline, allowDiskUse=True)
-            return list(cursor)
+            return await cursor.to_list(None)
         except Exception:
             logger.exception("aggregate failed on %s", self.collection_name)
             return []

@@ -42,7 +42,7 @@ class RtmBookRepository(GenericRepository):
             # The scheduler stores DeliveryDate as int (e.g., 20250208)
             query = {"DeliveryDate": delivery_date}
             cursor = self.collection.find(query, {"_id": 0})  # Exclude _id
-            results = list(cursor)
+            results = await cursor.to_list(None)
             logger.info(f"Retrieved {len(results)} RTM book entries for date {delivery_date}")
             return results
         except Exception as e:

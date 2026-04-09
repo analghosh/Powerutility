@@ -170,8 +170,8 @@ class DemandServeHistoricalEntity(BaseModel):
     
     # DSM related fields
     comp_act_demand: float = Field(default=0.0, description="Computed actual demand")
-    net_dsm_amount: float = Field(default=0.0, description="Net DSM amount")
-    dsm_rate: float = Field(default=0.0, description="DSM rate")
+    net_dsm_amount: Optional[float] = Field(None, description="Net DSM amount")
+    dsm_rate: Optional[float] = Field(None, description="DSM rate")
     forecasted_frequency: float = Field(default=0.0, description="Forecasted frequency value")
 
     # New fields for Demand Multiplier and Drawal Before Loss

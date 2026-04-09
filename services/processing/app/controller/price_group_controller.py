@@ -15,8 +15,8 @@ class PriceGroupController:
         return self.service.get(_id, actor, req)
 
 
-    def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int, actor: Optional[Dict[str, Any]], req: Dict[str, Any]):
-        return self.service.list(filters, page, page_size, actor, req)
+    async def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int, actor: Optional[Dict[str, Any]], req: Dict[str, Any]):
+        return await self.service.list(filters, page, page_size, actor, req)
 
 
     def update(self, _id: str, updates: Dict[str, Any], actor: Optional[Dict[str, Any]], req: Dict[str, Any]):

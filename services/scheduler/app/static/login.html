@@ -1,0 +1,575 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EPMS Admin Login</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .login-container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+            padding: 40px;
+            width: 100%;
+            max-width: 400px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .login-container::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #667eea, #764ba2);
+        }
+
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .logo h1 {
+            color: #333;
+            font-size: 28px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .logo p {
+            color: #666;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 8px;
+            color: #333;
+            font-weight: 500;
+            font-size: 14px;
+        }
+
+        .form-group input {
+            width: 100%;
+            padding: 12px 16px;
+            border: 2px solid #e1e5e9;
+            border-radius: 10px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+            background: #f8f9fa;
+        }
+
+        .form-group input:focus {
+            outline: none;
+            border-color: #667eea;
+            background: white;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .form-group input.error {
+            border-color: #e74c3c;
+            background: #fdf2f2;
+        }
+
+        .password-container {
+            position: relative;
+        }
+
+        .password-toggle {
+            position: absolute;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #666;
+            font-size: 18px;
+            padding: 4px;
+        }
+
+        .password-toggle:hover {
+            color: #333;
+        }
+
+        .login-button {
+            width: 100%;
+            padding: 14px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin-top: 10px;
+        }
+
+        .login-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 25px rgba(102, 126, 234, 0.3);
+        }
+
+        .login-button:active {
+            transform: translateY(0);
+        }
+
+        .login-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+
+        .error-message {
+            background: #fdf2f2;
+            color: #e74c3c;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border-left: 4px solid #e74c3c;
+            display: none;
+        }
+
+        .success-message {
+            background: #f0f9ff;
+            color: #0369a1;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 14px;
+            border-left: 4px solid #0369a1;
+            display: none;
+        }
+
+        .loading {
+            display: none;
+            text-align: center;
+            margin: 20px 0;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% {
+                transform: rotate(0deg);
+            }
+
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+
+        .mfa-section {
+            display: none;
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #e1e5e9;
+        }
+
+        .mfa-section h3 {
+            color: #333;
+            margin-bottom: 15px;
+            font-size: 16px;
+        }
+
+        .mfa-info {
+            background: #f8f9fa;
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+            font-size: 14px;
+            color: #666;
+        }
+
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            padding-top: 20px;
+            border-top: 1px solid #e1e5e9;
+            color: #666;
+            font-size: 12px;
+        }
+
+        .remember-me {
+            display: flex;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .remember-me input[type="checkbox"] {
+            width: auto;
+            margin-right: 8px;
+        }
+
+        .remember-me label {
+            margin-bottom: 0;
+            font-size: 14px;
+            color: #666;
+        }
+
+        @media (max-width: 480px) {
+            .login-container {
+                padding: 30px 20px;
+                margin: 10px;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="login-container">
+        <div class="logo">
+            <h1>EPMS</h1>
+            <p>Energy Portfolio Management System</p>
+        </div>
+
+        <div class="error-message" id="errorMessage"></div>
+        <div class="success-message" id="successMessage"></div>
+
+        <form id="loginForm">
+            <div class="form-group">
+                <label for="username">Username or Email</label>
+                <input type="text" id="username" name="username" required autocomplete="username">
+            </div>
+
+            <div class="form-group">
+                <label for="password">Password</label>
+                <div class="password-container">
+                    <input type="password" id="password" name="password" required autocomplete="current-password">
+                    <button type="button" class="password-toggle" onclick="togglePassword()">👁️</button>
+                </div>
+            </div>
+
+            <div class="remember-me">
+                <input type="checkbox" id="rememberMe" name="rememberMe">
+                <label for="rememberMe">Remember me</label>
+            </div>
+
+            <button type="submit" class="login-button" id="loginButton">
+                Sign In
+            </button>
+        </form>
+
+        <div class="loading" id="loading">
+            <div class="loading-spinner"></div>
+            <p>Authenticating...</p>
+        </div>
+
+        <div class="mfa-section" id="mfaSection">
+            <h3>Two-Factor Authentication</h3>
+            <div class="mfa-info">
+                Please enter the 6-digit code from your authenticator app to complete the login process.
+            </div>
+            <div class="form-group">
+                <label for="totpCode">TOTP Code</label>
+                <input type="text" id="totpCode" name="totpCode" placeholder="123456" maxlength="6" pattern="[0-9]{6}">
+            </div>
+            <button type="button" class="login-button" id="verifyMfaButton" onclick="verifyMFA()">
+                Verify & Complete Login
+            </button>
+        </div>
+
+        <div class="footer">
+            <p>&copy; 2025 EPMS. All rights reserved.</p>
+        </div>
+    </div>
+
+    <script>
+        // Configuration - loaded from /config endpoint
+        let AUTH_SERVICE_URL = ''; // set by loadConfig()
+        let BASE_PATH = ''; // set by loadConfig() or detectBasePath()
+        let temporaryToken = null;
+
+        // Detect base path from current URL
+        function detectBasePath() {
+            const path = window.location.pathname;
+            // Handle both static file access and direct route access
+            if (path.startsWith('/scheduler/')) {
+                return '/scheduler';
+            }
+            return '';
+        }
+
+        // Load configuration from server
+        async function loadConfig() {
+            try {
+                const detectedBasePath = detectBasePath();
+                const response = await fetch(`${detectedBasePath}/config`);
+                if (response.ok) {
+                    const config = await response.json();
+                    // Normalize: take everything up to and including the first /api/v1
+                    // This guards against doubled paths when env already contains /api/v1 suffix
+                    const rawUrl = (config.auth_service_url || '').replace(/\/$/, '');
+                    const apiV1Pos = rawUrl.indexOf('/api/v1');
+                    AUTH_SERVICE_URL = apiV1Pos !== -1
+                        ? rawUrl.substring(0, apiV1Pos + '/api/v1'.length)
+                        : rawUrl;
+                    BASE_PATH = config.base_path || detectedBasePath;
+                } else {
+                    BASE_PATH = detectBasePath();
+                }
+            } catch (error) {
+                console.warn('Failed to load config:', error);
+                BASE_PATH = detectBasePath();
+            }
+        }
+
+        // DOM elements
+        const loginForm = document.getElementById('loginForm');
+        const errorMessage = document.getElementById('errorMessage');
+        const successMessage = document.getElementById('successMessage');
+        const loading = document.getElementById('loading');
+        const mfaSection = document.getElementById('mfaSection');
+        const loginButton = document.getElementById('loginButton');
+        const verifyMfaButton = document.getElementById('verifyMfaButton');
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', async function () {
+            // Load configuration first
+            await loadConfig();
+
+            // Check if user is already logged in
+            const token = localStorage.getItem('access_token');
+            if (token && !isTokenExpired(token)) {
+                redirectToDashboard();
+                return;
+            }
+
+            // Focus on username field
+            document.getElementById('username').focus();
+
+            // Handle form submission
+            loginForm.addEventListener('submit', handleLogin);
+
+            // Handle Enter key in TOTP field
+            document.getElementById('totpCode').addEventListener('keypress', function (e) {
+                if (e.key === 'Enter') {
+                    verifyMFA();
+                }
+            });
+        });
+
+        function togglePassword() {
+            const passwordInput = document.getElementById('password');
+            const toggleButton = document.querySelector('.password-toggle');
+
+            if (passwordInput.type === 'password') {
+                passwordInput.type = 'text';
+                toggleButton.textContent = '🙈';
+            } else {
+                passwordInput.type = 'password';
+                toggleButton.textContent = '👁️';
+            }
+        }
+
+        async function handleLogin(e) {
+            e.preventDefault();
+
+            const username = document.getElementById('username').value.trim();
+            const password = document.getElementById('password').value;
+            const rememberMe = document.getElementById('rememberMe').checked;
+
+            if (!username || !password) {
+                showError('Please enter both username and password.');
+                return;
+            }
+
+            if (!AUTH_SERVICE_URL) {
+                showError('Service configuration not loaded. Please refresh the page.');
+                return;
+            }
+
+            setLoading(true);
+            hideMessages();
+
+            try {
+                const response = await fetch(`${AUTH_SERVICE_URL}/auth/login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        username: username,
+                        password: password
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    if (data.temporary_token) {
+                        // MFA required
+                        temporaryToken = data.temporary_token;
+                        showMFASection();
+                        showSuccess('Password verified. Please enter your TOTP code to complete login.');
+                    } else {
+                        // Direct login successful
+                        await handleSuccessfulLogin(data, rememberMe);
+                    }
+                } else {
+                    showError(data.detail || 'Login failed. Please check your credentials.');
+                }
+            } catch (error) {
+                console.error('Login error:', error);
+                showError('Network error. Please check your connection and try again.');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function verifyMFA() {
+            const totpCode = document.getElementById('totpCode').value.trim();
+
+            if (!totpCode || totpCode.length !== 6) {
+                showError('Please enter a valid 6-digit TOTP code.');
+                return;
+            }
+
+            if (!AUTH_SERVICE_URL) {
+                showError('Service configuration not loaded. Please refresh the page.');
+                return;
+            }
+
+            if (!temporaryToken) {
+                showError('Session expired. Please login again.');
+                return;
+            }
+
+            setLoading(true);
+            hideMessages();
+
+            try {
+                const response = await fetch(`${AUTH_SERVICE_URL}/auth/verify-login`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        temporary_token: temporaryToken,
+                        totp_code: totpCode
+                    })
+                });
+
+                const data = await response.json();
+
+                if (response.ok) {
+                    await handleSuccessfulLogin(data, document.getElementById('rememberMe').checked);
+                } else {
+                    showError(data.detail || 'Invalid TOTP code. Please try again.');
+                }
+            } catch (error) {
+                console.error('MFA verification error:', error);
+                showError('Network error. Please try again.');
+            } finally {
+                setLoading(false);
+            }
+        }
+
+        async function handleSuccessfulLogin(data, rememberMe) {
+            // Store tokens
+            const tokenExpiry = rememberMe ? 7 * 24 * 60 * 60 * 1000 : 24 * 60 * 60 * 1000; // 7 days or 1 day
+
+            localStorage.setItem('access_token', data.tokens.access_token);
+            localStorage.setItem('refresh_token', data.tokens.refresh_token);
+            localStorage.setItem('token_expires_at', data.tokens.expires_at);
+            localStorage.setItem('user_info', JSON.stringify(data.user));
+
+            showSuccess('Login successful! Redirecting to dashboard...');
+
+            // Redirect after a short delay
+            setTimeout(() => {
+                redirectToDashboard();
+            }, 1000);
+        }
+
+        function showMFASection() {
+            mfaSection.style.display = 'block';
+            loginForm.style.display = 'none';
+            document.getElementById('totpCode').focus();
+        }
+
+        function setLoading(show) {
+            loading.style.display = show ? 'block' : 'none';
+            loginButton.disabled = show;
+            verifyMfaButton.disabled = show;
+        }
+
+        function showError(message) {
+            errorMessage.textContent = message;
+            errorMessage.style.display = 'block';
+            successMessage.style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            successMessage.textContent = message;
+            successMessage.style.display = 'block';
+            errorMessage.style.display = 'none';
+        }
+
+        function hideMessages() {
+            errorMessage.style.display = 'none';
+            successMessage.style.display = 'none';
+        }
+
+        function redirectToDashboard() {
+            window.location.href = `${BASE_PATH}/dashboard`;
+        }
+
+        function isTokenExpired(token) {
+            try {
+                const payload = JSON.parse(atob(token.split('.')[1]));
+                const currentTime = Math.floor(Date.now() / 1000);
+                return payload.exp < currentTime;
+            } catch (error) {
+                return true;
+            }
+        }
+
+        // Handle page visibility change to refresh token if needed
+        document.addEventListener('visibilitychange', function () {
+            if (!document.hidden) {
+                const token = localStorage.getItem('access_token');
+                if (token && isTokenExpired(token)) {
+                    // Token expired, redirect to login
+                    localStorage.clear();
+                    window.location.href = `${BASE_PATH}/login`;
+                }
+            }
+        });
+    </script>
+</body>
+
+</html>

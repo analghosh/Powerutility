@@ -95,7 +95,7 @@ async def get_user_info(
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
         
-        user = user_repo.get_user_by_id(user_id)
+        user = await user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -413,7 +413,7 @@ async def validate_user_permissions(
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
         
-        user = user_repo.get_user_by_id(user_id)
+        user = await user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

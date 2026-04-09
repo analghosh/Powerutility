@@ -15,61 +15,21 @@ security = HTTPBearer()
 # Global JWT validator instance
 jwt_validator = JWTValidator()
 
-# Async Database connection
-_async_client = None
-
 async def get_async_mongo_client():
-    """Get async MongoDB client instance with connection pooling"""
-    global _async_client
-    if _async_client is None:
-        from pymongo import AsyncMongoClient
-        mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        _async_client = AsyncMongoClient(
-            mongodb_uri,
-            maxPoolSize=10,  # Limit connection pool
-            minPoolSize=2,
-            maxIdleTimeMS=45000,
-            serverSelectionTimeoutMS=5000
-        )
-    return _async_client
+    """Get async Motor client using centralized factory"""
+    from libs.database.mongo_client_factory import get_mongo_client
+    mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+    return get_mongo_client(mongodb_uri, "auth_service")
+
 
 async def get_db():
     """
     FastAPI dependency for async MongoDB database connection
-    
+
     Returns:
-        Database: Async MongoDB database instance
+        AsyncIOMotorDatabase: Async MongoDB database instance
     """
     client = await get_async_mongo_client()
-    db_name = os.getenv("AUTH_DB_NAME", "auth_db")
-    return client[db_name]
-
-# Synchronous database connection for backward compatibility
-_sync_client = None
-
-def get_sync_mongo_client():
-    """Get synchronous MongoDB client instance with connection pooling"""
-    global _sync_client
-    if _sync_client is None:
-        from pymongo import MongoClient
-        mongodb_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
-        _sync_client = MongoClient(
-            mongodb_uri,
-            maxPoolSize=10,  # Limit connection pool
-            minPoolSize=2,
-            maxIdleTimeMS=45000,
-            serverSelectionTimeoutMS=5000
-        )
-    return _sync_client
-
-def get_sync_db():
-    """
-    FastAPI dependency for synchronous MongoDB database connection
-    
-    Returns:
-        Database: Synchronous MongoDB database instance
-    """
-    client = get_sync_mongo_client()
     db_name = os.getenv("AUTH_DB_NAME", "auth_db")
     return client[db_name]
 

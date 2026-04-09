@@ -8,6 +8,7 @@ PUBLIC: List[tuple[str, str]] = [
     ("POST", "/auth/login"),
     ("POST", "/auth/refresh"),
     ("POST", "/auth/verify-login"),
+    ("POST", "/auth/change-password"),  # Any authenticated user can change their own password
     ("POST", "/mfa/enable"),
     ("POST", "/mfa/verify"),
     ("POST", "/mfa/disable"),

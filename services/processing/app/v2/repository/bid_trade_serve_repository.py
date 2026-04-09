@@ -21,24 +21,27 @@ class BidTradeServeRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "bid_trade_serve"
         logger.info(f"BidTradeServeRepository initialized with collection: {self.collection_name}")
-        self._create_collection_if_not_exists()
-        self._create_indexes()
-    
-    def _create_collection_if_not_exists(self):
+
+    async def setup(self):
+        """Create collection and indexes. Call once from async startup."""
+        await self._create_collection_if_not_exists()
+        await self._create_indexes()
+
+    async def _create_collection_if_not_exists(self):
         """Create collection if it does not exist."""
         try:
             db = self.db
             db_name = self.db_name or "unknown"
-            
-            if self.collection_name not in db.list_collection_names():
-                db.create_collection(self.collection_name)
+            existing = await db.list_collection_names()
+            if self.collection_name not in existing:
+                await db.create_collection(self.collection_name)
                 logger.info(f"Created collection '{self.collection_name}' in database '{db_name}'")
             else:
                 logger.debug(f"Collection '{self.collection_name}' already exists in database '{db_name}'")
         except Exception as e:
             logger.warning(f"Error checking/creating collection '{self.collection_name}': {str(e)}")
-    
-    def _create_indexes(self):
+
+    async def _create_indexes(self):
         """Create necessary indexes for efficient queries."""
         try:
             collection = self.collection
@@ -108,7 +111,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary: time_block -> total_traded
             trade_quantity_map = {}
@@ -153,7 +156,7 @@ class BidTradeServeRepository(GenericRepository):
             }
             
             cursor = self.collection.find(query).sort("time_block", 1)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -294,7 +297,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             logger.info(f"Retrieved {len(results)} trade status records with MCP for date {datebid}, type {bid_type}")
             return results
@@ -335,7 +338,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
 
             cursor = self.collection.aggregate(pipeline)
-            result = list(cursor)
+            result = await cursor.to_list(None)
 
             block_map: Dict[int, dict] = {}
 
@@ -404,7 +407,7 @@ class BidTradeServeRepository(GenericRepository):
             }
             update_query = {"$set": {"bidded": bidded_value}}
 
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             logger.info(
                 f"update_bidded_by_block: type={bid_type}, block={time_block}, "
                 f"date={start_of_day.strftime('%Y-%m-%d')}, bidded={bidded_value}, "
@@ -442,7 +445,7 @@ class BidTradeServeRepository(GenericRepository):
             }
             update_query = {"$set": {"bidded": 0}}
 
-            result = self.collection.update_many(filter_query, update_query)
+            result = await self.collection.update_many(filter_query, update_query)
             logger.info(
                 f"reset_bidded_for_date: type={bid_type}, "
                 f"date={start_of_day.strftime('%Y-%m-%d')}, "

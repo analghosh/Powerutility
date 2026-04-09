@@ -82,17 +82,20 @@ class RTMSchedulingProcessor(BaseProcessor):
         # Initialize custom demand
         self.customdemand = 0
         
-        # Ensure collections and indexes
-        self.create_indexes()
+        # Index creation must be awaited in an async setup method, not in __init__
 
-    def create_indexes(self):
+    async def setup(self):
+        """Async initialization for background tasks and indexes."""
+        await self.create_indexes()
+
+    async def create_indexes(self):
         """Ensure collections exist and create necessary indexes for scheduling calculations."""
         try:
             db = self.scheduling_repo.db
             
             # 1. Working Collection Indexes
             working_collection = db[self.scheduling_repo.collection_name]
-            working_collection.create_index(
+            await working_collection.create_index(
                 [("scheduled_at", 1), ("time_block", 1), ("plant_id", 1)],
                 name="idx_schedule_block_plant",
                 background=True
@@ -100,12 +103,10 @@ class RTMSchedulingProcessor(BaseProcessor):
             
             # 2. History Collection
             history_collection_name = "scheduling_requisition_calculation_history"
-            if history_collection_name not in db.list_collection_names():
-                db.create_collection(history_collection_name)
-                logger.info(f"Created collection: {history_collection_name}")
-            
+            # async motor handles automatic collection creation on insert, 
+            # but we define index which creates it if missing
             history_collection = db[history_collection_name]
-            history_collection.create_index(
+            await history_collection.create_index(
                 [("scheduled_at", 1), ("revision_no", 1), ("time_block", 1), ("plant_id", 1)],
                 name="idx_hist_schedule_rev_block_plant",
                 background=True
@@ -113,12 +114,8 @@ class RTMSchedulingProcessor(BaseProcessor):
             
             # 3. Revision Tracker Collection
             revision_collection_name = "scheduling_revision_tracker"
-            if revision_collection_name not in db.list_collection_names():
-                db.create_collection(revision_collection_name)
-                logger.info(f"Created collection: {revision_collection_name}")
-                
             revision_collection = db[revision_collection_name]
-            revision_collection.create_index(
+            await revision_collection.create_index(
                 [("scheduled_at_int", 1)],
                 name="idx_rev_schedule_int",
                 unique=True,
@@ -151,7 +148,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         schedule = "*/30 * * * *"  # Every 30 minutes
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -185,7 +182,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 "blocks_calculated": len(result_data) if isinstance(result_data, dict) else 0
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -210,7 +207,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -263,19 +260,19 @@ class RTMSchedulingProcessor(BaseProcessor):
             )
 
             # Fetch existing records
-            existing_records = list(working_collection.find({
+            existing_records = await working_collection.find({
                 "scheduled_at": {
                     "$gte": start_of_day,
                     "$lt": end_of_day
                 }
-            }))
+            }).to_list(None)
 
             if not existing_records:
                 return {"archived": 0, "deleted": 0, "revision_no": None}
 
             # Atomic revision increment
             now = datetime.now()
-            revision_doc = revision_collection.find_one_and_update(
+            revision_doc = await revision_collection.find_one_and_update(
                 {"scheduled_at_int": scheduled_at_int},
                 {
                     "$inc": {"latest_revision_no": 1},
@@ -303,10 +300,10 @@ class RTMSchedulingProcessor(BaseProcessor):
 
             # Insert into history
             if existing_records:
-                history_collection.insert_many(existing_records, ordered=False)
+                await history_collection.insert_many(existing_records, ordered=False)
 
             # Delete working records
-            delete_result = working_collection.delete_many({
+            delete_result = await working_collection.delete_many({
                 "scheduled_at": {
                     "$gte": start_of_day,
                     "$lt": end_of_day

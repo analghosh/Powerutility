@@ -156,7 +156,7 @@ class BidMarketRepository:
                 filter_query["type"] = type_filter
             
             # Get total count
-            total = self.repo.get_count(self.collection_name, filter_query)
+            total = await self.repo.get_count(self.collection_name, filter_query)
             
             # Get bid markets with pagination
             bid_markets = await self.repo.get_all_async(
@@ -234,11 +234,11 @@ class BidMarketRepository:
             if not ObjectId.is_valid(bid_market_id):
                 return False
             
-            result = self.repo.delete_one(
+            result = await self.repo.delete_one(
                 self.collection_name,
                 {"_id": ObjectId(bid_market_id)}
             )
-            
+
             if result.deleted_count > 0:
                 logger.info(f"Deleted bid market with ID: {bid_market_id}")
                 return True

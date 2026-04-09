@@ -327,7 +327,7 @@ async def list_master_plants(
         if v is not None:
             filters[k] = v
 
-    data = serve_master_plants_controller.list(
+    data = await serve_master_plants_controller.list(
         filters, page, page_size,
         user=None,                                 # <- no auth
         request_info=_request_info(request),

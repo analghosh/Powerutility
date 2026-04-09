@@ -188,7 +188,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
         """
         try:
             # Get all enabled FTP providers
-            provider_response = self.provider_service.get_all_providers(
+            provider_response = await self.provider_service.get_all_providers(
                 ingestion_type=IngestionType.FTP, enabled=True
             )
             
@@ -212,7 +212,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
 
         # Record job start
-        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
 
         logger.info("Starting FTP raw data processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
 
@@ -231,7 +231,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
 
                 # Record job completion
                 if execution_id:
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "success", True, execution_id, result
                     )
@@ -302,7 +302,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             # Record job completion
             if execution_id:
                 error_message = None if overall_success else f"Processed {processed_providers}, failed {failed_providers}"
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     status, overall_success, execution_id, result, error_message
                 )
@@ -324,7 +324,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
 
             # Record job completion with error
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, execution_id, result, str(e)
                 )
@@ -348,7 +348,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             logger.info("Processing provider: %s, data type: %s", provider_code, data_type)
             
             # Get full provider entity for processing
-            full_provider = self._get_full_provider_entity(provider_code)
+            full_provider = await self._get_full_provider_entity(provider_code)
             if not full_provider:
                 logger.error("Could not retrieve full provider entity for: %s", provider_code)
                 return {'success': False, 'error': 'Provider entity not found'}
@@ -406,7 +406,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             validated_data = validation_result["validated_data"]
             
             # Store data using raw data service
-            storage_result = self._store_ftp_data(validated_data, full_provider, log_ids)
+            storage_result = await self._store_ftp_data(validated_data, full_provider, log_ids)
             
             if storage_result["success"]:
                 logger.info("Successfully processed provider %s: %d records stored", 
@@ -429,19 +429,19 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             logger.error("Unexpected error processing provider %s: %s", provider.code, str(e))
             return {'success': False, 'error': str(e)}
 
-    def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
+    async def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
         """
         Get full provider entity by code
-        
+
         Args:
             provider_code: Provider code to retrieve
-            
+
         Returns:
             Optional[ProviderEntity]: Full provider entity or None if not found
         """
         try:
             # Use provider service to get full provider entity
-            provider_entity = self.provider_service.get_provider_by_code(provider_code)
+            provider_entity = await self.provider_service.get_provider_by_code(provider_code)
             if provider_entity:
                 return provider_entity
             else:
@@ -451,7 +451,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error retrieving provider entity for code %s: %s", provider_code, str(e))
             return None
 
-    def _store_ftp_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def _store_ftp_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Store FTP data using the raw data service
         
@@ -475,7 +475,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids
 
             # Use raw data service to store the data
-            result = self.raw_data_service.store_raw_data(
+            result = await self.raw_data_service.store_raw_data(
                 raw_data=data,
                 provider=provider,
                 additional_metadata=additional_metadata
@@ -1233,12 +1233,12 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
         try:
             # Get provider details - if data_type is None, get all enabled FTP providers
             if data_type:
-                providerResponse = self.provider_service.get_all_providers(
+                providerResponse = await self.provider_service.get_all_providers(
                     ingestion_type=ingestion_type, data_type=data_type, enabled=True
                 )
             else:
                 # Get all enabled FTP providers regardless of data type
-                providerResponse = self.provider_service.get_all_providers(
+                providerResponse = await self.provider_service.get_all_providers(
                     ingestion_type=ingestion_type, enabled=True
                 )
 

@@ -60,7 +60,7 @@ class MarketService:
             logger.info(f"[MarketService] Calling repository with schedule_date='{scheduled_at}', current_block={current_block}")
             
             # Repository just fetches data with the calculated parameters
-            result = self.market_repository.get_exchange_data(scheduled_at, current_block)
+            result = await self.market_repository.get_exchange_data(scheduled_at, current_block)
             
             logger.info(f"[MarketService] Repository returned {len(result)} records")
             
@@ -92,7 +92,7 @@ class MarketService:
                 return []
             
             # Repository just fetches data - no business logic
-            result = self.market_repository.get_bid_trade_data(scheduled_at)
+            result = await self.market_repository.get_bid_trade_data(scheduled_at)
             
             return self._flatten_data(result)  # Return flattened data
             
@@ -123,7 +123,7 @@ class MarketService:
                 return []
             
             # Repository just fetches data - no business logic
-            result = self.market_repository.get_exchange_table_data(scheduled_at, time_block)
+            result = await self.market_repository.get_exchange_table_data(scheduled_at, time_block)
             
             return self._flatten_data(result)  # Return raw data to match v1 format
             
@@ -155,9 +155,9 @@ class MarketService:
             
             # Repository just fetches data - no business logic
             if time_block is not None:
-                result = self.market_repository.get_bid_trade_by_time_block(scheduled_at, time_block)
+                result = await self.market_repository.get_bid_trade_by_time_block(scheduled_at, time_block)
             else:
-                result = self.market_repository.get_bid_trade_data(scheduled_at)
+                result = await self.market_repository.get_bid_trade_data(scheduled_at)
             
             return self._flatten_data(result)  # Return flattened data
             

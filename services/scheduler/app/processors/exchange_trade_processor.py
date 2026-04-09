@@ -22,9 +22,6 @@ class ExchangeTradeProcessor(BaseProcessor):
         super().__init__()
         self.repository = ExchangeTradeRepository()
         
-        # Preload timeblock mappings for better performance using base processor's caching
-        self.preload_timeblock_mappings()
-        
         # Initialize job repositories for execution tracking
         from libs.core.job_factory import create_job_data_repository, create_job_detail_repository
         from ..core.config import settings
@@ -40,6 +37,11 @@ class ExchangeTradeProcessor(BaseProcessor):
             settings.JOB_DETAIL_COLLECTION
         )
 
+    async def setup(self):
+        """Perform async initialization such as index creation"""
+        if hasattr(self.repository, "setup"):
+            await self.repository.setup()
+
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
         Execute exchange trade data processing as a cron job with execution_id as correlation ID
@@ -50,7 +52,7 @@ class ExchangeTradeProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
+        execution_id = await self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
         if not execution_id:
             logger.error(f"Failed to record job start for {job_type}")
             return {
@@ -94,7 +96,7 @@ class ExchangeTradeProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
             
-            self._record_job_execution(
+            await self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -125,7 +127,7 @@ class ExchangeTradeProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            self._record_job_execution(
+            await self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

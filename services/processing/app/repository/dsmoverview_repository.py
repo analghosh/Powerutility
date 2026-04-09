@@ -13,7 +13,7 @@ class DsmoverviewRepository(BaseRepository):
         logger.info(f"DashboardRepository initialized with collection: {collection_name}")
 
 
-    def get_dsm(self, schedule_date: str):
+    async def get_dsm(self, schedule_date: str):
         pipeline = [
         {"$match": {"schedule_date": schedule_date, "type":"IDF"}},
         {"$project": {
@@ -34,11 +34,11 @@ class DsmoverviewRepository(BaseRepository):
     ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return list(cursor)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
     
-    def get_IDF_demand_forecast(self, schedule_date: str):
+    async def get_IDF_demand_forecast(self, schedule_date: str):
         pipeline = [
         {"$match": {"schedule_date": schedule_date, "type":"IDF"}},
         {"$project": {
@@ -60,11 +60,11 @@ class DsmoverviewRepository(BaseRepository):
     ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return list(cursor)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
     
-    def get_DAF_demand_forecast(self, schedule_date: str):
+    async def get_DAF_demand_forecast(self, schedule_date: str):
         pipeline = [
         {"$match": {"schedule_date": schedule_date, "type":"DAF"}},
         {"$project": {
@@ -83,7 +83,7 @@ class DsmoverviewRepository(BaseRepository):
     ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return list(cursor)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
 

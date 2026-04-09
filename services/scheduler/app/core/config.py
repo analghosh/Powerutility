@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     # These settings are for backward compatibility ONLY
     # JOB DATA MUST NEVER BE STORED IN EPMS DATABASE
     # All job data goes to audit_db via AUDIT_DB_URI and AUDIT_DB_NAME
-    MONGODB_URI: str = "mongodb://localhost:27017/epms"
-    MONGODB_DATABASE: str = "epms"
+    MONGODB_URI: str = "mongodb://demo_dev:ItGwi2yhMKL7@103.235.106.243:27017/?directConnection=true&serverSelectionTimeoutMS=2000&authSource=admin&appName=mongosh+2.5.3a"
+    MONGODB_DATABASE: str = "dev_epms"
     MONGODB_JOBS_COLLECTION: str = "scheduled_jobs"
     MONGODB_JOB_HISTORY_COLLECTION: str = "job_history"
     MONGODB_CRON_JOBS_COLLECTION: str = "cron_jobs"
@@ -122,8 +122,8 @@ class Settings(BaseSettings):
     MONGODB_DC_SG_COLLECTION: str = "dc_sg"  # 1-day temporary storage for supply data
     
     # Audit Database Configuration
-    AUDIT_DB_URI: str = "mongodb://localhost:27017/audit_db"
-    AUDIT_DB_NAME: str = "audit_db"
+    AUDIT_DB_URI: str = "mongodb://demo_dev:ItGwi2yhMKL7@103.235.106.243:27017/?directConnection=true&serverSelectionTimeoutMS=2000&authSource=admin&appName=mongosh+2.5.3a"
+    AUDIT_DB_NAME: str = "dev_audit_db"
     AUDIT_COLLECTION_NAME: str = "audit_logs"
     QUEUE_COLLECTION_NAME: str = "audit_queue_jobs"
     AUDIT_CRON_LOGS_COLLECTION: str = "cron_job_logs"

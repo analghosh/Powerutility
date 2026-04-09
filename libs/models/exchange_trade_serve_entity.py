@@ -146,23 +146,37 @@ class ExchangeTradeHistoricalEntity(BaseModel):
     archived_at: datetime = Field(default_factory=datetime.now)
     archived_timestamp: datetime = Field(default_factory=datetime.now)
 
-# Database Index Management
 def ensure_exchange_trade_serve_indexes(collection):
     """Ensure database indexes for exchange_trade_serve collection"""
     import logging
     logger = logging.getLogger(__name__)
     
     try:
-        collection.create_index([("scheduled_at", 1)], background=True)
-        collection.create_index("time_block", background=True)
-        collection.create_index("market_type", background=True)
-        collection.create_index([
-            ("scheduled_at", 1),
-            ("market_type", 1),
-            ("px_name", 1),
-            ("time_block", 1)
-        ], background=True, unique=True)
-        logger.debug("✅ Exchange trade serve collection indexes ensured")
+        # Check if collection has synchronous create_index or async motor (awaitable)
+        import asyncio
+        loop = None
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            pass
+            
+        if hasattr(collection, "create_index") and asyncio.iscoroutinefunction(collection.create_index):
+            # We can't safely await inside a sync func without a running loop wrapper, 
+            # so we just let the caller handle it or skip if it's called synchronously
+            logger.warning("create_index is async but function is sync. Use a setup() method instead.")
+            # Note: The true fix is for the caller to not call this sync function on an async collection
+            # I will refactor the callers instead to properly handle this.
+        else:
+            collection.create_index([("scheduled_at", 1)], background=True)
+            collection.create_index("time_block", background=True)
+            collection.create_index("market_type", background=True)
+            collection.create_index([
+                ("scheduled_at", 1),
+                ("market_type", 1),
+                ("px_name", 1),
+                ("time_block", 1)
+            ], background=True, unique=True)
+            logger.debug("✅ Exchange trade serve collection indexes ensured")
     except Exception as e:
         logger.warning(f"⚠️ Failed to create exchange trade serve indexes: {e}")
 
@@ -172,14 +186,54 @@ def ensure_exchange_trade_serve_historical_indexes(collection):
     logger = logging.getLogger(__name__)
     
     try:
-        collection.create_index([("scheduled_at", 1)], background=True)
-        collection.create_index([("archived_at", -1)], background=True)
-        collection.create_index("market_type", background=True)
-        collection.create_index([
+        import asyncio
+        if hasattr(collection, "create_index") and asyncio.iscoroutinefunction(collection.create_index):
+            logger.warning("create_index is async but function is sync. Use a setup() method instead.")
+        else:
+            collection.create_index([("scheduled_at", 1)], background=True)
+            collection.create_index([("archived_at", -1)], background=True)
+            collection.create_index("market_type", background=True)
+            collection.create_index([
+                ("scheduled_at", 1),
+                ("market_type", 1)
+            ], background=True)
+            collection.create_index("time_block", background=True)
+            logger.debug("✅ Exchange trade serve historical collection indexes ensured")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to create exchange trade serve historical indexes: {e}")
+
+# Async versions for the new async architecture
+async def async_ensure_exchange_trade_serve_indexes(collection):
+    """Ensure database indexes asynchronously"""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        await collection.create_index([("scheduled_at", 1)], background=True)
+        await collection.create_index("time_block", background=True)
+        await collection.create_index("market_type", background=True)
+        await collection.create_index([
+            ("scheduled_at", 1),
+            ("market_type", 1),
+            ("px_name", 1),
+            ("time_block", 1)
+        ], background=True, unique=True)
+        logger.debug("✅ Async Exchange trade serve collection indexes ensured")
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to create async exchange trade serve indexes: {e}")
+
+async def async_ensure_exchange_trade_serve_historical_indexes(collection):
+    """Ensure historical database indexes asynchronously"""
+    import logging
+    logger = logging.getLogger(__name__)
+    try:
+        await collection.create_index([("scheduled_at", 1)], background=True)
+        await collection.create_index([("archived_at", -1)], background=True)
+        await collection.create_index("market_type", background=True)
+        await collection.create_index([
             ("scheduled_at", 1),
             ("market_type", 1)
         ], background=True)
-        collection.create_index("time_block", background=True)
-        logger.debug("✅ Exchange trade serve historical collection indexes ensured")
+        await collection.create_index("time_block", background=True)
+        logger.debug("✅ Async Exchange trade serve historical collection indexes ensured")
     except Exception as e:
-        logger.warning(f"⚠️ Failed to create exchange trade serve historical indexes: {e}")
+        logger.warning(f"⚠️ Failed to create async exchange trade serve historical indexes: {e}")

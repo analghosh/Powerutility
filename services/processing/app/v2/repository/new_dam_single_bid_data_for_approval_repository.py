@@ -39,7 +39,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         try: 
             documents = list(documents.values())
             documents = [doc for doc in documents if isinstance(doc, dict)]
-            result = self.collection.insert_many(documents, ordered=False)
+            result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             return inserted_ids
             
@@ -58,11 +58,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
 
         cursor = self.collection.aggregate(pipeline)
 
-        try:
-            result =  cursor.to_list(length=None)
-        except AttributeError:
-            # Fallback for PyMongo CommandCursor in server environment
-            result = list(cursor)
+        result = await cursor.to_list(None)
 
         if result:
             return result[0].get("revision_no", 0)
@@ -74,7 +70,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             query = self.collection.find(filters, projection or {})
-            return list(query)
+            return await query.to_list(None)
         except Exception as e:
             logger.error("Failed to find DAM single bid records: %s", str(e))
             return []
@@ -84,7 +80,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         Update a single document matching the filter.
         """
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error("Failed to update DAM single bid record: %s", str(e))
@@ -96,7 +92,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return list(cursor)
+            return await cursor.to_list(None)
         except Exception as e:
             logger.error("Failed to aggregate DAM single bid records: %s", str(e))
             return []
@@ -114,7 +110,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         try:
             query = {"bid_date": datebid}
             cursor = self.collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary keyed by time_block
             result_dict = {}
@@ -153,7 +149,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
             logger.debug(f"Querying bid_status_data for date: {datebid}, collection: {self.collection_name}")
             
             # First, check if any records exist for this date (for debugging)
-            count = self.collection.count_documents({"bid_date": datebid})
+            count = await self.collection.count_documents({"bid_date": datebid})
             logger.debug(f"Found {count} documents with bid_date={datebid} in collection {self.collection_name}")
             
             pipeline = [
@@ -188,7 +184,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             logger.debug(f"Aggregation returned {len(results)} grouped results for date {datebid}")
             
@@ -261,7 +257,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary keyed by time_block
             result_dict = {}

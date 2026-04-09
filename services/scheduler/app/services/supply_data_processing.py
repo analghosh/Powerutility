@@ -26,7 +26,7 @@ class SupplyDataProcessing:
         """Initialize the supply data processing service"""
         self.supply_repository = SupplyServeRepository()
 
-    def process_supply_data(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def process_supply_data(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Process supply data from raw data collection
         
@@ -53,7 +53,7 @@ class SupplyDataProcessing:
                 "status": RawDataStatus.PENDING.value
             }).limit(100)
             try:
-                raw_data_records = list(cursor)
+                raw_data_records = await cursor.to_list(None)
             finally:
                 cursor.close()
             

@@ -261,7 +261,7 @@ class RTMBiddingService:
             getsessionNo = await self.rtm_product_hardCoded_data_repo.get_Data()
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = list(self.plants_list_repo.aggregate('plant_master', plants_list_pipeline))
+            plantData = await self.plants_list_repo.aggregate('plant_master', plants_list_pipeline)
             plant_dict = {p['plant_id']: p for p in plantData}
             
             fix_count = getplantsData[0]['time_block']
@@ -298,7 +298,7 @@ class RTMBiddingService:
                 
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = list(self.demand_repo.get_data_pipeline("demand_serve", from_block, to_block, scheduled_at))
+            getForecastedValue = await self.demand_repo.get_data_pipeline("demand_serve", from_block, to_block, scheduled_at)
             
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             
@@ -2861,7 +2861,7 @@ class RTMBiddingService:
             logger.error(f"Error building limit values lookup stages: {str(e)}")
             raise Exception(f"Failed to build limit values lookup stages: {str(e)}")
 
-    def get_all_plant_data_for_scheduling(self, schedule_date, dc_sg):
+    async def get_all_plant_data_for_scheduling(self, schedule_date, dc_sg):
         """
         Get all plant data for scheduling with full RTM complexity.
         
@@ -2933,7 +2933,7 @@ class RTMBiddingService:
                 {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
             ]
 
-            posted_jobs = list(self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline))
+            posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             
             logger.info(f"Plant data for scheduling retrieved: {len(posted_jobs)} records")
             return posted_jobs

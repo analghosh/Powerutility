@@ -55,7 +55,7 @@ async def verify_hmac_auth(request: Request) -> Dict[str, Any]:
     
     # Lookup API key in database
     try:
-        api_key_doc = api_key_repo.find_by_api_key(api_key)
+        api_key_doc = await api_key_repo.find_by_api_key(api_key)
     except Exception as e:
         logger.error(f"Error looking up API key: {e}")
         raise HTTPException(
@@ -131,7 +131,7 @@ async def verify_hmac_auth(request: Request) -> Dict[str, Any]:
     
     # Get secret from repository (it will decrypt it)
     try:
-        secret = api_key_repo.get_secret(api_key)
+        secret = await api_key_repo.get_secret(api_key)
     except Exception as e:
         logger.error(f"Error getting secret for API key {api_key[:8]}...: {e}")
         raise HTTPException(
@@ -165,7 +165,7 @@ async def verify_hmac_auth(request: Request) -> Dict[str, Any]:
         )
     
     # Update last_used_at timestamp
-    api_key_repo.update_last_used(api_key)
+    await api_key_repo.update_last_used(api_key)
     
     # Add API key info to request state
     request.state.api_key = api_key

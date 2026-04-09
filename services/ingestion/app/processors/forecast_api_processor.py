@@ -56,7 +56,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
         
         # Record job start
-        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
         
         logger.info("Starting forecast API processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
         
@@ -73,7 +73,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 }
                 if execution_id:
                     end_time = datetime.now()
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "error", False, execution_id, result, "No API configuration found"
                     )
@@ -91,7 +91,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 }
                 if execution_id:
                     end_time = datetime.now()
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "error", False, execution_id, result, "Failed to fetch API data"
                     )
@@ -157,7 +157,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             }
             
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "success", True, execution_id, result
                 )
@@ -175,7 +175,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             result = {'status': 'error', 'error': str(e), 'execution_time': execution_time}
             
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, execution_id, result, str(e)
                 )

@@ -50,7 +50,7 @@ class DsmoverviewService:
                 schedule_date= '2025-08-04'
             
             acp = 250.172
-            cursor = self.dsmoverview_repo.get_dsm(schedule_date)
+            cursor = await self.dsmoverview_repo.get_dsm(schedule_date)
            
             logger.warning(f"[DashboardService] =========++++++++.: {cursor}")
             return cursor
@@ -155,7 +155,7 @@ class DsmoverviewService:
 
 
             cursor = self.dsmoverview_historical_repo.aggregate(pipeline)
-            return list(cursor)  # ✅ return after loop finishes
+            return await cursor.to_list(None)  # ✅ return after loop finishes
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
             raise
@@ -246,7 +246,7 @@ class DsmoverviewService:
 
             cursor = self.dsmoverview_historical_repo.aggregate(pipeline)
             logger.warning(f"No dashboard data found: {pipeline}")
-            return list(cursor)  # ✅ return after loop finishes
+            return await cursor.to_list(None)  # ✅ return after loop finishes
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
             raise

@@ -706,7 +706,7 @@ class LimitService:
     # --------- Pending list ---------
     async def list_pending(self, user_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         try:
-            return self.flow_repo.list_approvals(self.approval_collection)
+            return await self.flow_repo.list_approvals(self.approval_collection)
         except Exception as e:
             logger.exception(f"[LimitService] list_pending failed: {str(e)}")
             raise
@@ -1033,7 +1033,7 @@ class LimitService:
 
     async def approve_all(self, user_ctx: Dict[str, Any], audit_logger: Optional[AuditLogger] = None) -> Dict[str, Any]:
         try:
-            pending_approvals = self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
+            pending_approvals = await self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
             total_approvals = len(pending_approvals)
             approved_count = 0
             for approval in pending_approvals:
@@ -1061,7 +1061,7 @@ class LimitService:
 
             if not is_valid_oid:
                 logger.info(f"[LimitService] Treating {approval_id} as business ID")
-                pending = self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
+                pending = await self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
                 matches = [x for x in pending if str(x.get("id")) == str(approval_id)]
                 
                 logger.info(f"[LimitService] Found {len(matches)} matches for business ID {approval_id}")
@@ -1139,7 +1139,7 @@ class LimitService:
     async def reject_all(self, user_ctx: Dict[str, Any], reason: Optional[str], audit_logger: Optional[AuditLogger] = None) -> Dict[str, Any]:
         try:
             logger.info("[LimitService] reject_all called")
-            pending_approvals = self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
+            pending_approvals = await self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
             total_approvals = len(pending_approvals)
             logger.info(f"[LimitService] Found {total_approvals} pending approvals to reject")
             

@@ -4,8 +4,6 @@ from typing import List, Dict, Optional, Any
 from .base_repository import GenericRepository
 import logging
 from datetime import datetime, timedelta
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 from ...core.config import settings
 from ...services.dashboard_new import ist_now, block_from_hhmm
@@ -30,14 +28,14 @@ class ExchangeRepository(GenericRepository):
         self.collection_name = settings.MONGODB_EXCHANGE_SERVE_COLLECTION if hasattr(settings, 'MONGODB_EXCHANGE_SERVE_COLLECTION') else "exchange_serve"
         logger.info(f"ExchangeRepository initialized with collection: {self.collection_name}")
 
-    def _get_exchange_sync(self, schedule_date: str) -> List[Dict[str, Any]]:
+    async def _get_exchange_sync(self, schedule_date: str) -> List[Dict[str, Any]]:
         """
         Get exchange data by schedule date, using exchange_serve fields.
         Maps scheduled_at.$date to schedule_date for compatibility.
-        
+
         Args:
             schedule_date: Schedule date in YYYY-MM-DD format
-            
+
         Returns:
             List of exchange data grouped by exchange and market
         """
@@ -118,21 +116,19 @@ class ExchangeRepository(GenericRepository):
             }
         ]
 
-        return self.aggregate(self.collection_name, pipeline)
+        return await super().aggregate(self.collection_name, pipeline)
 
     async def get_exchange(self, schedule_date: str) -> List[Dict[str, Any]]:
         """
         Get exchange data by schedule date asynchronously.
-        
+
         Args:
             schedule_date: Schedule date in YYYY-MM-DD format
-            
+
         Returns:
             List of exchange data grouped by exchange and market
         """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._get_exchange_sync, schedule_date)
+        return await self._get_exchange_sync(schedule_date)
 
     async def get_exchange_power_optimization(
         self, 
@@ -218,29 +214,12 @@ class ExchangeRepository(GenericRepository):
                 }
             ]
             
-            # Helper to run aggregation
-            def _agg_sync(coll_name):
-                cursor = self.db[coll_name].aggregate(pipeline)
-                try:
-                    return list(cursor)
-                finally:
-                    cursor.close()
+            result = await self.db[self.collection_name].aggregate(pipeline).to_list(None)
 
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, _agg_sync, self.collection_name)
-            
             if not result:
                 historical_collection = getattr(settings, 'MONGODB_EXCHANGE_SERVE_HISTORICAL_COLLECTION', "exchange_serve_historical")
                 logger.debug(f"PowerOpt: No exchange data in {self.collection_name}, trying {historical_collection}")
-                
-                # Copy match_dict for count check
-                count_query = match_stage["$match"].copy()
-                # fix $expr for count_documents
-                # count_documents doesn't support $expr easily in some versions or simpler to key off logic
-                # For simplicity, just run agg on historical directly if main empty?
-                # Or do a simple count
-                
-                result = await loop.run_in_executor(None, _agg_sync, historical_collection)
+                result = await self.db[historical_collection].aggregate(pipeline).to_list(None)
                 
             return result
         except Exception as e:

@@ -53,75 +53,73 @@ class LimitWorkflowRepository:
         except Exception as e:
             logger.error(f"Failed to ensure approval collection {collection_name}: {e}")
 
-    def find_one(self, collection: str, filter_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def find_one(self, collection: str, filter_doc: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Finds a single document matching the filter."""
         try:
             # Assuming self.repository has a pymongo-like find_one method
-            return self.repository.find_one(collection, filter_doc)
+            return await self.repository.find_one(collection, filter_doc)
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] find_one failed: {str(e)}")
             raise
 
-    def upsert_one(self, collection: str, filter_doc: Dict[str, Any], update_doc: Dict[str, Any]) -> UpdateResult:
+    async def upsert_one(self, collection: str, filter_doc: Dict[str, Any], update_doc: Dict[str, Any]) -> UpdateResult:
         """Performs an upsert operation."""
         try:
             # Assuming self.repository has a pymongo-like update_one method
-            res = self.repository.update_one(collection, filter_doc, update_doc, upsert=True)
+            res = await self.repository.update_one(collection, filter_doc, update_doc, upsert=True)
             return res
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] upsert_one failed: {str(e)}")
             raise
 
-    def write_audit_many(self, audit_collection: str, log_docs: List[Dict[str, Any]]) -> None:
+    async def write_audit_many(self, audit_collection: str, log_docs: List[Dict[str, Any]]) -> None:
         """Writes a batch of audit logs."""
         try:
             if not log_docs:
                 return
             # Assuming self.repository has a pymongo-like insert_many method
-            self.repository.insert_many(audit_collection, log_docs)
+            await self.repository.insert_many(audit_collection, log_docs)
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] write_audit_many failed: {str(e)}")
             raise
 
     # This is your original function, just for context
-    def write_audit(self, audit_collection: str, log_doc: Dict[str, Any]) -> None:
+    async def write_audit(self, audit_collection: str, log_doc: Dict[str, Any]) -> None:
         try:
-            self.repository.insert_one(audit_collection, log_doc)
+            await self.repository.insert_one(audit_collection, log_doc)
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] write_audit failed: {str(e)}")
             raise
 
     # -------- Approval documents --------
-    def create_approval(self, approval_collection: str, doc: Dict[str, Any]) -> Any:
+    async def create_approval(self, approval_collection: str, doc: Dict[str, Any]) -> Any:
         try:
-            res = self.repository.insert_one(approval_collection, doc)
+            res = await self.repository.insert_one(approval_collection, doc)
             return res.inserted_id
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] create_approval failed: {str(e)}")
             raise
 
-    def get_approval(self, approval_collection: str, approval_id: Any) -> Optional[Dict[str, Any]]:
+    async def get_approval(self, approval_collection: str, approval_id: Any) -> Optional[Dict[str, Any]]:
         try:
-            return self.repository.find_one(approval_collection, {"_id": ObjectId(approval_id)})
+            return await self.repository.find_one(approval_collection, {"_id": ObjectId(approval_id)})
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] get_approval failed: {str(e)}")
             raise
 
-    def update_approval(self, approval_collection: str, approval_id: Any, updates: Dict[str, Any]) -> None:
+    async def update_approval(self, approval_collection: str, approval_id: Any, updates: Dict[str, Any]) -> None:
         try:
             logger.info(f"[LimitWorkflowRepository] Updating approval {approval_id} in {approval_collection} with {updates}")
-            # approval_id comes as a string from the service layer (because find_one serializes it)
-            # We must convert it back to ObjectId for the MongoDB query to work.
-            result = self.repository.update_one(approval_collection, {"_id": ObjectId(approval_id)}, {"$set": updates}, upsert=False)
+            result = await self.repository.update_one(approval_collection, {"_id": ObjectId(approval_id)}, {"$set": updates}, upsert=False)
             logger.info(f"[LimitWorkflowRepository] Update result: matched={result.matched_count}, modified={result.modified_count}")
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] update_approval failed: {str(e)}")
             raise
 
-    def delete_approval(self, approval_collection: str, approval_id: Any) -> None:
+    async def delete_approval(self, approval_collection: str, approval_id: Any) -> None:
         try:
             logger.info(f"[LimitWorkflowRepository] Attempting to delete approval {approval_id} from collection {approval_collection}")
-            result = self.repository.delete_one(approval_collection, {"_id": ObjectId(approval_id)})
+            result = await self.repository.delete_one(approval_collection, {"_id": ObjectId(approval_id)})
             logger.info(f"[LimitWorkflowRepository] Delete operation result: deleted_count={result.deleted_count}")
             if result.deleted_count == 0:
                 logger.warning(f"[LimitWorkflowRepository] No approval document found to delete with ID: {approval_id}")
@@ -131,17 +129,17 @@ class LimitWorkflowRepository:
             logger.exception(f"[LimitWorkflowRepository] delete_approval failed: {str(e)}")
             raise
 
-    def list_approvals(self, approval_collection: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def list_approvals(self, approval_collection: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
             filt = {"status": status} if status else {}
             cursor = self.repository.find(approval_collection, filt).sort("requested_at", -1)
             if hasattr(cursor, 'close'):
                 try:
-                    return list(cursor)
+                    return await cursor.to_list(None)
                 finally:
                     cursor.close()
             else:
-                return list(cursor)
+                return await cursor.to_list(None)
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] list_approvals failed: {str(e)}")
             raise
@@ -241,14 +239,8 @@ class LimitWorkflowRepository:
                 {"$sort": {"requested_at": -1}}
             ]
             
-            cursor = self.repository.aggregate(approval_collection, pipeline)
-            if hasattr(cursor, 'close'):
-                try:
-                    return list(cursor)
-                finally:
-                    cursor.close()
-            else:
-                return list(cursor)
+            cursor = await self.repository.aggregate(approval_collection, pipeline)
+            return cursor
             
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] get_combined_approvals failed: {str(e)}")
@@ -315,17 +307,7 @@ class LimitWorkflowRepository:
             ]
             
             # Get total count with increased timeout
-            cursor = self.repository.aggregate(approval_collection, count_pipeline, max_time_ms=60000)
-            # Depending on repository implementation, aggregate might return a list or a cursor.
-            # If it returns a list, cursor is a list and has no close() method.
-            # Convert to list safely.
-            if hasattr(cursor, 'close'):
-                try:
-                    count_result = list(cursor)
-                finally:
-                    cursor.close()
-            else:
-                count_result = list(cursor)
+            count_result = await self.repository.aggregate(approval_collection, count_pipeline, max_time_ms=60000)
 
             total = count_result[0]["total"] if count_result else 0
             
@@ -421,15 +403,7 @@ class LimitWorkflowRepository:
             ]
             
             # Execute the main pipeline with increased timeout
-            cursor = self.repository.aggregate(approval_collection, pipeline, max_time_ms=60000)
-            
-            if hasattr(cursor, 'close'):
-                try:
-                    data = list(cursor)
-                finally:
-                    cursor.close()
-            else:
-                data = list(cursor)
+            data = await self.repository.aggregate(approval_collection, pipeline, max_time_ms=60000)
             
             return {
                 "data": data,

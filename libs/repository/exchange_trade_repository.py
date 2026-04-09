@@ -6,7 +6,12 @@ Repository for active and historical exchange trade data
 import logging
 from typing import Dict, Any, List
 from libs.database.base_serve_repository import BaseServeRepository
-from libs.models.exchange_trade_serve_entity import ensure_exchange_trade_serve_indexes, ensure_exchange_trade_serve_historical_indexes
+from libs.models.exchange_trade_serve_entity import (
+    ensure_exchange_trade_serve_indexes, 
+    ensure_exchange_trade_serve_historical_indexes,
+    async_ensure_exchange_trade_serve_indexes,
+    async_ensure_exchange_trade_serve_historical_indexes
+)
 
 logger = logging.getLogger(__name__)
 
@@ -37,14 +42,14 @@ class ExchangeTradeRepository(BaseServeRepository):
             serve_collection=serve_collection,
             historical_collection=historical_collection
         )
+        # Indexes should be constructed via the async setup() method
+        pass
         
-        # Ensure indexes are created
-        self._ensure_indexes()
-        
-    def _ensure_indexes(self):
-        """Ensure necessary indexes exist on both collections"""
-        ensure_exchange_trade_serve_indexes(self.serve_collection)
-        ensure_exchange_trade_serve_historical_indexes(self.historical_collection)
+    async def setup(self):
+        """Ensure necessary indexes exist on both collections asynchronously"""
+        await async_ensure_exchange_trade_serve_indexes(self.serve_collection)
+        await async_ensure_exchange_trade_serve_historical_indexes(self.historical_collection)
+        logger.info("ExchangeTradeRepository async indexes setup complete")
 
     def bulk_upsert_exchange_trade_records(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """

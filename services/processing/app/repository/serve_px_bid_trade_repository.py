@@ -13,7 +13,7 @@ class servePxBidTradeRepository(BaseRepository):
         logger.info(f"DashboardRepository initialized with collection: {collection_name}")
 
 
-    def get_bid_trade(self, schedule_date: str) -> Optional[List[Dict[str, Any]]]:
+    async def get_bid_trade(self, schedule_date: str) -> Optional[List[Dict[str, Any]]]:
         pipeline = [
     {
         "$match": {
@@ -59,11 +59,11 @@ class servePxBidTradeRepository(BaseRepository):
 ]
 
 
-        return list(self.collection.aggregate(pipeline))
+        return await self.collection.aggregate(pipeline).to_list(None)
     
 
     
-    def get_exchange_by_date_time_block(self, schedule_date: str, time_block) -> Optional[List[Dict[str, Any]]]:
+    async def get_exchange_by_date_time_block(self, schedule_date: str, time_block) -> Optional[List[Dict[str, Any]]]:
         logger.info(f"get_exchange_by_date_time_block +++++++++++++++++++ ")
         pipeline = [
             {
@@ -105,6 +105,6 @@ class servePxBidTradeRepository(BaseRepository):
 
 
 
-        return list(self.collection.aggregate(pipeline))
+        return await self.collection.aggregate(pipeline).to_list(None)
    
     

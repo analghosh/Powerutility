@@ -1,5 +1,5 @@
 import logging
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 from datetime import datetime
 from fastapi import HTTPException, status
 from ..repository.iex_api_detail_repository import IexApiDetailRepository
@@ -28,7 +28,7 @@ class IexApiDetailService:
                     
         return details
 
-    async def create(self, data: Dict[str, Any], user_info: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def create(self, data: Dict[str, Any], user_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             # Check for duplicate before creating
             existing = await self.repository.check_duplicate(data)
@@ -57,7 +57,7 @@ class IexApiDetailService:
 
             if data.get("status") == "Active":
                 await self.repository.deactivate_other_environment(
-                    exchange=data.get("exchange")
+                    exchange=data.get("exchange") or ""
                 )
             # data["updated_at"] = now
             if user_info:
@@ -74,7 +74,7 @@ class IexApiDetailService:
             logger.error(f"Error creating Exchange API detail: {e}")
             raise e
 
-    async def update(self, id: str, data: Dict[str, Any], user_info: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def update(self, id: str, data: Dict[str, Any], user_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             # Check if document exists and is not soft-deleted
             existing = await self.repository.find_by_id(id, include_deleted=False)
@@ -146,17 +146,17 @@ class IexApiDetailService:
                     or existing.get("environment")
                     or ""
                 ).strip().upper()
-            status = update_payload.get("status")   
-            if status:              
-               if status is not None:
-                status_lower = str(status).strip().lower()
+            status_val = update_payload.get("status")
+            if status_val:
+               if status_val is not None:
+                status_lower = str(status_val).strip().lower()
 
                 if status_lower == "active":
                     update_payload["is_active"] = True
 
                 elif status_lower == "inactive":
                     update_payload["is_active"] = False
-      
+
                 if not exchange or not environment:
                     raise HTTPException(
                         status_code=status.HTTP_400_BAD_REQUEST,
@@ -228,7 +228,7 @@ class IexApiDetailService:
             logger.error(f"Error updating IEX API detail: {e}")
             raise e
 
-    async def update_status(self, id: str, new_status: str, user_info: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def update_status(self, id: str, new_status: str, user_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             # Check if document exists and is not soft-deleted
             existing = await self.repository.find_by_id(id, include_deleted=False)
@@ -277,7 +277,7 @@ class IexApiDetailService:
             logger.error(f"Error updating status: {e}")
             raise e
 
-    async def delete(self, id: str, user_info: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def delete(self, id: str, user_info: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         try:
             # Check if document exists and is not already deleted
             existing = await self.repository.find_by_id(id, include_deleted=False)

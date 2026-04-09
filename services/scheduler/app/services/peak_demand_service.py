@@ -31,7 +31,7 @@ class PeakDemandService:
         now = datetime.now()
         return (now.hour * 4) + (now.minute // 15) + 1
 
-    def compute_and_store_peak(self) -> Dict[str, Any]:
+    async def compute_and_store_peak(self) -> Dict[str, Any]:
         """
         Computes and stores peak demand, backfilling from the last known date
         up to and including today (using current block for today).
@@ -73,7 +73,7 @@ class PeakDemandService:
                 else self.demand_repo.historical_collection
             )
 
-            processed_for_date, skipped_for_date = self._compute_and_store_for_date(
+            processed_for_date, skipped_for_date = await self._compute_and_store_for_date(
                 current_date, collection_to_use, is_today
             )
 
@@ -129,7 +129,7 @@ class PeakDemandService:
 
         return None
 
-    def _compute_and_store_for_date(
+    async def _compute_and_store_for_date(
         self, target_date: date, source_collection: Collection, is_today: bool = False
     ) -> Tuple[int, int]:
         """
@@ -185,7 +185,7 @@ class PeakDemandService:
         try:
             cursor = source_collection.aggregate(pipeline)
             try:
-                results = list(cursor)
+                results = await cursor.to_list(None)
             finally:
                 cursor.close()
         except Exception as e:

@@ -104,7 +104,7 @@ class SupplyManualRepository(GenericRepository):
                 lambda: self.get_manual_supply(plant_id, dc_sg, process_type, updated_flag, time_block)
             )
 
-    def update_manual_supply_to_zero(
+    async def update_manual_supply_to_zero(
         self,
         plant_id: str,
         dc_sg: str,
@@ -142,7 +142,7 @@ class SupplyManualRepository(GenericRepository):
             }
             
             logger.info(f"Updating dc_sg records with query: {query}")
-            result = self.collection.update_many(query, update)
+            result = await self.collection.update_many(query, update)
             
             update_result = {
                 "matched_count": result.matched_count,

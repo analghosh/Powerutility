@@ -43,7 +43,7 @@ class NewDSMProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -61,7 +61,7 @@ class NewDSMProcessor(BaseProcessor):
             
             # Step 1: Load time blocks into cache if not already loaded
             if not self.time_blocks_cache:
-                self._load_time_blocks_cache()
+                await self._load_time_blocks_cache()
             
             # Step 2: Determine current time block based on current time
             current_time_block = self._get_current_time_block()
@@ -89,7 +89,7 @@ class NewDSMProcessor(BaseProcessor):
                 logger.debug(f"Processing time block {i+1}/{len(blocks_to_process)}: {timeblock} for date {date}")
 
                 try:
-                    if self._process_time_block(scheduled_at, timeblock):
+                    if await self._process_time_block(scheduled_at, timeblock):
                         processed_count += 1
                         logger.debug(f"✅ Successfully processed time block {timeblock} for date {date}")
                     else:
@@ -113,7 +113,7 @@ class NewDSMProcessor(BaseProcessor):
                 "cron_job": "new_dsm"
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -143,7 +143,7 @@ class NewDSMProcessor(BaseProcessor):
                 "cron_job": "new_dsm"
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -160,7 +160,7 @@ class NewDSMProcessor(BaseProcessor):
             # Clear correlation ID after job completion
             self.clear_correlation_id()
     
-    def _load_time_blocks_cache(self):
+    async def _load_time_blocks_cache(self):
         """Load all time blocks from database into cache"""
         try:
             from ..core.database import get_database
@@ -170,7 +170,7 @@ class NewDSMProcessor(BaseProcessor):
             # Fetch all time blocks and create cache
             cursor = time_block_collection.find({}).sort("timeblock", 1)
             try:
-                time_blocks = list(cursor)
+                time_blocks = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -337,7 +337,7 @@ class NewDSMProcessor(BaseProcessor):
             return []
     
     
-    def _process_time_block(
+    async def _process_time_block(
             self,
             scheduled_at: datetime,
             timeblock: int
@@ -356,13 +356,13 @@ class NewDSMProcessor(BaseProcessor):
 
             # 1️ Get weighted ACP once (CERC‑compliant pipeline includes fallback)
             final_wt_acp_dam, final_wt_acp_rtm = \
-                self._fetch_cerc_weighted_acp(
+                await self._fetch_cerc_weighted_acp(
                     timeblock,
                     scheduled_at
                 )
 
             # 2️⃣ Get demand records
-            demand_data = self._fetch_demand_serve_data(
+            demand_data = await self._fetch_demand_serve_data(
                 timeblock,
                 scheduled_at
             )
@@ -372,13 +372,13 @@ class NewDSMProcessor(BaseProcessor):
                 return False
 
             # 3️⃣ Calculate schedule from supply collection
-            schedule_mw = self._calculate_schedule_from_supply(
+            schedule_mw = await self._calculate_schedule_from_supply(
                 scheduled_at,
                 timeblock
             )
 
             # 4️⃣ Run DSM update
-            updated = self._batch_update_demand_records_with_dsm(
+            updated = await self._batch_update_demand_records_with_dsm(
                 demand_data,
                 final_wt_acp_dam,
                 final_wt_acp_rtm,
@@ -390,7 +390,7 @@ class NewDSMProcessor(BaseProcessor):
     
     
 
-    def _fallback_previous_acp(
+    async def _fallback_previous_acp(
         self,
         timeblock: int,
         scheduled_at: datetime
@@ -407,7 +407,7 @@ class NewDSMProcessor(BaseProcessor):
         from ..core.database import get_database
         db = get_database()
 
-        previous = db.exchange_dsm_serve.find_one(
+        previous = await db.exchange_dsm_serve.find_one(
             {
                 "time_block": timeblock,
                 "scheduled_at": {"$lt": scheduled_at}
@@ -419,11 +419,11 @@ class NewDSMProcessor(BaseProcessor):
             prev_date = previous.get("scheduled_at")
             if prev_date:
                 # recursive call will itself fallback further if needed
-                return self._fetch_cerc_weighted_acp(timeblock, prev_date)
+                return await self._fetch_cerc_weighted_acp(timeblock, prev_date)
 
         return 0.0, 0.0
     
-    def _fetch_cerc_weighted_acp(
+    async def _fetch_cerc_weighted_acp(
             self,
             timeblock: int,
             scheduled_at: datetime
@@ -572,9 +572,8 @@ class NewDSMProcessor(BaseProcessor):
                 }
             ]
 
-            results = list(
-                db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
-            )
+            cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
+            results = await cursor.to_list(None)
 
             # combine results: compute weighted average across IDAM subtypes and RTM
             idam_num = 0.0
@@ -598,12 +597,12 @@ class NewDSMProcessor(BaseProcessor):
 
             # Fallback if either is missing
             if idam_acp == 0 or rtm_acp == 0:
-                return self._fallback_previous_acp(timeblock, scheduled_at)
+                return await self._fallback_previous_acp(timeblock, scheduled_at)
             print("========================================================")
             print(f"Fetched CERC‑compliant weighted ACPs for timeblock {timeblock} at {scheduled_at}: IDAM={idam_acp}, RTM={rtm_acp}")
             return float(idam_acp), float(rtm_acp)
             
-    def _fetch_demand_serve_data(self, timeblock: int, scheduled_at: datetime) -> List[Dict[str, Any]]:
+    async def _fetch_demand_serve_data(self, timeblock: int, scheduled_at: datetime) -> List[Dict[str, Any]]:
         """
         Fetch demand serve data for the specific date and time block.
         Only records with type "IDF" are included; type "DAF" is excluded.
@@ -623,7 +622,7 @@ class NewDSMProcessor(BaseProcessor):
             end_of_day = start_of_day + timedelta(days=1)
             
             logger.debug(f"Fetching demand data for specific date: {start_of_day} to {end_of_day}")
-            demand_data = demand_serve_repository.find_demand_serve_by_date_range(start_of_day, end_of_day)
+            demand_data = await demand_serve_repository.find_demand_serve_by_date_range(start_of_day, end_of_day)
             logger.debug(f"Found {len(demand_data)} serve records for date: {scheduled_at.date()}")
             
             # Filter for time blocks >= current timeblock
@@ -665,7 +664,7 @@ class NewDSMProcessor(BaseProcessor):
             logger.error(f"Error fetching demand serve data: {str(e)}", exc_info=True)
             return []
     
-    def _calculate_schedule_from_supply(self, scheduled_at: datetime, timeblock: int) -> Optional[float]:
+    async def _calculate_schedule_from_supply(self, scheduled_at: datetime, timeblock: int) -> Optional[float]:
         """
         Calculate schedule_mw from supply_serve collection
         Filters for central plants (c_s = 'central') and SG records (dc_sg = 'SG')
@@ -722,7 +721,7 @@ class NewDSMProcessor(BaseProcessor):
             
             cursor = supply_serve_repository.serve_collection.aggregate(pipeline)
             try:
-                results = list(cursor)
+                results = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -738,7 +737,7 @@ class NewDSMProcessor(BaseProcessor):
             logger.error(f"Error calculating schedule from supply: {str(e)}", exc_info=True)
             return None
     
-    def _batch_update_demand_records_with_dsm(
+    async def _batch_update_demand_records_with_dsm(
         self, 
         demand_data: List[Dict[str, Any]], 
         max_dam_mcp: float, 
@@ -788,7 +787,7 @@ class NewDSMProcessor(BaseProcessor):
                         scheduled_at = datetime.fromisoformat(scheduled_at.replace('Z', '+00:00'))
                     
                     # Calculate schedule_mw from supply_serve collection
-                    schedule_mw = self._calculate_schedule_from_supply(scheduled_at, record_timeblock)
+                    schedule_mw = await self._calculate_schedule_from_supply(scheduled_at, record_timeblock)
                     
                     # Extract other required fields for DSM calculation
                     actual_mw = demand_record.get('drawal')

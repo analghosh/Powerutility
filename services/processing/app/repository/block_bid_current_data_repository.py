@@ -47,7 +47,7 @@ class BlockBidCurrentDataRepository(BaseRepository):
 
             logger.info(f"Inserting {len(documents)} documents into collection...")
             
-            result= self.collection.insert_many(documents, ordered=False)
+            result= await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             
             logger.info("Bulk insert successful")
@@ -63,10 +63,10 @@ class BlockBidCurrentDataRepository(BaseRepository):
                 "status": {"$ne": "Submitted"}
             }
 
-            cursor = self.collection.find(query).sort("from", -1)
+            docs = await self.collection.find(query).sort("from", -1).to_list(None)
             result = []
 
-            for doc in cursor:
+            for doc in docs:
                 # Convert ObjectId to string for JSON-safe response
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
@@ -80,7 +80,7 @@ class BlockBidCurrentDataRepository(BaseRepository):
 
         
     async def updatedata(self, record_id, data):
-        result =  self.collection.update_one(
+        result =  await self.collection.update_one(
             {"_id": ObjectId(record_id)},
             {"$set": data}
         )

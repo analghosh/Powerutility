@@ -115,7 +115,7 @@ class DashboardService:
             )
 
             # Process and enhance the data
-            processed_data = self._process_dashboard_data(
+            processed_data = await self._process_dashboard_data(
                 dashboard_data=dashboard_data,
                 schedule_date=effective_date_str,
                 current_block=current_block,
@@ -144,7 +144,7 @@ class DashboardService:
         except Exception as e:
             logger.exception(f"Failed to get max updated_at from {collection_name}")
             return None
-    def _process_dashboard_data(
+    async def _process_dashboard_data(
         self,
         dashboard_data: Dict[str, Any],
         schedule_date: str,

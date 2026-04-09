@@ -224,7 +224,7 @@ async def list_price_groups(
         controller_start = time.time()
         logger.info(f"🔍 Starting controller.list call")
         
-        result = controller.list(filters, page, page_size, user_context, req_meta)
+        result = await controller.list(filters, page, page_size, user_context, req_meta)
         
         controller_time = time.time() - controller_start
         logger.info(f"🔍 Controller.list completed in {controller_time:.3f}s")

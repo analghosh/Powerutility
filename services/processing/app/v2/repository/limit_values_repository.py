@@ -136,7 +136,7 @@ class LimitValuesRepository:
                 {"$sort": {"block": 1, "id": 1}}
             ])
             
-            data = self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
+            data = await self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
             return data
             
         except Exception as e:
@@ -180,7 +180,7 @@ class LimitValuesRepository:
                         }
                     }
                 ]
-                max_date_result = self.repository.aggregate(collection_name, max_date_pipeline)
+                max_date_result = await self.repository.aggregate(collection_name, max_date_pipeline)
                 
                 if max_date_result and max_date_result[0].get("date"):
                     max_date_val = max_date_result[0]["date"]
@@ -223,7 +223,7 @@ class LimitValuesRepository:
             # Even then, the grouping stage is the bottleneck.
             
             count_pipeline = base_pipeline + [{"$count": "total"}]
-            count_result = self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
+            count_result = await self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
             total = count_result[0]["total"] if count_result else 0
 
             # 5. Main data pipeline
@@ -234,7 +234,7 @@ class LimitValuesRepository:
                 {"$sort": {"block": 1, "id": 1}}
             ]
             
-            data = self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
+            data = await self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
             
             # Pagination calculations
             page_size = to_block - from_block + 1
@@ -290,7 +290,7 @@ class LimitValuesRepository:
                 count_pipeline.append({"$match": match_query})
             count_pipeline.append({"$count": "total"})
             
-            count_result = self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
+            count_result = await self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
             total = count_result[0]["total"] if count_result else 0
             
             # Calculate pagination
@@ -311,7 +311,7 @@ class LimitValuesRepository:
                 {"$limit": page_size}
             ])
             
-            data = self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
+            data = await self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
             
             return {
                 "data": data,
@@ -360,7 +360,7 @@ class LimitValuesRepository:
                 pipeline.append({"$match": match_query})
             pipeline.append({"$sort": {"scheduled_at": -1, "block": 1, "id": 1}})
             
-            data = self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
+            data = await self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
             
             return data
             
@@ -368,14 +368,14 @@ class LimitValuesRepository:
             logger.exception(f"[LimitValuesRepository] Failed get_all_data_with_filters: {str(e)}")
             raise
         
-    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Run an aggregation pipeline and return the list of documents.
         """
         logger.debug("limitVallueRepository.aggregate | pipeline=%s", pipeline)
         cursor = self.collection.aggregate(pipeline)
         try:
-            return list(cursor)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
 

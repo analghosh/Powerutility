@@ -30,26 +30,30 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
         """
         self.collection_name = "upload_tracking"
         super().__init__(self.collection_name, mongodb_uri, database_name)
-        self._create_collection_if_not_exists()
-        self._create_indexes()
-    
-    def _create_indexes(self):
+        # Async initialization is deferred — call initialize() once at startup.
+
+    async def initialize(self):
+        """Initialize async resources — call once at startup from async context."""
+        await self._create_collection_if_not_exists()
+        await self._create_indexes()
+
+    async def _create_indexes(self):
         """Create necessary indexes for upload tracking"""
         try:
             # Index on upload_id for fast lookups
-            self.collection.create_index("upload_id", unique=True)
-            
+            await self.collection.create_index("upload_id", unique=True)
+
             # Index on status for filtering
-            self.collection.create_index("status")
-            
+            await self.collection.create_index("status")
+
             # Index on created_at for time-based queries
-            self.collection.create_index("created_at")
-            
+            await self.collection.create_index("created_at")
+
             # Compound index for status and created_at
-            self.collection.create_index([("status", 1), ("created_at", -1)])
-            
+            await self.collection.create_index([("status", 1), ("created_at", -1)])
+
             logger.info("Upload tracking indexes created successfully")
-            
+
         except Exception as e:
             logger.error("Error creating upload tracking indexes: %s", e, exc_info=True)
     
@@ -78,9 +82,9 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
             
             logger.info("Creating upload record: upload_id=%s, file=%s", upload_id, file_name)
             
-            result = self.collection.insert_one(upload_data)
+            result = await self.collection.insert_one(upload_data)
             document_id = str(result.inserted_id)
-            
+
             logger.info("Upload record created: upload_id=%s, document_id=%s", upload_id, document_id)
             return document_id
             
@@ -91,7 +95,7 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
     async def get_upload_by_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
         """Get upload record by ID"""
         try:
-            upload_data = self.collection.find_one({"upload_id": upload_id})
+            upload_data = await self.collection.find_one({"upload_id": upload_id})
             
             if upload_data:
                 # Convert ObjectId to string for JSON serialization
@@ -126,13 +130,13 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
             if failed_at:
                 update_data["failed_at"] = failed_at
             
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"upload_id": upload_id},
                 {"$set": update_data}
             )
-            
+
             success = result.modified_count > 0
-            logger.info("Upload status updated: upload_id=%s, status=%s, success=%s", 
+            logger.info("Upload status updated: upload_id=%s, status=%s, success=%s",
                        upload_id, status.value, success)
             
             return success
@@ -147,9 +151,9 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
             cursor = self.collection.find(
                 {"status": RawDataStatus.PENDING.value}
             ).sort("created_at", 1).limit(limit)
-            
+
             uploads = []
-            for upload in cursor:
+            async for upload in cursor:
                 upload["_id"] = str(upload["_id"])
                 uploads.append(upload)
             
@@ -170,9 +174,9 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
             cursor = self.collection.find(
                 {"status": status.value}
             ).sort("created_at", -1).limit(limit)
-            
+
             uploads = []
-            for upload in cursor:
+            async for upload in cursor:
                 upload["_id"] = str(upload["_id"])
                 uploads.append(upload)
             
@@ -199,16 +203,16 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
                 query_filter["status"] = status_filter
             
             # Get total count for pagination metadata
-            total_count = self.collection.count_documents(query_filter)
-            
+            total_count = await self.collection.count_documents(query_filter)
+
             # Build sort criteria
             sort_criteria = [(sort_by, sort_order)]
-            
+
             # Execute paginated query
             cursor = self.collection.find(query_filter).sort(sort_criteria).skip(skip).limit(limit)
-            
+
             uploads = []
-            for upload in cursor:
+            async for upload in cursor:
                 upload["_id"] = str(upload["_id"])
                 uploads.append(upload)
             

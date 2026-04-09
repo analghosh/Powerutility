@@ -1,0 +1,301 @@
+{
+  "provider_configuration_sample": {
+    "name": "Trading Data Provider",
+    "code": "TRADING_BID_DATA",
+    "enabled": true,
+    "ingestion_type": "UPLOAD",
+    "data_type": "BID",
+    "metadata": {
+      "parser_type": "trading",
+      "file_format": "csv"
+    },
+    "fields": [
+      {
+        "field_name": "Date",
+        "field_type": "string",
+        "is_required": true,
+        "validation": [
+          {
+            "rule": "required",
+            "value": true,
+            "message": "Date is required"
+          },
+          {
+            "rule": "pattern",
+            "value": "^\\d{1,2}/\\d{1,2}/\\d{4}$",
+            "message": "Date must be in M/D/YYYY format"
+          }
+        ],
+        "description": "Trading date in M/D/YYYY format (e.g., 9/1/2025)",
+        "default_value": null
+      },
+      {
+        "field_name": "Time_Start",
+        "field_type": "string",
+        "is_required": true,
+        "validation": [
+          {
+            "rule": "required",
+            "value": true,
+            "message": "Start time is required"
+          },
+          {
+            "rule": "pattern",
+            "value": "^\\d{1,2}:\\d{2}$",
+            "message": "Time must be in HH:MM format"
+          }
+        ],
+        "description": "Time block start time (HH:MM format)",
+        "default_value": null
+      },
+      {
+        "field_name": "Time_End",
+        "field_type": "string",
+        "is_required": true,
+        "validation": [
+          {
+            "rule": "required",
+            "value": true,
+            "message": "End time is required"
+          }
+        ],
+        "description": "Time block end time (HH:MM format)",
+        "default_value": null
+      },
+      {
+        "field_name": "market_type",
+        "field_type": "string",
+        "is_required": true,
+        "validation": [
+          {
+            "rule": "required",
+            "value": true,
+            "message": "Market type is required"
+          },
+          {
+            "rule": "pattern",
+            "value": "^(DAM|RTM|GDAM|TAM)$",
+            "message": "Market type must be DAM, RTM, GDAM, or TAM"
+          }
+        ],
+        "description": "Market type (DAM, RTM, GDAM, TAM)",
+        "default_value": null
+      },
+      {
+        "field_name": "Bidded",
+        "field_type": "float",
+        "is_required": false,
+        "validation": [
+          {
+            "rule": "min_value",
+            "value": -999999,
+            "message": "Bidded value must be reasonable"
+          },
+          {
+            "rule": "max_value",
+            "value": 999999,
+            "message": "Bidded value must be reasonable"
+          }
+        ],
+        "description": "Bidded amount (can be negative)",
+        "default_value": 0.0
+      },
+      {
+        "field_name": "Traded",
+        "field_type": "float",
+        "is_required": false,
+        "validation": [
+          {
+            "rule": "min_value",
+            "value": -999999,
+            "message": "Traded value must be reasonable"
+          },
+          {
+            "rule": "max_value",
+            "value": 999999,
+            "message": "Traded value must be reasonable"
+          }
+        ],
+        "description": "Traded amount (can be negative)",
+        "default_value": 0.0
+      }
+    ],
+    "mapping": [
+      {
+        "provider_field": "Date",
+        "serve_field": "scheduled_at",
+        "transformation": "iso_date"
+      },
+      {
+        "provider_field": "Time_Start",
+        "serve_field": "time_start",
+        "transformation": "trim"
+      },
+      {
+        "provider_field": "Time_End",
+        "serve_field": "time_end",
+        "transformation": "trim"
+      },
+      {
+        "provider_field": "market_type",
+        "serve_field": "type",
+        "transformation": "uppercase"
+      },
+      {
+        "provider_field": "Bidded",
+        "serve_field": "bidded",
+        "transformation": "float"
+      },
+      {
+        "provider_field": "Traded",
+        "serve_field": "traded",
+        "transformation": "float"
+      }
+    ],
+    "unique_columns": ["scheduled_at", "time_start", "type"],
+    "description": "Trading bid data provider with time-based parsing and field mapping"
+  },
+  
+  "sample_input_data": {
+    "description": "Sample parsed data from trading parser (before field mapping)",
+    "records": [
+      {
+        "Date": "9/1/2025",
+        "Time_Start": "10:00",
+        "Time_End": "10:15",
+        "market_type": "DAM",
+        "Bidded": -4.0,
+        "Traded": -4.0
+      },
+      {
+        "Date": "9/1/2025",
+        "Time_Start": "10:00",
+        "Time_End": "10:15",
+        "market_type": "RTM",
+        "Bidded": -24.0,
+        "Traded": -24.0
+      },
+      {
+        "Date": "9/1/2025",
+        "Time_Start": "10:15",
+        "Time_End": "10:30",
+        "market_type": "DAM",
+        "Bidded": -25.0,
+        "Traded": -25.0
+      }
+    ]
+  },
+  
+  "sample_output_data": {
+    "description": "Sample data after field mapping and transformation",
+    "records": [
+      {
+        "scheduled_at": "2025-09-01",
+        "time_start": "10:00",
+        "time_end": "10:15",
+        "type": "DAM",
+        "bidded": -4.0,
+        "traded": -4.0,
+        "time_block": 41
+      },
+      {
+        "scheduled_at": "2025-09-01",
+        "time_start": "10:00",
+        "time_end": "10:15",
+        "type": "RTM",
+        "bidded": -24.0,
+        "traded": -24.0,
+        "time_block": 41
+      },
+      {
+        "scheduled_at": "2025-09-01",
+        "time_start": "10:15",
+        "time_end": "10:30",
+        "type": "DAM",
+        "bidded": -25.0,
+        "traded": -25.0,
+        "time_block": 42
+      }
+    ]
+  },
+  
+  "transformation_examples": {
+    "iso_date": {
+      "description": "Convert M/D/YYYY to YYYY-MM-DD",
+      "input": "9/1/2025",
+      "output": "2025-09-01"
+    },
+    "uppercase": {
+      "description": "Convert to uppercase",
+      "input": "dam",
+      "output": "DAM"
+    },
+    "lowercase": {
+      "description": "Convert to lowercase", 
+      "input": "RTM",
+      "output": "rtm"
+    },
+    "float": {
+      "description": "Convert to float number",
+      "input": "-24",
+      "output": -24.0
+    },
+    "int": {
+      "description": "Convert to integer",
+      "input": "41.5",
+      "output": 41
+    },
+    "abs": {
+      "description": "Get absolute value",
+      "input": -24.5,
+      "output": 24.5
+    },
+    "multiply_4": {
+      "description": "Multiply by 4",
+      "input": 10.0,
+      "output": 40.0
+    },
+    "divide_100": {
+      "description": "Divide by 100",
+      "input": 2500.0,
+      "output": 25.0
+    },
+    "trim": {
+      "description": "Remove leading/trailing spaces",
+      "input": "  10:00  ",
+      "output": "10:00"
+    }
+  },
+  
+  "field_types_supported": {
+    "string": "Text data (dates, times, market types)",
+    "float": "Decimal numbers (bidded/traded amounts)",
+    "integer": "Whole numbers (timeblocks, counts)",
+    "datetime": "Date and time values",
+    "boolean": "True/false values"
+  },
+  
+  "validation_rules_supported": {
+    "required": "Field must have a value",
+    "min_length": "Minimum string length",
+    "max_length": "Maximum string length", 
+    "min_value": "Minimum numeric value",
+    "max_value": "Maximum numeric value",
+    "pattern": "Regular expression pattern match",
+    "email": "Valid email format",
+    "url": "Valid URL format"
+  },
+  
+  "serve_table_schema": {
+    "description": "Final schema for bid_serve table",
+    "columns": {
+      "scheduled_at": "Date in YYYY-MM-DD format",
+      "time_block": "Time block number (1-96)",
+      "type": "Market type (DAM, RTM, GDAM, TAM)",
+      "bidded": "Bidded amount (float)",
+      "traded": "Traded amount (float)",
+      "time_start": "Start time (HH:MM) - optional metadata",
+      "time_end": "End time (HH:MM) - optional metadata"
+    }
+  }
+}

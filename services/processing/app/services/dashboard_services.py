@@ -72,8 +72,8 @@ class DashboardService:
 
         try:
             # Fetch matching documents
-            cursor = self.dashboard_repo.find_many(filter_query)
-            count = self.dashboard_repo.count(filter_query)
+            cursor = await self.dashboard_repo.find_many(filter_query)
+            count = await self.dashboard_repo.count(filter_query)
 
             documents: List[Dict[str, Any]] = []
 

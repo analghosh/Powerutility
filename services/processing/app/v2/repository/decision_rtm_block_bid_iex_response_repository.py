@@ -164,7 +164,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             
             query = {"inserted_date": inserted_date}
             cursor = self.collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary keyed by time_block
             # NOTE: multiple docs can exist per time_block; use list to avoid overwriting
@@ -213,7 +213,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             }
             
             cursor = collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -261,7 +261,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             # PHP orders by submited_bid_response.order_id, but that's nested
             # We'll order by _id first, then sort in Python if needed
             cursor = collection.find(query).sort("_id", 1)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -388,7 +388,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             }
 
             cursor = self.collection.find(query).sort("_id", 1)
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:

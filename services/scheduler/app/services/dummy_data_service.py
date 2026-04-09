@@ -76,21 +76,21 @@ class DummyDataService:
             settings.MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION
         ]
 
-        # Ensure time series collections exist
-        self._ensure_time_series_collections()
+    async def initialize(self):
+        """Async initialization: create time series collections if they don't exist.
+        Must be called once at application startup (inside the async lifespan)."""
+        await self._ensure_time_series_collections()
 
-    def _ensure_time_series_collections(self):
+    async def _ensure_time_series_collections(self):
         """Create time series collections if they don't exist"""
-        self._ensure_demand_serve_collection()
-        self._ensure_supply_serve_collection()
+        await self._ensure_demand_serve_collection()
+        await self._ensure_supply_serve_collection()
 
-    def _ensure_demand_serve_collection(self):
+    async def _ensure_demand_serve_collection(self):
         try:
-            if (
-                settings.MONGODB_DEMAND_SERVE_COLLECTION
-                not in self.db.list_collection_names()
-            ):
-                self.db.create_collection(
+            existing = await self.db.list_collection_names()
+            if settings.MONGODB_DEMAND_SERVE_COLLECTION not in existing:
+                await self.db.create_collection(
                     settings.MONGODB_DEMAND_SERVE_COLLECTION,
                     timeseries={
                         "timeField": "timestamp",
@@ -104,11 +104,8 @@ class DummyDataService:
                 )
 
             # Create demand_serve_historical as time series collection
-            if (
-                settings.MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION
-                not in self.db.list_collection_names()
-            ):
-                self.db.create_collection(
+            if settings.MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION not in existing:
+                await self.db.create_collection(
                     settings.MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION,
                     timeseries={
                         "timeField": "archived_timestamp",
@@ -132,13 +129,11 @@ class DummyDataService:
             logger.info("Could not create time series collections: %s", str(e))
             logger.info("Using regular collections with timestamp indexes")
 
-    def _ensure_supply_serve_collection(self):
+    async def _ensure_supply_serve_collection(self):
         try:
-            if (
-                settings.MONGODB_SUPPLY_SERVE_COLLECTION
-                not in self.db.list_collection_names()
-            ):
-                self.db.create_collection(
+            existing = await self.db.list_collection_names()
+            if settings.MONGODB_SUPPLY_SERVE_COLLECTION not in existing:
+                await self.db.create_collection(
                     settings.MONGODB_SUPPLY_SERVE_COLLECTION,
                     timeseries={
                         "timeField": "timestamp",
@@ -152,11 +147,8 @@ class DummyDataService:
                 )
 
             # Create supply_serve_historical as time series collection
-            if (
-                settings.MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION
-                not in self.db.list_collection_names()
-            ):
-                self.db.create_collection(
+            if settings.MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION not in existing:
+                await self.db.create_collection(
                     settings.MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION,
                     timeseries={
                         "timeField": "archived_timestamp",
@@ -212,7 +204,7 @@ class DummyDataService:
             return False
 
     
-    def _process_startup_data_flow(self, job_id: Optional[str] = None) -> Dict[str, Any]:
+    async def _process_startup_data_flow(self, job_id: Optional[str] = None) -> Dict[str, Any]:
         """
         Process data flow on startup based on whether cron has run before
 
@@ -222,8 +214,8 @@ class DummyDataService:
         try:
             logger.info("Processing startup data flow...")
             logger.info("First time running - starting backfill from July 1st, 2025")
-            self._process_first_time_startup("demand")
-            self._process_first_time_startup("supply")
+            await self._process_first_time_startup("demand")
+            await self._process_first_time_startup("supply")
 
             return {
                 "status": "success",
@@ -239,7 +231,7 @@ class DummyDataService:
                 "message": "Startup data flow failed",
             }
 
-    def _process_first_time_startup(self, data_type: str) -> Dict[str, Any]:
+    async def _process_first_time_startup(self, data_type: str) -> Dict[str, Any]:
         """Process first-time startup with backfill from July 1st, 2025"""
         try:
             logger.info("Processing first-time startup with backfill...")
@@ -260,7 +252,7 @@ class DummyDataService:
 
             # Start backfill from July 1st, 2025
             start_date = "2025-07-01"
-            backfill_result = self.backfill_from_date(start_date, data_type)
+            backfill_result = await self.backfill_from_date(start_date, data_type)
             logger.info("Backfill result: %s", backfill_result)
 
             if backfill_result["status"] == "success":
@@ -292,7 +284,7 @@ class DummyDataService:
                 "message": "First-time startup failed",
             }
 
-    def _fetch_data_for_date(
+    async def _fetch_data_for_date(
         self, target_date: datetime, data_type: str
     ) -> List[Dict[str, Any]]:
         """Fetch data from dummy collection for a specific date with uniqueness applied at MongoDB level"""
@@ -337,7 +329,7 @@ class DummyDataService:
             
             cursor = self.dummy_collection.aggregate(pipeline)
             try:
-                data = list(cursor)
+                data = await cursor.to_list(None)
             finally:
                 cursor.close()
             logger.info(
@@ -868,7 +860,7 @@ class DummyDataService:
         record_copy["archived_timestamp"] = historical_timestamp
         return record_copy
 
-    def execute_data_management(self, data_type: str) -> Dict[str, Any]:
+    async def execute_data_management(self, data_type: str) -> Dict[str, Any]:
         """Execute the data management cron job for a specific data type"""
         start_time = datetime.now()
         logger.info("Starting %s data management cron job", data_type)
@@ -879,7 +871,7 @@ class DummyDataService:
             logger.info("Processing data for target date: %s", target_date.date())
             
             duplicates_removed = self._cleanup_duplicates_for_target_date(target_date, data_type)
-            existing_data_check = self._check_and_fetch_data_for_date(target_date, data_type)
+            existing_data_check = await self._check_and_fetch_data_for_date(target_date, data_type)
             
             if self._should_process_data(existing_data_check):
                 process_result = self._process_data_for_target_date(
@@ -987,7 +979,7 @@ class DummyDataService:
         
         return duplicates_removed
     
-    def _check_and_fetch_data_for_date(self, target_date: datetime, data_type: str) -> Dict[str, Any]:
+    async def _check_and_fetch_data_for_date(self, target_date: datetime, data_type: str) -> Dict[str, Any]:
         """Check if data exists and fetch new data if needed"""
         logger.info("Checking if data already exists for %s...", target_date.date())
         
@@ -1003,7 +995,7 @@ class DummyDataService:
             }
         else:
             logger.info("Fetching data for %s from dummy collection...", target_date.date())
-            fetched_data = self._fetch_data_for_date(target_date, data_type)
+            fetched_data = await self._fetch_data_for_date(target_date, data_type)
             
             if not fetched_data:
                 logger.info("No data found for %s in dummy collection", target_date.date())
@@ -1203,7 +1195,7 @@ class DummyDataService:
             self.client.close()
             logger.info("MongoDB connection closed")
 
-    def backfill_from_date(
+    async def backfill_from_date(
         self, start_date: str, data_type: str
     ) -> Dict[str, Any]:
         """Backfill data from a specific date onwards"""
@@ -1219,7 +1211,7 @@ class DummyDataService:
             current_date = start_datetime
             while current_date <= end_datetime:
                 try:
-                    data = self._fetch_data_for_date(current_date, data_type)
+                    data = await self._fetch_data_for_date(current_date, data_type)
 
                     if data:
                         process_result = self.process_data_for_date(data, current_date, data_type)

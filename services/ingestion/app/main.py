@@ -82,9 +82,39 @@ async def lifespan(_: FastAPI):
     except Exception as seed_error:
         logger.warning("Failed to seed providers: %s", seed_error)
 
+    # Initialize provider repository (creates indexes, etc.)
+    try:
+        from .api.v1.routes.providers import provider_service
+        await provider_service.initialize()
+        logger.info("Provider repository initialized")
+    except Exception as e:
+        logger.error("Failed to initialize provider repository: %s", e)
+
+    # Initialize upload tracking repository (creates collection + indexes once)
+    try:
+        from .repository.upload_tracking_repository import UploadTrackingRepository
+        upload_repo = UploadTrackingRepository(
+            mongodb_uri=settings.MONGODB_URI,
+            database_name=settings.MONGODB_DATABASE
+        )
+        await upload_repo.initialize()
+        logger.info("Upload tracking repository initialized")
+    except Exception as e:
+        logger.error("Failed to initialize upload tracking repository: %s", e)
+
+    # Initialize raw data repositories (creates timeseries collections + indexes once)
+    try:
+        from libs.repository.raw_data_repository import RawDataRepository
+        for data_type in (None, "demand", "supply"):
+            raw_repo = RawDataRepository(settings.MONGODB_URI, settings.MONGODB_DATABASE, data_type)
+            await raw_repo.initialize()
+        logger.info("Raw data repositories initialized")
+    except Exception as e:
+        logger.error("Failed to initialize raw data repositories: %s", e)
+
     # Start the cron scheduler
     try:
-        cron_manager.start()
+        await cron_manager.start()
         logger.info("Cron scheduler started successfully")
         
         # Execute background file processing immediately on startup

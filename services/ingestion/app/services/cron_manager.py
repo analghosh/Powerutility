@@ -84,7 +84,7 @@ class CronManager(BaseCronManager):
         }
         return job_functions.get(job_type)
     
-    def _register_service_jobs(self):
+    async def _register_service_jobs(self):
         """Register ingestion-specific jobs"""
         logger.info("Registering ingestion-specific cron jobs...")
         
@@ -95,10 +95,10 @@ class CronManager(BaseCronManager):
         
         # Try to seed jobs from shared seeder first
         try:
-            self.cron_job_seeder.seed_default_jobs()
+            await self.cron_job_seeder.seed_default_jobs()
             # Get jobs from database if seeder is available
             if self.job_data_repository:
-                jobs = self.job_data_repository.get_all_jobs(enabled_only=True, service="ingestion")
+                jobs = await self.job_data_repository.get_all_jobs(enabled_only=True, service="ingestion")
                 registered_count = 0
                 for job_config in jobs:
                     job_function = self._get_job_function(job_config['job_type'])

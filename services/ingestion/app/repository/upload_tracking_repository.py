@@ -19,37 +19,45 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
     """
     Repository for managing upload tracking and status
     """
-    
+
+    _initialized: bool = False
+
     def __init__(self, mongodb_uri: str, database_name: str):
         """
         Initialize upload tracking repository
-        
+
         Args:
             mongodb_uri: MongoDB connection URI
             database_name: Database name
         """
         self.collection_name = "upload_tracking"
         super().__init__(self.collection_name, mongodb_uri, database_name)
-        self._create_collection_if_not_exists()
-        self._create_indexes()
-    
-    def _create_indexes(self):
+        # Async initialization is deferred — call initialize() once at startup.
+
+    async def initialize(self):
+        """Initialize async resources — call once at startup from async context."""
+        if not UploadTrackingRepository._initialized:
+            await self._create_collection_if_not_exists()
+            await self._create_indexes()
+            UploadTrackingRepository._initialized = True
+
+    async def _create_indexes(self):
         """Create necessary indexes for upload tracking"""
         try:
             # Index on upload_id for fast lookups
-            self.collection.create_index("upload_id", unique=True)
-            
+            await self.collection.create_index("upload_id", unique=True)
+
             # Index on status for filtering
-            self.collection.create_index("status")
-            
+            await self.collection.create_index("status")
+
             # Index on created_at for time-based queries
-            self.collection.create_index("created_at")
-            
+            await self.collection.create_index("created_at")
+
             # Compound index for status and created_at
-            self.collection.create_index([("status", 1), ("created_at", -1)])
-            
+            await self.collection.create_index([("status", 1), ("created_at", -1)])
+
             logger.info("Upload tracking indexes created successfully")
-            
+
         except Exception as e:
             logger.error("Error creating upload tracking indexes: %s", e, exc_info=True)
     
@@ -81,7 +89,7 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             
             logger.info("Creating upload record: upload_id=%s, file=%s", upload_id, file_name)
             
-            result = self.collection.insert_one(upload_data)
+            result = await self.collection.insert_one(upload_data)
             document_id = str(result.inserted_id)
             
             logger.info("Upload record created: upload_id=%s, document_id=%s", upload_id, document_id)
@@ -102,7 +110,7 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             Optional[Dict[str, Any]]: Upload record if found
         """
         try:
-            record = self.collection.find_one({"upload_id": upload_id})
+            record = await self.collection.find_one({"upload_id": upload_id})
             if record:
                 record["_id"] = str(record["_id"])
             return record
@@ -151,11 +159,11 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             if increment_retry:
                 update_operation["$inc"] = {"retry_count": 1}
             
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"upload_id": upload_id},
                 update_operation
             )
-            
+
             success = result.modified_count > 0
             logger.info("Upload status updated: upload_id=%s, status=%s, increment_retry=%s, success=%s", 
                        upload_id, status.value, increment_retry, success)
@@ -181,26 +189,26 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             cursor = self.collection.find(
                 {"status": status.value}
             ).sort("created_at", -1).limit(limit)
-            
+
             records = []
-            for record in cursor:
+            async for record in cursor:
                 record["_id"] = str(record["_id"])
                 records.append(record)
-            
+
             return records
-            
+
         except Exception as e:
             logger.error("Error getting uploads by status %s: %s", status.value, e, exc_info=True)
             return []
     
-    def get_uploads_by_provider(self, provider_type: str, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_uploads_by_provider(self, provider_type: str, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Get uploads by provider type
-        
+
         Args:
             provider_type: Provider type to filter by
             limit: Maximum number of records to return
-            
+
         Returns:
             List[Dict[str, Any]]: List of upload records
         """
@@ -208,22 +216,22 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             cursor = self.collection.find(
                 {"provider_type": provider_type}
             ).sort("created_at", -1).limit(limit)
-            
+
             records = []
-            for record in cursor:
+            async for record in cursor:
                 record["_id"] = str(record["_id"])
                 records.append(record)
-            
+
             return records
-            
+
         except Exception as e:
             logger.error("Error getting uploads by provider %s: %s", provider_type, e, exc_info=True)
             return []
     
-    def get_upload_statistics(self) -> Dict[str, Any]:
+    async def get_upload_statistics(self) -> Dict[str, Any]:
         """
         Get upload statistics
-        
+
         Returns:
             Dict[str, Any]: Upload statistics
         """
@@ -236,16 +244,16 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
                     }
                 }
             ]
-            
-            status_counts = list(self.collection.aggregate(pipeline))
-            
+
+            status_counts = await self.collection.aggregate(pipeline).to_list(None)
+
             # Get total count
-            total_count = self.collection.count_documents({})
-            
+            total_count = await self.collection.count_documents({})
+
             # Get recent uploads (last 24 hours)
             from datetime import timedelta
             yesterday = datetime.now() - timedelta(days=1)
-            recent_count = self.collection.count_documents({
+            recent_count = await self.collection.count_documents({
                 "created_at": {"$gte": yesterday}
             })
             
@@ -264,18 +272,18 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
                 "error": str(e)
             }
     
-    def delete_upload_record(self, upload_id: str) -> bool:
+    async def delete_upload_record(self, upload_id: str) -> bool:
         """
         Delete upload record
-        
+
         Args:
             upload_id: Upload identifier
-            
+
         Returns:
             bool: True if deleted successfully
         """
         try:
-            result = self.collection.delete_one({"upload_id": upload_id})
+            result = await self.collection.delete_one({"upload_id": upload_id})
             if result.deleted_count > 0:
                 logger.info("Deleted upload record for %s", upload_id)
                 return True
@@ -301,12 +309,12 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             cursor = self.collection.find(
                 {"status": RawDataStatus.PENDING.value}
             ).sort("created_at", 1).limit(limit)
-            
+
             records = []
-            for record in cursor:
+            async for record in cursor:
                 record["_id"] = str(record["_id"])
                 records.append(record)
-            
+
             logger.info("Retrieved %d pending uploads", len(records))
             return records
             
@@ -314,7 +322,7 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             logger.error("Error getting pending uploads: %s", e, exc_info=True)
             return []
     
-    def get_uploads_by_status_and_date(self, status: List[str], before_date: Optional[datetime] = None, after_date: Optional[datetime] = None, limit: int = 100, max_retries: int = 3) -> List[Dict[str, Any]]:
+    async def get_uploads_by_status_and_date(self, status: List[str], before_date: Optional[datetime] = None, after_date: Optional[datetime] = None, limit: int = 100, max_retries: int = 3) -> List[Dict[str, Any]]:
         """
         Get uploads by status and date range, excluding those that exceeded max retries
         
@@ -347,12 +355,12 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
                 query["created_at"] = date_query
             
             cursor = self.collection.find(query).sort("created_at", -1).limit(limit)
-            
+
             records = []
-            for record in cursor:
+            async for record in cursor:
                 record["_id"] = str(record["_id"])
                 records.append(record)
-            
+
             logger.info("Found %d uploads with status %s (max_retries: %d)", len(records), status, max_retries)
             return records
             
@@ -360,18 +368,18 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
             logger.error("Error getting uploads by status and date: %s", e, exc_info=True)
             return []
     
-    def delete_old_upload_records(self, cutoff_date: datetime) -> int:
+    async def delete_old_upload_records(self, cutoff_date: datetime) -> int:
         """
         Delete upload records older than cutoff date
-        
+
         Args:
             cutoff_date: Delete records before this date
-            
+
         Returns:
             int: Number of records deleted
         """
         try:
-            result = self.collection.delete_many({
+            result = await self.collection.delete_many({
                 "created_at": {"$lt": cutoff_date},
                 "status": {"$in": [str(RawDataStatus.COMPLETED), str(RawDataStatus.FAILED)]}
             })
@@ -400,16 +408,16 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
                 query_filter["status"] = status_filter
             
             # Get total count for pagination metadata
-            total_count = self.collection.count_documents(query_filter)
-            
+            total_count = await self.collection.count_documents(query_filter)
+
             # Build sort criteria
             sort_criteria = [(sort_by, sort_order)]
-            
+
             # Execute paginated query
             cursor = self.collection.find(query_filter).sort(sort_criteria).skip(skip).limit(limit)
-            
+
             uploads = []
-            for upload in cursor:
+            async for upload in cursor:
                 upload["_id"] = str(upload["_id"])
                 uploads.append(upload)
             

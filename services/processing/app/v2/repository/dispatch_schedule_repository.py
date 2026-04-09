@@ -93,7 +93,7 @@ class DispatchScheduleRepository(GenericRepository):
             
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query).sort("_id", 1)  # ascending order
-            results = list(cursor)
+            results = await cursor.to_list(None)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:

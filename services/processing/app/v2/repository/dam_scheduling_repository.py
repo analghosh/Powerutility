@@ -41,24 +41,24 @@ class DamSchedulingRepository:
             logger.info(f"Validating plant_id: '{plant_id}' in collection: '{self.plant_master_collection}'")
             
             # First, let's check what documents exist in the collection
-            sample_docs = self.repository.find(
+            sample_docs = await self.repository.find_many(
                 collection_name=self.plant_master_collection,
                 filter={},
-                projection={"plant_id": 1, "_id": 0}
-            ).limit(5).to_list()
-            
+                limit=5
+            )
+
             logger.info(f"Sample plant_ids in collection: {[doc.get('plant_id') for doc in sample_docs]}")
-            
-            result = self.repository.find_one(
+
+            result = await self.repository.find_one(
                 collection_name=self.plant_master_collection,
                 filter={"plant_id": plant_id}
             )
             exists = result is not None
             logger.info(f"Plant validation for '{plant_id}': {'EXISTS' if exists else 'NOT FOUND'}")
-            
+
             if not exists:
                 # Let's also try a case-insensitive search
-                case_insensitive_result = self.repository.find_one(
+                case_insensitive_result = await self.repository.find_one(
                     collection_name=self.plant_master_collection,
                     filter={"plant_id": {"$regex": f"^{plant_id}$", "$options": "i"}}
                 )
@@ -86,11 +86,10 @@ class DamSchedulingRepository:
                 return {}
             
             # Query for all plant_ids at once
-            result = self.repository.find(
+            result = await self.repository.find_many(
                 collection_name=self.plant_master_collection,
-                filter={"plant_id": {"$in": plant_ids}},
-                projection={"plant_id": 1, "_id": 0}
-            ).to_list()
+                filter={"plant_id": {"$in": plant_ids}}
+            )
             
             # Create set of existing plant_ids
             existing_plants = {plant["plant_id"] for plant in result}
@@ -135,7 +134,7 @@ class DamSchedulingRepository:
             if "updated_at" not in scheduling_data:
                 scheduling_data["updated_at"] = datetime.now()
             
-            result = self.repository.insert_one(self.collection_name, scheduling_data)
+            result = await self.repository.insert_one(self.collection_name, scheduling_data)
             logger.info(f"Created DAM scheduling record with ID: {result.inserted_id} for plant: {plant_id}")
             return str(result.inserted_id)
             
@@ -156,7 +155,7 @@ class DamSchedulingRepository:
             Dictionary containing the scheduling record or None if not found
         """
         try:
-            result = self.repository.find_by_id(self.collection_name, scheduling_id)
+            result = await self.repository.find_by_id(self.collection_name, scheduling_id)
             if result:
                 logger.info(f"Retrieved DAM scheduling record: {scheduling_id}")
             return result
@@ -248,18 +247,18 @@ class DamSchedulingRepository:
             # Add updated timestamp
             update_data["updated_at"] = datetime.now()
             
-            result = self.repository.update_one(
+            result = await self.repository.update_one(
                 self.collection_name,
                 {"_id": ObjectId(scheduling_id)},
                 {"$set": update_data}
             )
-            
+
             if result.modified_count > 0:
                 logger.info(f"Updated DAM scheduling record: {scheduling_id}")
-                return self.repository.find_by_id(self.collection_name, scheduling_id)
+                return await self.repository.find_by_id(self.collection_name, scheduling_id)
             else:
                 logger.warning(f"No changes made to DAM scheduling record: {scheduling_id}")
-                return self.repository.find_by_id(self.collection_name, scheduling_id)
+                return await self.repository.find_by_id(self.collection_name, scheduling_id)
                 
         except ValueError:
             raise
@@ -282,7 +281,7 @@ class DamSchedulingRepository:
                 logger.warning(f"Invalid ObjectId format: {scheduling_id}")
                 return False
             
-            result = self.repository.delete_one(
+            result = await self.repository.delete_one(
                 self.collection_name,
                 {"_id": ObjectId(scheduling_id)}
             )
@@ -584,8 +583,8 @@ class DamSchedulingRepository:
                     )
                 )
             
-            result = self.repository.db[self.collection_name].bulk_write(bulk_ops)
-            
+            result = await self.repository.db[self.collection_name].bulk_write(bulk_ops)
+
             stats = {
                 "inserted": result.upserted_count,
                 "updated": result.modified_count,
@@ -668,8 +667,8 @@ class DamSchedulingRepository:
             await self.clear_staged_data(user_id)
             
             # Insert valid records into staging collection
-            result = self.repository.db[self.staging_collection_name].insert_many(valid_records)
-            
+            result = await self.repository.db[self.staging_collection_name].insert_many(valid_records)
+
             # Create preview data (first 10 records for display)
             preview_data = []
             for record in valid_records[:10]:
@@ -721,10 +720,7 @@ class DamSchedulingRepository:
                 "staged_by": user_id,
                 "status": "staged"
             })
-            try:
-                staged_records = list(cursor)
-            finally:
-                cursor.close()
+            staged_records = await cursor.to_list(None)
             
             if not staged_records:
                 return {
@@ -808,7 +804,7 @@ class DamSchedulingRepository:
                 )
             
             # Execute bulk upsert to main collection
-            result = self.repository.db[self.collection_name].bulk_write(bulk_ops)
+            result = await self.repository.db[self.collection_name].bulk_write(bulk_ops)
             
             # Clear staged data for this user
             clear_result = await self.clear_staged_data(user_id)
@@ -844,7 +840,7 @@ class DamSchedulingRepository:
             True if cleared successfully
         """
         try:
-            result = self.repository.db[self.staging_collection_name].delete_many({
+            result = await self.repository.db[self.staging_collection_name].delete_many({
                 "staged_by": user_id
             })
             logger.info(f"Cleared {result.deleted_count} staged records for user: {user_id}")
@@ -878,12 +874,9 @@ class DamSchedulingRepository:
                 }
             ).limit(limit).sort([("schedule_date", 1), ("time_block", 1)])
             
-            try:
-                staged_records = list(cursor)
-            finally:
-                cursor.close()
-            
-            total_count = self.repository.db[self.staging_collection_name].count_documents({
+            staged_records = await cursor.to_list(None)
+
+            total_count = await self.repository.db[self.staging_collection_name].count_documents({
                 "staged_by": user_id,
                 "status": "staged"
             })
@@ -931,11 +924,11 @@ class DamSchedulingRepository:
             skip = (page - 1) * page_size
             
             # Get total count
-            total_count = self.repository.db[self.staging_collection_name].count_documents({
+            total_count = await self.repository.db[self.staging_collection_name].count_documents({
                 "staged_by": user_id,
                 "status": "staged"
             })
-            
+
             logger.info(f"Found {total_count} staged records for user {user_id} in collection {self.staging_collection_name}")
             
             # Get paginated records with all relevant fields
@@ -954,7 +947,7 @@ class DamSchedulingRepository:
             ).sort([("schedule_date", 1), ("time_block", 1), ("plant_id", 1)]).skip(skip).limit(page_size)
             
             try:
-                staged_records = list(cursor)
+                staged_records = await cursor.to_list(None)
             finally:
                 cursor.close()
             

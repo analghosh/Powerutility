@@ -98,7 +98,7 @@ async def get_providers(
     logger.info(f"_current_user keys: {list(_current_user.keys()) if _current_user else 'None'}")
     
     try:
-        result = provider_service.get_all_providers(
+        result = await provider_service.get_all_providers(
             ingestion_type=ingestion_type,
             data_type=data_type,
             enabled=enabled,
@@ -168,7 +168,7 @@ async def get_provider_by_id(
     session_id = _current_user.get("session_id", "unknown")
     
     try:
-        provider = provider_service.get_provider_by_id(provider_id)
+        provider = await provider_service.get_provider_by_id(provider_id)
         if not provider:
             # Log provider not found
             audit_logger.log_user_action(
@@ -319,7 +319,7 @@ async def create_provider(
     session_id = _current_user.get("session_id", "unknown")
     
     try:
-        provider_id = provider_service.create_provider(
+        provider_id = await provider_service.create_provider(
             request=request,
             created_by=_current_user.get("user_id")
         )
@@ -406,7 +406,7 @@ async def update_provider(
     session_id = _current_user.get("session_id", "unknown")
     
     try:
-        success = provider_service.update_provider(provider_id, request)
+        success = await provider_service.update_provider(provider_id, request)
         
         if not success:
             # Log provider not found for update
@@ -472,7 +472,7 @@ async def enable_disable_provider(
     session_id = _current_user.get("session_id", "unknown")
     
     try:
-        success = provider_service.enable_disable_provider(provider_id, request.enabled)
+        success = await provider_service.enable_disable_provider(provider_id, request.enabled)
         
         if not success:
             # Log provider not found for enable/disable
@@ -539,7 +539,7 @@ async def delete_provider(
     session_id = _current_user.get("session_id", "unknown")
     
     try:
-        success = provider_service.delete_provider(provider_id)
+        success = await provider_service.delete_provider(provider_id)
         
         if not success:
             # Log provider not found for deletion

@@ -69,7 +69,7 @@ class DsmRepository:
             logger.info(f"[DsmRepository] Scheduled at: {scheduled_at}")
             logger.info(f"[DsmRepository] Pipeline: {pipeline}")
 
-            result = self.repository.aggregate(
+            result = await self.repository.aggregate(
                 collection_name, pipeline, max_time_ms=30000
             )  # 30 second timeout
             
@@ -77,7 +77,7 @@ class DsmRepository:
 
             if not result:
                 historical_collection = collection_name + "_historical"
-                result = self.repository.aggregate(
+                result = await self.repository.aggregate(
                     historical_collection, pipeline, max_time_ms=30000
                 )
 
@@ -181,7 +181,7 @@ class DsmRepository:
                 },
             ]
 
-            result = self.repository.aggregate(collection_name, pipeline)
+            result = await self.repository.aggregate(collection_name, pipeline)
             logger.info(f"[DsmRepository] Retrieved {len(result) if result else 0} result(s) from {collection_name}")
             if result and len(result) > 0:
                 dates_count = len(result[0].get('dates', [])) if isinstance(result[0], dict) else 0
@@ -294,7 +294,7 @@ class DsmRepository:
                 {"$sort": {"schedule_date": 1}},
             ]
 
-            result = self.repository.aggregate(collection_name, pipeline)
+            result = await self.repository.aggregate(collection_name, pipeline)
             return result
         except Exception as e:
             logger.exception(f"[DsmRepository] Failed to execute historical DSM table data pipeline: {str(e)}")
@@ -313,7 +313,7 @@ class DsmRepository:
         """
         try:
             logger.info(f"[DsmRepository] Testing collection access: {collection_name}")
-            result = self.repository.get_all(collection_name, limit=limit)
+            result = await self.repository.get_all(collection_name, limit=limit)
             logger.info(f"[DsmRepository] Collection test - found {len(result)} documents")
             if result:
                 logger.info(f"[DsmRepository] Sample document: {result[0]}")
