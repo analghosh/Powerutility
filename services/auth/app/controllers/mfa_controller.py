@@ -159,13 +159,9 @@ class MFAController:
             )
         else:
             # Include rate limit info in response
-            message = verification_result['message']
-            if verification_result['remaining_attempts'] > 0:
-                message += f" ({verification_result['remaining_attempts']} attempts remaining)"
-            
-            return VerifyMFAResponse(
-                verified=False,
-                message=message
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=verification_result['message']
             )
     
     async def disable_mfa(self, user_id: str, request: DisableMFARequest) -> DisableMFAResponse:
