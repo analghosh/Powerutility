@@ -86,7 +86,7 @@ class MFAController:
         # Update user with MFA secret and hashed backup codes
         self.user_model.update_user(user_id, {
             "mfa_secret": secret,
-            "mfa_enabled": True,
+            "mfa_enabled": False,
             "mfa_backup_codes": hashed_backup_codes,  # Store hashed versions
             "mfa_setup_complete": False  # Will be set to True after verification
         })
@@ -112,10 +112,10 @@ class MFAController:
             )
         
         # Check if MFA is enabled
-        if not user.mfa_enabled:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="MFA is not enabled"
+        if user.mfa_enabled:
+            return VerifyMFAResponse(
+                verified=True,
+                message="MFA is already enabled and verified"
             )
         
         # Get MFA secret from raw document (for security)
@@ -149,7 +149,8 @@ class MFAController:
             # Mark MFA setup as complete if not already
             if not user.mfa_setup_complete:
                 self.user_model.update_user(user_id, {
-                    "mfa_setup_complete": True
+                    "mfa_setup_complete": True,
+                    "mfa_enabled": True  # Enable MFA after successful verification
                 })
             
             return VerifyMFAResponse(
