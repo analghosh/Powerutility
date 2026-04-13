@@ -147,15 +147,15 @@ class MFAController:
         
         if verification_result['verified']:
             # Mark MFA setup as complete if not already
-            if not user.mfa_setup_complete:
-                self.user_model.update_user(user_id, {
+
+            self.user_model.update_user(user_id, {
                     "mfa_setup_complete": True,
-                    "mfa_enabled": True  # Enable MFA after successful verification
-                })
+                    "mfa_enabled": True
+            })
             
             return VerifyMFAResponse(
                 verified=True,
-                message="MFA code verified successfully"
+                message="MFA code verified successfully and"
             )
         else:
             # Include rate limit info in response
