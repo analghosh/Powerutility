@@ -275,7 +275,7 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error in missing supply data check: {str(e)}")
             return False
 
-    def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get pending raw data for a provider, including FAILED status for retry.
         Overridden for SupplyProcessor to retry failed records.
@@ -335,7 +335,7 @@ class SupplyProcessor(BaseProcessor):
             
             # Query raw data collection with the pending IDs
             raw_data_query = {"_id": {"$in": object_ids}}
-            pending_raw_data = self.raw_data_repository.find_many(raw_data_query)
+            pending_raw_data = await self.raw_data_repository.find_many(raw_data_query)
             
             logger.info(f"Successfully fetched {len(pending_raw_data)} raw data records for provider {provider_id}")
             

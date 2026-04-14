@@ -660,12 +660,12 @@ class RenewableProcessor(BaseProcessor):
                     max_date = max(d["scheduled_at"] for d in archival_candidates)
                     
                     # Deduplication using Unique Key: scheduled_at, time_block, type, plant_id
-                    existing_hist_cursor = self.renewable_repository.find_historical_many({
+                    existing_hist = await self.renewable_repository.find_historical_many({
                         "scheduled_at": {"$gte": min_date, "$lte": max_date}
                     })
-                    
+
                     existing_keys = set()
-                    for doc in existing_hist_cursor:
+                    for doc in existing_hist:
                         key = (
                             doc.get("scheduled_at"),
                             doc.get("time_block"),
