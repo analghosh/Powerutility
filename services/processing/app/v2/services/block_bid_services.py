@@ -1030,10 +1030,10 @@ class BlockBidServices:
             # Fallback: submission-time snapshot until scheduler has synced
             logger.info(f"Bid-book: no scheduler-synced data for {biding_date}, falling back to iex_response collection")
             try:
-                cursor = self.iex_response_repo.collection.find(
+                docs = await self.iex_response_repo.collection.find(
                     {"inserted_date": biding_date}, sort=[("from", 1)]
-                )
-                for doc in cursor:
+                ).to_list(10000)
+                for doc in docs:
                     if "_id" in doc:
                         doc["_id"] = str(doc["_id"])
                     results.append(doc)

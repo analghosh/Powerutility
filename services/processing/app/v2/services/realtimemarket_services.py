@@ -154,7 +154,7 @@ class RealtimemarketService:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -247,7 +247,7 @@ class RealtimemarketService:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -568,7 +568,7 @@ class RealtimemarketService:
         }
     }
 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -895,7 +895,7 @@ class RealtimemarketService:
         }
     }
 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -1214,7 +1214,7 @@ class RealtimemarketService:
         }
     }
 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
