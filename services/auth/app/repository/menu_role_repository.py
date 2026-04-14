@@ -166,26 +166,25 @@ class MenuRoleRepository(BaseRepository):
             if permissions is None:
                 permissions = ["read"]
 
-            # Check if relationship already exists
-            existing = await self.get_menu_role(menu_id, role_id)
-            if existing:
-                # Update existing relationship
-                success = await self.update_menu_role(existing.id, MenuRoleUpdate(permissions=permissions))
-            else:
-                # Create new relationship
-                menu_role_data = MenuRoleCreate(
-                    menu_id=menu_id,
-                    role_id=role_id,
-                    permissions=permissions
-                )
-                await self.create_menu_role(menu_role_data)
-                success = True
+            # Atomic upsert — avoids race condition and duplicate key errors
+            now = datetime.now()
+            self.collection.update_one(
+                {"role_id": role_id, "menu_id": menu_id},
+                {
+                    "$set": {
+                        "permissions": permissions,
+                        "is_active": True,
+                        "updated_at": now,
+                    },
+                    "$setOnInsert": {
+                        "created_at": now,
+                    },
+                },
+                upsert=True,
+            )
 
-            # Sync role permissions after menu assignment change
-            if success:
-                await self._sync_role_permissions(role_id)
-
-            return success
+            self._sync_role_permissions(role_id)
+            return True
         except Exception as e:
             logger.error(f"Error granting role menu access: {e}")
             return False

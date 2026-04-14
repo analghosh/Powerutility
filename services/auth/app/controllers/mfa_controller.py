@@ -90,7 +90,7 @@ class MFAController:
         # Update user with MFA secret and hashed backup codes
         await self.user_model.update_user(user_id, {
             "mfa_secret": secret,
-            "mfa_enabled": True,
+            "mfa_enabled": False,
             "mfa_backup_codes": hashed_backup_codes,  # Store hashed versions
             "mfa_setup_complete": False  # Will be set to True after verification
         })
@@ -116,10 +116,10 @@ class MFAController:
             )
         
         # Check if MFA is enabled
-        if not user.mfa_enabled:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="MFA is not enabled"
+        if user.mfa_enabled:
+            return VerifyMFAResponse(
+                verified=True,
+                message="MFA is already enabled and verified"
             )
         
         # Get MFA secret from raw document (for security)
@@ -151,24 +151,21 @@ class MFAController:
         
         if verification_result['verified']:
             # Mark MFA setup as complete if not already
-            if not user.mfa_setup_complete:
-                await self.user_model.update_user(user_id, {
-                    "mfa_setup_complete": True
-                })
+
+            self.user_model.update_user(user_id, {
+                    "mfa_setup_complete": True,
+                    "mfa_enabled": True
+            })
             
             return VerifyMFAResponse(
                 verified=True,
-                message="MFA code verified successfully"
+                message="MFA code verified successfully and"
             )
         else:
             # Include rate limit info in response
-            message = verification_result['message']
-            if verification_result['remaining_attempts'] > 0:
-                message += f" ({verification_result['remaining_attempts']} attempts remaining)"
-            
-            return VerifyMFAResponse(
-                verified=False,
-                message=message
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=verification_result['message']
             )
     
     async def disable_mfa(self, user_id: str, request: DisableMFARequest) -> DisableMFAResponse:
