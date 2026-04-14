@@ -40,7 +40,7 @@ class JobExecutionRepository:
                 "execution_start", -1
             ).skip(skip).limit(limit)
 
-            job_details_list = await cursor.to_list(None)
+            job_details_list = await cursor.to_list(10000)
 
             return job_details_list, total_count
 
@@ -70,7 +70,7 @@ class JobExecutionRepository:
                 "_id": {"$in": object_ids}
             })
 
-            for job_data in await cursor.to_list(None):
+            for job_data in await cursor.to_list(10000):
                 job_data_map[str(job_data["_id"])] = job_data
 
             return job_data_map
@@ -102,7 +102,7 @@ class JobExecutionRepository:
         """Get all job configurations"""
         try:
             cursor = self.job_data_collection.find({})
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         except Exception as e:
             logger.error(f"Error fetching all jobs: {e}", exc_info=True)
             raise

@@ -2173,7 +2173,7 @@ class RTMSchedulingServices:
                         '$lt': to_date_dt
                     }
                 }
-            ).sort([('scheduled_at', 1), ('time_block', 1)]).to_list(None)
+            ).sort([('scheduled_at', 1), ('time_block', 1)]).to_list(10000)
             
             logger.info(f"[RTMSchedulingServices] get_all_scheduling_data: Found {len(results)} records in date range")
             
@@ -2200,7 +2200,7 @@ class RTMSchedulingServices:
                     plant_master_collection = self.plants_list_repo.db[self.plants_list_repo.collection_name]
                     plant_master_records = await plant_master_collection.find(
                         {"plant_id": {"$in": list(plant_ids)}}
-                    ).to_list(None)
+                    ).to_list(10000)
                     for plant_record in plant_master_records:
                         plant_id_key = plant_record.get('plant_id', '')
                         if plant_id_key:

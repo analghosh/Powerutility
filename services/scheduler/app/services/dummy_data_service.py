@@ -329,7 +329,7 @@ class DummyDataService:
             
             cursor = self.dummy_collection.aggregate(pipeline)
             try:
-                data = await cursor.to_list(None)
+                data = await cursor.to_list(10000)
             finally:
                 cursor.close()
             logger.info(

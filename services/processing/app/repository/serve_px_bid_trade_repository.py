@@ -59,7 +59,7 @@ class servePxBidTradeRepository(BaseRepository):
 ]
 
 
-        return await self.collection.aggregate(pipeline).to_list(None)
+        return await self.collection.aggregate(pipeline).to_list(10000)
     
 
     
@@ -105,6 +105,6 @@ class servePxBidTradeRepository(BaseRepository):
 
 
 
-        return await self.collection.aggregate(pipeline).to_list(None)
+        return await self.collection.aggregate(pipeline).to_list(10000)
    
     

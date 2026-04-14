@@ -58,7 +58,7 @@ class ServeMasterPlantsRepository(BaseRepository):
         page = max(page, 1)
         page_size = max(min(page_size, 200), 1)
         cursor = cursor.skip((page - 1) * page_size).limit(page_size)
-        items = await cursor.to_list(None)
+        items = await cursor.to_list(10000)
         return {
             "items": _serialize_many(items),  # <—— stringify _id & other BSON
             "page": page,

@@ -69,7 +69,7 @@ class BidTradeServeRepository(BaseServeRepository):
             # 2. Main (Safe Migration)
             main_coll_name = settings.MONGODB_BID_TRADE_SERVE_COLLECTION
             # Optimized probe
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -89,7 +89,7 @@ class BidTradeServeRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({"scheduled_at": {"$gte": start_migration_date}})
-                        all_docs = await cursor.to_list(length=None)
+                        all_docs = await cursor.to_list(length=100000)
 
                         deduped_map = {}
                         for doc in all_docs:
@@ -219,7 +219,7 @@ class BidTradeServeRepository(BaseServeRepository):
                 "scheduled_at": {"$gte": start_yesterday, "$lte": end_yesterday}
             })
 
-            all_docs = await cursor.to_list(length=None)
+            all_docs = await cursor.to_list(length=50000)
             archival_batch = []
             for doc in all_docs:
                 hist_doc = dict(doc)

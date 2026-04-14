@@ -185,7 +185,7 @@ class PeakDemandService:
         try:
             cursor = source_collection.aggregate(pipeline)
             try:
-                results = await cursor.to_list(None)
+                results = await cursor.to_list(10000)
             finally:
                 cursor.close()
         except Exception as e:

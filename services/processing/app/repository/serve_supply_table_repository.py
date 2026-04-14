@@ -15,7 +15,7 @@ class serveSupplyTableRepository(BaseRepository):
     async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         try:
             cursor = self.collection.aggregate(pipeline, allowDiskUse=True)
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         except Exception:
             logger.exception("aggregate failed on %s", self.collection_name)
             return []

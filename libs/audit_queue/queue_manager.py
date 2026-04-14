@@ -104,7 +104,7 @@ class MongoAuditQueue:
 
     async def _async_initialize(self):
         """Create the Motor client on _motor_loop so all its futures are loop-local."""
-        self.mongo_client = AsyncIOMotorClient(self.mongodb_uri, maxPoolSize=50, minPoolSize=5)
+        self.mongo_client = AsyncIOMotorClient(self.mongodb_uri, maxPoolSize=20, minPoolSize=2)
         self.db = self.mongo_client[self.audit_db_name]
         self.jobs_collection = self.db[self.queue_collection_name]
         await self._create_indexes()
@@ -460,7 +460,7 @@ class MongoAuditQueue:
             cursor = self.jobs_collection.find(
                 {"status": {"$in": [JobStatus.SAVED, JobStatus.PROCESSING]}},
             ).sort("created_at", 1).limit(limit)
-            return self._run_async(cursor.to_list(length=None))
+            return self._run_async(cursor.to_list(length=10000))
         except Exception as e:
             logger.error("Failed to get pending jobs: %s", e)
             return []

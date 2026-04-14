@@ -50,7 +50,7 @@ class RTMProductHardCodedDataRepository(GenericRepository):
                 }
             ]
             cursor = self.aggregate(self.collection_name, pipeline)
-            result = await cursor.to_list(length=None)
+            result = await cursor.to_list(length=10000)
             logger.info(f"Retrieved {len(result)} RTM product records")
             return result
         except Exception as e:

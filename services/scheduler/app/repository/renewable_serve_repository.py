@@ -73,7 +73,7 @@ class RenewableServeRepository(BaseServeRepository):
 
             # 2. Main (Safe Migration)
             main_coll_name = serve_collection
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -91,7 +91,7 @@ class RenewableServeRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({"scheduled_at": {"$gte": start_migration_date}})
-                        all_docs = await cursor.to_list(length=None)
+                        all_docs = await cursor.to_list(100000)
 
                         deduped_map = {}
                         for doc in all_docs:
@@ -234,7 +234,7 @@ class RenewableServeRepository(BaseServeRepository):
             cursor = self.serve_collection.find({
                 "scheduled_at": {"$gte": start_yesterday, "$lte": end_yesterday}
             })
-            all_docs = await cursor.to_list(length=None)
+            all_docs = await cursor.to_list(length=50000)
 
             archival_batch = []
             for doc in all_docs:
@@ -397,7 +397,7 @@ class RenewableServeRepository(BaseServeRepository):
             collection = self.db[historical_collection_name]
 
             cursor = collection.find(query)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
 
         except Exception as e:
             logger.error("Error finding historical renewable records: %s", str(e))
@@ -458,7 +458,7 @@ class RenewableServeRepository(BaseServeRepository):
                 query["type"] = {"$in": list(types)}
 
             cursor = self.serve_collection.find(query)
-            candidates = await cursor.to_list(length=None)
+            candidates = await cursor.to_list(length=10000)
 
             # Filter Exact Matches In-Memory
             target_signatures = set()

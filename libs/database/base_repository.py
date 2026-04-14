@@ -22,8 +22,8 @@ class BaseRepository:
         self.client: AsyncIOMotorClient = get_mongo_client(
             mongodb_uri,
             "shared_repository_client",
-            maxPoolSize=50,
-            minPoolSize=10,
+            maxPoolSize=20,
+            minPoolSize=2,
         )
         self.db_name = database_name
         self.db: AsyncIOMotorDatabase = self.client[database_name]
@@ -74,7 +74,7 @@ class BaseRepository:
         """Find multiple documents by filter"""
         try:
             cursor = self.collection.find(filter).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=limit)
         except Exception as e:
             logger.error(f"Error finding documents in {self.collection_name}: {e}")
             return []
@@ -160,7 +160,7 @@ class BaseRepository:
         """Find documents with pagination"""
         try:
             cursor = self.collection.find(filter).skip(skip).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=limit)
         except Exception as e:
             logger.error(
                 f"Error finding documents with pagination in {self.collection_name}: {e}"
@@ -171,7 +171,7 @@ class BaseRepository:
         """Execute aggregation pipeline"""
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error executing aggregation in {self.collection_name}: {e}")
             return []

@@ -63,7 +63,7 @@ class WeatherServeRepository(BaseServeRepository):
 
             # 2. Main (Safe Migration)
             main_coll_name = "weather_serve"
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -83,7 +83,7 @@ class WeatherServeRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({"timestamp": {"$gte": start_migration_date}})
-                        all_docs = await cursor.to_list(length=None)
+                        all_docs = await cursor.to_list(length=100000)
 
                         deduped_map = {}
                         for doc in all_docs:
@@ -259,7 +259,7 @@ class WeatherServeRepository(BaseServeRepository):
             cursor = self.serve_collection.find({
                 "timestamp": {"$gte": start_yesterday, "$lte": end_yesterday}
             })
-            all_docs = await cursor.to_list(length=None)
+            all_docs = await cursor.to_list(length=50000)
 
             archival_batch = []
             for doc in all_docs:

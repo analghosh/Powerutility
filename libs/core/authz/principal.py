@@ -32,7 +32,7 @@ async def compute_effective_permissions(user_doc: dict, tenant_id: str, db) -> S
     role_names = user_doc.get("roles", [])
     
     # Load role documents by name (not key)
-    role_docs = await db.roles.find({"name": {"$in": role_names}}).to_list(None)
+    role_docs = await db.roles.find({"name": {"$in": role_names}}).to_list(100)
     role_perms = set()
     for role_doc in role_docs:
         perms = role_doc.get("permissions", [])
