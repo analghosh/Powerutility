@@ -159,7 +159,7 @@ class RawDataRepository(BaseRepository):
         """
         try:
             object_ids = [ObjectId(rid) for rid in raw_data_ids]
-            records = await self.collection.find({"_id": {"$in": object_ids}}).to_list(None)
+            records = await self.collection.find({"_id": {"$in": object_ids}}).to_list(10000)
 
             for record in records:
                 record["_id"] = str(record["_id"])
@@ -239,7 +239,7 @@ class RawDataRepository(BaseRepository):
                 }}
             ]
 
-            results = await self.collection.aggregate(pipeline).to_list(None)
+            results = await self.collection.aggregate(pipeline).to_list(10000)
 
             stats = {
                 "total": 0,

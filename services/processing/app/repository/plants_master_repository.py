@@ -25,7 +25,7 @@ class PlantsMasterRepository(BaseRepository):
         logger.debug("PlantsMasterRepository.aggregate | pipeline=%s", pipeline)
         cursor = self.collection.aggregate(pipeline)
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         finally:
             cursor.close()
 
@@ -36,7 +36,7 @@ class PlantsMasterRepository(BaseRepository):
         logger.debug("PlantsMasterRepository.find_by_plant_id | plant_id=%s", plant_id)
         cursor = self.collection.find({"plant_id": plant_id})
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         finally:
             cursor.close()
 
@@ -47,7 +47,7 @@ class PlantsMasterRepository(BaseRepository):
         logger.debug("PlantsMasterRepository.get_all_plants")
         cursor = self.collection.find({})
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         finally:
             cursor.close()
 
@@ -66,7 +66,7 @@ class PlantsMasterRepository(BaseRepository):
             ]
             cursor = self.collection.aggregate(pipeline)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(10000)
             finally:
                 cursor.close()
 

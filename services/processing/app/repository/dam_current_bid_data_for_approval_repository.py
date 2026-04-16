@@ -26,7 +26,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(10000)
             finally:
                 cursor.close()
             return result
@@ -45,7 +45,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(10000)
             finally:
                 cursor.close()
             return result
@@ -64,7 +64,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(10000)
             finally:
                 cursor.close()
             return result
@@ -100,7 +100,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(10000)
             finally:
                 cursor.close()
             return result

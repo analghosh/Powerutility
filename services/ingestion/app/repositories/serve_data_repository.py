@@ -35,8 +35,10 @@ class ServeDataRepository(BaseServeRepository):
     def _ensure_timeseries_collections(self):
         """Ensure time-series collections are created for serve data"""
         try:
+            existing = set(self.database.list_collection_names())
+
             # Create demand serve time-series collection
-            if self.demand_serve_collection not in self.database.list_collection_names():
+            if self.demand_serve_collection not in existing:
                 self.database.create_collection(
                     self.demand_serve_collection,
                     timeseries={
@@ -46,9 +48,9 @@ class ServeDataRepository(BaseServeRepository):
                     }
                 )
                 logger.info("Created time-series collection: %s", self.demand_serve_collection)
-            
+
             # Create demand historical time-series collection
-            if self.demand_historical_collection not in self.database.list_collection_names():
+            if self.demand_historical_collection not in existing:
                 self.database.create_collection(
                     self.demand_historical_collection,
                     timeseries={
@@ -58,9 +60,9 @@ class ServeDataRepository(BaseServeRepository):
                     }
                 )
                 logger.info("Created time-series collection: %s", self.demand_historical_collection)
-            
+
             # Create supply serve time-series collection
-            if self.supply_serve_collection not in self.database.list_collection_names():
+            if self.supply_serve_collection not in existing:
                 self.database.create_collection(
                     self.supply_serve_collection,
                     timeseries={
@@ -70,9 +72,9 @@ class ServeDataRepository(BaseServeRepository):
                     }
                 )
                 logger.info("Created time-series collection: %s", self.supply_serve_collection)
-            
+
             # Create supply historical time-series collection
-            if self.supply_historical_collection not in self.database.list_collection_names():
+            if self.supply_historical_collection not in existing:
                 self.database.create_collection(
                     self.supply_historical_collection,
                     timeseries={

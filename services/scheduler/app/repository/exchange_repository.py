@@ -62,7 +62,7 @@ class ExchangeRepository(BaseServeRepository):
 
             # 2. Ensure Main Serve collection is a Normal collection (for Updates/Deletes)
             main_coll_name = settings.MONGODB_EXCHANGE_SERVE_COLLECTION
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -83,7 +83,7 @@ class ExchangeRepository(BaseServeRepository):
         try:
             start_date = datetime.now() - timedelta(days=5)
             cursor = self.db[coll_name].find({"scheduled_at": {"$gte": start_date}})
-            all_docs = await cursor.to_list(length=None)
+            all_docs = await cursor.to_list(length=10000)
 
             deduped_data = {}
             for doc in all_docs:
@@ -138,6 +138,7 @@ class ExchangeRepository(BaseServeRepository):
     async def archive_old_exchange_data(self, days_to_keep: int = 2) -> Dict[str, Any]:
         """
         Archive Strategy for Time-Series Historical.
+        Processes in 7-day chunks to avoid loading unbounded historical data into memory.
         """
         try:
             today_min = datetime.combine(date.today(), datetime.min.time())
@@ -145,49 +146,70 @@ class ExchangeRepository(BaseServeRepository):
 
             logger.info(f"Archiving to Time-Series. Cutoff Archive: {today_min.date()}, Cleanup: {delete_cutoff.date()}")
 
-            # 1. Fetch candidates from Serve (Anything older than today)
-            cursor = self.serve_collection.find({"scheduled_at": {"$lt": today_min}})
-            candidates = await cursor.to_list(length=None)
-
-            archived_count = 0
-            if not candidates:
+            # Find earliest record to archive (cheap indexed lookup)
+            earliest = await self.serve_collection.find_one(
+                {"scheduled_at": {"$lt": today_min}},
+                {"scheduled_at": 1},
+                sort=[("scheduled_at", 1)]
+            )
+            if not earliest:
                 logger.info("No candidates for archival.")
-            else:
-                # 2. Manual Deduplication against Historical Time-Series
-                min_d = min(c["scheduled_at"] for c in candidates)
-                max_d = max(c["scheduled_at"] for c in candidates)
+                del_res = await self.serve_collection.delete_many({"scheduled_at": {"$lt": delete_cutoff}})
+                return {"archived_count": 0, "deleted_count": del_res.deleted_count, "status": "success"}
 
-                existing_hist_cursor = self.historical_collection.find(
-                    {"scheduled_at": {"$gte": min_d, "$lte": max_d}},
-                    {"scheduled_at": 1, "time_block": 1, "market_type": 1, "px_name": 1, "_id": 0}
-                )
+            total_archived = 0
+            chunk_days = 7
+            chunk_start = earliest["scheduled_at"].replace(hour=0, minute=0, second=0, microsecond=0)
 
-                seen_keys = set()
-                async for d in existing_hist_cursor:
-                    seen_keys.add((d["scheduled_at"], d["time_block"], d["market_type"], d.get("px_name")))
+            # Process in 7-day chunks — each chunk holds at most ~7K exchange records in RAM
+            while chunk_start < today_min:
+                chunk_end = min(chunk_start + timedelta(days=chunk_days), today_min)
 
-                to_insert = []
-                for doc in candidates:
-                    key = (doc["scheduled_at"], doc["time_block"], doc["market_type"], doc.get("px_name"))
-                    if key not in seen_keys:
-                        hist_doc = dict(doc)
-                        if "_id" in hist_doc: del hist_doc["_id"]
-                        hist_doc["archived_at"] = datetime.now()
-                        to_insert.append(hist_doc)
-                        seen_keys.add(key)
+                candidates = []
+                async for doc in self.serve_collection.find({
+                    "scheduled_at": {"$gte": chunk_start, "$lt": chunk_end}
+                }):
+                    candidates.append(doc)
 
-                # 3. Insert into Time-Series Historical
-                if to_insert:
-                    res = await self.historical_collection.insert_many(to_insert, ordered=False)
-                    archived_count = len(res.inserted_ids)
-                    logger.info(f"Successfully archived {archived_count} records.")
+                if candidates:
+                    # Load existing historical keys for this chunk to avoid duplicates
+                    seen_keys: set = set()
+                    async for d in self.historical_collection.find(
+                        {"scheduled_at": {"$gte": chunk_start, "$lt": chunk_end}},
+                        {"scheduled_at": 1, "time_block": 1, "market_type": 1, "px_name": 1, "_id": 0}
+                    ):
+                        seen_keys.add((d["scheduled_at"], d["time_block"], d["market_type"], d.get("px_name")))
 
-            # 4. Cleanup Serve collection (Older than T-2)
+                    now = datetime.now()
+                    to_insert = []
+                    for doc in candidates:
+                        key = (doc["scheduled_at"], doc["time_block"], doc["market_type"], doc.get("px_name"))
+                        if key not in seen_keys:
+                            hist_doc = dict(doc)
+                            hist_doc.pop("_id", None)
+                            hist_doc["archived_at"] = now
+                            to_insert.append(hist_doc)
+                            seen_keys.add(key)
+
+                    if to_insert:
+                        res = await self.historical_collection.insert_many(to_insert, ordered=False)
+                        total_archived += len(res.inserted_ids)
+
+                    logger.info(
+                        f"Chunk {chunk_start.date()} → {chunk_end.date()}: "
+                        f"{len(candidates)} candidates, {len(to_insert)} new inserts"
+                    )
+
+                chunk_start = chunk_end
+
+            logger.info(f"Successfully archived {total_archived} exchange records.")
+
+            # Cleanup Serve collection (Older than T-N)
             del_res = await self.serve_collection.delete_many({"scheduled_at": {"$lt": delete_cutoff}})
             logger.info(f"Cleaned {del_res.deleted_count} records from Serve.")
 
             return {
-                "archived_count": archived_count,
+                "archived_count": total_archived,
                 "deleted_count": del_res.deleted_count,
                 "status": "success"
             }
@@ -216,7 +238,7 @@ class ExchangeRepository(BaseServeRepository):
             }
             if px_name:
                 query["px_name"] = px_name
-            records = await self.serve_collection.find(query).sort("time_block", 1).to_list(None)
+            records = await self.serve_collection.find(query).sort("time_block", 1).to_list(10000)
             logger.info(f"Found {len(records)} exchange records for {market_type} on {start_date.date()}")
             return records
         except Exception as e:
@@ -238,7 +260,7 @@ class ExchangeRepository(BaseServeRepository):
         try:
             query = {"status": {"$in": [RawDataStatus.PENDING, RawDataStatus.FAILED]}}
             cursor = self.raw_collection.find(query).sort("createdAt", 1).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Error getting pending raw data: %s", str(e))
             return []

@@ -103,7 +103,7 @@ class MasterPlantsRepository(GenericRepository):
             List[Dict[str, Any]]: List of all plant documents
         """
         cursor = self.db[self.collection_name].find({}, {"_id": 0})
-        return await cursor.to_list(None)
+        return await cursor.to_list(10000)
 
     async def get_plants_map_by_ids(self, plant_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not plant_ids:

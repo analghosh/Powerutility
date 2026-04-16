@@ -245,7 +245,7 @@ class UploadTrackingRepository(BaseRepository, IUploadTrackingRepository):
                 }
             ]
 
-            status_counts = await self.collection.aggregate(pipeline).to_list(None)
+            status_counts = await self.collection.aggregate(pipeline).to_list(10000)
 
             # Get total count
             total_count = await self.collection.count_documents({})

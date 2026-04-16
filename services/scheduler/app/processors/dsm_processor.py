@@ -178,7 +178,7 @@ class DSMProcessor(BaseProcessor):
             # Fetch all time blocks and create cache
             cursor = time_block_collection.find({}).sort("timeblock", 1)
             try:
-                time_blocks = await cursor.to_list(None)
+                time_blocks = await cursor.to_list(10000)
             finally:
                 cursor.close()
             
@@ -525,7 +525,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(rtm_query)
                     try:
-                        rtm_records = await cursor.to_list(None)
+                        rtm_records = await cursor.to_list(10000)
                     finally:
                         cursor.close()
                     logger.debug(f"RTM records from historical collection: {len(rtm_records)}")
@@ -543,7 +543,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(dam_query)
                     try:
-                        dam_records = await cursor.to_list(None)
+                        dam_records = await cursor.to_list(10000)
                     finally:
                         cursor.close()
                     logger.debug(f"DAM records from historical collection: {len(dam_records)}")

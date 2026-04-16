@@ -18,7 +18,7 @@ class limitVallueRepository(BaseRepository):
         Run an aggregation pipeline and return the list of documents.
         """
         logger.debug("limitVallueRepository.aggregate | pipeline=%s", pipeline)
-        return await self.collection.aggregate(pipeline).to_list(None)
+        return await self.collection.aggregate(pipeline).to_list(10000)
 
 
     async def insert_many(self, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -121,7 +121,7 @@ class limitVallueRepository(BaseRepository):
 ]
 
             cursor = self.collection.aggregate(pipeline)
-            data = await cursor.to_list(None)
+            data = await cursor.to_list(10000)
 
 
             return {
@@ -158,7 +158,7 @@ class limitVallueRepository(BaseRepository):
             cursor = self.collection.aggregate(pipeline)
 
 
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         except Exception as e:
             logger.error("Failed to fetch paginated records: %s", str(e))
             return {"data": [], "error": str(e)}
@@ -193,7 +193,7 @@ class limitVallueRepository(BaseRepository):
             cursor = self.collection.aggregate(pipeline)
 
 
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         except Exception as e:
             logger.error("Failed to fetch paginated records: %s", str(e))
             return {"data": [], "error": str(e)}

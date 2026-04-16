@@ -126,7 +126,7 @@ class DcSgRepository(BaseRepository):
                 }
 
             cursor = self.collection.find(query)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Error retrieving records from dc_sg: %s", str(e))
             return []
@@ -158,7 +158,7 @@ class DcSgRepository(BaseRepository):
             count = await self.collection.count_documents(query)
             logger.info(f"Found {count} records for date {date_val}")
             cursor = self.collection.find(query)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error getting records by date {date_val}: {str(e)}")
             return []
@@ -200,7 +200,7 @@ class DcSgRepository(BaseRepository):
             ]
 
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error getting latest records per timeblock for plant {plant_id}: {str(e)}")
             return []
@@ -259,7 +259,7 @@ class DcSgRepository(BaseRepository):
             query = {"$or": chunk}
             try:
                 cursor = self.collection.find(query)
-                found = await cursor.to_list(length=None)
+                found = await cursor.to_list(length=10000)
                 all_records.extend(found)
             except Exception as e:
                 logger.error(f"Error in find_by_unique_keys chunk {i}: {str(e)}")

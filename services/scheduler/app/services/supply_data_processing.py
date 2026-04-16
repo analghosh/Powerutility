@@ -53,7 +53,7 @@ class SupplyDataProcessing:
                 "status": RawDataStatus.PENDING.value
             }).limit(100)
             try:
-                raw_data_records = await cursor.to_list(None)
+                raw_data_records = await cursor.to_list(10000)
             finally:
                 cursor.close()
             

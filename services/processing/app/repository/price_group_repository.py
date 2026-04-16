@@ -103,7 +103,7 @@ class PriceGroupRepository(BaseRepository):
             pipeline_start = time.time()
             cursor = self.collection.aggregate(pipeline)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(10000)
             finally:
                 await cursor.close()
             db_time = time.time() - pipeline_start
@@ -128,7 +128,7 @@ class PriceGroupRepository(BaseRepository):
             logger.error(f"🔍 Aggregation failed: {e}, falling back to old method")
             # Fallback to old method
             cursor = self.collection.find(filters).sort(sort).skip(skip).limit(page_size)
-            data = await cursor.to_list(None)
+            data = await cursor.to_list(10000)
             total = self.count(filters)
             db_time = time.time() - pipeline_start
         

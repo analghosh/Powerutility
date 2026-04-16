@@ -96,7 +96,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(None)
+            return await cursor.to_list(10000)
         except Exception as e:
             logger.error("Failed to aggregate DAM product data: %s", str(e))
             return []
@@ -122,7 +122,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$replaceRoot": {"newRoot": "$doc"}},
                 {"$sort": {"from": 1}},
             ]
-            docs = await self.collection.aggregate(pipeline).to_list(None)
+            docs = await self.collection.aggregate(pipeline).to_list(10000)
             result = []
 
             for doc in docs:
@@ -197,7 +197,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 "market_type": market_type
             }
             
-            results = await self.collection.find(query).sort("from", 1).to_list(None)
+            results = await self.collection.find(query).sort("from", 1).to_list(10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -343,7 +343,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Find documents by filters with optional projection.
         """
         try:
-            return await self.collection.find(filters, projection or {}).to_list(None)
+            return await self.collection.find(filters, projection or {}).to_list(10000)
         except Exception as e:
             logger.error(f"Failed to find block bid records: {str(e)}")
             return []

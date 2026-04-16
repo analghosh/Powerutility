@@ -116,7 +116,7 @@ class AuditLog:
             return await self.collection.find(
                 {"user_id": user_id},
                 {"_id": 0}  # Exclude _id field
-            ).sort("timestamp", -1).limit(limit).to_list(None)
+            ).sort("timestamp", -1).limit(limit).to_list(limit)
         except Exception:
             return []
 
@@ -142,7 +142,7 @@ class AuditLog:
             return await self.collection.find(
                 query,
                 {"_id": 0}  # Exclude _id field
-            ).sort("timestamp", -1).limit(limit).to_list(None)
+            ).sort("timestamp", -1).limit(limit).to_list(limit)
         except Exception:
             return []
 
@@ -157,7 +157,7 @@ class AuditLog:
                 "event_type": "login",
                 "success": False,
                 "timestamp": {"$gte": cutoff_time}
-            }).sort("timestamp", -1).to_list(None)
+            }).sort("timestamp", -1).to_list(10000)
         except Exception:
             return []
 

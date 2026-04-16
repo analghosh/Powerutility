@@ -144,7 +144,7 @@ class SupplyFillProcessor(BaseProcessor):
             # 2. Get all plants
             cursor = self.plant_repository.collection.find({})
             try:
-                plants = await cursor.to_list(None)
+                plants = await cursor.to_list(10000)
             finally:
                 cursor.close()
             new_dc_sg_entities = []

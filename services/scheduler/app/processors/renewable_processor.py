@@ -644,7 +644,7 @@ class RenewableProcessor(BaseProcessor):
                 "scheduled_at": {"$lt": datetime.combine(archive_cutoff, datetime.min.time())}
             })
             
-            archival_candidates = await cursor.to_list(None)
+            archival_candidates = await cursor.to_list(10000)
             
             if not archival_candidates:
                 logger.info("No renewable records found for archival")

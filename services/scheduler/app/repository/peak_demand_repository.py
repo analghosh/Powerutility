@@ -48,7 +48,7 @@ class PeakDemandRepository(BaseServeRepository):
 
             # --- Main collection: ensure it is a normal collection ---
             main_coll_name = "peak_demand_serve"
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -68,7 +68,7 @@ class PeakDemandRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({})
-                        all_docs = await cursor.to_list(length=None)
+                        all_docs = await cursor.to_list(length=10000)
                         deduped_map = {}
                         for doc in all_docs:
                             if "_id" in doc:
@@ -171,7 +171,7 @@ class PeakDemandRepository(BaseServeRepository):
 
         try:
             cursor = self.serve_collection.find(query)
-            old_records = await cursor.to_list(length=None)
+            old_records = await cursor.to_list(length=10000)
 
             if not old_records:
                 logger.info("No peak demand records older than %d days to archive.", retention_days)

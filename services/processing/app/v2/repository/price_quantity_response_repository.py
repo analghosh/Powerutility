@@ -110,7 +110,7 @@ class PriceQuantityResponseRepository(GenericRepository):
                 "cronJob_time": cron_job_time
             }
             cursor = self.collection.find(query)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(10000)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -185,7 +185,7 @@ class PriceQuantityResponseRepository(GenericRepository):
             ]
             
             cursor = exchange_collection.aggregate(pipeline)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(10000)
             
             if not results:
                 logger.info(f"No RTM MCP data found in exchange_serve for date {datebid}, exchange {exchange}")
@@ -242,7 +242,7 @@ class PriceQuantityResponseRepository(GenericRepository):
                 "cronJob_time": cron_job_time
             }
             cursor = self.collection.find(query)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(10000)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -317,7 +317,7 @@ class PriceQuantityResponseRepository(GenericRepository):
             ]
             
             cursor = exchange_collection.aggregate(pipeline)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(10000)
             
             if not results:
                 logger.info(f"No DAM MCP data found in exchange_serve for date {datebid}, exchange {exchange}")

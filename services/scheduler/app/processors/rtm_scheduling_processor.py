@@ -265,7 +265,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                     "$gte": start_of_day,
                     "$lt": end_of_day
                 }
-            }).to_list(None)
+            }).to_list(10000)
 
             if not existing_records:
                 return {"archived": 0, "deleted": 0, "revision_no": None}
