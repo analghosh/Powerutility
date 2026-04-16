@@ -54,7 +54,7 @@ class ReferenceData(BaseModel):
 class SubmitForApprovalRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
-    market_type: str = "RTM"        # "RTM" or "DAM"
+    market_type: List[str]        # "RTM" or "DAM"
     type: str = "Sell"              # "Sell" or "Buy"
     dates: str                      # "DD-MM-YYYY"
     trade_session: Optional[List[Union[str, int]]] = None   # RTM only; omit for DAM
@@ -65,7 +65,8 @@ class SubmitForApprovalRequest(BaseModel):
     iex_price: List[Optional[float]] = []
     pxil_price: List[Optional[float]] = []
     number_of_bids: List[Union[str, int]] = []
-
+    exchange: List[str]
+    selected_for: List[str]
 class WithdrawRequest(BaseModel):
     bid_id: str
     remark: str = ""
@@ -177,6 +178,8 @@ async def submit_for_approval_block_bid(post_data: SubmitForApprovalRequest,
             {
         "market_type": "RTM",
         "type": "Sell",
+        "exchange": "IEX",
+        "selected_for": "Bid",
         "dates": "25-10-2025",
         "trade_session": [
             "48"
