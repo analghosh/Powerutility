@@ -271,7 +271,7 @@ class LimitValuesRepository(GenericRepository):
                 "status": "APPROVED"
             }
             cursor = self.db[approval_collection].find(query)
-            results = await cursor.to_list(length=None)
+            results = list(cursor)
             logger.info(f"Found {len(results)} approved records for tomorrow ({tomorrow.strftime('%Y-%m-%d')})")
             return results
         except Exception as e:
