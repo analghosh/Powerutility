@@ -234,7 +234,7 @@ class LimitValuesRepository(GenericRepository):
             insert_data.setdefault("created_at", current_time)
             insert_data.setdefault("inserted_at", current_time)
 
-            await operations.append(UpdateOne(
+            operations.append(UpdateOne(
                 filter_query,
                 {"$setOnInsert": insert_data},
                 upsert=True
