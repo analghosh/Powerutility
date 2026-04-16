@@ -457,8 +457,7 @@ class RTMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = list(
-                self.limit_values_repo.repository.aggregate(
+            forecastedPrice = await self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -481,11 +480,9 @@ class RTMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
-            )
             limit_schedule_date = target_date
             
-            bufferPrice = list(
-                self.limit_values_repo.repository.aggregate(
+            bufferPrice = await self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -508,7 +505,6 @@ class RTMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
-            )
 
 
             ceilingPrice = await self.limit_values_repo.repository.aggregate(
