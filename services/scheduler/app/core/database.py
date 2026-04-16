@@ -28,8 +28,8 @@ def get_database_client() -> AsyncIOMotorClient:
             _client = get_mongo_client(
                 settings.MONGODB_URI,
                 "shared_repository_client",
-                maxPoolSize=20,
-                minPoolSize=2,
+                maxPoolSize=50,
+                minPoolSize=10,
             )
             logger.info("✅ MongoDB async connection established (using shared Motor client)")
         except Exception as e:

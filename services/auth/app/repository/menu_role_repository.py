@@ -168,7 +168,7 @@ class MenuRoleRepository(BaseRepository):
 
             # Atomic upsert — avoids race condition and duplicate key errors
             now = datetime.now()
-            await self.collection.update_one(
+            self.collection.update_one(
                 {"role_id": role_id, "menu_id": menu_id},
                 {
                     "$set": {
@@ -183,7 +183,7 @@ class MenuRoleRepository(BaseRepository):
                 upsert=True,
             )
 
-            await self._sync_role_permissions(role_id)
+            self._sync_role_permissions(role_id)
             return True
         except Exception as e:
             logger.error(f"Error granting role menu access: {e}")

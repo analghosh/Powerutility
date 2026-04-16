@@ -139,7 +139,7 @@ class SchedulingRequisitionCalculationRepository(BaseRepository):
 
 
         # return pipeline
-            return await self.collection.aggregate(pipeline).to_list(10000)
+            return await self.collection.aggregate(pipeline).to_list(None)
         except Exception as e:
             logger.error("Failed serve records: %s", str(e))
             return {"error": str(e)}

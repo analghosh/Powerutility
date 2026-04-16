@@ -60,7 +60,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.find(filters, projection or {})
-            return await cursor.to_list(length=10000)
+            return await cursor.to_list(length=None)
         except Exception as e:
             logger.error("Failed to find DAM single bid records: %s", str(e))
             return []
@@ -82,7 +82,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(length=10000)
+            return await cursor.to_list(length=None)
         except Exception as e:
             logger.error("Failed to aggregate DAM single bid records: %s", str(e))
             return []

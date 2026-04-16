@@ -339,7 +339,7 @@ class GenericRepository:
             if sort:
                 cursor = cursor.sort(sort)
             cursor = cursor.skip(skip).limit(page_size)
-            items = await cursor.to_list(length=10000)
+            items = await cursor.to_list(length=None)
 
             total_pages = (total + page_size - 1) // page_size
             has_next = page < total_pages

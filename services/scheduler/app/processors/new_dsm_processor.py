@@ -170,7 +170,7 @@ class NewDSMProcessor(BaseProcessor):
             # Fetch all time blocks and create cache
             cursor = time_block_collection.find({}).sort("timeblock", 1)
             try:
-                time_blocks = await cursor.to_list(10000)
+                time_blocks = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -573,7 +573,7 @@ class NewDSMProcessor(BaseProcessor):
             ]
 
             cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
 
             # combine results: compute weighted average across IDAM subtypes and RTM
             idam_num = 0.0
@@ -721,7 +721,7 @@ class NewDSMProcessor(BaseProcessor):
             
             cursor = supply_serve_repository.serve_collection.aggregate(pipeline)
             try:
-                results = await cursor.to_list(10000)
+                results = await cursor.to_list(None)
             finally:
                 cursor.close()
             

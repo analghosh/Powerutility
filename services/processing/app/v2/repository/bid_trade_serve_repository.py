@@ -111,7 +111,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary: time_block -> total_traded
             trade_quantity_map = {}
@@ -156,7 +156,7 @@ class BidTradeServeRepository(GenericRepository):
             }
             
             cursor = self.collection.find(query).sort("time_block", 1)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -297,7 +297,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
             
             logger.info(f"Retrieved {len(results)} trade status records with MCP for date {datebid}, type {bid_type}")
             return results
@@ -338,7 +338,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
 
             cursor = self.collection.aggregate(pipeline)
-            result = await cursor.to_list(10000)
+            result = await cursor.to_list(None)
 
             block_map: Dict[int, dict] = {}
 

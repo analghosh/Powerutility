@@ -67,7 +67,7 @@ class MasterPlantsRepository(GenericRepository):
         """
         try:
             cursor = self.find(self.collection_name, {})
-            result = await cursor.to_list(length=10000)
+            result = await cursor.to_list(length=None)
             logger.info(f"Retrieved {len(result)} plant master records")
             return result
         except Exception as e:
@@ -91,7 +91,7 @@ class MasterPlantsRepository(GenericRepository):
         """
         try:
             cursor = self.find(self.collection_name, {"scheduling_req_category": scheduling_req_category})
-            result = await cursor.to_list(length=10000)
+            result = await cursor.to_list(length=None)
             return result
         except Exception as e:
             logger.error(f"Failed to get plants by category {scheduling_req_category}: {str(e)}")

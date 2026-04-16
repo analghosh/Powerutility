@@ -72,7 +72,7 @@ class BaseRepository:
             cursor = self.collection.find(filter).skip(skip).limit(limit)
             if sort:
                 cursor = cursor.sort(sort)
-            return await cursor.to_list(length=10000)
+            return await cursor.to_list(length=None)
         except Exception as e:
             logger.error(f"Error finding documents in {self.collection_name}: {e}")
             return []

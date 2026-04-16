@@ -58,7 +58,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
 
         cursor = self.collection.aggregate(pipeline)
 
-        result = await cursor.to_list(10000)
+        result = await cursor.to_list(None)
 
         if result:
             return result[0].get("revision_no", 0)
@@ -70,7 +70,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             query = self.collection.find(filters, projection or {})
-            return await query.to_list(10000)
+            return await query.to_list(None)
         except Exception as e:
             logger.error("Failed to find DAM single bid records: %s", str(e))
             return []
@@ -92,7 +92,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(10000)
+            return await cursor.to_list(None)
         except Exception as e:
             logger.error("Failed to aggregate DAM single bid records: %s", str(e))
             return []
@@ -110,7 +110,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         try:
             query = {"bid_date": datebid}
             cursor = self.collection.find(query)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary keyed by time_block
             result_dict = {}
@@ -184,7 +184,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
             
             logger.debug(f"Aggregation returned {len(results)} grouped results for date {datebid}")
             
@@ -257,7 +257,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
             
             # Convert to dictionary keyed by time_block
             result_dict = {}

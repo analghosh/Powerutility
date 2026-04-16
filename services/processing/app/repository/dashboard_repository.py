@@ -46,6 +46,6 @@ class DashboardRepository(BaseRepository):
         }
         cursor = self.collection.find(query, projection)
         try:
-            return await cursor.to_list(10000)
+            return await cursor.to_list(None)
         finally:
             cursor.close()

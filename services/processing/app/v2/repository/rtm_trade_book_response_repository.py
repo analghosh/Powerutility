@@ -90,7 +90,7 @@ class RTMTradeBookResponseRepository(GenericRepository):
         try:
             query = {"schedule_date": datebid}
             cursor = self.collection.find(query)
-            results = await cursor.to_list(10000)
+            results = await cursor.to_list(None)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:

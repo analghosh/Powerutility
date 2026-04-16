@@ -133,7 +133,7 @@ async def run_historical_deduplication():
             # 1. Get Date Range
             range_res = await db[coll_name].aggregate([
                 {"$group": {"_id": None, "min": {"$min": f"${date_field}"}, "max": {"$max": f"${date_field}"}}}
-            ]).to_list(10000)
+            ]).to_list(None)
 
             if not range_res or not range_res[0]['min']:
                 continue

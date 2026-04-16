@@ -61,7 +61,7 @@ class LimitValuesRepository(GenericRepository):
                 filter_query["area"] = area
 
             cursor = self.find(self.collection_name, filter_query).sort({"scheduled_at": 1})
-            result = await cursor.to_list(length=10000)
+            result = await cursor.to_list(length=None)
             logger.info(f"Retrieved {len(result)} limit values for market={market}, ID={id}, area={area}")
             return result
         except Exception as e:
@@ -95,7 +95,7 @@ class LimitValuesRepository(GenericRepository):
             cursor = self.find(self.collection_name, match_filter).sort(
                 [("scheduled_at", 1), ("time_block", 1)]
             )
-            result = await cursor.to_list(length=10000)
+            result = await cursor.to_list(length=None)
 
             logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}")
             return result
@@ -159,7 +159,7 @@ class LimitValuesRepository(GenericRepository):
             # 1. Fetch records older than today
             query = {"scheduled_at": {"$lt": today}}
             cursor = self.db[self.collection_name].find(query)
-            candidates = await cursor.to_list(length=10000)
+            candidates = await cursor.to_list(length=None)
 
             if not candidates:
                 logger.info("No records found for archival")
@@ -271,7 +271,7 @@ class LimitValuesRepository(GenericRepository):
                 "status": "APPROVED"
             }
             cursor = self.db[approval_collection].find(query)
-            results = await cursor.to_list(length=10000)
+            results = await cursor.to_list(length=None)
             logger.info(f"Found {len(results)} approved records for tomorrow ({tomorrow.strftime('%Y-%m-%d')})")
             return results
         except Exception as e:

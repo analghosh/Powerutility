@@ -191,7 +191,7 @@ class SupplyProcessor(BaseProcessor):
             logger.info(f"Found {len(existing_keys)} existing unique keys (blocks) for today in supply_serve/dc_sg.")
 
             # 2. Fill from plant master and last available data
-            plants = await self.plant_repository.collection.find({}).to_list(length=10000)
+            plants = await self.plant_repository.collection.find({}).to_list(length=None)
             
             new_dc_sg_entities = []
             
@@ -597,13 +597,13 @@ class SupplyProcessor(BaseProcessor):
             
             # Fetch by approval_no
             if approval_nos:
-                plants_by_app = await self.plant_repository.collection.find({"approval_no": {"$in": list(approval_nos)}}).to_list(length=10000)
+                plants_by_app = await self.plant_repository.collection.find({"approval_no": {"$in": list(approval_nos)}}).to_list(length=None)
                 for p in plants_by_app:
                     plant_map_by_approval[str(p.get("approval_no")).strip()] = p
             
             # Fetch by plant_id
             if plant_ids:
-                plants_by_id_list = await self.plant_repository.collection.find({"plant_id": {"$in": list(plant_ids)}}).to_list(length=10000)
+                plants_by_id_list = await self.plant_repository.collection.find({"plant_id": {"$in": list(plant_ids)}}).to_list(length=None)
                 for p in plants_by_id_list:
                     plant_map_by_id[str(p.get("plant_id")).strip()] = p
             
@@ -1083,7 +1083,7 @@ class SupplyProcessor(BaseProcessor):
                 
                 # Manually run find query in thread
                 filter_query = {"$or": chunk}
-                found = await self.supply_repository.serve_collection.find(filter_query).to_list(length=10000)
+                found = await self.supply_repository.serve_collection.find(filter_query).to_list(length=None)
                 for frec in found:
                     k = (
                         frec.get("scheduled_at"),
@@ -1353,15 +1353,19 @@ class SupplyProcessor(BaseProcessor):
             start_range = datetime.combine(target_dates[0], datetime.min.time())
             end_range = datetime.combine(target_dates[-1] + timedelta(days=1), datetime.min.time())
 
-            # 1. Fetch ALL SG Records for the range — stream directly into grouped dict
+            # 1. Fetch ALL SG Records for the range
             sg_filter_all = {
                 "scheduled_at": {"$gte": start_range, "$lt": end_range},
                 "dc_sg": "SG"
             }
+            sg_records = await self.supply_repository.collection.find(
+                sg_filter_all
+            ).to_list(length=None)
+            
             # Group SG records by Plant to process plant-wise (cleaner for logs and batching)
             # Map: plant_id -> list of records
             sg_by_plant = {}
-            async for rec in self.supply_repository.collection.find(sg_filter_all):
+            for rec in sg_records:
                 p_id = rec.get("plant_id")
                 if p_id:
                     if p_id not in sg_by_plant: sg_by_plant[p_id] = []
@@ -1475,14 +1479,18 @@ class SupplyProcessor(BaseProcessor):
                     processor_success = False
 
             # 2. Update DC Records (using the calculated multipliers)
-            # Fetch ALL DC records for the range — stream directly into grouped dict
+            # Fetch ALL DC records for the range
             dc_filter_all = {
                 "scheduled_at": {"$gte": start_range, "$lt": end_range},
                 "dc_sg": "DC"
             }
+            dc_records = await self.supply_repository.collection.find(
+                dc_filter_all
+            ).to_list(length=None)
+            
             # Group DC records by Plant
             dc_by_plant = {}
-            async for rec in self.supply_repository.collection.find(dc_filter_all):
+            for rec in dc_records:
                 p_id = rec.get("plant_id")
                 if p_id:
                     if p_id not in dc_by_plant: dc_by_plant[p_id] = []

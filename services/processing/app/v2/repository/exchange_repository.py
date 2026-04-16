@@ -214,12 +214,12 @@ class ExchangeRepository(GenericRepository):
                 }
             ]
             
-            result = await self.db[self.collection_name].aggregate(pipeline).to_list(10000)
+            result = await self.db[self.collection_name].aggregate(pipeline).to_list(None)
 
             if not result:
                 historical_collection = getattr(settings, 'MONGODB_EXCHANGE_SERVE_HISTORICAL_COLLECTION', "exchange_serve_historical")
                 logger.debug(f"PowerOpt: No exchange data in {self.collection_name}, trying {historical_collection}")
-                result = await self.db[historical_collection].aggregate(pipeline).to_list(10000)
+                result = await self.db[historical_collection].aggregate(pipeline).to_list(None)
                 
             return result
         except Exception as e:

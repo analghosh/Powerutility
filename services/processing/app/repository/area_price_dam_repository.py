@@ -28,7 +28,7 @@ class AreaPriceDamRepository(BaseRepository):
                 }},
                 {"$sort": {"time_block": 1}}  # ascending order
             ]
-            return await self.collection.aggregate(pipeline).to_list(10000)
+            return await self.collection.aggregate(pipeline).to_list(None)
         except Exception as e:
             logger.error(f"Failed to get area price data in {self.collection_name}: {str(e)}")
             raise
@@ -50,7 +50,7 @@ class AreaPriceDamRepository(BaseRepository):
                 }},
                 {"$sort": {"time_block": 1}}
             ]
-            return await self.collection.aggregate(pipeline).to_list(10000)
+            return await self.collection.aggregate(pipeline).to_list(None)
         except Exception as e:
             logger.error(f"Failed to get area price data by time range in {self.collection_name}: {str(e)}")
             raise
@@ -66,7 +66,7 @@ class AreaPriceDamRepository(BaseRepository):
                 {"$limit": 1},
                 {"$project": {"_id": 0}}
             ]
-            result = await self.collection.aggregate(pipeline).to_list(10000)
+            result = await self.collection.aggregate(pipeline).to_list(None)
             return result[0] if result else None
         except Exception as e:
             logger.error(f"Failed to get latest price in {self.collection_name}: {str(e)}")
@@ -87,7 +87,7 @@ class AreaPriceDamRepository(BaseRepository):
                     "total_volume": {"$sum": "$volume"}
                 }}
             ]
-            result = await self.collection.aggregate(pipeline).to_list(10000)
+            result = await self.collection.aggregate(pipeline).to_list(None)
             return result[0] if result else {}
         except Exception as e:
             logger.error(f"Failed to get price summary in {self.collection_name}: {str(e)}")

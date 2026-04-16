@@ -24,8 +24,8 @@ class MongoClientFactory:
 
     # Optimized connection settings for all clients
     DEFAULT_CONNECTION_SETTINGS = {
-        "maxPoolSize": 20,
-        "minPoolSize": 2,
+        "maxPoolSize": 50,
+        "minPoolSize": 10,
         "maxIdleTimeMS": 30000,
         "waitQueueTimeoutMS": 5000,
         "serverSelectionTimeoutMS": 5000,

@@ -223,7 +223,7 @@ class BaseServeRepository(BaseRepository):
         """Find serve records by scheduled_at date"""
         try:
             cursor = self.serve_collection.find({"scheduled_at": scheduled_at})
-            records = await cursor.to_list(length=10000)
+            records = await cursor.to_list(length=None)
             logger.info("Found %d serve records for date: %s", len(records), scheduled_at)
             return records
         except Exception as e:
@@ -244,7 +244,7 @@ class BaseServeRepository(BaseRepository):
                 ]
             }
             cursor = self.serve_collection.find(query)
-            records = await cursor.to_list(length=10000)
+            records = await cursor.to_list(length=None)
             logger.info(
                 "Found %d serve records for date range: %s to %s",
                 len(records),

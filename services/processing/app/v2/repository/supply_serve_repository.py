@@ -304,7 +304,7 @@ class SupplyServeRepository(GenericRepository):
             )
                 
             try:
-                result = await cursor.to_list(10000)
+                result = await cursor.to_list(None)
                 if using_historical:
                     logger.info(f"PowerOpt: Retrieved {len(result)} records from historical collection for {schedule_date}")
                     

@@ -28,7 +28,7 @@ class DAMProductHardCodedDataRepository(BaseRepository):
                 {"$sort": {"Product_Code": 1}},
                 {"$project": { "_id": 0}}
             ]
-            result = await self.collection.aggregate(pipeline).to_list(10000)
+            result = await self.collection.aggregate(pipeline).to_list(None)
             logger.info("Successfully retrieved product data")
             return result
         except Exception as e:
@@ -72,7 +72,7 @@ class DAMProductHardCodedDataRepository(BaseRepository):
                 }},
                 {"$sort": {"Product_Code": 1}}
             ]
-            result = await self.collection.aggregate(pipeline).to_list(10000)
+            result = await self.collection.aggregate(pipeline).to_list(None)
             return result
         except Exception as e:
             logger.error(f"Failed to get all products from {self.collection_name}: {str(e)}")

@@ -155,7 +155,7 @@ class DsmoverviewService:
 
 
             cursor = self.dsmoverview_historical_repo.aggregate(pipeline)
-            return await cursor.to_list(10000)  # ✅ return after loop finishes
+            return await cursor.to_list(None)  # ✅ return after loop finishes
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
             raise
@@ -246,7 +246,7 @@ class DsmoverviewService:
 
             cursor = self.dsmoverview_historical_repo.aggregate(pipeline)
             logger.warning(f"No dashboard data found: {pipeline}")
-            return await cursor.to_list(10000)  # ✅ return after loop finishes
+            return await cursor.to_list(None)  # ✅ return after loop finishes
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
             raise

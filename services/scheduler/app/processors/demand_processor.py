@@ -703,7 +703,7 @@ class DemandProcessor(BaseProcessor):
                      try:
                          cursor = self.supply_repository.serve_collection.find(query)
                          try:
-                             found = await cursor.to_list(10000)
+                             found = await cursor.to_list(None)
                          finally:
                              cursor.close()
                          for f in found:
@@ -721,7 +721,7 @@ class DemandProcessor(BaseProcessor):
                      try:
                          cursor = self.demand_repository.serve_collection.find(query)
                          try:
-                             found = await cursor.to_list(10000)
+                             found = await cursor.to_list(None)
                          finally:
                              cursor.close()
                          for f in found:

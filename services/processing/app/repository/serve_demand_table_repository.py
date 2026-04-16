@@ -45,7 +45,7 @@ class DashboardRepository(BaseRepository):
         }
         cursor = self.collection.find(query, projection)
         try:
-            return await cursor.to_list(10000)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
 
@@ -63,7 +63,7 @@ class DashboardRepository(BaseRepository):
         ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return await cursor.to_list(10000)
+            return await cursor.to_list(None)
         finally:
             cursor.close()
     
@@ -71,7 +71,7 @@ class DashboardRepository(BaseRepository):
     async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         try:
             cursor = self.collection.aggregate(pipeline, allowDiskUse=True)
-            return await cursor.to_list(10000)
+            return await cursor.to_list(None)
         except Exception:
             logger.exception("aggregate failed on %s", self.collection_name)
             return []

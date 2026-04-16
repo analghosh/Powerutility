@@ -68,7 +68,7 @@ class RTMSingleBidDataForApprovalRepository(BaseRepository):
 
         cursor = self.collection.aggregate(pipeline)
 
-        result = await cursor.to_list(10000)
+        result = await cursor.to_list(None)
 
         if result:
             return result[0].get("revision_no", 0)

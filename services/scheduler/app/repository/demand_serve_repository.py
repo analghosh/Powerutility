@@ -62,7 +62,7 @@ class DemandServeRepository(BaseServeRepository):
             # 2. Main Collection (Ensure Normal + Safe Migration)
             main_coll_name = settings.MONGODB_DEMAND_SERVE_COLLECTION
 
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -84,7 +84,7 @@ class DemandServeRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({"scheduled_at": {"$gte": start_migration_date}})
-                        all_docs = await cursor.to_list(length=10000)
+                        all_docs = await cursor.to_list(length=None)
 
                         # Deduplicate in memory
                         deduped_map = {}
@@ -182,7 +182,7 @@ class DemandServeRepository(BaseServeRepository):
                 filter_criteria["time_block"] = time_block
 
             cursor = self.serve_collection.find(filter_criteria).sort("inserted_at", -1)
-            all_records = await cursor.to_list(length=10000)
+            all_records = await cursor.to_list(length=None)
 
             if len(all_records) <= 1:
                 return 0  # No duplicates
@@ -324,7 +324,7 @@ class DemandServeRepository(BaseServeRepository):
             "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date}, "type": "IDF"}
 
         cursor = self.serve_collection.find(query).sort([("scheduled_at", 1), ("time_block", 1)])
-        return await cursor.to_list(length=10000)
+        return await cursor.to_list(length=None)
 
     async def get_actual_demand(self, scheduled_at: datetime) -> List[Dict[str, Any]]:
         """Get actual demand serve record by unique key"""
@@ -333,29 +333,28 @@ class DemandServeRepository(BaseServeRepository):
             "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date}, "type": "IDF"}
 
         cursor = self.serve_collection.find(query).sort([("scheduled_at", 1), ("time_block", 1)])
-        return await cursor.to_list(length=10000)
+        return await cursor.to_list(length=None)
 
     async def archive_old_demand_data(self, days_to_keep: int = 2) -> Dict[str, Any]:
         """
         Archive old demand data to historical collection and cleanup serve collection.
-        Processes in 7-day chunks to avoid loading unbounded historical data into memory.
         """
         try:
             today = datetime.now().date()
-            archive_cutoff_dt = datetime.combine(today, datetime.min.time())
+            archive_cutoff = today
             delete_cutoff = today - timedelta(days=days_to_keep)
 
-            logger.info(f"Starting Demand archival. Archive < {today}, Delete < {delete_cutoff}")
+            logger.info(f"Starting Demand archival. Archive < {archive_cutoff}, Delete < {delete_cutoff}")
 
             start_time = datetime.now()
 
-            # Find the earliest record to archive (cheap indexed lookup)
-            earliest = await self.serve_collection.find_one(
-                {"scheduled_at": {"$lt": archive_cutoff_dt}},
-                {"scheduled_at": 1},
-                sort=[("scheduled_at", 1)]
-            )
-            if not earliest:
+            cursor = self.serve_collection.find({
+                "scheduled_at": {"$lt": datetime.combine(archive_cutoff, datetime.min.time())}
+            })
+
+            archival_candidates = await cursor.to_list(length=None)
+
+            if not archival_candidates:
                 logger.info("No demand records found for archival")
                 return {
                     "archived_count": 0,
@@ -363,79 +362,68 @@ class DemandServeRepository(BaseServeRepository):
                     "message": "No records to archive"
                 }
 
-            total_archived = 0
-            chunk_days = 7
-            chunk_start = earliest["scheduled_at"].replace(
-                hour=0, minute=0, second=0, microsecond=0
-            )
+            logger.info(f"Found {len(archival_candidates)} demand records to potentially archive")
 
-            # Process in 7-day chunks — each chunk holds at most ~3500 demand records in RAM
-            while chunk_start < archive_cutoff_dt:
-                chunk_end = min(chunk_start + timedelta(days=chunk_days), archive_cutoff_dt)
+            historical_inserts = []
 
-                # Load only this chunk's serve records
-                archival_candidates = []
-                async for doc in self.serve_collection.find({
-                    "scheduled_at": {"$gte": chunk_start, "$lt": chunk_end}
-                }):
-                    archival_candidates.append(doc)
+            if archival_candidates:
+                min_date = min(d["scheduled_at"] for d in archival_candidates)
+                max_date = max(d["scheduled_at"] for d in archival_candidates)
 
-                if archival_candidates:
-                    # Load existing historical keys for this chunk to avoid duplicates
-                    existing_keys: set = set()
-                    async for doc in self.historical_collection.find(
-                        {"scheduled_at": {"$gte": chunk_start, "$lt": chunk_end}},
-                        {"scheduled_at": 1, "time_block": 1, "type": 1, "_id": 0}
-                    ):
-                        existing_keys.add((
-                            doc.get("scheduled_at"),
-                            doc.get("time_block"),
-                            doc.get("type")
-                        ))
+                existing_hist_cursor = self.historical_collection.find({
+                    "scheduled_at": {"$gte": min_date, "$lte": max_date}
+                }, {"scheduled_at": 1, "time_block": 1, "type": 1, "_id": 0})
 
-                    now = datetime.now()
-                    historical_inserts = []
-                    for doc in archival_candidates:
-                        key = (doc.get("scheduled_at"), doc.get("time_block"), doc.get("type"))
-                        if key not in existing_keys:
-                            hist_doc = dict(doc)
-                            hist_doc.pop("_id", None)
-                            hist_doc["archived_at"] = now
-                            hist_doc["archived_timestamp"] = now
-                            historical_inserts.append(hist_doc)
-                            existing_keys.add(key)
+                existing_keys = set()
+                async for doc in existing_hist_cursor:
+                    key = (
+                        doc.get("scheduled_at"),
+                        doc.get("time_block"),
+                        doc.get("type")
+                    )
+                    existing_keys.add(key)
 
-                    if historical_inserts:
-                        try:
-                            res = await self.historical_collection.insert_many(
-                                historical_inserts, ordered=False
-                            )
-                            total_archived += len(res.inserted_ids)
-                        except Exception as e:
-                            logger.error(f"Bulk insert error in demand archival chunk {chunk_start.date()}: {e}")
-                            if hasattr(e, 'details'):
-                                total_archived += e.details.get('nInserted', 0)
-
-                    logger.info(
-                        f"Chunk {chunk_start.date()} → {chunk_end.date()}: "
-                        f"{len(archival_candidates)} candidates, "
-                        f"{len(historical_inserts) if archival_candidates else 0} new inserts"
+                for doc in archival_candidates:
+                    key = (
+                        doc.get("scheduled_at"),
+                        doc.get("time_block"),
+                        doc.get("type")
                     )
 
-                chunk_start = chunk_end
+                    if key not in existing_keys:
+                        hist_doc = dict(doc)
+                        if "_id" in hist_doc: del hist_doc["_id"]
 
-            logger.info(f"Archived {total_archived} new demand records to historical")
+                        hist_doc["archived_at"] = datetime.now()
+                        hist_doc["archived_timestamp"] = datetime.now()
 
-            del_res = await self.serve_collection.delete_many({
+                        historical_inserts.append(hist_doc)
+                        existing_keys.add(key)
+
+            archived_count = 0
+            if historical_inserts:
+                try:
+                    res = await self.historical_collection.insert_many(historical_inserts, ordered=False)
+                    archived_count = len(res.inserted_ids)
+                except Exception as e:
+                    logger.error(f"Bulk insert error in demand archival: {e}")
+                    if hasattr(e, 'details'):
+                        archived_count = e.details.get('nInserted', 0)
+
+            logger.info(f"Archived {archived_count} new demand records to historical")
+
+            delete_query = {
                 "scheduled_at": {"$lt": datetime.combine(delete_cutoff, datetime.min.time())}
-            })
+            }
+
+            del_res = await self.serve_collection.delete_many(delete_query)
             deleted_count = del_res.deleted_count
 
             logger.info(f"Cleaned up {deleted_count} demand records older than {delete_cutoff}")
 
             return {
                 "status": "success",
-                "archived_count": total_archived,
+                "archived_count": archived_count,
                 "deleted_count": deleted_count,
                 "cutoff_date": delete_cutoff.isoformat(),
                 "execution_time": (datetime.now() - start_time).total_seconds()
@@ -482,7 +470,7 @@ class DemandServeRepository(BaseServeRepository):
         """
         try:
             cursor = self.serve_collection.find(filter_criteria)
-            existing_records = await cursor.to_list(length=10000)
+            existing_records = await cursor.to_list(length=None)
 
             delete_result = await self.serve_collection.delete_many(filter_criteria)
             deleted_count = delete_result.deleted_count
@@ -653,7 +641,7 @@ class DemandServeRepository(BaseServeRepository):
         """
         try:
             cursor = self.serve_collection.find(filter)
-            return await cursor.to_list(length=10000)
+            return await cursor.to_list(length=None)
         except Exception as e:
             logger.error(f"Error in get_all_async: {str(e)}")
             return []

@@ -54,7 +54,7 @@ class SupplyServeRepository(BaseServeRepository):
             # 2. Main Collection (Ensure Normal Collection + Safe Migration)
             main_coll_name = settings.MONGODB_SUPPLY_SERVE_COLLECTION
 
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -72,7 +72,7 @@ class SupplyServeRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({"scheduled_at": {"$gte": start_migration_date}})
-                        all_docs = await cursor.to_list(100000)
+                        all_docs = await cursor.to_list(length=None)
 
                         deduped_map = {}
                         for doc in all_docs:
@@ -226,7 +226,7 @@ class SupplyServeRepository(BaseServeRepository):
         """
         try:
             cursor = self.serve_collection.find(filter_criteria)
-            existing_records = await cursor.to_list(length=10000)
+            existing_records = await cursor.to_list(length=None)
 
             delete_result = await self.serve_collection.delete_many(filter_criteria)
             deleted_count = delete_result.deleted_count
@@ -331,7 +331,7 @@ class SupplyServeRepository(BaseServeRepository):
             cursor = self.serve_collection.find({
                 "scheduled_at": {"$gte": start_yesterday, "$lte": end_yesterday}
             })
-            all_docs = await cursor.to_list(50000)
+            all_docs = await cursor.to_list(length=None)
 
             archival_batch = []
             archived_count = 0
@@ -601,7 +601,7 @@ class SupplyServeRepository(BaseServeRepository):
             ]
 
             cursor = self.serve_collection.aggregate(pipeline)
-            return await cursor.to_list(length=10000)
+            return await cursor.to_list(length=None)
 
         except Exception as e:
             logger.error(f"Error aggregating supply schedule: {str(e)}")

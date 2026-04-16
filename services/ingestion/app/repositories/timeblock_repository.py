@@ -57,7 +57,7 @@ class TimeblockRepository(BaseRepository):
             List[Dict[str, Any]]: List of timeblock records
         """
         try:
-            timeblocks = await self.collection.find({}).sort("timeblock", 1).to_list(10000)
+            timeblocks = await self.collection.find({}).sort("timeblock", 1).to_list(None)
 
             # Convert ObjectId to string for JSON serialization
             for timeblock in timeblocks:
@@ -101,7 +101,7 @@ class TimeblockRepository(BaseRepository):
             Set[int]: Set of valid timeblock numbers
         """
         try:
-            timeblocks = await self.collection.find({}, {"timeblock": 1, "_id": 0}).to_list(10000)
+            timeblocks = await self.collection.find({}, {"timeblock": 1, "_id": 0}).to_list(None)
             valid_numbers = {doc["timeblock"] for doc in timeblocks if "timeblock" in doc}
 
             logger.info("Retrieved %d valid timeblock numbers", len(valid_numbers))
@@ -164,7 +164,7 @@ class TimeblockRepository(BaseRepository):
             List[Dict[str, Any]]: List of timeblock records
         """
         try:
-            timeblocks = await self.collection.find({"fulltime": fulltime}).sort("timeblock", 1).to_list(10000)
+            timeblocks = await self.collection.find({"fulltime": fulltime}).sort("timeblock", 1).to_list(None)
 
             # Convert ObjectId to string for JSON serialization
             for timeblock in timeblocks:

@@ -211,7 +211,7 @@ class DayaheadmarketService:
             ]
             cursor = self.supply_repo.aggregate(pipeline)
             try:
-                getplantsData = await cursor.to_list(10000)
+                getplantsData = await cursor.to_list(None)
             finally:
                 cursor.close()
             logger.info(f"Found {len(getplantsData)} plant data records for schedule_date: {schedule_date}")
@@ -235,14 +235,14 @@ class DayaheadmarketService:
             ]
             cursor = self.dam_product_hardCoded_data_repo.aggregate(product_hardCoded_pipeline)
             try:
-                getsessionNo = await cursor.to_list(10000)
+                getsessionNo = await cursor.to_list(None)
             finally:
                 cursor.close()
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
             cursor = self.plants_list_repo.aggregate(plants_list_pipeline)
             try:
-                plantData = await cursor.to_list(10000)
+                plantData = await cursor.to_list(None)
             finally:
                 cursor.close()
             plant_dict = {p['plant_id']: p for p in plantData}
@@ -328,7 +328,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                getForecastedValue = await cursor.to_list(10000)
+                getForecastedValue = await cursor.to_list(None)
             finally:
                 cursor.close()
 
@@ -347,7 +347,7 @@ class DayaheadmarketService:
                     {"$limit": 1}
                 ])
                 try:
-                    latest_dam_dates = await cursor.to_list(10000)
+                    latest_dam_dates = await cursor.to_list(None)
                 finally:
                     cursor.close()
                 if latest_dam_dates:
@@ -361,7 +361,7 @@ class DayaheadmarketService:
                         {"$limit": 1}
                     ])
                     try:
-                        latest_dates = await cursor.to_list(10000)
+                        latest_dates = await cursor.to_list(None)
                     finally:
                         cursor.close()
                     if latest_dates:
@@ -385,7 +385,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                dam_forecasted_price_data = await cursor.to_list(10000)
+                dam_forecasted_price_data = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -400,7 +400,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1, "ID": 1}}
             ])
             try:
-                set_min_sell_price_data = await cursor.to_list(10000)
+                set_min_sell_price_data = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -415,7 +415,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1, "ID": 1}}
             ])
             try:
-                n1_quantum_data = await cursor.to_list(10000)
+                n1_quantum_data = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -430,7 +430,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                n1_data = await cursor.to_list(10000)
+                n1_data = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -441,7 +441,7 @@ class DayaheadmarketService:
                 {"$limit": 20}
             ])
             try:
-                available_ids = await cursor.to_list(10000)
+                available_ids = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -451,7 +451,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "ID": 1, "schedule_date": 1, "block": 1}}
             ])
             try:
-                any_limit_data = await cursor.to_list(10000)
+                any_limit_data = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -484,7 +484,7 @@ class DayaheadmarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                forecastedPrice = await cursor.to_list(10000)
+                forecastedPrice = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -498,7 +498,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                set_min_sell_price_data = await cursor.to_list(10000)
+                set_min_sell_price_data = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -512,7 +512,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                n1_quantum_data = await cursor.to_list(10000)
+                n1_quantum_data = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -528,7 +528,7 @@ class DayaheadmarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                bufferPrice = await cursor.to_list(10000)
+                bufferPrice = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -542,7 +542,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                ceilingPrice = await cursor.to_list(10000)
+                ceilingPrice = await cursor.to_list(None)
             finally:
                 cursor.close()
             
@@ -557,7 +557,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                n_1Limits = await cursor.to_list(10000)
+                n_1Limits = await cursor.to_list(None)
             finally:
                 cursor.close()
 
@@ -571,7 +571,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_buyLimits = await cursor.to_list(10000)
+                noc_buyLimits = await cursor.to_list(None)
             finally:
                 cursor.close()
 
@@ -585,7 +585,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_sellLimits = await cursor.to_list(10000)
+                noc_sellLimits = await cursor.to_list(None)
             finally:
                 cursor.close()
 
@@ -612,7 +612,7 @@ class DayaheadmarketService:
                 {"$limit": 5}
             ])
             try:
-                available_dates = await cursor.to_list(10000)
+                available_dates = await cursor.to_list(None)
             finally:
                 cursor.close()
             logger.info(f"Available dates in limit_values: {[d['_id'] for d in available_dates]}")
