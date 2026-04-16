@@ -212,11 +212,11 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
         try:
             client = get_mongo_client(self.mongo_uri, "rtm_forecast_api_config")
             db = client[self.database_name]
-            provider = await db["providers"].find_one({"code": "rtm_forecast_api_provider", "enabled": True})
+            provider = db["providers"].find_one({"code": "rtm_forecast_api_provider", "enabled": True})
             if not provider:
-                provider = await db["providers"].find_one({"provider_type": "rtm_forecast_api", "enabled": True})
+                provider = db["providers"].find_one({"provider_type": "rtm_forecast_api", "enabled": True})
             if not provider:
-                provider = await db["providers"].find_one({"code": "rtm_api_provider", "enabled": True})
+                provider = db["providers"].find_one({"code": "rtm_api_provider", "enabled": True})
             if not provider or not provider.get("metadata"):
                 return None
             metadata = provider.get("metadata", {})
