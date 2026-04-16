@@ -146,7 +146,7 @@ class LimitValuesProcessor(BaseProcessor):
                 merged_data[unique_key_tuple] = tomorrow_record
 
             # 2. Fetch tomorrow's approved entries — these are built separately and always upsert
-            approved_entries_tomorrow = self.repository.get_approved_tomorrow(tomorrow)
+            approved_entries_tomorrow = await self.repository.get_approved_tomorrow(tomorrow)
             logger.info(f"[LimitValuesProcessor] Found {len(approved_entries_tomorrow)} approved entries for tomorrow to merge")
 
             approval_ids_to_delete = []

@@ -260,7 +260,7 @@ class LimitValuesRepository(GenericRepository):
             logger.error(f"Error in bulk_insert_only for {collection_name}: {e}")
             raise
 
-    def get_approved_tomorrow(self, tomorrow: datetime) -> List[Dict[str, Any]]:
+    async def get_approved_tomorrow(self, tomorrow: datetime) -> List[Dict[str, Any]]:
         """
         Fetch approved entries for tomorrow from the approval collection.
         """
