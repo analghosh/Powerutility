@@ -125,7 +125,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
             docs = await self.collection.aggregate(pipeline).to_list(None)
             result = []
 
-            for doc in docs:
+            for doc in cursor:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
                 result.append(doc)
