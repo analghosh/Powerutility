@@ -569,7 +569,7 @@ class DAMBiddingServices:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = await self.supply_repo.aggregate_async(pipeline)
+            result = await self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline)
             return {"data": result}
         except Exception as e:
             logger.exception(f"[DAMBiddingServices] Failed to fetch demand data: {str(e)}")
