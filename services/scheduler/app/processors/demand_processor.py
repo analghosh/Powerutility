@@ -545,7 +545,7 @@ class DemandProcessor(BaseProcessor):
             )
             
             logger.error("Error executing demand data archival job: %s", str(e))
-    async def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
+    def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
         """Fetch supply schedule data for the dates in raw_data (list of dicts or list of dates)"""
         try:
             unique_dates = set()
@@ -580,7 +580,7 @@ class DemandProcessor(BaseProcessor):
             start_date = datetime.combine(sorted_dates[0], datetime.min.time())
             end_date = datetime.combine(sorted_dates[-1] + timedelta(days=1), datetime.min.time())
             
-            aggregated_schedule = await self.supply_repository.aggregate_supply_schedule(start_date, end_date)
+            aggregated_schedule = self.supply_repository.aggregate_supply_schedule(start_date, end_date)
             
             schedule_map = {}
             if aggregated_schedule:
@@ -629,7 +629,7 @@ class DemandProcessor(BaseProcessor):
             logger.info(f"Demand calculation summary: {get_calculation_summary(raw_data)}")
             
             # Fetch supply schedule map (Bulk)
-            supply_map = await self._get_supply_schedule_map(raw_data)
+            supply_map = self._get_supply_schedule_map(raw_data)
             
             demand_entities = []
             historical_entities = []

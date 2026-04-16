@@ -209,7 +209,7 @@ class LimitValuesRepository(GenericRepository):
             logger.error(f"Archival process failed: {e}")
             return {"archived": 0, "deleted": 0, "error": str(e)}
 
-    async def bulk_insert_only(self, collection_name: str, documents: List[Dict[str, Any]], unique_key_fields: List[str]) -> Dict[str, Any]:
+    def bulk_insert_only(self, collection_name: str, documents: List[Dict[str, Any]], unique_key_fields: List[str]) -> Dict[str, Any]:
         """
         Insert documents only if they don't already exist. Never updates existing records.
         Uses $setOnInsert so matched documents are completely untouched.
@@ -249,7 +249,7 @@ class LimitValuesRepository(GenericRepository):
         try:
             for i in range(0, len(operations), batch_size):
                 batch_ops = operations[i:i + batch_size]
-                result = await collection.bulk_write(batch_ops, ordered=False)
+                result = collection.bulk_write(batch_ops, ordered=False)
                 total_stats["inserted"] += result.upserted_count
                 total_stats["skipped"] += result.matched_count
                 total_stats["total"] += len(batch_ops)
@@ -260,7 +260,7 @@ class LimitValuesRepository(GenericRepository):
             logger.error(f"Error in bulk_insert_only for {collection_name}: {e}")
             raise
 
-    async def get_approved_tomorrow(self, tomorrow: datetime) -> List[Dict[str, Any]]:
+    def get_approved_tomorrow(self, tomorrow: datetime) -> List[Dict[str, Any]]:
         """
         Fetch approved entries for tomorrow from the approval collection.
         """

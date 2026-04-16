@@ -64,7 +64,7 @@ class LimitValuesProcessor(BaseProcessor):
             
             # 1. Fetch Today's Data for Rollover to Tomorrow
             today_existing_query = {"scheduled_at": today, "id":{"$nin":["RTM_forecasted_price", "DAM_forecasted_price"]}}
-            today_existing_data = await self.repository.find_many(self.final_collection_name, today_existing_query, limit=10000)
+            today_existing_data = self.repository.find_many(self.final_collection_name, today_existing_query, limit=10000)
             logger.info(f"[LimitValuesProcessor] Found {len(today_existing_data)} records for today to rollover to tomorrow")
             
             merged_data = {}
@@ -83,7 +83,7 @@ class LimitValuesProcessor(BaseProcessor):
             }
 
             yesterday = today - timedelta(days=1)
-            yesterday_existing_data = await self.repository.find_many(self.final_collection_name, {"scheduled_at": yesterday, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
+            yesterday_existing_data = self.repository.find_many(self.final_collection_name, {"scheduled_at": yesterday, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
             logger.info(f"[LimitValuesProcessor] Found {len(yesterday_existing_data)} records for yesterday to rollover to today")
             if today_existing_data:
                 logger.info(f"[LimitValuesProcessor] Today ({today_str}) already has {len(today_existing_data)} records; will skip per-record duplicates")
@@ -112,7 +112,7 @@ class LimitValuesProcessor(BaseProcessor):
                 merged_data[unique_key_tuple] = today_record
             
             # Fetch all of tomorrow's existing data to do per-record skip check
-            tomorrow_existing_data = await self.repository.find_many(self.final_collection_name, {"scheduled_at": tomorrow, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
+            tomorrow_existing_data = self.repository.find_many(self.final_collection_name, {"scheduled_at": tomorrow, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
             tomorrow_existing_keys = {
                 (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"))
                 for r in tomorrow_existing_data
@@ -155,7 +155,7 @@ class LimitValuesProcessor(BaseProcessor):
                 tomorrow_rollover_data[unique_key_tuple] = tomorrow_record
 
             # 2. Fetch tomorrow's approved entries — these are built separately and always upsert
-            approved_entries_tomorrow = await self.repository.get_approved_tomorrow(tomorrow)
+            approved_entries_tomorrow = self.repository.get_approved_tomorrow(tomorrow)
             logger.info(f"[LimitValuesProcessor] Found {len(approved_entries_tomorrow)} approved entries for tomorrow to merge")
 
             approval_ids_to_delete = []
@@ -198,7 +198,7 @@ class LimitValuesProcessor(BaseProcessor):
             rollover_documents = list(merged_data.values())
             if rollover_documents:
                 logger.info(f"[LimitValuesProcessor] Bulk insert-only (yesterday rollover) of {len(rollover_documents)} records for {today_str}")
-                insert_result = await self.repository.bulk_insert_only(
+                insert_result = self.repository.bulk_insert_only(
                     self.final_collection_name,
                     rollover_documents,
                     unique_key_fields
@@ -208,7 +208,7 @@ class LimitValuesProcessor(BaseProcessor):
             tomorrow_rollover_documents = list(tomorrow_rollover_data.values())
             if tomorrow_rollover_documents:
                 logger.info(f"[LimitValuesProcessor] Bulk upsert (today rollover) of {len(tomorrow_rollover_documents)} records for {tomorrow_str}")
-                insert_result = await self.repository.bulk_upsert_optimized(
+                insert_result = self.repository.bulk_upsert_optimized(
                     self.final_collection_name,
                     tomorrow_rollover_documents,
                     unique_key_fields
@@ -250,7 +250,7 @@ class LimitValuesProcessor(BaseProcessor):
             approval_documents = list(approval_docs.values())
             if approval_documents:
                 logger.info(f"[LimitValuesProcessor] Bulk upsert (approvals) of {len(approval_documents)} records for {tomorrow_str}")
-                upsert_result = await self.repository.bulk_upsert_optimized(
+                upsert_result = self.repository.bulk_upsert_optimized(
                     self.final_collection_name,
                     approval_documents,
                     unique_key_fields
@@ -273,15 +273,15 @@ class LimitValuesProcessor(BaseProcessor):
 
             # 4. Batch Audit Logs
             if audit_logs:
-                await self.repository.insert_many(self.audit_collection_name, audit_logs)
+                self.repository.insert_many(self.audit_collection_name, audit_logs)
 
             # 5. Historical Archival (Older than today)
-            archive_result = await self.repository.archive_to_historical(today)
+            archive_result = self.repository.archive_to_historical(today)
             logger.info(f"[LimitValuesProcessor] Archival result: {archive_result}")
 
             # 6. Delete processed approval entries
             if approval_ids_to_delete:
-                delete_res = await self.repository.delete_many(self.approval_collection_name, {"_id": {"$in": approval_ids_to_delete}})
+                delete_res = self.repository.delete_many(self.approval_collection_name, {"_id": {"$in": approval_ids_to_delete}})
                 logger.info(f"[LimitValuesProcessor] Deleted {delete_res.deleted_count} processed approval entries")
             
             result = {
