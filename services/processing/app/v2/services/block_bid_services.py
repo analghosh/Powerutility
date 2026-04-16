@@ -51,14 +51,24 @@ class BlockBidServices:
         time_block_range = []
         data = []
 
-        market_type  = request.get("market_type", "RTM")
+        market_type_list = request.get("market_type", [])
         from_list    = request.get("from", [])
-
+        trade_sessions_raw = request.get("trade_session", []) or []
+        trade_sessions = []
         # DAM block bid has no session concept — use trade_session=0
-        if market_type.upper() == "DAM":
-            trade_sessions = [0] * len(from_list)
-        else:
-            trade_sessions = request.get("trade_session", [])
+        for i in range(len(from_list)):
+            market_type = market_type_list[i].upper()
+
+            if market_type == "DAM":
+                session = 0
+            else:
+                session = (
+                    int(trade_sessions_raw[i])
+                    if i < len(trade_sessions_raw) and trade_sessions_raw[i] not in (None, "")
+                    else 0
+                )
+
+            trade_sessions.append(session)
 
         # Fetch current max revision per (session, time_block) so each new insert gets max+1
         session_ints = [int(s) for s in trade_sessions]
@@ -85,7 +95,9 @@ class BlockBidServices:
                 "biding_date": formatted_date,
                 "reason": "",
                 "type": request["type"],
-                "market_type": market_type,
+                "market_type": request["market_type"][i],
+                "exchange": request["exchange"][i],
+                "selected_for": request["selected_for"][i],
                 "ex_split_string": f"IEX-{request['iex_price'][i]}_PXIL-{request['pxil_price'][i]}",
                 "revision_no": revision_no,
             }
