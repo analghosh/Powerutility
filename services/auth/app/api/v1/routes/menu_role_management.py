@@ -196,24 +196,20 @@ async def update_role_menu_permissions(
         menu = await menu_repo.get_menu_by_id(menu_id)
         if not menu:
             raise HTTPException(status_code=404, detail="Menu not found")
-        
-        # Upsert: create relationship if it doesn't exist, otherwise update
-        menu_role = menu_role_repo.get_menu_role(menu_id, role_id)
+
+        # Get existing menu-role relationship
+        menu_role = await menu_role_repo.get_menu_role(menu_id, role_id)
         if not menu_role:
-            success = menu_role_repo.grant_role_menu_access(
-                role_id=role_id,
-                menu_id=menu_id,
-                permissions=permission_update.permissions
-            )
-            if not success:
-                raise HTTPException(status_code=500, detail="Failed to create menu-role relationship")
-        else:
-            success = menu_role_repo.update_menu_role(
-                menu_role.id,
-                MenuRoleUpdate(permissions=permission_update.permissions)
-            )
-            if not success:
-                raise HTTPException(status_code=500, detail="Failed to update menu permissions")
+            raise HTTPException(status_code=404, detail="Menu-role relationship not found")
+
+        # Update permissions
+        success = await menu_role_repo.update_menu_role(
+            menu_role.id,
+            MenuRoleUpdate(permissions=permission_update.permissions)
+        )
+
+        if not success:
+            raise HTTPException(status_code=500, detail="Failed to update menu permissions")
 
         # Sync role permissions so users get the updated access on next login
         await menu_role_repo._sync_role_permissions(role_id)

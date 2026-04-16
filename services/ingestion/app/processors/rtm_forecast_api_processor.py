@@ -295,7 +295,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                                     timestamp=datetime.now(),
                                     metadata={"url": url, "method": "GET", "status_code": response.status, "params": params, "attempt": attempt + 1}
                                 )
-                                await self.integration_apilog_repository.save_log("rtm_forecast", log_entity)
+                                self.integration_apilog_repository.save_log("rtm_forecast", log_entity)
                             except Exception as log_error:
                                 logger.warning("Failed to log RTM Forecast API response: %s", log_error)
                             logger.info("Successfully fetched RTM forecast data from API")
