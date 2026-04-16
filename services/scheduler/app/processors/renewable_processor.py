@@ -329,10 +329,10 @@ class RenewableProcessor(BaseProcessor):
 
             # 2. Which plant_ids have ANY record in renewable_serve for today?
             try:
-                serve_today = list(self.renewable_repository.serve_collection.find(
+                serve_today = await self.renewable_repository.serve_collection.find(
                     {"scheduled_at": {"$gte": target_start, "$lte": target_end}},
                     projection={"plant_id": 1, "_id": 0}
-                ))
+                ).to_list(length=None)
                 plants_in_serve_today = {r.get("plant_id") for r in serve_today if r.get("plant_id")}
             except Exception as e:
                 logger.error("Error querying renewable_serve for today's plant_ids: %s", e)
