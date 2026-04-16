@@ -600,7 +600,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         data_type_log = config.get('data_type', 'unknown')
                         # Ensure we use the value if it's an enum, otherwise string
                         data_type_str = data_type_log.value if hasattr(data_type_log, 'value') else str(data_type_log)
-                        log_id = await self.integration_apilog_repository.save_log(data_type_str.lower(), log_entity)
+                        log_id = self.integration_apilog_repository.save_log(data_type_str.lower(), log_entity)
                     except Exception as log_error:
                         logger.error("Failed to integration log: %s", log_error)
                         log_id = None

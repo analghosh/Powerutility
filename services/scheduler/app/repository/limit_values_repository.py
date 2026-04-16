@@ -234,7 +234,7 @@ class LimitValuesRepository(GenericRepository):
             insert_data.setdefault("created_at", current_time)
             insert_data.setdefault("inserted_at", current_time)
 
-            operations.append(UpdateOne(
+            await operations.append(UpdateOne(
                 filter_query,
                 {"$setOnInsert": insert_data},
                 upsert=True
@@ -271,7 +271,7 @@ class LimitValuesRepository(GenericRepository):
                 "status": "APPROVED"
             }
             cursor = self.db[approval_collection].find(query)
-            results = list(cursor)
+            results = await cursor.to_list(length=None)
             logger.info(f"Found {len(results)} approved records for tomorrow ({tomorrow.strftime('%Y-%m-%d')})")
             return results
         except Exception as e:

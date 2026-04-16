@@ -280,7 +280,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                                         "attempt": attempt + 1
                                     }
                                 )
-                                log_id = await self.integration_apilog_repository.save_log("schedule", log_entity)
+                                log_id = self.integration_apilog_repository.save_log("schedule", log_entity)
                                 logger.info("Logged API response to integration_apilog with id: %s", log_id)
                             except Exception as log_error:
                                 logger.warning("Failed to log API response: %s", log_error)
