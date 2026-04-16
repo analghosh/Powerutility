@@ -899,7 +899,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                         "source": "ftp"
                     }
                 )
-                log_id = await self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
+                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
             except Exception as e:
                 logger.error("Failed to integration log FTP file: %s", e)
             
@@ -955,7 +955,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                         "source": "sftp"
                     }
                 )
-                log_id = await self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
+                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
             except Exception as e:
                 logger.error("Failed to integration log SFTP file: %s", e)
                 
