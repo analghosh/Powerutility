@@ -494,20 +494,18 @@ class DAMBiddingServices:
                         target_date = datetime.strptime(schedule_date, "%Y-%m%d")
                     except ValueError:
                         raise ValueError(f"Invalid date format: {schedule_date}. Expected YYYY-MM-DD.")
-            
+
             else:
                 # Get current date in YYYY-MM-DD format
-                target_date = datetime.now().date()
+                target_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
 
-                # Temporary: Hardcoded schedule date for fetching DSM records
-                # schedule_date= '2025-08-04'
-            
-          
+            end_date = target_date + timedelta(days=1)
+
             pipeline = [
                     {
                         # From supply_serve collection
                         "$match": {
-                            "scheduled_at": target_date,                        # Change from schedule_date to scheduled_at 
+                            "scheduled_at": {"$gte": target_date, "$lt": end_date},
                             "dc_sg": "SG",
                             "time_block": {"$gte": from_block, "$lte": to_block}
                         }
@@ -521,7 +519,7 @@ class DAMBiddingServices:
                     {
                         "$lookup": {
                             # From demand_serve collection
-                            "from": "demand_serve",                          # Change from serve_demand_table to demand_serve for demand_serve collection
+                            "from": "demand_serve",
                             "let": {"t_block": "$_id"},
                             "pipeline": [
                                 {
@@ -529,7 +527,8 @@ class DAMBiddingServices:
                                         "$expr": {
                                             "$and": [
                                                 {"$eq": ["$time_block", "$$t_block"]},
-                                                {"$eq": ["$scheduled_at", target_date]},
+                                                {"$gte": ["$scheduled_at", target_date]},
+                                                {"$lt": ["$scheduled_at", end_date]},
                                                 {"$eq": ["$type", "DAF"]}
                                             ]
                                         }
@@ -569,7 +568,7 @@ class DAMBiddingServices:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = await self.supply_repo.aggregate_async(pipeline)
+            result = await self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline)
             return {"data": result}
         except Exception as e:
             logger.exception(f"[DAMBiddingServices] Failed to fetch demand data: {str(e)}")
