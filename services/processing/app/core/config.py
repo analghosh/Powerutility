@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     # Database Configuration
     MONGODB_URI: str = "mongodb://localhost:27017/" 
     MONGODB_DATABASE: str = "dev_epms"  # Default, overridden by .env
-    AUDIT_DB_NAME: str = "audit_db" 
+    AUDIT_DB_NAME: str = "dev_audit_db" 
     MONGODB_AUTH_COLLECTION: str = "users"
     MONGODB_SESSIONS_COLLECTION: str = "sessions"
     MONGODB_AUDIT_COLLECTION: str = "audit_logs"
@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # Authentication Service
-    AUTH_SERVICE_URL: str = "https://api-dev.infiscopelabs.com/api/v1/auth"
+    AUTH_SERVICE_URL: str = "http://localhost:8001/api/v1/auth"
     AUTH_SERVICE_TIMEOUT: int = 10
     
     # Ingestion Service
@@ -163,6 +163,7 @@ class Settings(BaseSettings):
     MONGODB_RTM_PRODUCT_HARDCODED_DATA_COLLECTION: str = "rtm_product_hardCoded_data"
     MONGODB_RTM_BID_CAPTURE_COLLECTION: str = "rtm_bid_capture"
     MONGODB_RTM_BID_CAPTURE_MANUAL_COLLECTION: str = "rtm_bid_capture_manual"
+    MONGODB_RTM_OPTIMIZATION_RAW_INPUTS_SNAPSHOT_COLLECTION: str = "rtm_optimization_raw_inputs_snapshot"
 
     MONGODB_RENEWABLE_SERVE: str = "renewable_serve"
     MONGODB_RENEWABLE_SERVE_HISTORICAL: str = "renewable_serve_historical"
