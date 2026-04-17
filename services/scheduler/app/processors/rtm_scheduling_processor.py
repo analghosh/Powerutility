@@ -405,19 +405,19 @@ class RTMSchedulingProcessor(BaseProcessor):
                 dc_sg = "SG"
 
             logger.info(f"[RTMSchedulingServices] Fetching plant data for {dc_sg} (Schedule Date: {schedule_date})")
-            getplantsData = self.getAllPlantsDataForScheduling(schedule_date, dc_sg)
+            getplantsData = await self.getAllPlantsDataForScheduling(schedule_date, dc_sg)
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsData)} {dc_sg} plant data records")
             
             logger.info(f"[RTMSchedulingServices] Fetching plant data for DC (Schedule Date: {schedule_date})")
-            getplantsDataDC = self.getAllPlantsDataForScheduling(schedule_date, "DC")
+            getplantsDataDC = await self.getAllPlantsDataForScheduling(schedule_date, "DC")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsDataDC)} DC plant data records")
 
             today_dt = datetime.combine(datetime.now().date(), datetime.min.time())
             demand_schedule_date = today_dt.strftime("%Y-%m-%d")
             logger.info(f"[RTMSchedulingServices] Fetching demand forecast and actual data (Using today: {demand_schedule_date})")
 
-            get_forecasted_list = self.serve_demand_repo.get_forcasted_demand(today_dt)
-            get_actual_list = self.serve_demand_repo.get_actual_demand(today_dt)
+            get_forecasted_list = await self.serve_demand_repo.get_forcasted_demand(today_dt)
+            get_actual_list = await self.serve_demand_repo.get_actual_demand(today_dt)
             
             get_forecasted_value = {item.get("time_block"): item for item in (get_forecasted_list or []) if item.get("time_block") is not None}
             
@@ -1496,7 +1496,7 @@ class RTMSchedulingProcessor(BaseProcessor):
 
         return lookups
     
-    def getAllPlantsDataForScheduling(self, schedule_date, dc_sg):
+    async def getAllPlantsDataForScheduling(self, schedule_date, dc_sg):
         """
         Wrapper function to get all plant data for scheduling.
         Calls the internal method with proper parameters.
@@ -1632,7 +1632,7 @@ class RTMSchedulingProcessor(BaseProcessor):
 
         # Add timeout to prevent hanging (180 seconds = 3 minutes)
         try:
-            posted_jobs = self.supply_repo.aggregate(pipeline)
+            posted_jobs = await self.supply_repo.aggregate(pipeline)
         except Exception as e:
             if "MaxTimeMSExpired" in str(e) or "time limit" in str(e).lower():
                 logger.error(f"[RTMSchedulingServices] get_all_plant_data_for_scheduling: Aggregation timed out for date {schedule_date_used}, dc_sg={dc_sg}. "
@@ -1650,7 +1650,10 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.warning("  3. dc_sg filter is too restrictive")
             # Construct dc_sg_value outside f-string to avoid backslash issue
             dc_sg_value = dc_sg if dc_sg != 'DC_SG' else '{"$in": ["DC", "SG"]}'
-            logger.warning(f"  4. Check if data exists with query: {{'scheduled_at': {{'$gte': {target_date}, 'dc_sg': {dc_sg_value}}}")
+            logger.warning(
+                f"  4. Check if data exists with query: {{'scheduled_at': "
+                f"{{'$gte': {today_start}, '$lt': {today_end}}}, 'dc_sg': {dc_sg_value}}}"
+            )
         
         # Add missing fields to match original structure (start_time, end_time, full_time, dc_sg_type)
         

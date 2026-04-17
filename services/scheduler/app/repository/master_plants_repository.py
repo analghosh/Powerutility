@@ -42,7 +42,7 @@ class MasterPlantsRepository(GenericRepository):
                     pass
 
             # Unique index on plant_id
-            collection.create_index(
+            await collection.create_index(
                 [("plant_id", 1)],
                 unique=True,
                 background=True,
@@ -66,8 +66,7 @@ class MasterPlantsRepository(GenericRepository):
         Get all plants from plant_master collection asynchronously.
         """
         try:
-            cursor = self.find(self.collection_name, {})
-            result = await cursor.to_list(length=None)
+            result = await self.get_all(self.collection_name, {})
             logger.info(f"Retrieved {len(result)} plant master records")
             return result
         except Exception as e:
@@ -90,8 +89,10 @@ class MasterPlantsRepository(GenericRepository):
         Get plants filtered by scheduling requirement category.
         """
         try:
-            cursor = self.find(self.collection_name, {"scheduling_req_category": scheduling_req_category})
-            result = await cursor.to_list(length=None)
+            result = await self.get_all(
+                self.collection_name,
+                {"scheduling_req_category": scheduling_req_category},
+            )
             return result
         except Exception as e:
             logger.error(f"Failed to get plants by category {scheduling_req_category}: {str(e)}")
