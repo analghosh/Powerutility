@@ -115,7 +115,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$sort": {"revision_no": -1}},
                 {
                     "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block", "market_type": "$market_type"},
+                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block", "market_type": "$market_type", "exchange": "$exchange"},
                         "doc": {"$first": "$$ROOT"}
                     }
                 },
