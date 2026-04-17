@@ -60,8 +60,11 @@ class LimitValuesRepository(GenericRepository):
             if area and area != "" and area != "NA":
                 filter_query["area"] = area
 
-            cursor = self.find(self.collection_name, filter_query).sort({"scheduled_at": 1})
-            result = await cursor.to_list(length=None)
+            result = await self.get_all(
+                self.collection_name,
+                filter=filter_query,
+                sort=[("scheduled_at", 1)],
+            )
             logger.info(f"Retrieved {len(result)} limit values for market={market}, ID={id}, area={area}")
             return result
         except Exception as e:
@@ -92,10 +95,11 @@ class LimitValuesRepository(GenericRepository):
             if area and area != "" and area != "NA":
                 match_filter["area"] = area
 
-            cursor = self.find(self.collection_name, match_filter).sort(
-                [("scheduled_at", 1), ("time_block", 1)]
+            result = await self.get_all(
+                self.collection_name,
+                filter=match_filter,
+                sort=[("scheduled_at", 1), ("time_block", 1)],
             )
-            result = await cursor.to_list(length=None)
 
             logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}")
             return result
