@@ -38,7 +38,7 @@ class RTMSchedulingController:
         try:
             logger.info(f"[RTMSchedulingController] Starting getAllPlantDataForScheduling - Correlation ID: {correlation_id}")
             
-            data = self.rtm_scheduling_services.getAllPlantDataForScheduling()
+            data = await self.rtm_scheduling_services.getAllPlantDataForScheduling()
             
             logger.info(f"[RTMSchedulingController] Retrieved {len(data) if isinstance(data, list) else 0} records from getAllPlantDataForScheduling - Correlation ID: {correlation_id}")
             
