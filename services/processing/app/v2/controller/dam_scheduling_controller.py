@@ -238,9 +238,9 @@ class DamSchedulingController:
         """
         return await self.service.get_dam_scheduling_summary(start_date, end_date)
 
-    async def schedule_by_date(self, schedule_date: Optional[str]) -> Dict[str, Any]:
+    def schedule_by_date(self, schedule_date: Optional[str]) -> Dict[str, Any]:
         try:
-            return await self.service.schedule_by_date(schedule_date)
+            return self.service.schedule_by_date(schedule_date)
         except HTTPException:
             raise
         except Exception:

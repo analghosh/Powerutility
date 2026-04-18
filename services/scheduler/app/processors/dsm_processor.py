@@ -41,7 +41,7 @@ class DSMProcessor(BaseProcessor):
         # start_time = datetime.now()
         
         # # Generate and record job start to get execution_id (correlation ID)
-        # execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        # execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         # if not execution_id:
         #     logger.error("Failed to record job start for %s", job_type)
         #     return {
@@ -120,7 +120,7 @@ class DSMProcessor(BaseProcessor):
                 # 
             # }
             # 
-            # await self._record_job_completion(
+            # self._record_job_completion(
                 # job_type=job_type,
                 # job_name=job_name,
                 # schedule=schedule,
@@ -151,7 +151,7 @@ class DSMProcessor(BaseProcessor):
                 # "cron_job":"dsm"
             # }
             # 
-            # await self._record_job_completion(
+            # self._record_job_completion(
                 # job_type=job_type,
                 # job_name=job_name,
                 # schedule=schedule,
@@ -168,7 +168,7 @@ class DSMProcessor(BaseProcessor):
             # Clear correlation ID after job completion
             # self.clear_correlation_id()
     
-    async def _load_time_blocks_cache(self):
+    def _load_time_blocks_cache(self):
         """Load all time blocks from database into cache"""
         try:
             from ..core.database import get_database
@@ -178,7 +178,7 @@ class DSMProcessor(BaseProcessor):
             # Fetch all time blocks and create cache
             cursor = time_block_collection.find({}).sort("timeblock", 1)
             try:
-                time_blocks = await cursor.to_list(None)
+                time_blocks = list(cursor)
             finally:
                 cursor.close()
             
@@ -332,7 +332,7 @@ class DSMProcessor(BaseProcessor):
             logger.error(f"Error generating blocks to process: {str(e)}")
             return []
     
-    async def _process_time_block(self, block_info: Dict[str, Any]) -> bool:
+    def _process_time_block(self, block_info: Dict[str, Any]) -> bool:
         """
         Process a single time block to calculate DSM rate and net DSM amount
         
@@ -389,7 +389,7 @@ class DSMProcessor(BaseProcessor):
             except Exception as debug_error:
                 logger.error(f"Debug query error: {str(debug_error)}")
             
-            exchange_data = await self._fetch_exchange_data(timeblock, scheduled_at)
+            exchange_data = self._fetch_exchange_data(timeblock, scheduled_at)
             if not exchange_data:
                 logger.warning(f"❌ Step 1 FAILED: No exchange data found for time block {timeblock} on {date}")
                 return False
@@ -482,7 +482,7 @@ class DSMProcessor(BaseProcessor):
             logger.error(f"Error processing time block {block_info}: {str(e)}")
             return False
     
-    async def _fetch_exchange_data(self, timeblock: int, scheduled_at: datetime) -> List[Dict[str, Any]]:
+    def _fetch_exchange_data(self, timeblock: int, scheduled_at: datetime) -> List[Dict[str, Any]]:
         """
         Fetch exchange data (RTM and DAM) for the given time block and date using proper repository
         
@@ -525,7 +525,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(rtm_query)
                     try:
-                        rtm_records = await cursor.to_list(None)
+                        rtm_records = list(cursor)
                     finally:
                         cursor.close()
                     logger.debug(f"RTM records from historical collection: {len(rtm_records)}")
@@ -543,7 +543,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(dam_query)
                     try:
-                        dam_records = await cursor.to_list(None)
+                        dam_records = list(cursor)
                     finally:
                         cursor.close()
                     logger.debug(f"DAM records from historical collection: {len(dam_records)}")

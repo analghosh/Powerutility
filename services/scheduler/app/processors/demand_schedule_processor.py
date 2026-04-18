@@ -38,7 +38,7 @@ class DemandScheduleProcessor(BaseProcessor):
         schedule = "*/5 * * * *"  # Every 5 minutes
         start_time = datetime.now()
         
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             return {"status": "error", "message": "Failed to record job start"}
         
@@ -63,7 +63,7 @@ class DemandScheduleProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id,
                 result["status"], success, result
             )
@@ -73,7 +73,7 @@ class DemandScheduleProcessor(BaseProcessor):
         except Exception as e:
             end_time = datetime.now()
             logger.error(f"Error in demand schedule update job: {e}")
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id,
                 "error", False, {"message": str(e)}, str(e)
             )

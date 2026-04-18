@@ -114,7 +114,7 @@ class SupplyManualService:
                 }
             
             # Step 2: Update dc_sg records
-            dc_sg_result = await self.dc_sg_repository.update_manual_supply_to_zero(
+            dc_sg_result = self.dc_sg_repository.update_manual_supply_to_zero(
                 plant_id=plant_id,
                 dc_sg=dc_sg,
                 process_type=process_type,
@@ -173,7 +173,7 @@ class SupplyManualService:
                 }
                 
                 # Step 1: Delete existing record
-                delete_result = await supply_serve_collection.delete_one(delete_query)
+                delete_result = supply_serve_collection.delete_one(delete_query)
                 deleted_count += delete_result.deleted_count
                 
                 # Step 2: Insert new zero-volume record
@@ -201,7 +201,7 @@ class SupplyManualService:
                     "system_revision_number": record.get("system_revision_number", 1) + 1
                 }
                 
-                insert_result = await supply_serve_collection.insert_one(new_record)
+                insert_result = supply_serve_collection.insert_one(new_record)
                 if insert_result.inserted_id:
                     inserted_count += 1
             

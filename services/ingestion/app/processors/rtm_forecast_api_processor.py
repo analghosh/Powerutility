@@ -8,6 +8,7 @@ Handles fetching RTM forecast data from external API and storing:
 import json
 import asyncio
 # import inspect
+# import inspect
 import aiohttp
 from datetime import date, datetime, timedelta
 from typing import Dict, Any, List, Optional
@@ -137,7 +138,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
         job_name = "RTM Forecast API Processor"
         schedule = "*/30 * * * *"  # Every 30 minutes
         start_time = datetime.now()
-        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
 
         logger.info("Starting RTM Forecast API processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
 
@@ -147,7 +148,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 logger.warning("No RTM Forecast API configuration found in database")
                 result = {'status': 'error', 'error': 'No API configuration found', 'execution_time': (datetime.now() - start_time).total_seconds()}
                 if execution_id:
-                    await self.record_job_completion(job_type, job_name, schedule, start_time, datetime.now(), execution_id, "error", False, execution_id, result, "No API configuration found")
+                    self.record_job_completion(job_type, job_name, schedule, start_time, datetime.now(), execution_id, "error", False, execution_id, result, "No API configuration found")
                 return result
 
             api_response = await self._fetch_rtm_forecast_data(api_config)
@@ -155,7 +156,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 logger.error("Failed to fetch RTM forecast data from API")
                 result = {'status': 'error', 'error': 'Failed to fetch API data', 'execution_time': (datetime.now() - start_time).total_seconds()}
                 if execution_id:
-                    await self.record_job_completion(job_type, job_name, schedule, start_time, datetime.now(), execution_id, "error", False, execution_id, result, "Failed to fetch API data")
+                    self.record_job_completion(job_type, job_name, schedule, start_time, datetime.now(), execution_id, "error", False, execution_id, result, "Failed to fetch API data")
                 return result
 
             demand_serve_stored = 0
@@ -249,7 +250,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 'after_evening_cutover': after_evening_cutover,
             }
             if execution_id:
-                await self.record_job_completion(job_type, job_name, schedule, start_time, end_time, execution_id, "success", True, execution_id, result)
+                self.record_job_completion(job_type, job_name, schedule, start_time, end_time, execution_id, "success", True, execution_id, result)
             logger.info(
                 "RTM Forecast API processing completed: demand_serve=%d, limit_values=%d in %.2fs",
                 demand_serve_stored,
@@ -264,7 +265,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             logger.error("Error in RTM Forecast API processing cron job: %s", str(e))
             result = {'status': 'error', 'error': str(e), 'execution_time': execution_time}
             if execution_id:
-                await self.record_job_completion(job_type, job_name, schedule, start_time, end_time, execution_id, "error", False, execution_id, result, str(e))
+                self.record_job_completion(job_type, job_name, schedule, start_time, end_time, execution_id, "error", False, execution_id, result, str(e))
             return result
 
     async def _get_api_config_from_db(self) -> Optional[Dict[str, Any]]:
@@ -273,19 +274,19 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             client = get_mongo_client(self.mongo_uri, "rtm_forecast_api_config")
             db = client[self.database_name]
             providers_collection = db["providers"]
-            provider = await providers_collection.find_one({
+            provider = providers_collection.find_one({
                 "code": "rtm_forecast_api_provider",
                 "enabled": True
             })
 
             if not provider:
-                provider = await providers_collection.find_one({
+                provider = providers_collection.find_one({
                     "provider_type": "rtm_forecast_api",
                     "enabled": True
                 })
 
             if not provider:
-                provider = await providers_collection.find_one({
+                provider = providers_collection.find_one({
                     "code": "rtm_api_provider",
                     "enabled": True
                 })
@@ -382,7 +383,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                                     timestamp=datetime.now(),
                                     metadata={"url": url, "method": "GET", "status_code": response.status, "params": params, "attempt": attempt + 1}
                                 )
-                                await self.integration_apilog_repository.save_log("rtm_forecast", log_entity)
+                                self.integration_apilog_repository.save_log("rtm_forecast", log_entity)
                             except Exception as log_error:
                                 logger.warning("Failed to log RTM Forecast API response: %s", log_error)
                             logger.info("Successfully fetched RTM forecast data from API")
@@ -496,7 +497,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                             "system_revision_number": 1,
                         },
                     }
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = collection.update_one(filter_doc, update_doc, upsert=True)
                     # result = await self._maybe_await(collection.update_one(filter_doc, update_doc, upsert=True))
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
@@ -587,7 +588,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                             "created_by": "rtm_forecast_api_processor",
                         },
                     }
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = collection.update_one(filter_doc, update_doc, upsert=True)
                     # result = await self._maybe_await(collection.update_one(filter_doc, update_doc, upsert=True))
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1

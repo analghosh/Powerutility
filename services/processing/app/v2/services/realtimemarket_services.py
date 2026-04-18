@@ -2528,7 +2528,7 @@ class RealtimemarketService:
         return reviseDataTotalsupply
         
 
-    async def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
+    def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
         
 
         # scheduledatetimestamp = yesterday midnight (unix timestamp)
@@ -2594,7 +2594,7 @@ class RealtimemarketService:
             {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
         ]
 
-        posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline) # type: ignore
+        posted_jobs = list(self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)) # type: ignore
         
         return posted_jobs
 

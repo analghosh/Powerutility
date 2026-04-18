@@ -338,15 +338,10 @@ class ProviderManagementService:
         return self.provider_service.get_serve_columns_for_data_type(data_type)
     
     
-    async def initialize(self):
-        """Initialize async resources — call once at startup"""
-        await self.provider_service.repository.initialize()
-        await self.timeblock_repository.initialize()
-
     def get_valid_timeblocks(self) -> List[int]:
         """
         Get list of valid time_block values from time_block collection
-
+        
         Returns:
             List[int]: List of valid time_block numbers
         """
@@ -380,40 +375,40 @@ class ProviderManagementService:
         
         return True, ""
     
-    async def create_provider(self, request: CreateProviderRequest, created_by: Optional[str] = None) -> str:
+    def create_provider(self, request: CreateProviderRequest, created_by: Optional[str] = None) -> str:
         """
         Create a new provider
-
+        
         Args:
             request: Create provider request
             created_by: User creating the provider
-
+            
         Returns:
             str: Created provider ID
-
+            
         Raises:
             ValueError: If provider code+ingestion_type+data_type combination already exists or validation fails
         """
         try:
             # Check if code+ingestion_type+data_type combination already exists
-            if await self.provider_service.repository.check_provider_combination_exists(
+            if self.provider_service.repository.check_provider_combination_exists(
                 request.code, request.ingestion_type, request.data_type
             ):
                 raise ValueError(
                     f"Provider with code '{request.code}', ingestion_type '{request.ingestion_type}', "
                     f"and data_type '{request.data_type}' already exists"
                 )
-
+            
             # Validate schema fields
             self._validate_schema(request.fields, getattr(request, 'data_type', None), getattr(request, 'ingestion_type', None))
-
+            
             # Validate field mappings
             # self._validate_field_mappings(request.fields, request.mapping, request.data_type, request.ingestion_type)
-
+            
             # Validate FTP-specific requirements
             if request.ingestion_type == IngestionType.FTP:
                 self._validate_ftp_metadata(request.metadata)
-
+            
             # Create provider entity
             provider = ProviderEntity(
                 name=request.name,
@@ -428,24 +423,24 @@ class ProviderManagementService:
                 created_by=created_by,
                 metadata=request.metadata
             )
-
+            
             # Save to database
-            provider_id = await self.provider_service.repository.create_provider(provider)
-
-            logger.info("Created provider: %s (%s) by user: %s",
+            provider_id = self.provider_service.repository.create_provider(provider)
+            
+            logger.info("Created provider: %s (%s) by user: %s", 
                        provider_id, request.code, created_by)
-
+            
             return provider_id
-
+            
         except Exception as e:
             logger.error("Error creating provider: %s", e)
             raise
     
-    async def get_provider_by_id(self, provider_id: str) -> Optional[ProviderResponse]:
+    def get_provider_by_id(self, provider_id: str) -> Optional[ProviderResponse]:
         """Get provider by ID"""
-        return await self.provider_service.get_provider_by_id(provider_id)
-
-    async def get_all_providers(
+        return self.provider_service.get_provider_by_id(provider_id)
+    
+    def get_all_providers(
         self,
         ingestion_type: Optional[IngestionType] = None,
         data_type: Optional[DataType] = None,
@@ -454,7 +449,7 @@ class ProviderManagementService:
         limit: int = 100
     ) -> ProviderListResponse:
         """Get all providers with optional filters"""
-        return await self.provider_service.get_all_providers(
+        return self.provider_service.get_all_providers(
             ingestion_type=ingestion_type,
             data_type=data_type,
             enabled=enabled,
@@ -492,40 +487,41 @@ class ProviderManagementService:
             data_type=entity.data_type,
         )
     
-    async def update_provider(self, provider_id: str, request: UpdateProviderRequest) -> bool:
+    def update_provider(self, provider_id: str, request: UpdateProviderRequest) -> bool:
         """
         Update provider
-
+        
         Args:
             provider_id: Provider ID
             request: Update provider request
-
+            
         Returns:
             bool: True if updated successfully
-
+            
         Raises:
             ValueError: If provider not found or validation fails
         """
         try:
             # Check if provider exists
-            existing_provider = await self.provider_service.repository.get_provider_by_id(provider_id)
+            existing_provider = self.provider_service.repository.get_provider_by_id(provider_id)
             if not existing_provider:
                 raise ValueError(f"Provider with ID '{provider_id}' not found")
-
+            
             # Prepare updates
             updates = {}
-
+            
             if request.name is not None:
                 updates["name"] = request.name
-
+            
+            
             if request.enabled is not None:
                 updates["enabled"] = request.enabled
-
+            
             if request.ingestion_type is not None:
                 # Check if new combination would be unique
                 new_ingestion_type = request.ingestion_type
                 new_data_type = request.data_type if request.data_type is not None else existing_provider.data_type
-                if await self.provider_service.repository.check_provider_combination_exists(
+                if self.provider_service.repository.check_provider_combination_exists(
                     existing_provider.code, new_ingestion_type, new_data_type, exclude_id=provider_id
                 ):
                     raise ValueError(
@@ -533,12 +529,12 @@ class ProviderManagementService:
                         f"and data_type '{new_data_type}' already exists"
                     )
                 updates["ingestion_type"] = request.ingestion_type.value
-
+            
             if request.data_type is not None:
                 # Check if new combination would be unique
                 new_data_type = request.data_type
                 new_ingestion_type = request.ingestion_type if request.ingestion_type is not None else existing_provider.ingestion_type
-                if await self.provider_service.repository.check_provider_combination_exists(
+                if self.provider_service.repository.check_provider_combination_exists(
                     existing_provider.code, new_ingestion_type, new_data_type, exclude_id=provider_id
                 ):
                     raise ValueError(
@@ -546,16 +542,16 @@ class ProviderManagementService:
                         f"and data_type '{new_data_type}' already exists"
                     )
                 updates["data_type"] = request.data_type.value
-
+            
             if request.fields is not None:
                 data_type_to_validate = request.data_type if request.data_type is not None else existing_provider.data_type
                 ingestion_type_to_validate = request.ingestion_type if request.ingestion_type is not None else existing_provider.ingestion_type
                 self._validate_schema(request.fields, data_type_to_validate, ingestion_type_to_validate)
                 updates["fields"] = [field.model_dump() for field in request.fields]
-
+            
             if request.unique_columns is not None:
                 updates["unique_columns"] = request.unique_columns
-
+            
             if request.mapping is not None:
                 # Validate field mappings if schema is also being updated
                 schema_to_validate = request.fields if request.fields else existing_provider.fields
@@ -563,7 +559,7 @@ class ProviderManagementService:
                 ingestion_type_to_validate = request.ingestion_type if request.ingestion_type else existing_provider.ingestion_type
                 self._validate_field_mappings(schema_to_validate, request.mapping, data_type_to_validate, ingestion_type_to_validate)
                 updates["mapping"] = [mapping.model_dump() for mapping in request.mapping]
-
+            
             if request.description is not None:
                 updates["description"] = request.description
 
@@ -573,98 +569,98 @@ class ProviderManagementService:
                 if ingestion_type_to_validate == IngestionType.FTP:
                     self._validate_ftp_metadata(request.metadata)
                 updates["metadata"] = request.metadata
-
+            
             # Update provider
-            success = await self.provider_service.repository.update_provider(provider_id, updates)
-
+            success = self.provider_service.repository.update_provider(provider_id, updates)
+            
             if success:
                 logger.info("Updated provider: %s", provider_id)
-
+            
             return success
-
+            
         except Exception as e:
             logger.error("Error updating provider: %s", e)
             raise
     
-    async def delete_provider(self, provider_id: str) -> bool:
+    def delete_provider(self, provider_id: str) -> bool:
         """
         Delete provider
-
+        
         Args:
             provider_id: Provider ID
-
+            
         Returns:
             bool: True if deleted successfully
-
+            
         Raises:
             ValueError: If provider not found
         """
         try:
             # Check if provider exists
-            existing_provider = await self.provider_service.repository.get_provider_by_id(provider_id)
+            existing_provider = self.provider_service.repository.get_provider_by_id(provider_id)
             if not existing_provider:
                 raise ValueError(f"Provider with ID '{provider_id}' not found")
-
+            
             # Delete provider
-            success = await self.provider_service.repository.delete_provider(provider_id)
-
+            success = self.provider_service.repository.delete_provider(provider_id)
+            
             if success:
                 logger.info("Deleted provider: %s (%s)", provider_id, existing_provider.code)
-
+            
             return success
-
+            
         except Exception as e:
             logger.error("Error deleting provider: %s", e)
             raise
     
-    async def enable_disable_provider(self, provider_id: str, enabled: bool) -> bool:
+    def enable_disable_provider(self, provider_id: str, enabled: bool) -> bool:
         """
         Enable or disable provider
-
+        
         Args:
             provider_id: Provider ID
             enabled: Whether to enable or disable
-
+            
         Returns:
             bool: True if updated successfully
-
+            
         Raises:
             ValueError: If provider not found
         """
         try:
             # Check if provider exists
-            existing_provider = await self.provider_service.repository.get_provider_by_id(provider_id)
+            existing_provider = self.provider_service.repository.get_provider_by_id(provider_id)
             if not existing_provider:
                 raise ValueError(f"Provider with ID '{provider_id}' not found")
-
+            
             # Update enabled status
-            success = await self.provider_service.repository.enable_disable_provider(provider_id, enabled)
-
+            success = self.provider_service.repository.enable_disable_provider(provider_id, enabled)
+            
             if success:
                 action = "enabled" if enabled else "disabled"
                 logger.info("%s provider: %s (%s)", action, provider_id, existing_provider.code)
-
+            
             return success
-
+            
         except Exception as e:
             logger.error("Error enabling/disabling provider: %s", e)
             raise
     
-    async def validate_provider_type_data_type_combination(self, provider_type: str, data_type: str) -> Dict[str, Any]:
+    def validate_provider_type_data_type_combination(self, provider_type: str, data_type: str) -> Dict[str, Any]:
         """
         Validate that a provider type and data type combination exists and is enabled
-
+        
         Args:
             provider_type: Provider type
-            data_type: Data type
-
+            data_type: Data type    
+            
         Returns:
             Dict[str, Any]: Validation result with success status and details
         """
         try:
             # Convert data_type to lowercase to match enum values
             data_type_lower = data_type.lower()
-
+            
             # Validate data type is supported
             try:
                 DataType(data_type_lower)
@@ -676,10 +672,10 @@ class ProviderManagementService:
                     "provider_type": provider_type,
                     "data_type": data_type
                 }
-
+            
             # Find provider by code and data type
-            provider = await self.provider_service.repository.get_provider_by_code_and_data_type(provider_type, data_type_lower)
-
+            provider = self.provider_service.repository.get_provider_by_code_and_data_type(provider_type, data_type_lower)
+            
             if not provider:
                 return {
                     "valid": False,
@@ -687,7 +683,7 @@ class ProviderManagementService:
                     "provider_type": provider_type,
                     "data_type": data_type
                 }
-
+            
             # Check if provider is enabled
             if not provider.enabled:
                 return {
@@ -697,7 +693,7 @@ class ProviderManagementService:
                     "data_type": data_type,
                     "provider_id": str(provider.id)
                 }
-
+            
             # Check if provider supports UPLOAD ingestion type
             if provider.ingestion_type != IngestionType.UPLOAD:
                 return {
@@ -708,10 +704,10 @@ class ProviderManagementService:
                     "provider_id": str(provider.id),
                     "ingestion_type": provider.ingestion_type
                 }
-
-            logger.info("Provider validation successful: %s/%s (ID: %s)",
+            
+            logger.info("Provider validation successful: %s/%s (ID: %s)", 
                        provider_type, data_type, provider.id)
-
+            
             return {
                 "valid": True,
                 "provider_id": str(provider.id),
@@ -722,7 +718,7 @@ class ProviderManagementService:
                 "schema_fields": [field.field_name for field in provider.fields],
                 "unique_columns": provider.unique_columns
             }
-
+            
         except Exception as e:
             logger.error("Error validating provider type and data type combination: %s", e)
             return {
@@ -736,7 +732,7 @@ class ProviderManagementService:
     async def get_provider_by_code_and_type(self, provider_code: str, data_type: str) -> Optional[Dict[str, Any]]:
         """Async: Get provider by code and data type, mapped for domain layer usage"""
         try:
-            provider = await self.provider_service.repository.get_provider_by_code_and_data_type(
+            provider = self.provider_service.repository.get_provider_by_code_and_data_type(
                 provider_code, data_type.lower() if isinstance(data_type, str) else data_type
             )
             if not provider:

@@ -251,7 +251,7 @@ async def get_user_info(
         # Get user from database (no caching for security)
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         
         if not user:
             raise HTTPException(

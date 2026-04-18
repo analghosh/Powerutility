@@ -43,15 +43,15 @@ class BaseJobSeeder(ABC):
         """
         pass
     
-    async def seed_default_jobs(self) -> Dict[str, Any]:
+    def seed_default_jobs(self) -> Dict[str, Any]:
         """Seed default cron jobs for this service"""
-
+        
         default_jobs = self.get_default_jobs()
-
+        
         # Add service name to all jobs
         for job_config in default_jobs:
             job_config["service"] = self.service_name
-
+        
         results = {
             "service": self.service_name,
             "created": 0,
@@ -59,10 +59,10 @@ class BaseJobSeeder(ABC):
             "failed": 0,
             "errors": []
         }
-
+        
         for job_config in default_jobs:
             try:
-                result = await self.seed_job(job_config)
+                result = self.seed_job(job_config)
                 if result == "created":
                     results["created"] += 1
                 elif result == "skipped":
@@ -70,36 +70,36 @@ class BaseJobSeeder(ABC):
                 else:
                     results["failed"] += 1
                     results["errors"].append(f"Failed to seed {job_config['job_type']}")
-
+                    
             except (ValueError, TypeError, OSError) as e:
                 results["failed"] += 1
                 results["errors"].append(f"Error seeding {job_config['job_type']}: {str(e)}")
-                logger.error("Error seeding job %s for service %s: %s",
+                logger.error("Error seeding job %s for service %s: %s", 
                            job_config["job_type"], self.service_name, str(e))
-
-        logger.info("Seeding completed for service %s: %s created, %s skipped, %s failed",
+        
+        logger.info("Seeding completed for service %s: %s created, %s skipped, %s failed", 
                    self.service_name, results["created"], results["skipped"], results["failed"])
-
+        
         return results
-
-    async def seed_job(self, job_config: Dict[str, Any]) -> str:
+    
+    def seed_job(self, job_config: Dict[str, Any]) -> str:
         """
         Seed a single job if it doesn't exist
-
+        
         Args:
             job_config: Job configuration dictionary
-
+            
         Returns:
             str: "created", "skipped", or "failed"
         """
         try:
-            existing_job = await self.job_data_repository.get_job(job_config["job_type"])
-
+            existing_job = self.job_data_repository.get_job(job_config["job_type"])
+            
             if existing_job:
-                logger.info("Job %s already exists for service %s, skipping",
+                logger.info("Job %s already exists for service %s, skipping", 
                            job_config["job_type"], self.service_name)
                 return "skipped"
-
+            
             # Create new job
             job_data = JobData(
                 job_type=job_config["job_type"],
@@ -117,24 +117,24 @@ class BaseJobSeeder(ABC):
                 created_at=datetime.now(),
                 updated_at=datetime.now()
             )
-
-            job_id = await self.job_data_repository.create_job(job_data)
-            logger.info("Seeded job: %s (ID: %s, Service: %s)",
+            
+            job_id = self.job_data_repository.create_job(job_data)
+            logger.info("Seeded job: %s (ID: %s, Service: %s)", 
                        job_config["name"], job_id, job_config["service"])
             return "created"
-
+            
         except (ValueError, TypeError, OSError) as e:
-            logger.error("Failed to seed job %s for service %s: %s",
+            logger.error("Failed to seed job %s for service %s: %s", 
                         job_config["job_type"], self.service_name, str(e))
             return "failed"
-
-    async def seed_custom_jobs(self, custom_jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
+    
+    def seed_custom_jobs(self, custom_jobs: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Seed custom jobs provided by user
-
+        
         Args:
             custom_jobs: List of custom job configurations
-
+            
         Returns:
             Dict with seeding results
         """
@@ -145,14 +145,14 @@ class BaseJobSeeder(ABC):
             "failed": 0,
             "errors": []
         }
-
+        
         # Add service name to all custom jobs
         for job_config in custom_jobs:
             job_config["service"] = self.service_name
-
+        
         for job_config in custom_jobs:
             try:
-                result = await self.seed_job(job_config)
+                result = self.seed_job(job_config)
                 if result == "created":
                     results["created"] += 1
                 elif result == "skipped":
@@ -160,29 +160,29 @@ class BaseJobSeeder(ABC):
                 else:
                     results["failed"] += 1
                     results["errors"].append(f"Failed to seed {job_config['job_type']}")
-
+                    
             except (ValueError, TypeError, OSError) as e:
                 results["failed"] += 1
                 results["errors"].append(f"Error seeding {job_config['job_type']}: {str(e)}")
-                logger.error("Error seeding custom job %s for service %s: %s",
+                logger.error("Error seeding custom job %s for service %s: %s", 
                            job_config["job_type"], self.service_name, str(e))
-
-        logger.info("Custom job seeding completed for service %s: %s created, %s skipped, %s failed",
+        
+        logger.info("Custom job seeding completed for service %s: %s created, %s skipped, %s failed", 
                    self.service_name, results["created"], results["skipped"], results["failed"])
-
+        
         return results
-
-    async def update_existing_jobs(self) -> Dict[str, Any]:
+    
+    def update_existing_jobs(self) -> Dict[str, Any]:
         """Update existing jobs with new configurations"""
         # This can be implemented later for configuration updates
         logger.info("Update existing jobs not implemented yet for service: %s", self.service_name)
         return {"service": self.service_name, "updated": 0, "errors": []}
-
-    async def get_seeding_status(self) -> Dict[str, Any]:
+    
+    def get_seeding_status(self) -> Dict[str, Any]:
         """Get current seeding status for this service"""
         try:
-            total_jobs = await self.job_data_repository.get_job_count(service=self.service_name)
-            enabled_jobs = await self.job_data_repository.get_job_count(enabled_only=True, service=self.service_name)
+            total_jobs = self.job_data_repository.get_job_count(service=self.service_name)
+            enabled_jobs = self.job_data_repository.get_job_count(enabled_only=True, service=self.service_name)
             
             return {
                 "service": self.service_name,

@@ -733,27 +733,32 @@ DEFAULT_PROVIDERS = [
 
 class ProviderSeeder:
     """Seeder for provider configurations"""
-
+    
     def __init__(self):
         self.client = get_mongo_client(settings.MONGODB_URI)
         self.db = self.client[settings.MONGODB_DATABASE]
         self.collection = self.db.providers
 
-    async def seed(self):
+    def seed(self):
         """Seed default providers if they don't exist"""
         logger.info("Checking for default provider configurations...")
-
+        
         for provider_data in DEFAULT_PROVIDERS:
             code = provider_data["code"]
-
+            
             # Upsert provider (Insert if new, Update if exists)
             logger.info(f"Seeding/Updating provider: {code}")
-
+            
             # Update timestamps
             now = datetime.utcnow()
             provider_data["updated_at"] = now
             if "created_at" not in provider_data:
-                pass
+                 # existing records might have created_at, we don't want to overwrite it if we were reading from DB, 
+                 # but here provider_data is from DEFAULT_PROVIDERS which is a dict. 
+                 # We should probably use $setOnInsert for created_at if we want to be strict, 
+                 # but for simplicity in this script, we can just set it.
+                 # Actually, let's use pymongo's update_one with upsert.
+                 pass
 
             # If provider already exists, preserve its metadata values.
             # This prevents overwriting user-configured values like api_url/api_key on service restarts,
@@ -776,17 +781,17 @@ class ProviderSeeder:
             if "created_at" in update_data["$set"]:
                 del update_data["$set"]["created_at"]
 
-            await self.collection.update_one(
+            self.collection.update_one(
                 {"code": code},
                 update_data,
                 upsert=True
             )
             logger.info(f"Provider {code} seeded/updated successfully")
 
-async def seed_providers():
+def seed_providers():
     """Function to run seeder"""
     seeder = ProviderSeeder()
-    await seeder.seed()
+    seeder.seed()
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

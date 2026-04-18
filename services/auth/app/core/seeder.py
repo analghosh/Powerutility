@@ -218,30 +218,30 @@ class DatabaseSeeder:
             logger.error(f"Error seeding menus: {e}")
             return False
     
-    async def seed_roles(self, force_reload: bool = False) -> bool:
+    def seed_roles(self, force_reload: bool = False) -> bool:
         """Seed default roles into the database"""
         try:
             logger.info("Seeding default roles...")
-
+            
             for role_data in DEFAULT_ROLES:
-                existing_role = await self.role_repository.get_role_by_name(role_data["name"])
+                existing_role = self.role_repository.get_role_by_name(role_data["name"])
                 if existing_role and not force_reload:
                     logger.info(f"Role {role_data['name']} already exists, skipping...")
                     continue
-
+                
                 if existing_role and force_reload:
                     logger.info(f"Force reloading role: {role_data['name']}")
-                    await self.role_repository.delete_role(existing_role.id)
-
-                created_role = await self.role_repository.create_role(
+                    self.role_repository.delete_role(existing_role.id)
+                
+                created_role = self.role_repository.create_role(
                     name=role_data["name"],
                     description=role_data["description"]
                 )
                 logger.info(f"Created role: {created_role.name}")
-
+            
             logger.info("Role seeding completed successfully!")
             return True
-
+            
         except Exception as e:
             logger.error(f"Error seeding roles: {e}")
             return False
@@ -412,29 +412,29 @@ class DatabaseSeeder:
             logger.error(f"Error granting admin page access: {e}")
             return False
 
-    async def ensure_admin_user(self) -> bool:
+    def ensure_admin_user(self) -> bool:
         """
         Ensures the admin user exists and updates it if necessary.
         Only creates/updates the admin user, no other users.
         """
         try:
             logger.info("Ensuring admin user exists...")
-            admin_user = await self.user_repository.get_user_by_username(settings.ADMIN_USERNAME)
+            admin_user = self.user_repository.get_user_by_username(settings.ADMIN_USERNAME)
 
             if admin_user:
                 logger.info(f"Admin user '{settings.ADMIN_USERNAME}' already exists.")
                 return True
             else:
                 logger.info(f"Admin user '{settings.ADMIN_USERNAME}' not found. Creating...")
-
+                
                 # Get admin role
-                admin_role = await self.role_repository.get_role_by_name("admin")
+                admin_role = self.role_repository.get_role_by_name("admin")
                 if not admin_role:
                     logger.error("Admin role not found - cannot create admin user")
                     return False
-
+                
                 # Create admin user
-                created_user = await self.user_repository.create_user(
+                created_user = self.user_repository.create_user(
                     username=settings.ADMIN_USERNAME,
                     email=settings.ADMIN_EMAIL,
                     password=settings.ADMIN_INITIAL_PASSWORD,

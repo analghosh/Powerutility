@@ -277,19 +277,22 @@ class DashboardRepository:
                 rtm_map[tb] = round(float(mcp_val), 2) if mcp_val is not None else 0.0
                 acp_map[tb] = round(float(acp_val), 2) if acp_val is not None else 0.0
 
-        # Show exactly 24 blocks: past 11, current 1, and future 12
+        # Show exactly 24 blocks: past 11, current 1, and future 12.
+        # Positions 0-11 of mcp_window are past+current; positions 12-23 are future.
+        # RTM and ACP only cover past+current blocks — use position set, not raw block number,
+        # because across midnight tomorrow's block 1 numerically satisfies 1 <= 85 (wrong).
         mcp_window = window_block_ids
+        past_and_current_block_ids = set(mcp_window[:12])
 
         dam_data = [
             {"time_block": bid, "data": dam_map.get(bid, 0.0)}
             for bid in mcp_window
         ]
 
-        rtm_max_block = current_block
         rtm_data = [
             {"time_block": bid, "data": rtm_map.get(bid, 0.0)}
             for bid in mcp_window
-            if bid <= rtm_max_block
+            if bid in past_and_current_block_ids
         ]
 
         acp_data = [
@@ -299,7 +302,7 @@ class DashboardRepository:
                 "acp": acp_map.get(bid, 0.0),
             }
             for bid in mcp_window
-            if bid <= current_block
+            if bid in past_and_current_block_ids
         ]
 
         # Find current values
@@ -402,9 +405,11 @@ class DashboardRepository:
     def _format_demand_data(self, window_blocks: List[Dict[str, Any]], current_block: int) -> Dict:
         current_block_data = next((b for b in window_blocks if b.get("time_block") == current_block), {})
         data = []
-        for b in window_blocks:
-            demand_value = b.get("actual", 0) if b.get("time_block", 0) <= current_block else b.get("forecast",
-                                                                                                             0)
+        for i, b in enumerate(window_blocks):
+            # Use window position: indices 0-11 are past+current, 12-23 are future.
+            # Comparing raw block numbers fails across midnight (e.g. tomorrow's block 1 < today's block 85).
+            is_past_or_current = i <= 11
+            demand_value = b.get("actual", 0) if is_past_or_current else b.get("forecast", 0)
             data.append({"time_block": b.get("time_block"), "time": block_to_time_str(b.get("time_block")),
                          "demand": round(demand_value or 0, 2)})
         return {
@@ -501,11 +506,14 @@ class DashboardRepository:
         }
 
     def _format_total_net_dsm_data(self, window_blocks: List[Dict[str, Any]], current_block: int) -> Dict:
-        total_dsm_window = window_blocks[:12]  # Only first 12 blocks (same as od_ud)
+        total_dsm_window = window_blocks[:12]  # Only first 12 blocks (past + current)
         cumulative_sum = 0
         cumulative_data = []
         for b in total_dsm_window:
-            if b.get("time_block", 0) > current_block: break
+            # For early-morning past-crossover windows, yesterday's high-numbered blocks (e.g. 90-96)
+            # appear before today's blocks (1-N). Skip them instead of breaking so today's
+            # blocks still get accumulated.
+            if b.get("time_block", 0) > current_block: continue
             cumulative_sum += round(b.get("net_dsm_amount", 0) or 0, 2)
             cumulative_data.append({"time_block": b.get("time_block"), "time": block_to_time_str(b.get("time_block")),
                                     "total_net_dsm_amount": round(cumulative_sum, 2)})

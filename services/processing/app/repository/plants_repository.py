@@ -40,9 +40,10 @@ class ServeMasterPlantsRepository(BaseRepository):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
-        # Index creation is async; skipped here to avoid RuntimeWarning
+        # Create unique compound index on sector, state_ut, and plant_name
+        self._create_unique_index()
     # ---------- Read ----------
-    async def list(
+    def list(
         self,
         filters: Optional[Dict[str, Any]] = None,
         page: int = 1,
@@ -54,11 +55,11 @@ class ServeMasterPlantsRepository(BaseRepository):
         cursor = self.collection.find(q, projection or {})
         if sort:
             cursor = cursor.sort(sort)
-        total = await self.collection.count_documents(q)
+        total = self.collection.count_documents(q)
         page = max(page, 1)
         page_size = max(min(page_size, 200), 1)
         cursor = cursor.skip((page - 1) * page_size).limit(page_size)
-        items = await cursor.to_list(None)
+        items = list(cursor)
         return {
             "items": _serialize_many(items),  # <—— stringify _id & other BSON
             "page": page,
@@ -66,18 +67,18 @@ class ServeMasterPlantsRepository(BaseRepository):
             "total": total,
         }
 
-    async def find_by_id(self, id: str) -> Optional[Dict[str, Any]]:
+    def find_by_id(self, id: str) -> Optional[Dict[str, Any]]:
         """Find document by ID with BSON serialization"""
         try:
             if not ObjectId.is_valid(id):
                 return None
-            doc = await self.collection.find_one({"_id": ObjectId(id)})
+            doc = self.collection.find_one({"_id": ObjectId(id)})
             return _serialize_doc(doc)  # Apply BSON serialization
         except Exception as e:
             logger.error(f"Error finding document by ID in {self.collection_name}: {e}")
             return None
 
-    async def update(self, id: str, data: Dict[str, Any], add_timestamps: bool = True) -> Optional[Dict[str, Any]]:
+    def update(self, id: str, data: Dict[str, Any], add_timestamps: bool = True) -> Optional[Dict[str, Any]]:
         """Update document by ID and return the updated document with BSON serialization"""
         try:
             if not ObjectId.is_valid(id):
@@ -86,7 +87,7 @@ class ServeMasterPlantsRepository(BaseRepository):
                 data["updated_at"] = datetime.now()
             
             # Use findOneAndUpdate to get the updated document
-            result = await self.collection.find_one_and_update(
+            result = self.collection.find_one_and_update(
                 {"_id": ObjectId(id)},
                 {"$set": data},
                 return_document=ReturnDocument.AFTER

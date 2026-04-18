@@ -202,7 +202,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 }
             ]
 
-            return await self.aggregate(self.collection_name, pipeline)
+            return await self.aggregate_async(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get RTM plant data for scheduling: {str(e)}")
             return []

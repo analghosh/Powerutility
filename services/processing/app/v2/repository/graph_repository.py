@@ -197,7 +197,7 @@ class GraphRepository:
                 })
 
             # Execute aggregation
-            rows = await self.repository.aggregate(collection_name, core)
+            rows = self.repository.aggregate(collection_name, core)
 
             # Group by date or return flat
             if group_by_date:
@@ -416,7 +416,7 @@ class GraphRepository:
             ]
             
             logger.debug("Executing demand_curve pipeline: %s", pipeline)
-            rows = await self.repository.aggregate(collection_name, pipeline)
+            rows = self.repository.aggregate(collection_name, pipeline)
             return rows
             
         except Exception as e:
@@ -620,7 +620,7 @@ class GraphRepository:
             ]
             
             logger.debug("Executing mape_curve pipeline: %s", pipeline)
-            rows = await self.repository.aggregate(collection_name, pipeline)
+            rows = self.repository.aggregate(collection_name, pipeline)
             return rows
             
         except Exception as e:
@@ -687,7 +687,7 @@ class GraphRepository:
             ]
             
             logger.debug("Executing simplified last_7_days pipeline: %s", pipeline)
-            rows = await self.repository.aggregate(collection_name, pipeline)
+            rows = self.repository.aggregate(collection_name, pipeline)
             return rows
             
         except Exception as e:
@@ -825,7 +825,7 @@ class GraphRepository:
             ]
             
             logger.debug("Executing comp_act_demand_stats_by_date pipeline: %s", pipeline)
-            rows = await self.repository.aggregate(collection_name, pipeline)
+            rows = self.repository.aggregate(collection_name, pipeline)
             
             # Ensure all requested dates appear (even if no data)
             present = {r["schedule_date"] for r in rows}

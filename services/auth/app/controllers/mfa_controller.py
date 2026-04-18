@@ -2,7 +2,6 @@
 MFA controller for handling multi-factor authentication
 """
 
-import logging
 import secrets
 from typing import List, Dict
 from datetime import datetime
@@ -10,8 +9,6 @@ from fastapi import HTTPException, status
 from bson import ObjectId
 from ..models.user import user_model
 from ..services.mfa_service import mfa_service
-
-logger = logging.getLogger(__name__)
 from ..schemas.mfa import (
     EnableMFARequest, EnableMFAResponse, VerifyMFARequest, VerifyMFAResponse,
     DisableMFARequest, DisableMFAResponse, MFARecoveryRequest, MFARecoveryResponse,
@@ -52,21 +49,20 @@ class MFAController:
     def verify_backup_code(self, code: str, hashed_code: str) -> bool:
         """Verify backup code against hash"""
         import hashlib
-        import hmac
         try:
             salt_hex, hash_hex = hashed_code.split(':')
             salt = bytes.fromhex(salt_hex)
             stored_hash = bytes.fromhex(hash_hex)
-
+            
             code_hash = hashlib.pbkdf2_hmac('sha256', code.encode(), salt, 100000)
-            return hmac.compare_digest(code_hash, stored_hash)
+            return code_hash == stored_hash
         except Exception:
             return False
     
     async def enable_mfa(self, user_id: str, request: EnableMFARequest) -> EnableMFAResponse:
         """Enable MFA for user"""
         # Get user
-        user = await self.user_model.get_user_by_id(user_id)
+        user = self.user_model.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -88,9 +84,9 @@ class MFAController:
         hashed_backup_codes = self.hash_backup_codes(backup_codes)
         
         # Update user with MFA secret and hashed backup codes
-        await self.user_model.update_user(user_id, {
+        self.user_model.update_user(user_id, {
             "mfa_secret": secret,
-            "mfa_enabled": True,
+            "mfa_enabled": False,
             "mfa_backup_codes": hashed_backup_codes,  # Store hashed versions
             "mfa_setup_complete": False  # Will be set to True after verification
         })
@@ -108,7 +104,7 @@ class MFAController:
     async def verify_mfa(self, user_id: str, request: VerifyMFARequest) -> VerifyMFAResponse:
         """Verify MFA code"""
         # Get user
-        user = await self.user_model.get_user_by_id(user_id)
+        user = self.user_model.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -116,14 +112,14 @@ class MFAController:
             )
         
         # Check if MFA is enabled
-        if not user.mfa_enabled:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="MFA is not enabled"
+        if user.mfa_enabled:
+            return VerifyMFAResponse(
+                verified=True,
+                message="MFA is already enabled and verified"
             )
         
         # Get MFA secret from raw document (for security)
-        user_doc = await self.user_model.collection.find_one({"_id": ObjectId(user_id)})
+        user_doc = self.user_model.collection.find_one({"_id": ObjectId(user_id)})
         if not user_doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -151,10 +147,11 @@ class MFAController:
         
         if verification_result['verified']:
             # Mark MFA setup as complete if not already
-            if not user.mfa_setup_complete:
-                await self.user_model.update_user(user_id, {
-                    "mfa_setup_complete": True
-                })
+
+            self.user_model.update_user(user_id, {
+                    "mfa_setup_complete": True,
+                    "mfa_enabled": True
+            })
             
             return VerifyMFAResponse(
                 verified=True,
@@ -162,13 +159,9 @@ class MFAController:
             )
         else:
             # Include rate limit info in response
-            message = verification_result['message']
-            if verification_result['remaining_attempts'] > 0:
-                message += f" ({verification_result['remaining_attempts']} attempts remaining)"
-            
-            return VerifyMFAResponse(
-                verified=False,
-                message=message
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=verification_result['message']
             )
     
     async def disable_mfa(self, user_id: str, request: DisableMFARequest) -> DisableMFAResponse:
@@ -181,7 +174,7 @@ class MFAController:
         - No password required (reduces security exposure)
         """
         # Get user
-        user = await self.user_model.get_user_by_id(user_id)
+        user = self.user_model.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -196,7 +189,7 @@ class MFAController:
             )
         
         # Get MFA secret from raw document (for security)
-        user_doc = await self.user_model.collection.find_one({"_id": ObjectId(user_id)})
+        user_doc = self.user_model.collection.find_one({"_id": ObjectId(user_id)})
         if not user_doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -228,7 +221,7 @@ class MFAController:
             )
         
         # Disable MFA
-        await self.user_model.update_user(user_id, {
+        self.user_model.update_user(user_id, {
             "mfa_enabled": False,
             "mfa_secret": None,
             "mfa_setup_complete": False,
@@ -241,78 +234,67 @@ class MFAController:
         )
     
     async def recover_mfa(self, user_id: str, request: MFARecoveryRequest) -> MFARecoveryResponse:
-        """Disable MFA using a backup code (account recovery)"""
-        from ..services.mfa_rate_limiter import mfa_rate_limiter
-
-        rate_limit_key = f"{user_id}_backup"
-
-        # Check rate limit before doing any DB work
-        if not mfa_rate_limiter.can_attempt(rate_limit_key):
-            lockout_info = mfa_rate_limiter.get_lockout_info(rate_limit_key)
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Too many failed attempts. Try again in {lockout_info['remaining_seconds']} seconds."
-            )
-
+        """Recover MFA using backup code"""
         # Get user
-        user = await self.user_model.get_user_by_id(user_id)
+        user = self.user_model.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
-
+        
         # Check if MFA is enabled
         if not user.mfa_enabled:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="MFA is not enabled"
             )
-
+        
         # Get backup codes from raw document (for security)
-        user_doc = await self.user_model.collection.find_one({"_id": ObjectId(user_id)})
+        user_doc = self.user_model.collection.find_one({"_id": ObjectId(user_id)})
         if not user_doc:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="User not found"
             )
-
+        
         hashed_backup_codes = user_doc.get("mfa_backup_codes", [])
-
+        
         # Verify backup code against hashed versions
         valid_code = None
         for hashed_code in hashed_backup_codes:
             if self.verify_backup_code(request.backup_code, hashed_code):
                 valid_code = hashed_code
                 break
-
+        
         if not valid_code:
-            mfa_rate_limiter.record_attempt(rate_limit_key, success=False)
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid backup code"
+            return MFARecoveryResponse(
+                recovered=False,
+                message="Invalid backup code"
             )
-
-        # Record success and clear rate limit
-        mfa_rate_limiter.record_attempt(rate_limit_key, success=True)
-
-        # Disable MFA completely
-        await self.user_model.update_user(user_id, {
-            "mfa_enabled": False,
-            "mfa_secret": None,
-            "mfa_setup_complete": False,
-            "mfa_backup_codes": []
+        
+        # Remove used backup code
+        hashed_backup_codes.remove(valid_code)
+        
+        # Generate new backup codes
+        new_backup_codes = self.generate_backup_codes()
+        new_hashed_codes = self.hash_backup_codes(new_backup_codes)
+        
+        # Update user with remaining + new hashed codes
+        self.user_model.update_user(user_id, {
+            "mfa_backup_codes": hashed_backup_codes + new_hashed_codes
         })
-
+        
         return MFARecoveryResponse(
             recovered=True,
-            message="MFA has been disabled. Re-enable MFA to secure your account."
+            message="Account recovered successfully",
+            new_backup_codes=new_backup_codes
         )
     
     async def get_mfa_status(self, user_id: str) -> MFAStatusResponse:
         """Get MFA status for user"""
         # Get user
-        user = await self.user_model.get_user_by_id(user_id)
+        user = self.user_model.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -320,7 +302,7 @@ class MFAController:
             )
         
         # Get backup codes count from raw document (for security)
-        user_doc = await self.user_model.collection.find_one({"_id": ObjectId(user_id)})
+        user_doc = self.user_model.collection.find_one({"_id": ObjectId(user_id)})
         backup_codes = user_doc.get("mfa_backup_codes", []) if user_doc else []
         
         return MFAStatusResponse(
@@ -342,7 +324,7 @@ class MFAController:
             Dict with operation result
         """
         # Get target user
-        user = await self.user_model.get_user_by_id(user_id)
+        user = self.user_model.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -350,7 +332,7 @@ class MFAController:
             )
         
         # Get admin user
-        admin_user = await self.user_model.get_user_by_id(admin_user_id)
+        admin_user = self.user_model.get_user_by_id(admin_user_id)
         if not admin_user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -365,7 +347,7 @@ class MFAController:
             )
         
         # Disable MFA
-        await self.user_model.update_user(user_id, {
+        self.user_model.update_user(user_id, {
             "mfa_enabled": False,
             "mfa_secret": None,
             "mfa_setup_complete": False,
@@ -373,7 +355,7 @@ class MFAController:
         })
         
         # Reset rate limiting for user
-        from ..services.mfa_rate_limiter import mfa_rate_limiter
+        from .mfa_rate_limiter import mfa_rate_limiter
         mfa_rate_limiter.reset_user(user_id)
         
         logger.warning(f"Emergency MFA disable for user {user_id} by admin {admin_user_id}: {reason}")

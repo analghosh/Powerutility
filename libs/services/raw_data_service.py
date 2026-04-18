@@ -69,7 +69,7 @@ class RawDataService:
         self._repository_cache[data_type] = (raw_repo, status_repo)
         return raw_repo, status_repo
     
-    async def store_raw_data(
+    def store_raw_data(
         self,
         raw_data: List[Dict[str, Any]],
         provider: Any,
@@ -127,7 +127,7 @@ class RawDataService:
             )
             
             # Step 5: Store in database (time series collection)
-            document_id = await raw_repo.create_raw_data(entity)
+            document_id = raw_repo.create_raw_data(entity)
             
             # Step 6: Create processing status record (normal collection) - DUAL COLLECTION ARCHITECTURE
             processing_status_id = None
@@ -145,7 +145,7 @@ class RawDataService:
                     retry_count=0
                 )
                 
-                processing_status_id = await status_repo.create_processing_status(processing_status_entity)
+                processing_status_id = status_repo.create_processing_status(processing_status_entity)
                 logger.info("Created processing status record: %s for raw_data_id: %s (collection: %s)", 
                            processing_status_id, document_id, status_repo.collection_name)
                 
@@ -171,51 +171,51 @@ class RawDataService:
                 "error": str(e)
             }
     
-    async def get_raw_data_by_ids(self, raw_data_ids: List[str], data_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    def get_raw_data_by_ids(self, raw_data_ids: List[str], data_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get raw data records by their IDs
         """
         raw_repo, _ = self._get_repositories(data_type)
-        return await raw_repo.get_raw_data_by_ids(raw_data_ids)
+        return raw_repo.get_raw_data_by_ids(raw_data_ids)
 
-    async def get_processing_status_by_upload_id(self, upload_id: str, data_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_processing_status_by_upload_id(self, upload_id: str, data_type: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Get processing status by upload tracking ID
-
+        
         Args:
             upload_id: Upload tracking ID
             data_type: Optional data type to target specific collection
-
+            
         Returns:
             Dict[str, Any]: Processing status record or None
         """
         logger.info("Fetching processing status for upload_id: %s (type: %s)", upload_id, data_type)
-
+        
         raw_repo, status_repo = self._get_repositories(data_type)
-
+        
         # 1. Find raw data record by upload_id in metadata
-        raw_data = await raw_repo.get_by_upload_id(upload_id)
+        raw_data = raw_repo.get_by_upload_id(upload_id)
         if not raw_data:
             logger.warning("No raw data record found for upload_id: %s in %s", upload_id, raw_repo.collection_name)
             return None
-
+        
         # 2. Get processing status record by raw_data_id
         raw_data_id = raw_data.get("_id")
         logger.info("Found raw_data record with ID: %s for upload_id: %s", raw_data_id, upload_id)
-
-        status_record = await status_repo.get_by_raw_data_id(raw_data_id)
+        
+        status_record = status_repo.get_by_raw_data_id(raw_data_id)
         if not status_record:
-            logger.warning("No processing status record found for raw_data_id: %s in %s",
+            logger.warning("No processing status record found for raw_data_id: %s in %s", 
                           raw_data_id, status_repo.collection_name)
             return None
-
+            
         logger.info("Found processing status record for raw_data_id: %s", raw_data_id)
         return status_record
     
     
-    async def get_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:
+    def get_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:
         """Get raw data by document ID"""
-        return await self.repository.get_by_id(record_id)
+        return self.repository.get_by_id(record_id)
         
     def _parse_csv_content(self, csv_content: str) -> List[Dict[str, Any]]:
         """
