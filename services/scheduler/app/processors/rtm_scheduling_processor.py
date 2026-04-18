@@ -65,7 +65,6 @@ class RTMSchedulingProcessor(BaseProcessor):
         self._snapshot_ttl_seconds = 30 * 24 * 60 * 60
         self.last_snapshot_run_id: Optional[str] = None
         self.last_snapshot_session_id: Optional[int] = None
-        
         # Calculate current 15-minute block index (0-based, 0-95) from current time
         now = datetime.now()
         minutes_since_midnight = now.hour * 60 + now.minute
@@ -600,7 +599,18 @@ class RTMSchedulingProcessor(BaseProcessor):
                 snapshot_session_id,
                 run_started_aware.isoformat(),
             )
-            self._store_raw_snapshot(getsessionNoRaw, "rtm_session_raw", run_id, execution_id, schedule_date, snapshot_session_id)
+            snapshot_storage_date = self._ensure_tz_run_start(run_started_aware).strftime("%Y-%m-%d")
+            if snapshot_session_id is not None:
+                snapshot_coll = self.scheduling_repo.db[self.snapshot_collection_name]
+                delete_result = snapshot_coll.delete_many({"session_id": snapshot_session_id})
+                logger.info(
+                    "[RTMSchedulingServices] Snapshot replace-by-session | session_id=%s | removed=%s",
+                    snapshot_session_id,
+                    delete_result.deleted_count,
+                )
+            self._store_raw_snapshot(
+                getsessionNoRaw, "rtm_session_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
 
             # Transform session data to dictionary keyed by from_period_code (time_block)
             # Handle both new (session_number, from_period_code) and legacy (Session_Id, From_Period_Code) fields
@@ -618,7 +628,9 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info("[RTMSchedulingServices] Fetching all plant data from master plants repository")
             getPlantListRaw = await self.plants_list_repo.get_all_plants()
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getPlantListRaw)} plant records")
-            self._store_raw_snapshot(getPlantListRaw, "plant_master_raw", run_id, execution_id, schedule_date, snapshot_session_id)
+            self._store_raw_snapshot(
+                getPlantListRaw, "plant_master_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
             
             # Transform plant list - ensure each plant has a "key" field set to plant_id
             # getPlantList needs to be a list (for iteration) but also accessible by plant_id
@@ -653,13 +665,19 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info("[RTMSchedulingServices] Fetching limit values - TM, SEZ, MLTP")
             allTMValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "TM", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allTMValuesRaw)} TM limit values")
-            self._store_raw_snapshot(allTMValuesRaw, "limit_tm_raw", run_id, execution_id, schedule_date, snapshot_session_id)
+            self._store_raw_snapshot(
+                allTMValuesRaw, "limit_tm_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
             allSEZValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "DAM", "SEZ", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allSEZValuesRaw)} SEZ limit values")
-            self._store_raw_snapshot(allSEZValuesRaw, "limit_sez_raw", run_id, execution_id, schedule_date, snapshot_session_id)
+            self._store_raw_snapshot(
+                allSEZValuesRaw, "limit_sez_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
             allMLTPValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "Multiplier", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allMLTPValuesRaw)} MLTP limit values")
-            self._store_raw_snapshot(allMLTPValuesRaw, "limit_mltp_raw", run_id, execution_id, schedule_date, snapshot_session_id)
+            self._store_raw_snapshot(
+                allMLTPValuesRaw, "limit_mltp_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
             
             # Convert limit values to dictionaries keyed by composite key: "schedule_date_ID_time_block"
             # Format: { "schedule_date_ID_time_block": value, ... }
@@ -689,12 +707,16 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info(f"[RTMSchedulingServices] Fetching plant data for {dc_sg} (Schedule Date: {schedule_date})")
             getplantsData = self.getAllPlantsDataForScheduling(schedule_date, dc_sg)
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsData)} {dc_sg} plant data records")
-            self._store_raw_snapshot(getplantsData, "supply_sg_dc_raw", run_id, execution_id, schedule_date, snapshot_session_id)
+            self._store_raw_snapshot(
+                getplantsData, "supply_sg_dc_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
             
             logger.info(f"[RTMSchedulingServices] Fetching plant data for DC (Schedule Date: {schedule_date})")
             getplantsDataDC = self.getAllPlantsDataForScheduling(schedule_date, "DC")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsDataDC)} DC plant data records")
-            self._store_raw_snapshot(getplantsDataDC, "supply_dc_raw", run_id, execution_id, schedule_date, snapshot_session_id)
+            self._store_raw_snapshot(
+                getplantsDataDC, "supply_dc_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
 
             today_dt = datetime.combine(datetime.now().date(), datetime.min.time())
             demand_schedule_date = today_dt.strftime("%Y-%m-%d")
@@ -702,6 +724,12 @@ class RTMSchedulingProcessor(BaseProcessor):
 
             get_forecasted_list = self.serve_demand_repo.get_forcasted_demand(today_dt)
             get_actual_list = self.serve_demand_repo.get_actual_demand(today_dt)
+            self._store_raw_snapshot(
+                get_forecasted_list or [], "demand_forecast_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
+            self._store_raw_snapshot(
+                get_actual_list or [], "demand_actual_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
+            )
             
             get_forecasted_value = {item.get("time_block"): item for item in (get_forecasted_list or []) if item.get("time_block") is not None}
             
@@ -777,7 +805,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 "rtm_forecasted_price_raw",
                 run_id,
                 execution_id,
-                schedule_date,
+                snapshot_storage_date,
                 snapshot_session_id,
             )
 
@@ -826,7 +854,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 run_with_exchange=run_with_exchange,
                 snapshot_run_id=run_id,
                 snapshot_execution_id=execution_id,
-                snapshot_schedule_date=schedule_date,
+                snapshot_schedule_date=snapshot_storage_date,
                 snapshot_session_id=snapshot_session_id,
             )
             logger.info(f"[RTMSchedulingServices] SchedulingCalculator completed - Generated scheduling records")

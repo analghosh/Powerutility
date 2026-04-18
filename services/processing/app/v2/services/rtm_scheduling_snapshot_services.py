@@ -120,6 +120,31 @@ class RTMSchedulingSnapshotService:
         self.repository = rtm_scheduling_snapshot_repository
 
     @staticmethod
+    def _build_session_id_match(session_id: Optional[str]) -> Optional[Dict[str, Any]]:
+        """
+        Build a resilient session_id matcher.
+        Snapshot writer often stores session_id as int; API query params arrive as string.
+        """
+        if session_id is None:
+            return None
+        raw = str(session_id).strip()
+        if not raw:
+            return None
+
+        candidates: List[Any] = [raw]
+        try:
+            candidates.append(int(raw))
+        except (ValueError, TypeError):
+            pass
+
+        # De-duplicate while preserving order
+        deduped: List[Any] = []
+        for value in candidates:
+            if value not in deduped:
+                deduped.append(value)
+        return {"$in": deduped}
+
+    @staticmethod
     def _parse_mongo_value(value: Any) -> Any:
         if isinstance(value, dict):
             if "$date" in value:
@@ -182,19 +207,32 @@ class RTMSchedulingSnapshotService:
         output = BytesIO()
         sheet_names: Dict[str, str] = snapshot_data.get("sheet_names", {})
         data_by_source: Dict[str, List[Dict[str, Any]]] = snapshot_data.get("data_by_source", {})
+        non_empty_sources = [source for source, rows in data_by_source.items() if rows]
+
+        # openpyxl requires at least one visible sheet. If no snapshot rows match filters,
+        # return a valid workbook with an informational sheet instead of raising 500.
+        if not non_empty_sources:
+            with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                pd.DataFrame(
+                    [{
+                        "message": "No snapshot data found for the requested filters",
+                        "schedule_date": snapshot_data.get("schedule_date"),
+                        "session_id": snapshot_data.get("session_id"),
+                    }]
+                ).to_excel(writer, sheet_name="No Data", index=False)
+            output.seek(0)
+            return output.getvalue()
 
         try:
             with pd.ExcelWriter(output) as writer:
-                for source, rows in data_by_source.items():
-                    if not rows:
-                        continue
+                for source in non_empty_sources:
+                    rows = data_by_source[source]
                     sheet_name = sheet_names.get(source, source)[:31]
                     pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
         except Exception:
             with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                for source, rows in data_by_source.items():
-                    if not rows:
-                        continue
+                for source in non_empty_sources:
+                    rows = data_by_source[source]
                     sheet_name = sheet_names.get(source, source)[:31]
                     pd.DataFrame(rows).to_excel(writer, sheet_name=sheet_name, index=False)
 
@@ -208,8 +246,9 @@ class RTMSchedulingSnapshotService:
     ) -> Dict[str, Any]:
         try:
             match_filter: Dict[str, Any] = {"source_name": {"$in": self.RTM_SNAPSHOT_SOURCE_LIST}}
-            if session_id:
-                match_filter["session_id"] = session_id
+            session_match = self._build_session_id_match(session_id)
+            if session_match:
+                match_filter["session_id"] = session_match
 
             pipeline: List[Dict[str, Any]] = [
                 {"$match": match_filter},
