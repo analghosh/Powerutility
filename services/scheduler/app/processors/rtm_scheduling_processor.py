@@ -1653,7 +1653,10 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.warning("  3. dc_sg filter is too restrictive")
             # Construct dc_sg_value outside f-string to avoid backslash issue
             dc_sg_value = dc_sg if dc_sg != 'DC_SG' else '{"$in": ["DC", "SG"]}'
-            logger.warning(f"  4. Check if data exists with query: {{'scheduled_at': {{'$gte': {target_date}, 'dc_sg': {dc_sg_value}}}")
+            logger.warning(
+                f"  4. Check if data exists with query: {{'scheduled_at': "
+                f"{{'$gte': {today_start}, '$lt': {today_end}}}, 'dc_sg': {dc_sg_value}}}"
+            )
         
         # Add missing fields to match original structure (start_time, end_time, full_time, dc_sg_type)
         
