@@ -1,6 +1,8 @@
+import copy
 import logging
 from datetime import datetime, timedelta, date, timezone
 from typing import Dict, Any, List, Optional
+from uuid import uuid4
 from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 from pymongo import ReturnDocument
@@ -59,6 +61,10 @@ class RTMSchedulingProcessor(BaseProcessor):
         self.serve_demand_repo = demand_serve_repository  # Use scheduler's demand repository instance
         self.serve_exchange_repo = exchange_repository  # Use scheduler's exchange repository instance
         self.scheduling_repo = SchedulingRequisitionCalculationRepository(collection_name=collection_name)
+        self.snapshot_collection_name = "rtm_optimization_raw_inputs_snapshot"
+        self._snapshot_ttl_seconds = 30 * 24 * 60 * 60
+        self.last_snapshot_run_id: Optional[str] = None
+        self.last_snapshot_session_id: Optional[int] = None
         
         # Calculate current 15-minute block index (0-based, 0-95) from current time
         now = datetime.now()
@@ -122,6 +128,50 @@ class RTMSchedulingProcessor(BaseProcessor):
                 [("scheduled_at_int", 1)],
                 name="idx_rev_schedule_int",
                 unique=True,
+                background=True
+            )
+
+            # 4. Raw Input Snapshot Collection (30-day TTL)
+            snapshot_collection = db[self.snapshot_collection_name]
+            snapshot_collection.create_index(
+                [("run_id", 1)],
+                name="idx_rtm_snapshot_run_id",
+                background=True
+            )
+            snapshot_collection.create_index(
+                [("execution_id", 1)],
+                name="idx_rtm_snapshot_execution_id",
+                background=True
+            )
+            snapshot_collection.create_index(
+                [("source_name", 1), ("schedule_date", 1)],
+                name="idx_rtm_snapshot_source_schedule_date",
+                background=True
+            )
+            snapshot_collection.create_index(
+                [("schedule_date", 1), ("time_block", 1), ("plant_id", 1)],
+                name="idx_rtm_snapshot_schedule_block_plant",
+                background=True
+            )
+            snapshot_collection.create_index(
+                [("created_at", 1)],
+                name="idx_rtm_snapshot_created_at_ttl_30d",
+                expireAfterSeconds=self._snapshot_ttl_seconds,
+                background=True
+            )
+            snapshot_collection.create_index(
+                [("session_id", 1), ("schedule_date", 1)],
+                name="idx_rtm_snapshot_session_schedule_date",
+                background=True
+            )
+            snapshot_collection.create_index(
+                [("session_id", 1), ("run_id", 1)],
+                name="idx_rtm_snapshot_session_run_id",
+                background=True
+            )
+            snapshot_collection.create_index(
+                [("source_name", 1), ("run_id", 1)],
+                name="idx_rtm_snapshot_source_run_id",
                 background=True
             )
             
@@ -228,6 +278,211 @@ class RTMSchedulingProcessor(BaseProcessor):
         finally:
             self.clear_correlation_id()
 
+    def _parse_hhmm_to_minutes(self, value: Any) -> Optional[int]:
+        """Parse 'HH:MM' or legacy period id strings to minutes from midnight; 24:00 -> 1440."""
+        if value is None:
+            return None
+        s = str(value).strip()
+        if not s:
+            return None
+        parts = s.split(":")
+        if len(parts) < 2:
+            return None
+        try:
+            h = int(parts[0])
+            m = int(parts[1])
+        except ValueError:
+            return None
+        if h == 24 and m == 0:
+            return 1440
+        if h < 0 or h > 23 or m < 0 or m > 59:
+            return None
+        return h * 60 + m
+
+    def _ensure_tz_run_start(self, run_started_at: Optional[datetime]) -> datetime:
+        tz = ZoneInfo(settings.CRON_TIMEZONE)
+        if run_started_at is None:
+            return datetime.now(tz)
+        if run_started_at.tzinfo is None:
+            return run_started_at.replace(tzinfo=tz)
+        return run_started_at.astimezone(tz)
+
+    def _session_id_for_run_start(
+        self,
+        run_started_at: datetime,
+        product_rows: List[Dict[str, Any]],
+    ) -> Optional[int]:
+        """
+        Map job/run start wall time to Session_Id from rtm_product_hardCoded_data intervals
+        (from_period_time / To_Period_Id, half-open [start, end) in minutes).
+        """
+        if not product_rows:
+            return None
+        t_local = self._ensure_tz_run_start(run_started_at)
+        T = t_local.hour * 60 + t_local.minute
+        for row in product_rows:
+            start_s = row.get("from_period_time") or row.get("From_Period_Id")
+            end_s = row.get("to_period_time") or row.get("To_Period_Id")
+            start_m = self._parse_hhmm_to_minutes(start_s)
+            end_m = self._parse_hhmm_to_minutes(end_s)
+            if end_s is not None and str(end_s).strip() == "23:59":
+                end_m = 1440
+            if start_m is None or end_m is None:
+                continue
+            if end_m <= start_m and end_m != 1440:
+                continue
+            if start_m <= T < end_m:
+                sid = row.get("session_number") if row.get("session_number") is not None else row.get("Session_Id")
+                if sid is None:
+                    return None
+                try:
+                    return int(sid)
+                except (ValueError, TypeError):
+                    try:
+                        return int(float(sid))
+                    except (ValueError, TypeError):
+                        return None
+        logger.warning(
+            "[RTMSchedulingServices] No hardcoded product interval matched run start %s (T=%s min); session_id unset",
+            t_local.isoformat(),
+            T,
+        )
+        return None
+
+    def _build_snapshot_documents(
+        self,
+        records: Any,
+        source_name: str,
+        run_id: str,
+        execution_id: str,
+        schedule_date: str,
+        session_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        now = datetime.now()
+        docs: List[Dict[str, Any]] = []
+
+        if source_name in {"supply_sg_dc_raw", "supply_dc_raw"} and isinstance(records, list):
+            for block in records:
+                if not isinstance(block, dict):
+                    continue
+                block_num = block.get("time_block")
+                plants = block.get("result", [])
+                if isinstance(plants, list):
+                    for plant_row in plants:
+                        if not isinstance(plant_row, dict):
+                            continue
+                        docs.append({
+                            "run_id": run_id,
+                            "execution_id": execution_id,
+                            "job_type": "rtm_scheduling_calculation",
+                            "schedule_date": schedule_date,
+                            "session_id": session_id,
+                            "source_name": source_name,
+                            "time_block": block_num,
+                            "plant_id": plant_row.get("key") or plant_row.get("plant_id"),
+                            "raw_payload": dict(plant_row),
+                            "created_at": now,
+                        })
+                else:
+                    docs.append({
+                        "run_id": run_id,
+                        "execution_id": execution_id,
+                        "job_type": "rtm_scheduling_calculation",
+                        "schedule_date": schedule_date,
+                        "session_id": session_id,
+                        "source_name": source_name,
+                        "time_block": block_num,
+                        "plant_id": None,
+                        "raw_payload": dict(block),
+                        "created_at": now,
+                    })
+            return docs
+
+        if not isinstance(records, list):
+            records = [records]
+
+        for row in records:
+            if not isinstance(row, dict):
+                continue
+            docs.append({
+                "run_id": run_id,
+                "execution_id": execution_id,
+                "job_type": "rtm_scheduling_calculation",
+                "schedule_date": schedule_date,
+                "session_id": session_id,
+                "source_name": source_name,
+                "time_block": row.get("time_block", row.get("block")),
+                "plant_id": row.get("plant_id", row.get("key")),
+                "raw_payload": dict(row),
+                "created_at": now,
+            })
+        return docs
+
+    def _store_raw_snapshot(
+        self,
+        records: Any,
+        source_name: str,
+        run_id: str,
+        execution_id: str,
+        schedule_date: str,
+        session_id: Optional[int] = None,
+    ) -> int:
+        docs = self._build_snapshot_documents(
+            records=records,
+            source_name=source_name,
+            run_id=run_id,
+            execution_id=execution_id,
+            schedule_date=schedule_date,
+            session_id=session_id,
+        )
+        if not docs:
+            return 0
+        collection = self.scheduling_repo.db[self.snapshot_collection_name]
+        collection.insert_many(docs, ordered=False)
+        logger.info(
+            "[RTMSchedulingServices] Snapshot captured | source=%s | count=%s | run_id=%s",
+            source_name,
+            len(docs),
+            run_id
+        )
+        return len(docs)
+
+    def _store_scheduling_optimized_snapshots(
+        self,
+        all_insert_data: List[Dict[str, Any]],
+        run_id: str,
+        execution_id: str,
+        schedule_date: str,
+        session_id: Optional[int],
+    ) -> int:
+        """Persist optimizer output rows into the same snapshot collection as raw inputs."""
+        if not all_insert_data:
+            return 0
+        now = datetime.now()
+        collection = self.scheduling_repo.db[self.snapshot_collection_name]
+        docs: List[Dict[str, Any]] = []
+        for row in all_insert_data:
+            payload = copy.deepcopy(row)
+            docs.append({
+                "run_id": run_id,
+                "execution_id": execution_id,
+                "job_type": "rtm_scheduling_calculation",
+                "schedule_date": schedule_date,
+                "session_id": session_id,
+                "source_name": "scheduling_optimized_row",
+                "time_block": row.get("time_block"),
+                "plant_id": row.get("plant_id"),
+                "raw_payload": payload,
+                "created_at": now,
+            })
+        collection.insert_many(docs, ordered=False)
+        logger.info(
+            "[RTMSchedulingServices] Optimized snapshot captured | count=%s | run_id=%s",
+            len(docs),
+            run_id,
+        )
+        return len(docs)
+
 
         
     def __build_limit_value_dict(self, limit_values_list, include_time_block=True):
@@ -322,10 +577,30 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.error(f"Error in archive_and_clear_working: {str(e)}")
             return {"archived": 0, "deleted": 0, "revision_no": None, "error": str(e)}
 
-    async def calSchedulingTableData(self, schedule_date, audit_logger=None, user_context: Optional[Dict[str, Any]] = None, run_with_exchange: bool = False):
+    async def calSchedulingTableData(self, schedule_date, audit_logger=None, user_context: Optional[Dict[str, Any]] = None, run_with_exchange: bool = False, run_started_at: Optional[datetime] = None):
         try:
+            run_started_aware = self._ensure_tz_run_start(run_started_at)
+            execution_id = self.get_correlation_id() or f"adhoc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+            run_id = f"rtm_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}"
+            self.last_snapshot_run_id = run_id
             getsessionNoRaw = await self.rtm_session.get_Data()
+            if getsessionNoRaw is None:
+                getsessionNoRaw = []
+            elif not isinstance(getsessionNoRaw, list):
+                logger.warning(
+                    "[RTMSchedulingServices] get_Data() returned type %s; using empty list for session mapping",
+                    type(getsessionNoRaw).__name__,
+                )
+                getsessionNoRaw = []
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getsessionNoRaw)} RTM session records")
+            snapshot_session_id = self._session_id_for_run_start(run_started_aware, getsessionNoRaw)
+            self.last_snapshot_session_id = snapshot_session_id
+            logger.info(
+                "[RTMSchedulingServices] Snapshot session_id=%s for run_start=%s",
+                snapshot_session_id,
+                run_started_aware.isoformat(),
+            )
+            self._store_raw_snapshot(getsessionNoRaw, "rtm_session_raw", run_id, execution_id, schedule_date, snapshot_session_id)
 
             # Transform session data to dictionary keyed by from_period_code (time_block)
             # Handle both new (session_number, from_period_code) and legacy (Session_Id, From_Period_Code) fields
@@ -343,6 +618,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info("[RTMSchedulingServices] Fetching all plant data from master plants repository")
             getPlantListRaw = await self.plants_list_repo.get_all_plants()
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getPlantListRaw)} plant records")
+            self._store_raw_snapshot(getPlantListRaw, "plant_master_raw", run_id, execution_id, schedule_date, snapshot_session_id)
             
             # Transform plant list - ensure each plant has a "key" field set to plant_id
             # getPlantList needs to be a list (for iteration) but also accessible by plant_id
@@ -377,10 +653,13 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info("[RTMSchedulingServices] Fetching limit values - TM, SEZ, MLTP")
             allTMValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "TM", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allTMValuesRaw)} TM limit values")
+            self._store_raw_snapshot(allTMValuesRaw, "limit_tm_raw", run_id, execution_id, schedule_date, snapshot_session_id)
             allSEZValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "DAM", "SEZ", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allSEZValuesRaw)} SEZ limit values")
+            self._store_raw_snapshot(allSEZValuesRaw, "limit_sez_raw", run_id, execution_id, schedule_date, snapshot_session_id)
             allMLTPValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "Multiplier", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allMLTPValuesRaw)} MLTP limit values")
+            self._store_raw_snapshot(allMLTPValuesRaw, "limit_mltp_raw", run_id, execution_id, schedule_date, snapshot_session_id)
             
             # Convert limit values to dictionaries keyed by composite key: "schedule_date_ID_time_block"
             # Format: { "schedule_date_ID_time_block": value, ... }
@@ -410,10 +689,12 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info(f"[RTMSchedulingServices] Fetching plant data for {dc_sg} (Schedule Date: {schedule_date})")
             getplantsData = self.getAllPlantsDataForScheduling(schedule_date, dc_sg)
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsData)} {dc_sg} plant data records")
+            self._store_raw_snapshot(getplantsData, "supply_sg_dc_raw", run_id, execution_id, schedule_date, snapshot_session_id)
             
             logger.info(f"[RTMSchedulingServices] Fetching plant data for DC (Schedule Date: {schedule_date})")
             getplantsDataDC = self.getAllPlantsDataForScheduling(schedule_date, "DC")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsDataDC)} DC plant data records")
+            self._store_raw_snapshot(getplantsDataDC, "supply_dc_raw", run_id, execution_id, schedule_date, snapshot_session_id)
 
             today_dt = datetime.combine(datetime.now().date(), datetime.min.time())
             demand_schedule_date = today_dt.strftime("%Y-%m-%d")
@@ -491,6 +772,14 @@ class RTMSchedulingProcessor(BaseProcessor):
                 f"[RTMSchedulingServices] Retrieved {len(rtm_forecasted_price_list)} RTM_forecasted_price "
                 f"limit_values rows for {demand_schedule_date}"
             )
+            self._store_raw_snapshot(
+                rtm_forecasted_price_list or [],
+                "rtm_forecasted_price_raw",
+                run_id,
+                execution_id,
+                schedule_date,
+                snapshot_session_id,
+            )
 
             # Convert list to dictionary keyed by block (1–96); SchedulingCalculator reads 'values' or 'value'
             rtm_forecasted_price = {}
@@ -535,6 +824,10 @@ class RTMSchedulingProcessor(BaseProcessor):
                 get_session_no=getsessionNo,
                 is_after_cutoff=is_after_cutoff,
                 run_with_exchange=run_with_exchange,
+                snapshot_run_id=run_id,
+                snapshot_execution_id=execution_id,
+                snapshot_schedule_date=schedule_date,
+                snapshot_session_id=snapshot_session_id,
             )
             logger.info(f"[RTMSchedulingServices] SchedulingCalculator completed - Generated scheduling records")
             logger.info(f"[RTMSchedulingServices] Completed calSchedulingTableData successfully - Schedule Date: {schedule_date}")
@@ -823,7 +1116,11 @@ class RTMSchedulingProcessor(BaseProcessor):
             get_plant_list,
             get_session_no,
             is_after_cutoff=False,
-            run_with_exchange=False):
+            run_with_exchange=False,
+            snapshot_run_id=None,
+            snapshot_execution_id=None,
+            snapshot_schedule_date=None,
+            snapshot_session_id=None):
         
         reviseDataArray = {}
         reviseDataTotalsupply = {}
@@ -1437,6 +1734,21 @@ class RTMSchedulingProcessor(BaseProcessor):
                 collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
                 collection.insert_many(all_insert_data)
                 logger.info(f"[RTMSchedulingServices] Bulk inserted {len(all_insert_data)} scheduling records")
+                if snapshot_run_id:
+                    try:
+                        self._store_scheduling_optimized_snapshots(
+                            all_insert_data,
+                            snapshot_run_id,
+                            snapshot_execution_id or "",
+                            snapshot_schedule_date or "",
+                            snapshot_session_id,
+                        )
+                    except Exception as snap_err:
+                        logger.error(
+                            "[RTMSchedulingServices] Optimized snapshot insert failed (working rows saved): %s",
+                            snap_err,
+                            exc_info=True,
+                        )
             except Exception as e:
                 if "MongoClient after close" in str(e):
                     logger.warning("[RTMSchedulingServices] MongoClient was closed, refreshing connection and retrying bulk insert...")
@@ -1447,6 +1759,21 @@ class RTMSchedulingProcessor(BaseProcessor):
                         collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
                         collection.insert_many(all_insert_data)
                         logger.info(f"[RTMSchedulingServices] Bulk inserted {len(all_insert_data)} scheduling records (after reconnect)")
+                        if snapshot_run_id:
+                            try:
+                                self._store_scheduling_optimized_snapshots(
+                                    all_insert_data,
+                                    snapshot_run_id,
+                                    snapshot_execution_id or "",
+                                    snapshot_schedule_date or "",
+                                    snapshot_session_id,
+                                )
+                            except Exception as snap_err:
+                                logger.error(
+                                    "[RTMSchedulingServices] Optimized snapshot insert failed after reconnect (working rows saved): %s",
+                                    snap_err,
+                                    exc_info=True,
+                                )
                     except Exception as retry_err:
                         logger.error(f"Error in bulk insert after reconnect: {str(retry_err)}")
                         raise

@@ -125,6 +125,7 @@ from .v2.api.router.graph_routes import router as graph_router
 from .v2.api.router.demand_forecast_routes import router as demand_forecast_router
 from .v2.api.router.dashboard_routes import router as dashboard_v2_router
 from .v2.api.router.management_snapshot_routes import router as management_snapshot_v2_router
+from .v2.api.router.rtm_scheduling_snapshot_routes import router as rtm_scheduling_snapshot_v2_router
 from .v2.api.router.price_group_routes import router as price_group_router
 from .v2.api.router.supply_routes import router as supply_router
 from .v2.api.router.master_plants_routes import router as master_plant_router
@@ -296,6 +297,7 @@ v2_app.include_router(graph_router)
 v2_app.include_router(demand_forecast_router)
 v2_app.include_router(dashboard_v2_router)
 v2_app.include_router(management_snapshot_v2_router)
+v2_app.include_router(rtm_scheduling_snapshot_v2_router)
 v2_app.include_router(price_group_router)
 v2_app.include_router(supply_router)
 v2_app.include_router(master_plant_router)
