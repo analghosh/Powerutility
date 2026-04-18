@@ -8,71 +8,87 @@ import logging
 import httpx
 from datetime import datetime
 from typing import Dict, Any, Optional, List
-from motor.motor_asyncio import AsyncIOMotorDatabase
+from pymongo import MongoClient
 from services.scheduler.app.core.config import settings
 from libs.database.base_repository import BaseRepository
 
 logger = logging.getLogger(__name__)
-
 
 class SchedulerExchangeAPIClient:
     """
     Client for Exchange API interactions within Scheduler.
     Handles authentication, config retrieval, and API calls with logging.
     """
-
+    
     def __init__(self):
         self.db_uri = settings.MONGODB_URI
         self.db_name = settings.MONGODB_DATABASE
+        self._client = None
+        self._db = None
         self.timeout = 30.0
         self.asset_details_cache = BaseRepository('asset_master', self.db_uri, self.db_name)
 
-    def _get_db(self) -> AsyncIOMotorDatabase:
-        """Get async Motor database using centralized factory."""
-        from libs.database.mongo_client_factory import get_mongo_client
-        client = get_mongo_client(self.db_uri, "shared_repository_client")
-        return client[self.db_name]
+    def _get_db(self):
+        if not self._client:
+            self._client = MongoClient(self.db_uri)
+            self._db = self._client[self.db_name]
+        return self._db
+
+    def _close_db(self):
+        if self._client:
+            self._client.close()
+            self._client = None
+            self._db = None
 
     async def _get_exchange_config(self, market_type: str) -> Optional[Dict[str, Any]]:
-        """Fetch active exchange configuration."""
+        """
+        Fetch active exchange configuration matching logic in Processing Service.
+        """
         try:
             db = self._get_db()
             config_collection = db["exchange_config"]
-
+            
             if market_type.lower() == "dam":
+                # Matches DAMTransactionService calling exchange_config_repo.get_active_config()
+                # Query: {"is_active": True}
                 query = {
                     "is_active": True,
-                    "is_deleted": {"$ne": True},
-                    "bidType": "single",
+                    "is_deleted": {"$ne": True}, 
+                    "bidType": "single", 
                     "market": "DAM"
                 }
                 logger.info(f"Fetching DAM config with query: {query}")
-                return await config_collection.find_one(query)
-
+                return config_collection.find_one(query)
+                
             elif market_type.lower() == "rtm":
+                # Matches RTMTransactionService calling exchange_config_repo.get_bidType_market_active_config("single", "RTM")
+                # Query: {"is_active": True, "is_deleted": {"$ne": True}, "bidType": "single", "market": "RTM"}
                 query = {
-                    "is_active": True,
-                    "is_deleted": {"$ne": True},
-                    "bidType": "single",
+                    "is_active": True, 
+                    "is_deleted": {"$ne": True}, 
+                    "bidType": "single", 
                     "market": "RTM"
                 }
                 logger.info(f"Fetching RTM config with query: {query}")
-                return await config_collection.find_one(query)
-
+                return config_collection.find_one(query)
+            
             else:
+                # Fallback for other markets if any
                 query = {"is_active": True, "market": {"$regex": f"^{market_type}$", "$options": "i"}}
-                return await config_collection.find_one(query)
-
+                return config_collection.find_one(query)
+            
         except Exception as e:
             logger.error(f"Error fetching exchange config: {e}")
             return None
 
     async def _log_to_db(self, url: str, method: str, headers: Dict, request_body: Any, response_body: Any, market_type: str, api_method: str):
-        """Log API interaction to iex_integration_apiLog."""
+        """
+        Log API interaction to iex_integration_apilog.
+        """
         try:
             db = self._get_db()
             log_collection = db["iex_integration_apiLog"]
-
+            
             log_entry = {
                 "Url": url,
                 "Method": method,
@@ -80,14 +96,15 @@ class SchedulerExchangeAPIClient:
                 "RequestBody": request_body,
                 "ResponseBody": response_body,
                 "MarketType": market_type,
-                "ApiMethod": api_method,
+                "ApiMethod": api_method, 
                 "Timestamp": datetime.now(),
                 "CreatedAt": datetime.now()
             }
-
-            await log_collection.insert_one(log_entry)
-
+            
+            log_collection.insert_one(log_entry)
+            
         except Exception as e:
+            # Don't fail the job just because logging failed, but error retrieval is important
             logger.error(f"Failed to log API call: {e}")
 
     async def get_delivery_dates(self, market_type: str) -> Dict[str, Any]:
@@ -429,35 +446,42 @@ class SchedulerExchangeAPIClient:
                 raise
 
     async def _get_live_exchange_config(self, market_type: str) -> Optional[Dict[str, Any]]:
-        """Fetch active live exchange configuration."""
+        """
+        Fetch active exchange configuration matching logic in Processing Service.
+        """
         try:
             db = self._get_db()
             config_collection = db["exchange_config_live"]
-
+            
             if market_type.lower() == "dam":
+                # Matches DAMTransactionService calling exchange_config_repo.get_active_config()
+                # Query: {"is_active": True}
                 query = {
                     "is_active": True,
-                    "is_deleted": {"$ne": True},
-                    "bidType": "single",
+                    "is_deleted": {"$ne": True}, 
+                    "bidType": "single", 
                     "market": "DAM"
                 }
                 logger.info(f"Fetching DAM config with query: {query}")
-                return await config_collection.find_one(query)
-
+                return config_collection.find_one(query)
+                
             elif market_type.lower() == "rtm":
+                # Matches RTMTransactionService calling exchange_config_repo.get_bidType_market_active_config("single", "RTM")
+                # Query: {"is_active": True, "is_deleted": {"$ne": True}, "bidType": "single", "market": "RTM"}
                 query = {
-                    "is_active": True,
-                    "is_deleted": {"$ne": True},
-                    "bidType": "single",
+                    "is_active": True, 
+                    "is_deleted": {"$ne": True}, 
+                    "bidType": "single", 
                     "market": "RTM"
                 }
                 logger.info(f"Fetching RTM config with query: {query}")
-                return await config_collection.find_one(query)
-
+                return config_collection.find_one(query)
+            
             else:
+                # Fallback for other markets if any
                 query = {"is_active": True, "market": {"$regex": f"^{market_type}$", "$options": "i"}}
-                return await config_collection.find_one(query)
-
+                return config_collection.find_one(query)
+            
         except Exception as e:
             logger.error(f"Error fetching exchange config: {e}")
             return None
@@ -608,14 +632,15 @@ class SchedulerExchangeAPIClient:
             # Cache to asset_master collection
             if hasattr(self.asset_details_cache, 'collection'):
                 try:
-                    await self.asset_details_cache.collection.delete_many({})
+                    # Sync calls
+                    self.asset_details_cache.collection.delete_many({})
                     if isinstance(data, dict):
                         data_to_store = dict(data)
                         data_to_store["created_at"] = datetime.now()
                         data_to_store["is_live"] = is_live
-                        await self.asset_details_cache.collection.insert_one(data_to_store)
+                        self.asset_details_cache.collection.insert_one(data_to_store)
                 except Exception as e:
-                    logger.error(f"Failed to cache asset details: {e}")
+                     logger.error(f"Failed to cache asset details: {e}")
 
             response.raise_for_status()
             return data

@@ -8,6 +8,8 @@ from .base_repository import GenericRepository
 from ...core.config import settings
 import logging
 from datetime import datetime, timedelta
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,24 @@ class SupplyServeRepository(GenericRepository):
         self.collection_name = settings.MONGODB_SUPPLY_SERVE_COLLECTION if hasattr(settings, 'MONGODB_SUPPLY_SERVE_COLLECTION') else "supply_serve"
         logger.info(f"SupplyServeRepository initialized with collection: {self.collection_name}")
 
+    def _aggregate_sync(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute aggregation pipeline synchronously"""
+        try:
+            result = super().aggregate(self.collection_name, pipeline)
+            return list(result) if result else []
+        except Exception as e:
+            logger.error(f"Failed to execute aggregation: {str(e)}")
+            return []
+
+    async def aggregate_async(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute aggregation pipeline asynchronously"""
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            return await loop.run_in_executor(executor, self._aggregate_sync, pipeline)
+
+    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Execute aggregation pipeline (sync interface for compatibility)"""
+        return self._aggregate_sync(pipeline)
     
     @property
     def collection(self):
@@ -112,7 +132,7 @@ class SupplyServeRepository(GenericRepository):
                 }
             ])
             
-            return await super().aggregate(self.collection_name, pipeline)
+            return self._aggregate_sync(pipeline)
         except Exception as e:
             logger.error(f"Failed to get supply by date range: {str(e)}")
             return []
@@ -260,10 +280,10 @@ class SupplyServeRepository(GenericRepository):
                   
             # Check if any data exists for this date (quick count check with timeout)
             try:
-                count = await collection.count_documents({
+                count = collection.count_documents({
                     "scheduled_at": {"$gte": target_date, "$lt": end_date},
                     # "plant_id": {"$nin": list(EXCLUDED_PLANTS)}
-                }, limit=1)
+                }, limit=1, maxTimeMS=5000)  # 5 second timeout for count
             except Exception as count_err:
                 logger.warning(f"PowerOpt: Count check failed for {schedule_date}: {count_err}")
                 count = 0
@@ -281,10 +301,10 @@ class SupplyServeRepository(GenericRepository):
                 
                 # Quick check if historical has data (with short timeout)
                 try:
-                    hist_count = await collection.count_documents({
+                    hist_count = collection.count_documents({
                         "scheduled_at": {"$gte": target_date, "$lt": end_date},
                         # "plant_id": {"$nin": list(EXCLUDED_PLANTS)}
-                    }, limit=1)
+                    }, limit=1, maxTimeMS=5000)  # 5 second timeout
                 except Exception as hist_err:
                     logger.warning(f"PowerOpt: Historical count check failed: {hist_err}")
                     hist_count = 0
@@ -304,7 +324,7 @@ class SupplyServeRepository(GenericRepository):
             )
                 
             try:
-                result = await cursor.to_list(None)
+                result = list(cursor)
                 if using_historical:
                     logger.info(f"PowerOpt: Retrieved {len(result)} records from historical collection for {schedule_date}")
                     

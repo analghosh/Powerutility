@@ -153,8 +153,8 @@ class PriceGroupService:
         })
         return self.mapper.out_map(doc) if doc else None
 
-    async def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int, actor: Optional[Dict[str, Any]], req: Dict[str, Any]):
-        res = await self.repo.list(filters=filters or {}, page=page, page_size=page_size)
+    def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int, actor: Optional[Dict[str, Any]], req: Dict[str, Any]):
+        res = self.repo.list(filters=filters or {}, page=page, page_size=page_size)
         # Skip unnecessary mapping since repository already returns the correct format
         return res
 

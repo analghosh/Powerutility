@@ -205,7 +205,7 @@ class RealtimemarketService:
             ]
             cursor = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             try:
-                getplantsData = await cursor.to_list(None)
+                getplantsData = list(cursor)
             finally:
                 cursor.close()
            
@@ -225,7 +225,7 @@ class RealtimemarketService:
             plants_list_pipeline = [{"$project": {"_id": 0}}]
             cursor = self.plants_list_repo.repository.aggregate('plant_master', plants_list_pipeline)
             try:
-                plantData = await cursor.to_list(None)
+                plantData = list(cursor)
             finally:
                 cursor.close()
             plant_dict = {p['plant_id']: p for p in plantData}
@@ -271,7 +271,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                getForecastedValue = await cursor.to_list(None)
+                getForecastedValue = list(cursor)
             finally:
                 cursor.close()
 
@@ -287,7 +287,7 @@ class RealtimemarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                forecastedPrice = await cursor.to_list(None)
+                forecastedPrice = list(cursor)
             finally:
                 cursor.close()
             limit_schedule_date = schedule_date
@@ -302,7 +302,7 @@ class RealtimemarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                bufferPrice = await cursor.to_list(None)
+                bufferPrice = list(cursor)
             finally:
                 cursor.close()
             
@@ -317,7 +317,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                ceilingPrice = await cursor.to_list(None)
+                ceilingPrice = list(cursor)
             finally:
                 cursor.close()
             
@@ -333,7 +333,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                n_1Limits = await cursor.to_list(None)
+                n_1Limits = list(cursor)
             finally:
                 cursor.close()
 
@@ -348,7 +348,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_buyLimits = await cursor.to_list(None)
+                noc_buyLimits = list(cursor)
             finally:
                 cursor.close()
 
@@ -363,7 +363,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_sellLimits = await cursor.to_list(None)
+                noc_sellLimits = list(cursor)
             finally:
                 cursor.close()
 
@@ -2009,9 +2009,9 @@ class RealtimemarketService:
             allMLTPValues = await self.limit_values_repo.get_data( yesterday, tomorrow, "RTM", "Multiplier", "OB")
             
             
-            getplantsData = await self.get_all_plant_data_for_scheduling(schedule_date, "SG")
+            getplantsData = self.get_all_plant_data_for_scheduling(schedule_date, "SG")
             # return getplantsData
-            getplantsDataDC =  await self.get_all_plant_data_for_scheduling(schedule_date, "DC")
+            getplantsDataDC =  self.get_all_plant_data_for_scheduling(schedule_date, "DC")
             
             # countblockSGData = self.get_last_record_of_sg(getplantsData,0)
             
@@ -3191,7 +3191,7 @@ class RealtimemarketService:
         return reviseDataTotalsupply
         
 
-    async def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
+    def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
         
 
         # scheduledatetimestamp = yesterday midnight (unix timestamp)
@@ -3259,7 +3259,7 @@ class RealtimemarketService:
 
         cursor = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline) # type: ignore
         try:
-            posted_jobs = await cursor.to_list(None)
+            posted_jobs = list(cursor)
         finally:
             cursor.close()
         

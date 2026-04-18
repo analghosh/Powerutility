@@ -41,13 +41,13 @@ async def list_roles(
     try:
         from ....repository.role_repository import RoleRepository
         role_repo = RoleRepository()
-
-        roles = await role_repo.get_all_active_roles()
-
+        
+        roles = role_repo.get_all_active_roles()
+        
         # Log role list access with secure audit logging
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-
+        
         get_audit_logger().log_user_action(
             service="auth",
             user_id=current_user.user_id,
@@ -59,7 +59,7 @@ async def list_roles(
             user_agent=user_agent,
             success=True
         )
-
+        
         return [
             RoleResponse(
                 id=str(role.id),
@@ -76,7 +76,7 @@ async def list_roles(
         # Log failed role list access with secure audit logging
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-
+        
         get_audit_logger().log_error_event(
             service="auth",
             error_name="RoleListAccessError",
@@ -99,21 +99,21 @@ async def create_role(
     try:
         from ....repository.role_repository import RoleRepository
         role_repo = RoleRepository()
-
+        
         # Check if role already exists
-        existing_role = await role_repo.get_role_by_name(role_data.name)
+        existing_role = role_repo.get_role_by_name(role_data.name)
         if existing_role:
             raise HTTPException(status_code=400, detail="Role name already exists")
-
+        
         # Create role (permissions will be auto-generated from menu assignments)
-        role = await role_repo.create_role(
+        role = role_repo.create_role(
             name=role_data.name,
             description=role_data.description,
             permissions=[]  # Empty initially, will be populated when menus are assigned
         )
-
+        
         # Role is already returned from create_role method
-
+        
         return RoleResponse(
             id=str(role.id),
             name=role.name,
@@ -137,11 +137,11 @@ async def get_role(
     try:
         from ....repository.role_repository import RoleRepository
         role_repo = RoleRepository()
-
-        role = await role_repo.get_role_by_id(role_id)
+        
+        role = role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
+        
         return RoleResponse(
             id=str(role.id),
             name=role.name,
@@ -166,31 +166,31 @@ async def update_role(
     try:
         from ....repository.role_repository import RoleRepository
         role_repo = RoleRepository()
-
+        
         # Check if role exists
-        role = await role_repo.get_role_by_id(role_id)
+        role = role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
+        
         # Update role (permissions are managed through menu assignments)
         update_data = {}
         if role_data.name is not None:
             # Check if new name conflicts with existing role
-            existing_role = await role_repo.get_role_by_name(role_data.name)
+            existing_role = role_repo.get_role_by_name(role_data.name)
             if existing_role and str(existing_role.id) != role_id:
                 raise HTTPException(status_code=400, detail="Role name already exists")
             update_data['name'] = role_data.name
         if role_data.description is not None:
             update_data['description'] = role_data.description
         # Note: permissions are not directly updatable - use menu assignment endpoints
-
-        success = await role_repo.update_role(role_id, update_data)
+        
+        success = role_repo.update_role(role_id, update_data)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update role")
-
+        
         # Get updated role
-        updated_role = await role_repo.get_role_by_id(role_id)
-
+        updated_role = role_repo.get_role_by_id(role_id)
+        
         return RoleResponse(
             id=str(updated_role.id),
             name=updated_role.name,
@@ -214,27 +214,27 @@ async def delete_role(
     try:
         from ....repository.role_repository import RoleRepository
         role_repo = RoleRepository()
-
+        
         # Check if role exists
-        role = await role_repo.get_role_by_id(role_id)
+        role = role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
+        
         # Check if role is being used by users
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-        users_with_role = await user_repo.get_users_by_role(role.name)
+        users_with_role = user_repo.get_users_by_role(role.name)
         if users_with_role:
             raise HTTPException(
-                status_code=400,
+                status_code=400, 
                 detail=f"Cannot delete role '{role.name}' as it is assigned to {len(users_with_role)} user(s)"
             )
-
+        
         # Delete role
-        success = await role_repo.delete_role(role_id)
+        success = role_repo.delete_role(role_id)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete role")
-
+        
         return {"message": "Role deleted successfully", "role_id": role_id}
     except HTTPException:
         raise

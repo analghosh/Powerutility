@@ -33,9 +33,9 @@ class ServeMasterPlantsController:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
         return doc
 
-    async def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int,
+    def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int,
              user: Optional[Any], request_info: Dict[str, Any]) -> Dict[str, Any]:
-        return await self.service.list(filters, page, page_size, self._actor_from_user(user), request_info)
+        return self.service.list(filters, page, page_size, self._actor_from_user(user), request_info)
 
     def update(self, _id: str, updates: Dict[str, Any], user: Optional[Any], request_info: Dict[str, Any]) -> Dict[str, Any]:
         doc = self.service.update(_id, updates, self._actor_from_user(user), request_info)
@@ -52,8 +52,8 @@ class ServeMasterPlantsController:
     async def process_plant_file(self, file: UploadFile) -> Dict[str, Any]:
         return await self.service.process_plant_file(file)
 
-    async def get_plants(self, filter_by: Optional[str], filter_value: Optional[str], skip: int, limit: int) -> List[Dict[str, Any]]:
-        return await self.service.get_plants(filter_by, filter_value, skip, limit)
+    def get_plants(self, filter_by: Optional[str], filter_value: Optional[str], skip: int, limit: int) -> List[Dict[str, Any]]:
+        return self.service.get_plants(filter_by, filter_value, skip, limit)
 
 
 

@@ -45,8 +45,8 @@ class DemandforecastService:
         try:
             schedule_date = schedule_date or date.today().isoformat()
 
-            idf_list = await self.dsmoverview_repo.get_IDF_demand_forecast(schedule_date)
-            daf_list = await self.dsmoverview_repo.get_DAF_demand_forecast(schedule_date)
+            idf_list = self.dsmoverview_repo.get_IDF_demand_forecast(schedule_date)
+            daf_list = self.dsmoverview_repo.get_DAF_demand_forecast(schedule_date)
 
             # Normalize dicts keyed by integer time_block
             def tb_key(x):

@@ -22,7 +22,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         self.collection_name = collection_name
         logger.info(f"SchedulingRequisitionCalculationRepository initialized with collection: {collection_name}")
     
-    def _get_rtm_all_plant_data_sync(self) -> List[Dict[str, Any]]:
+    async def _get_rtm_all_plant_data(self) -> List[Dict[str, Any]]:
         """
         Get all RTM plant data for scheduling.
         Maps legacy field names to standard field names in response.
@@ -202,26 +202,24 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 }
             ]
 
-            return self.aggregate(self.collection_name, pipeline)
+            return await self.aggregate_async(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get RTM plant data for scheduling: {str(e)}")
             return []
 
-    def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
+    async def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
         """
-        Get all RTM plant data for scheduling (synchronous version).
+        Get all RTM plant data for scheduling.
         Returns data with standardized field names while supporting legacy field names.
         """
-        return self._get_rtm_all_plant_data_sync()
+        return await self._get_rtm_all_plant_data()
 
     async def get_rtm_all_plant_data_for_scheduling(self) -> List[Dict[str, Any]]:
         """
         Get all RTM plant data for scheduling (async version).
         Returns data with standardized field names while supporting legacy field names.
         """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._get_rtm_all_plant_data_sync)
+        return await self.getRTMAllPlantDataForScheduling()
 
     def create(self, record_data: Dict[str, Any]) -> str:
         """

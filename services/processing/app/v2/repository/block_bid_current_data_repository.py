@@ -81,7 +81,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
             logger.info(f"Inserting {len(documents)} documents into collection...")
             
-            result= await self.collection.insert_many(documents, ordered=False)
+            result= self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             
             logger.info("Bulk insert successful")
@@ -96,7 +96,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(None)
+            return list(cursor)
         except Exception as e:
             logger.error("Failed to aggregate DAM product data: %s", str(e))
             return []
@@ -115,14 +115,14 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$sort": {"revision_no": -1}},
                 {
                     "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
+                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block", "market_type": "$market_type", "exchange": "$exchange"},
                         "doc": {"$first": "$$ROOT"}
                     }
                 },
                 {"$replaceRoot": {"newRoot": "$doc"}},
                 {"$sort": {"from": 1}},
             ]
-            docs = await self.collection.aggregate(pipeline).to_list(None)
+            cursor = self.collection.aggregate(pipeline)
             result = []
 
             for doc in docs:
@@ -138,7 +138,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
         
     async def updatedata(self, record_id, data):
-        result =  await self.collection.update_one(
+        result =  self.collection.update_one(
             {"_id": ObjectId(record_id)},
             {"$set": data}
         )
@@ -197,7 +197,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 "market_type": market_type
             }
             
-            results = await self.collection.find(query).sort("from", 1).to_list(None)
+            cursor = self.collection.find(query).sort("from", 1)
+            results = list(cursor)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -217,81 +218,103 @@ class BlockBidCurrentDataRepository(GenericRepository):
         market_type: str = "RTM"
     ) -> Dict[str, float]:
         """
-        Get cumulative total volume of approved block bids grouped by time_block.
+        Get cumulative total volume of Submitted block bids grouped by time_block.
+        Uses only the latest revision_no per (trade_session, time_block), same as get_approved_bids.
         If number_of_bids > 1, quantum is multiplied by number_of_bids to get correct quantity.
-        
+
         Args:
             biding_date: Schedule date in YYYY-MM-DD format
             market_type: Market type (RTM, DAM, etc.). Defaults to "RTM"
-        
+
         Returns:
-            Dictionary mapping time_block (e.g., "19:00-19:15") to total approved quantum
+            Dictionary mapping time_block (e.g., "19:00-19:15") to total quantum
+
+        Note:
+            For DAM, only ``trade_session`` 0 (or null / missing) is included — same as
+            ``insert_block_bid`` (DAM has no multi-session split). RTM sums all sessions
+            that share the same clock ``time_block`` string.
         """
         try:
+            match_filter: Dict[str, Any] = {
+                "biding_date": biding_date,
+                "market_type": market_type,
+                "status": "Submitted",
+            }
+            if str(market_type).upper() == "DAM":
+                # Avoid double-counting when stray non-zero trade_session rows exist for DAM
+                match_filter["trade_session"] = {"$in": [0, None]}
+
             pipeline = [
+                {"$match": match_filter},
+                {"$sort": {"revision_no": -1}},
                 {
-                    "$match": {
-                        "biding_date": biding_date,
-                        "market_type": market_type,
-                        "status": {"$in": ["submitted", "Submitted"]}  # Handle both lowercase and capital A
-                        # "status": {"$in": ["approved", "Approved"]}  # Handle both lowercase and capital A
+                    "$group": {
+                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
+                        "doc": {"$first": "$$ROOT"},
                     }
                 },
+                {"$replaceRoot": {"newRoot": "$doc"}},
                 {
                     "$project": {
                         "time_block": 1,
                         "quantum": 1,
-                        "number_of_bids": {
-                            "$ifNull": ["$number_of_bids", 1]  # Default to 1 if not present
-                        },
+                        "number_of_bids": {"$ifNull": ["$number_of_bids", 1]},
                         "calculated_quantity": {
                             "$cond": {
                                 "if": {"$gt": [{"$ifNull": ["$number_of_bids", 1]}, 1]},
                                 "then": {
                                     "$multiply": [
                                         "$quantum",
-                                        {"$ifNull": ["$number_of_bids", 1]}
+                                        {"$ifNull": ["$number_of_bids", 1]},
                                     ]
                                 },
-                                "else": "$quantum"
+                                "else": "$quantum",
                             }
-                        }
+                        },
                     }
                 },
                 {
                     "$group": {
                         "_id": "$time_block",
-                        "total_quantum": {"$sum": "$calculated_quantity"}
+                        "total_quantum": {"$sum": "$calculated_quantity"},
                     }
                 },
                 {
                     "$project": {
                         "_id": 0,
                         "time_block": "$_id",
-                        "total_quantum": 1
+                        "total_quantum": 1,
                     }
-                }
+                },
             ]
-            
+
             results = await self.aggregate(pipeline)
-            
-            # Convert to dictionary: time_block -> total_quantum
+
             quantities_dict = {}
             for result in results:
                 time_block = result.get("time_block", "")
                 total_quantum = float(result.get("total_quantum", 0))
                 if time_block:
                     quantities_dict[time_block] = total_quantum
-            
-            logger.info(f"Retrieved approved block bid quantities for {len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}")
+
+            logger.info(
+                f"Retrieved Submitted block bid quantities (latest revision only) for "
+                f"{len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}"
+            )
             if quantities_dict:
-                logger.debug(f"Approved block bid time blocks found: {list(quantities_dict.keys())}")
+                logger.debug(f"Submitted block bid time blocks: {list(quantities_dict.keys())}")
             else:
-                logger.warning(f"No approved block bids found for date {biding_date}, market_type {market_type}. Check if status is 'approved' or 'Approved' and biding_date matches.")
+                logger.warning(
+                    f"No Submitted block bids found for date {biding_date}, market_type {market_type} "
+                    f"(status must be exactly 'Submitted', latest revision per session/block)."
+                )
             return quantities_dict
-            
+
         except Exception as e:
-            logger.error(f"Error getting approved block bid quantities for date {biding_date}, market_type {market_type}: {str(e)}")
+            logger.error(
+                f"Error getting Submitted block bid quantities for date {biding_date}, "
+                f"market_type {market_type}: {str(e)}"
+            )
             return {}
 
     
@@ -343,7 +366,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Find documents by filters with optional projection.
         """
         try:
-            return await self.collection.find(filters, projection or {}).to_list(None)
+            query = self.collection.find(filters, projection or {})
+            return list(query)
         except Exception as e:
             logger.error(f"Failed to find block bid records: {str(e)}")
             return []

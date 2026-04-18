@@ -38,7 +38,7 @@ class ExchangeDsmProcessor(BaseProcessor):
         start_time = datetime.now()
 
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
+        execution_id = self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
         if not execution_id:
             logger.error(f"Failed to record job start for {job_type}")
             return {
@@ -79,7 +79,7 @@ class ExchangeDsmProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
 
-            await self._record_job_execution(
+            self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

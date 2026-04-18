@@ -3,14 +3,13 @@ from __future__ import annotations
 from typing import Set
 
 class UserPrincipal:
-    def __init__(self, user_id: str, tenant_id: str, is_super_admin: bool, authz_version: int, effective_permissions: Set[str], roles: list = None, must_change_password: bool = False):
+    def __init__(self, user_id: str, tenant_id: str, is_super_admin: bool, authz_version: int, effective_permissions: Set[str], roles: list = None):
         self.user_id = user_id
         self.tenant_id = tenant_id
         self.is_super_admin = is_super_admin
         self.authz_version = authz_version
         self.effective_permissions = effective_permissions
         self.roles = roles or []
-        self.must_change_password = must_change_password
 
 async def compute_effective_permissions(user_doc: dict, tenant_id: str, db) -> Set[str]:  # noqa: ARG001
     """
