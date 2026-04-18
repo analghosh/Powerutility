@@ -408,7 +408,7 @@ class RTMBiddingServices:
                 formatted_date, market_type="RTM"
             )
             reserved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_reserved_block_bid_quantities_by_time_block(
-                formatted_date, market_type="RTM"
+                formatted_date
             )
 
             # Bid Trade Serve data for calculating NOC sell / buy limits based on trade quantities
