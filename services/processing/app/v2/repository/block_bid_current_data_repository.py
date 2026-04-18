@@ -393,6 +393,94 @@ class BlockBidCurrentDataRepository(GenericRepository):
             )
             return {}
 
+    async def get_approved_reserved_block_bid_quantities_by_time_block(
+        self,
+        biding_date: str,
+        market_type: str = "RTM",
+    ) -> Dict[str, float]:
+        """
+        Sum block-bid quantity for **Reserved** selections only, grouped by ``time_block``.
+
+        Only documents with ``status`` exactly ``Approved`` and ``selected_for`` exactly
+        ``Reserved`` are included (not ``Submitted`` or lapse variants). Quantity per row
+        matches ``get_approved_block_bid_quantities_by_time_block`` (``number_of_bids``
+        multiplies ``quantum`` when > 1). Change reserved rules only in this method.
+
+        For DAM, only ``trade_session`` 0 or null/missing is included, same as the
+        non-reserved approved-quantities helper.
+        """
+        try:
+            match_filter: Dict[str, Any] = {
+                "biding_date": biding_date,
+                "market_type": market_type,
+                "status": "Approved",
+                "selected_for": "Reserved",
+            }
+            if str(market_type).upper() == "DAM":
+                match_filter["trade_session"] = {"$in": [0, None]}
+
+            pipeline = [
+                {"$match": match_filter},
+                {
+                    "$project": {
+                        "time_block": 1,
+                        "quantum": 1,
+                        "number_of_bids": {"$ifNull": ["$number_of_bids", 1]},
+                        "calculated_quantity": {
+                            "$cond": {
+                                "if": {"$gt": [{"$ifNull": ["$number_of_bids", 1]}, 1]},
+                                "then": {
+                                    "$multiply": [
+                                        "$quantum",
+                                        {"$ifNull": ["$number_of_bids", 1]},
+                                    ]
+                                },
+                                "else": "$quantum",
+                            }
+                        },
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$time_block",
+                        "total_quantum": {"$sum": "$calculated_quantity"},
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "time_block": "$_id",
+                        "total_quantum": 1,
+                    }
+                },
+            ]
+
+            results = await self.aggregate(pipeline)
+
+            quantities_dict: Dict[str, float] = {}
+            for result in results:
+                time_block = result.get("time_block", "")
+                total_quantum = float(result.get("total_quantum", 0))
+                if time_block:
+                    quantities_dict[time_block] = total_quantum
+
+            logger.info(
+                f"Retrieved Reserved (Approved-only) block bid quantities for "
+                f"{len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}"
+            )
+            if not quantities_dict:
+                logger.debug(
+                    f"No Approved Reserved block bids for {biding_date}, market_type {market_type}."
+                )
+            return quantities_dict
+
+        except Exception as e:
+            logger.error(
+                f"Error getting reserved block bid quantities for date {biding_date}, "
+                f"market_type {market_type}: {str(e)}"
+            )
+            return {}
+
     
     
     async def get_active_bids_by_sessions(

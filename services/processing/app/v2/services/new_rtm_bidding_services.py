@@ -405,6 +405,9 @@ class RTMBiddingServices:
             approved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_block_bid_quantities_by_time_block(
                 formatted_date, market_type="RTM"
             )
+            reserved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_reserved_block_bid_quantities_by_time_block(
+                formatted_date, market_type="RTM"
+            )
 
             # Bid Trade Serve data for calculating NOC sell / buy limits based on trade quantities
             bid_trade_block_data = await self.bid_trade_serve_repo.adjustment_noc_buy_sell(scheduled_at=formatted_date)
@@ -751,6 +754,7 @@ class RTMBiddingServices:
                 # Convert block number to time_block format (HH:MM-HH:MM) to match with block bid data
                 time_block_str = get_fifteen_full_time_block_id(actual_block_no)
                 totalBlockBid = float(approved_block_bid_quantities.get(time_block_str, 0))
+                total_reserved_bid = float(reserved_block_bid_quantities.get(time_block_str, 0))
                 # totalBlockBid = 0
                 
                 tptal = 0       
@@ -786,6 +790,7 @@ class RTMBiddingServices:
                         'rtm_noc_buy_value': noc_buyLimitsInner,
                         'rtm_noc_sell_value': noc_sellLimitsInner,
                         'totalBlockBid': totalBlockBid,
+                        'total_reserved_bid': total_reserved_bid,
                         'remaining_volume': remaining_volume,   # Calculate remaining volume for must plants
                         'sell_volume': remaining_volume,   # Calculate sell volume for must plants
                         'actual_volume': remaining_volume,   # Calculate actual volume for must plants
@@ -820,6 +825,7 @@ class RTMBiddingServices:
                         'rtm_noc_buy_value': noc_buyLimitsInner,
                         'rtm_noc_sell_value': noc_sellLimitsInner,
                         'totalBlockBid': totalBlockBid,
+                        'total_reserved_bid': total_reserved_bid,
                         'remaining_volume': 0,
                         'sell_volume': 0,
                         'actual_volume': 0,
@@ -929,7 +935,8 @@ class RTMBiddingServices:
                                     'rtm_nminusone_quantum': n_1LimitsInner,
                                     'rtm_noc_buy_value': noc_buyLimitsInner,
                                     'rtm_noc_sell_value': noc_sellLimitsInner, 
-                                    'totalBlockBid': totalBlockBid, 
+                                    'totalBlockBid': totalBlockBid,
+                                    'total_reserved_bid': total_reserved_bid,
                                     'remaining_volume': float(total_diff),
                                     'sell_volume': round(sell_volume),
                                     'actual_volume': float(round(plnt_100_volume)),
@@ -975,6 +982,7 @@ class RTMBiddingServices:
                             'rtm_noc_buy_value': noc_buyLimitsInner,
                             'rtm_noc_sell_value': noc_sellLimitsInner,
                             'totalBlockBid': totalBlockBid,
+                            'total_reserved_bid': total_reserved_bid,
                             'remaining_volume': float(total_diff),
                             'sell_volume': 0,
                             'actual_volume': float(round(plant_volume)),
