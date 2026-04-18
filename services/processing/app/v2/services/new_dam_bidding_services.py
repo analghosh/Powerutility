@@ -727,7 +727,7 @@ class DAMBiddingServices:
                 formatted_date, market_type="DAM"
             )
             reserved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_reserved_block_bid_quantities_by_time_block(
-                formatted_date, market_type="DAM"
+                formatted_date
             )
             
             # Helper function to convert block number to time_block format (HH:MM-HH:MM)

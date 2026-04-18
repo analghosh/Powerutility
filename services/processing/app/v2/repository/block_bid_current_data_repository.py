@@ -396,28 +396,21 @@ class BlockBidCurrentDataRepository(GenericRepository):
     async def get_approved_reserved_block_bid_quantities_by_time_block(
         self,
         biding_date: str,
-        market_type: str = "RTM",
     ) -> Dict[str, float]:
         """
         Sum block-bid quantity for **Reserved** selections only, grouped by ``time_block``.
 
-        Only documents with ``status`` exactly ``Approved`` and ``selected_for`` exactly
-        ``Reserved`` are included (not ``Submitted`` or lapse variants). Quantity per row
-        matches ``get_approved_block_bid_quantities_by_time_block`` (``number_of_bids``
-        multiplies ``quantum`` when > 1). Change reserved rules only in this method.
-
-        For DAM, only ``trade_session`` 0 or null/missing is included, same as the
-        non-reserved approved-quantities helper.
+        Matches ``biding_date``, ``status`` exactly ``Approved``, and ``selected_for``
+        exactly ``Reserved`` only (no ``market_type`` filter, so e.g. RTM/GRTM rows all
+        count). Quantity per row matches ``get_approved_block_bid_quantities_by_time_block``
+        (``number_of_bids`` multiplies ``quantum`` when > 1).
         """
         try:
             match_filter: Dict[str, Any] = {
                 "biding_date": biding_date,
-                "market_type": market_type,
                 "status": "Approved",
                 "selected_for": "Reserved",
             }
-            if str(market_type).upper() == "DAM":
-                match_filter["trade_session"] = {"$in": [0, None]}
 
             pipeline = [
                 {"$match": match_filter},
@@ -466,18 +459,17 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
             logger.info(
                 f"Retrieved Reserved (Approved-only) block bid quantities for "
-                f"{len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}"
+                f"{len(quantities_dict)} time blocks on {biding_date} (all market_type)"
             )
             if not quantities_dict:
                 logger.debug(
-                    f"No Approved Reserved block bids for {biding_date}, market_type {market_type}."
+                    f"No Approved Reserved block bids for {biding_date}."
                 )
             return quantities_dict
 
         except Exception as e:
             logger.error(
-                f"Error getting reserved block bid quantities for date {biding_date}, "
-                f"market_type {market_type}: {str(e)}"
+                f"Error getting reserved block bid quantities for date {biding_date}: {str(e)}"
             )
             return {}
 
