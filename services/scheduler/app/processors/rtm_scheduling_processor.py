@@ -705,14 +705,14 @@ class RTMSchedulingProcessor(BaseProcessor):
                 dc_sg = "SG"
 
             logger.info(f"[RTMSchedulingServices] Fetching plant data for {dc_sg} (Schedule Date: {schedule_date})")
-            getplantsData = self.getAllPlantsDataForScheduling(schedule_date, dc_sg)
+            getplantsData = await self.getAllPlantsDataForScheduling(schedule_date, dc_sg)
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsData)} {dc_sg} plant data records")
             self._store_raw_snapshot(
                 getplantsData, "supply_sg_dc_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
             
             logger.info(f"[RTMSchedulingServices] Fetching plant data for DC (Schedule Date: {schedule_date})")
-            getplantsDataDC = self.getAllPlantsDataForScheduling(schedule_date, "DC")
+            getplantsDataDC = await self.getAllPlantsDataForScheduling(schedule_date, "DC")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsDataDC)} DC plant data records")
             self._store_raw_snapshot(
                 getplantsDataDC, "supply_dc_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
@@ -1854,7 +1854,7 @@ class RTMSchedulingProcessor(BaseProcessor):
 
         return lookups
     
-    def getAllPlantsDataForScheduling(self, schedule_date, dc_sg):
+    async def getAllPlantsDataForScheduling(self, schedule_date, dc_sg):
         """
         Wrapper function to get all plant data for scheduling.
         Calls the internal method with proper parameters.
