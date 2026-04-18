@@ -207,9 +207,10 @@ class BlockBidCurrentDataRepository(GenericRepository):
         market_type: str = "RTM"
     ) -> Dict[str, float]:
         """
-        Get cumulative total volume of Submitted block bids grouped by time_block.
-        Uses only the latest revision_no per (trade_session, time_block), same as get_approved_bids.
-        If number_of_bids > 1, quantum is multiplied by number_of_bids to get correct quantity.
+        Sum block-bid quantity for every matched document, grouped by ``time_block``.
+        Includes status ``Approved`` and ``Submitted``; every matching row contributes
+        (no revision de-duplication). If ``number_of_bids`` > 1, quantum is multiplied
+        by ``number_of_bids`` to get quantity per row.
 
         Args:
             biding_date: Schedule date in YYYY-MM-DD format
@@ -221,13 +222,14 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Note:
             For DAM, only ``trade_session`` 0 (or null / missing) is included — same as
             ``insert_block_bid`` (DAM has no multi-session split). RTM sums all sessions
-            that share the same clock ``time_block`` string.
+            that share the same clock ``time_block`` string. If old revision rows remain
+            in the collection, they are all summed unless filtered elsewhere.
         """
         try:
             match_filter: Dict[str, Any] = {
                 "biding_date": biding_date,
                 "market_type": market_type,
-                "status": "Submitted",
+                "status": {"$in": ["Approved", "Submitted"]},
             }
             if str(market_type).upper() == "DAM":
                 # Avoid double-counting when stray non-zero trade_session rows exist for DAM
@@ -235,14 +237,6 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
             pipeline = [
                 {"$match": match_filter},
-                {"$sort": {"revision_no": -1}},
-                {
-                    "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
-                        "doc": {"$first": "$$ROOT"},
-                    }
-                },
-                {"$replaceRoot": {"newRoot": "$doc"}},
                 {
                     "$project": {
                         "time_block": 1,
@@ -287,21 +281,21 @@ class BlockBidCurrentDataRepository(GenericRepository):
                     quantities_dict[time_block] = total_quantum
 
             logger.info(
-                f"Retrieved Submitted block bid quantities (latest revision only) for "
+                f"Retrieved block bid quantities (all matched Approved/Submitted rows) for "
                 f"{len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}"
             )
             if quantities_dict:
-                logger.debug(f"Submitted block bid time blocks: {list(quantities_dict.keys())}")
+                logger.debug(f"Block bid time blocks: {list(quantities_dict.keys())}")
             else:
                 logger.warning(
-                    f"No Submitted block bids found for date {biding_date}, market_type {market_type} "
-                    f"(status must be exactly 'Submitted', latest revision per session/block)."
+                    f"No Approved/Submitted block bids found for date {biding_date}, "
+                    f"market_type {market_type}."
                 )
             return quantities_dict
 
         except Exception as e:
             logger.error(
-                f"Error getting Submitted block bid quantities for date {biding_date}, "
+                f"Error getting block bid quantities for date {biding_date}, "
                 f"market_type {market_type}: {str(e)}"
             )
             return {}
