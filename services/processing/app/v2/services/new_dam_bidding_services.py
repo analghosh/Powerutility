@@ -734,6 +734,9 @@ class DAMBiddingServices:
             approved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_block_bid_quantities_by_time_block(
                 formatted_date, market_type="DAM"
             )
+            reserved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_reserved_block_bid_quantities_by_time_block(
+                formatted_date, market_type="DAM"
+            )
             
             # Helper function to convert block number to time_block format (HH:MM-HH:MM)
             def get_fifteen_full_time_block_id(block_id: int) -> str:
@@ -1079,6 +1082,7 @@ class DAMBiddingServices:
                 # Convert block number to time_block format (HH:MM-HH:MM) to match with block bid data
                 time_block_str = get_fifteen_full_time_block_id(actual_block_no)
                 totalBlockBid = float(approved_block_bid_quantities.get(time_block_str, 0))
+                total_reserved_bid = float(reserved_block_bid_quantities.get(time_block_str, 0))
                 # totalBlockBid = 0
                 
                 tptal = 0       
@@ -1114,6 +1118,7 @@ class DAMBiddingServices:
                         'dam_noc_buy_value': noc_buyLimitsInner,
                         'dam_noc_sell_value': noc_sellLimitsInner,
                         'totalBlockBid': totalBlockBid,
+                        'total_reserved_bid': total_reserved_bid,
                         'remaining_volume': remaining_volume,   # Calculate remaining volume for must plants
                         'sell_volume': remaining_volume,   # Calculate sell volume for must plants
                         'actual_volume': remaining_volume,   # Calculate actual volume for must plants
@@ -1148,6 +1153,7 @@ class DAMBiddingServices:
                         'dam_noc_buy_value': noc_buyLimitsInner,
                         'dam_noc_sell_value': noc_sellLimitsInner,
                         'totalBlockBid': totalBlockBid,
+                        'total_reserved_bid': total_reserved_bid,
                         'remaining_volume': 0,
                         'sell_volume': 0,
                         'actual_volume': 0,
@@ -1269,7 +1275,8 @@ class DAMBiddingServices:
                                     'dam_nminusone_quantum': n_1LimitsInner,
                                     'dam_noc_buy_value': noc_buyLimitsInner,
                                     'dam_noc_sell_value': noc_sellLimitsInner, 
-                                    'totalBlockBid': totalBlockBid, 
+                                    'totalBlockBid': totalBlockBid,
+                                    'total_reserved_bid': total_reserved_bid,
                                     'remaining_volume': float(total_diff),
                                     'sell_volume': round(sell_volume),
                                     'actual_volume': float(round(plnt_100_volume)),
@@ -1315,6 +1322,7 @@ class DAMBiddingServices:
                             'dam_noc_buy_value': noc_buyLimitsInner,
                             'dam_noc_sell_value': noc_sellLimitsInner,
                             'totalBlockBid': totalBlockBid,
+                            'total_reserved_bid': total_reserved_bid,
                             'remaining_volume': float(total_diff),
                             'sell_volume': 0,
                             'actual_volume': float(round(plant_volume)),
