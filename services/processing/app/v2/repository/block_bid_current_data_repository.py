@@ -211,87 +211,186 @@ class BlockBidCurrentDataRepository(GenericRepository):
             logger.error(f"Error getting block bid data for date {datebid}, market_type {market_type}: {str(e)}")
             return []
 
+    # async def get_approved_block_bid_quantities_by_time_block(
+    #     self,
+    #     biding_date: str,
+    #     market_type: str = "RTM"
+    # ) -> Dict[str, float]:
+    #     """
+    #     Get cumulative total volume of approved block bids grouped by time_block.
+    #     If number_of_bids > 1, quantum is multiplied by number_of_bids to get correct quantity.
+        
+    #     Args:
+    #         biding_date: Schedule date in YYYY-MM-DD format
+    #         market_type: Market type (RTM, DAM, etc.). Defaults to "RTM"
+        
+    #     Returns:
+    #         Dictionary mapping time_block (e.g., "19:00-19:15") to total approved quantum
+    #     """
+    #     try:
+    #         pipeline = [
+    #             {
+    #                 "$match": {
+    #                     "biding_date": biding_date,
+    #                     "market_type": market_type,
+    #                     "status": {"$in": ["submitted", "Submitted"]}  # Handle both lowercase and capital A
+    #                     # "status": {"$in": ["approved", "Approved"]}  # Handle both lowercase and capital A
+    #                 }
+    #             },
+    #             {
+    #                 "$project": {
+    #                     "time_block": 1,
+    #                     "quantum": 1,
+    #                     "number_of_bids": {
+    #                         "$ifNull": ["$number_of_bids", 1]  # Default to 1 if not present
+    #                     },
+    #                     "calculated_quantity": {
+    #                         "$cond": {
+    #                             "if": {"$gt": [{"$ifNull": ["$number_of_bids", 1]}, 1]},
+    #                             "then": {
+    #                                 "$multiply": [
+    #                                     "$quantum",
+    #                                     {"$ifNull": ["$number_of_bids", 1]}
+    #                                 ]
+    #                             },
+    #                             "else": "$quantum"
+    #                         }
+    #                     }
+    #                 }
+    #             },
+    #             {
+    #                 "$group": {
+    #                     "_id": "$time_block",
+    #                     "total_quantum": {"$sum": "$calculated_quantity"}
+    #                 }
+    #             },
+    #             {
+    #                 "$project": {
+    #                     "_id": 0,
+    #                     "time_block": "$_id",
+    #                     "total_quantum": 1
+    #                 }
+    #             }
+    #         ]
+            
+    #         results = await self.aggregate(pipeline)
+            
+    #         # Convert to dictionary: time_block -> total_quantum
+    #         quantities_dict = {}
+    #         for result in results:
+    #             time_block = result.get("time_block", "")
+    #             total_quantum = float(result.get("total_quantum", 0))
+    #             if time_block:
+    #                 quantities_dict[time_block] = total_quantum
+            
+    #         logger.info(f"Retrieved approved block bid quantities for {len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}")
+    #         if quantities_dict:
+    #             logger.debug(f"Approved block bid time blocks found: {list(quantities_dict.keys())}")
+    #         else:
+    #             logger.warning(f"No approved block bids found for date {biding_date}, market_type {market_type}. Check if status is 'approved' or 'Approved' and biding_date matches.")
+    #         return quantities_dict
+            
+    #     except Exception as e:
+    #         logger.error(f"Error getting approved block bid quantities for date {biding_date}, market_type {market_type}: {str(e)}")
+    #         return {}
+
     async def get_approved_block_bid_quantities_by_time_block(
         self,
         biding_date: str,
         market_type: str = "RTM"
     ) -> Dict[str, float]:
         """
-        Get cumulative total volume of approved block bids grouped by time_block.
-        If number_of_bids > 1, quantum is multiplied by number_of_bids to get correct quantity.
-        
+        Sum block-bid quantity for every matched document, grouped by ``time_block``.
+        Includes status ``Approved`` and ``Submitted``; every matching row contributes
+        (no revision de-duplication). If ``number_of_bids`` > 1, quantum is multiplied
+        by ``number_of_bids`` to get quantity per row.
+
         Args:
             biding_date: Schedule date in YYYY-MM-DD format
             market_type: Market type (RTM, DAM, etc.). Defaults to "RTM"
-        
+
         Returns:
-            Dictionary mapping time_block (e.g., "19:00-19:15") to total approved quantum
+            Dictionary mapping time_block (e.g., "19:00-19:15") to total quantum
+
+        Note:
+            For DAM, only ``trade_session`` 0 (or null / missing) is included — same as
+            ``insert_block_bid`` (DAM has no multi-session split). RTM sums all sessions
+            that share the same clock ``time_block`` string. If old revision rows remain
+            in the collection, they are all summed unless filtered elsewhere.
         """
         try:
+            match_filter: Dict[str, Any] = {
+                "biding_date": biding_date,
+                "market_type": market_type,
+                "status": {"$in": ["Approved", "Submitted", "approved", "submitted"]},
+            }
+            if str(market_type).upper() == "DAM":
+                # Avoid double-counting when stray non-zero trade_session rows exist for DAM
+                match_filter["trade_session"] = {"$in": [0, None]}
+
             pipeline = [
-                {
-                    "$match": {
-                        "biding_date": biding_date,
-                        "market_type": market_type,
-                        "status": {"$in": ["submitted", "Submitted"]}  # Handle both lowercase and capital A
-                        # "status": {"$in": ["approved", "Approved"]}  # Handle both lowercase and capital A
-                    }
-                },
+                {"$match": match_filter},
                 {
                     "$project": {
                         "time_block": 1,
                         "quantum": 1,
-                        "number_of_bids": {
-                            "$ifNull": ["$number_of_bids", 1]  # Default to 1 if not present
-                        },
+                        "number_of_bids": {"$ifNull": ["$number_of_bids", 1]},
                         "calculated_quantity": {
                             "$cond": {
                                 "if": {"$gt": [{"$ifNull": ["$number_of_bids", 1]}, 1]},
                                 "then": {
                                     "$multiply": [
                                         "$quantum",
-                                        {"$ifNull": ["$number_of_bids", 1]}
+                                        {"$ifNull": ["$number_of_bids", 1]},
                                     ]
                                 },
-                                "else": "$quantum"
+                                "else": "$quantum",
                             }
-                        }
+                        },
                     }
                 },
                 {
                     "$group": {
                         "_id": "$time_block",
-                        "total_quantum": {"$sum": "$calculated_quantity"}
+                        "total_quantum": {"$sum": "$calculated_quantity"},
                     }
                 },
                 {
                     "$project": {
                         "_id": 0,
                         "time_block": "$_id",
-                        "total_quantum": 1
+                        "total_quantum": 1,
                     }
-                }
+                },
             ]
-            
+
             results = await self.aggregate(pipeline)
-            
-            # Convert to dictionary: time_block -> total_quantum
+
             quantities_dict = {}
             for result in results:
                 time_block = result.get("time_block", "")
                 total_quantum = float(result.get("total_quantum", 0))
                 if time_block:
                     quantities_dict[time_block] = total_quantum
-            
-            logger.info(f"Retrieved approved block bid quantities for {len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}")
+
+            logger.info(
+                f"Retrieved block bid quantities (all matched Approved/Submitted rows) for "
+                f"{len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}"
+            )
             if quantities_dict:
-                logger.debug(f"Approved block bid time blocks found: {list(quantities_dict.keys())}")
+                logger.debug(f"Block bid time blocks: {list(quantities_dict.keys())}")
             else:
-                logger.warning(f"No approved block bids found for date {biding_date}, market_type {market_type}. Check if status is 'approved' or 'Approved' and biding_date matches.")
+                logger.warning(
+                    f"No Approved/Submitted block bids found for date {biding_date}, "
+                    f"market_type {market_type}."
+                )
             return quantities_dict
-            
+
         except Exception as e:
-            logger.error(f"Error getting approved block bid quantities for date {biding_date}, market_type {market_type}: {str(e)}")
+            logger.error(
+                f"Error getting block bid quantities for date {biding_date}, "
+                f"market_type {market_type}: {str(e)}"
+            )
             return {}
 
     
