@@ -68,6 +68,7 @@ class LimitValuesProcessor(BaseProcessor):
             logger.info(f"[LimitValuesProcessor] Found {len(today_existing_data)} records for today to rollover to tomorrow")
             
             merged_data = {}
+            tomorrow_rollover_data = {}
 
             # Build today's existing keys for per-record skip check
             # Normalize scheduled_at to naive datetime to match Python-computed today/tomorrow
@@ -116,14 +117,22 @@ class LimitValuesProcessor(BaseProcessor):
                 (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"))
                 for r in tomorrow_existing_data
             }
+            # Map (block, market, id) -> source for tomorrow's existing records
+            tomorrow_source_map = {
+                (r.get("block"), r.get("market"), r.get("id")): r.get("source")
+                for r in tomorrow_existing_data
+            }
             if tomorrow_existing_data:
                 logger.info(f"[LimitValuesProcessor] Tomorrow ({tomorrow_str}) already has {len(tomorrow_existing_data)} records; will skip per-record duplicates")
 
-            # 1a. Prepare Rollover Data (Lowest priority) — skip records already present in tomorrow
+            # 1a. Prepare Rollover Data — upsert if tomorrow has stale rollover, skip if manual/approval
             for record in today_existing_data:
                 rollover_key = (tomorrow, record.get("block"), record.get("market"), record.get("id"))
                 if rollover_key in tomorrow_existing_keys:
-                    continue
+                    # Only overwrite if tomorrow's value is itself a rollover (not manual/approval)
+                    existing_source = tomorrow_source_map.get((record.get("block"), record.get("market"), record.get("id")))
+                    if existing_source not in ("today_rollover", "yesterday_rollover"):
+                        continue  # tomorrow has manual/approval data, preserve it
                 # Remove _id and other internal fields for fresh upsert
                 record_id = record.get("id")
                 unique_key_tuple = (
@@ -134,7 +143,7 @@ class LimitValuesProcessor(BaseProcessor):
                     record.get("area"),
                     tomorrow # Important: merged for tomorrow
                 )
-                
+
                 # Clone record for tomorrow
                 tomorrow_record = record.copy()
                 tomorrow_record.pop("_id", None)
@@ -142,8 +151,8 @@ class LimitValuesProcessor(BaseProcessor):
                 tomorrow_record["source"] = "today_rollover"
                 tomorrow_record["created_by"] = "system_cron"
                 tomorrow_record["updated_by"] = "system_cron"
-                
-                merged_data[unique_key_tuple] = tomorrow_record
+
+                tomorrow_rollover_data[unique_key_tuple] = tomorrow_record
 
             # 2. Fetch tomorrow's approved entries — these are built separately and always upsert
             approved_entries_tomorrow = self.repository.get_approved_tomorrow(tomorrow)
@@ -185,16 +194,26 @@ class LimitValuesProcessor(BaseProcessor):
             unique_key_fields = ["block", "id", "market", "category", "area", "scheduled_at"]
             audit_logs = []
 
-            # 3a. Rollover docs — insert only, never update existing records
+            # 3a. Rollover docs — yesterday→today insert only, today→tomorrow upsert (to propagate manual edits)
             rollover_documents = list(merged_data.values())
             if rollover_documents:
-                logger.info(f"[LimitValuesProcessor] Bulk insert-only (rollover) of {len(rollover_documents)} records for {tomorrow_str}")
+                logger.info(f"[LimitValuesProcessor] Bulk insert-only (yesterday rollover) of {len(rollover_documents)} records for {today_str}")
                 insert_result = self.repository.bulk_insert_only(
                     self.final_collection_name,
                     rollover_documents,
                     unique_key_fields
                 )
-                logger.info(f"[LimitValuesProcessor] Rollover insert result: {insert_result}")
+                logger.info(f"[LimitValuesProcessor] Yesterday rollover insert result: {insert_result}")
+
+            tomorrow_rollover_documents = list(tomorrow_rollover_data.values())
+            if tomorrow_rollover_documents:
+                logger.info(f"[LimitValuesProcessor] Bulk upsert (today rollover) of {len(tomorrow_rollover_documents)} records for {tomorrow_str}")
+                insert_result = self.repository.bulk_upsert_optimized(
+                    self.final_collection_name,
+                    tomorrow_rollover_documents,
+                    unique_key_fields
+                )
+                logger.info(f"[LimitValuesProcessor] Today rollover upsert result: {insert_result}")
                 for doc in rollover_documents:
                     audit_logs.append({
                         "ts": current_time,
@@ -209,8 +228,23 @@ class LimitValuesProcessor(BaseProcessor):
                         "source": doc.get("source"),
                         "success": True
                     })
+            if tomorrow_rollover_documents:
+                for doc in tomorrow_rollover_documents:
+                    audit_logs.append({
+                        "ts": current_time,
+                        "actor_id": "system_cron",
+                        "actor_username": "limit_values_processor",
+                        "action": "ROLLOVER_UPSERT_LIMIT_VALUES",
+                        "entity_type": "limit_values",
+                        "operation": "UPSERT",
+                        "correlation_id": f"cron_{today_str}",
+                        "key": {field: doc.get(field) for field in unique_key_fields},
+                        "scheduled_at": doc.get("scheduled_at"),
+                        "source": doc.get("source"),
+                        "success": True
+                    })
             else:
-                logger.info("[LimitValuesProcessor] No rollover records to insert for tomorrow")
+                logger.info("[LimitValuesProcessor] No rollover records to upsert for tomorrow")
 
             # 3b. Approval docs — full upsert, can update existing records
             approval_documents = list(approval_docs.values())
