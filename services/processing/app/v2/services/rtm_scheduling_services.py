@@ -74,7 +74,7 @@ class RTMSchedulingServices:
         self.customdemand = 0
         
 
-    def getAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
+    async def getAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
         """
         Get all plant data for RTM scheduling.
         Returns data in the exact same format as v1 API for compatibility.
@@ -85,7 +85,7 @@ class RTMSchedulingServices:
         """
         try:
             logger.info("[RTMSchedulingServices] Calling scheduling_repo.getRTMAllPlantDataForScheduling()")
-            data = self.scheduling_repo.getRTMAllPlantDataForScheduling()
+            data = await self.scheduling_repo.getRTMAllPlantDataForScheduling()
             logger.info(f"[RTMSchedulingServices] Retrieved {len(data) if isinstance(data, list) else 0} records from repository")
             
             # Processor function
