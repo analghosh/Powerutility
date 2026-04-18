@@ -3,7 +3,7 @@ import asyncio
 from functools import partial
 from pydoc import text
 import re
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 from datetime import date, datetime, timedelta
 import time
 from math import isnan, isfinite
@@ -57,6 +57,13 @@ def to_float(v):
         return 0.0
 
 class DAMBiddingServices:
+    def __init__(self):
+        self.generic_repo = GenericRepository()
+        self.exchange_config_repo = ExchangeConfigRepository()
+        self.single_bid_data_for_approval_repo = DAMSingleBidDataForApprovalRepository()
+        self.integration_api_log_repo = IntegrationApiLogRepository()
+        self.dam_book_collection = settings.MONGODB_DAM_BOOK_COLLECTION
+        self.time_block_collection = settings.MONGODB_TIME_BLOCK_COLLECTION
 
     async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
         """Get DAM bid submission details for a specific date."""
@@ -102,7 +109,7 @@ class DAMBiddingServices:
             # ---------------------------------------------------------
             # 3. Fetch book data ONLY for other users
             # ---------------------------------------------------------
-            book_details = await self.generic_repo.find_many(
+            book_details = self.generic_repo.find_many(
                 self.dam_book_collection,
                 {
                     "scheduled_at": scheduled_at,
@@ -116,16 +123,16 @@ class DAMBiddingServices:
             all_time_pairs: set[Tuple[int, int]] = set()
 
             for data in system_user_data:
-                all_time_pairs.add((int(data.get("start_time") or 0), int(data.get("end_time") or 0)))
+                all_time_pairs.add((data.get("start_time"), data.get("end_time")))
 
             for bid in book_details:
-                all_time_pairs.add((int(bid.get("FromPeriodId") or 0), int(bid.get("ToPeriodId") or 0)))
+                all_time_pairs.add((bid.get("FromPeriodId"), bid.get("ToPeriodId")))
 
             # ---------------------------------------------------------
             # 5. Fetch time blocks once
             # ---------------------------------------------------------
             if all_time_pairs:
-                time_blocks = await self.generic_repo.find_many(
+                time_blocks = self.generic_repo.find_many(
                     self.time_block_collection,
                     {
                         "$or": [
@@ -153,7 +160,7 @@ class DAMBiddingServices:
             for data in system_user_data:
                 start = data.get("start_time")
                 end = data.get("end_time")
-                key = (int(start or 0), int(end or 0))
+                key = (start, end)
                 order_id = data.get("orderId")
 
                 if key not in response_struct:
@@ -217,7 +224,7 @@ class DAMBiddingServices:
             for bid in book_details:
                 start = bid.get("FromPeriodId")
                 end = bid.get("ToPeriodId")
-                key = (int(start or 0), int(end or 0))
+                key = (start, end)
 
                 if key not in response_struct:
                     response_struct[key] = {
@@ -383,7 +390,6 @@ class DAMBiddingServices:
         self.supply_repo = SupplyServeRepository()
         self.exchange_config_repo = ExchangeConfigRepository()
         self.single_bid_data_for_approval_repo = DAMSingleBidDataForApprovalRepository(collection_name="dam_single_bid_data_for_approval")
-        self.integration_api_log_repo = IntegrationApiLogRepository()
         self.dam_product_hardcoded_data_repo = DAMProductHardCodedDataRepository()
         self.plants_list_repo = MasterPlantsRepository()
         self.limit_values_repo = LimitValuesRepository()
@@ -569,7 +575,7 @@ class DAMBiddingServices:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = await self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline)
+            result = await self.supply_repo.aggregate_async(pipeline)
             return {"data": result}
         except Exception as e:
             logger.exception(f"[DAMBiddingServices] Failed to fetch demand data: {str(e)}")
@@ -628,7 +634,7 @@ class DAMBiddingServices:
             ]
 
             # Fetch plants data from supply_serve collection
-            getplantsData = await self.supply_repo.aggregate("supply_serve", pipeline)
+            getplantsData = list(self.supply_repo.aggregate(pipeline))
            
             if not getplantsData:
                 return {}
@@ -642,7 +648,7 @@ class DAMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "dam_tm": 1}}
             ]
-            dc_data = await self.supply_repo.aggregate("supply_serve", dc_pipeline)
+            dc_data = list(self.supply_repo.aggregate(dc_pipeline))
             # Build lookup: {(plant_id, time_block): dam_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("dam_tm", 0) for d in dc_data}
             
@@ -662,13 +668,15 @@ class DAMBiddingServices:
                 {"$project": {"_id": 0}}
             ]
             # Fetch session data from dam_product_hardcoded_data collection
-            getsessionNo = await self.dam_product_hardcoded_data_repo.aggregate(
+            getsessionNo = list(
+                self.dam_product_hardcoded_data_repo.aggregate(
                     self.dam_product_hardcoded_data_repo.collection_name,
                     product_hardCoded_pipeline,
                 )
+            )
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = await self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline) 
+            plantData = list(self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline)) 
             plant_dict = {p['plant_id']: p for p in plantData}
 
             fix_count = getplantsData[0]['time_block']
@@ -704,7 +712,7 @@ class DAMBiddingServices:
                 }
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = await self.demand_repo.aggregate(
+            getForecastedValue = list(self.demand_repo.aggregate(
                 self.demand_repo.collection_name,
                 [
                     {
@@ -717,7 +725,7 @@ class DAMBiddingServices:
                     {"$sort": {"time_block": 1}},
                     {"$project": {"_id": 0}},
                 ],
-            )
+            ))
 
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             
@@ -772,7 +780,8 @@ class DAMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = await self.limit_values_repo.repository.aggregate_async(
+            forecastedPrice = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -794,42 +803,15 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},  # Sort by block for consistent ordering
                         {"$project": {"_id": 0}},
                     ],
+                )
             )
             limit_schedule_date = target_date
             print("=============================================================== forecastedPrice =============================================================== ")
             print(forecastedPrice)
             print("=============================================================== forecastedPrice =============================================================== ")
             
-            # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = await self.limit_values_repo.repository.aggregate_async(
-                    "limit_values",
-                    [
-                        {
-                            "$match": {
-                                "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
-                                "id": "DAM_forecasted_price",
-                                "market": "DAM",
-                                "block": {"$gte": from_block, "$lte": to_block},
-                            }
-                        },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
-                        {
-                            "$group": {
-                                "_id": "$block",  # Group by block to get latest record per block
-                                "latest_doc": {"$first": "$$ROOT"}  # Get the first (latest date) record for each block
-                            }
-                        },
-                        {"$replaceRoot": {"newRoot": "$latest_doc"}},  # Replace root with the latest document
-                        {"$sort": {"block": 1}},  # Sort by block for consistent ordering
-                        {"$project": {"_id": 0}},
-                    ],
-            )
-            limit_schedule_date = target_date
-            print("=============================================================== forecastedPrice =============================================================== ")
-            print(forecastedPrice)
-            print("=============================================================== forecastedPrice =============================================================== ")
-            
-            bufferPrice = await self.limit_values_repo.repository.aggregate(
+            bufferPrice = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -840,7 +822,7 @@ class DAMBiddingServices:
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
                         {
                             "$group": {
                                 "_id": "$block",
@@ -852,8 +834,10 @@ class DAMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
             
-            ceilingPrice = await self.limit_values_repo.repository.aggregate(
+            ceilingPrice = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -865,7 +849,7 @@ class DAMBiddingServices:
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
                         {
                             "$group": {
                                 "_id": "$block",
@@ -877,9 +861,11 @@ class DAMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
             
 
-            n_1Limits = await self.limit_values_repo.repository.aggregate(
+            n_1Limits = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -891,7 +877,7 @@ class DAMBiddingServices:
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
                         {
                             "$group": {
                                 "_id": "$block",
@@ -903,8 +889,10 @@ class DAMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
 
-            noc_buyLimits = await self.limit_values_repo.repository.aggregate(
+            noc_buyLimits = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -916,7 +904,7 @@ class DAMBiddingServices:
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
                         {
                             "$group": {
                                 "_id": "$block",
@@ -928,8 +916,10 @@ class DAMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
 
-            noc_sellLimits = await self.limit_values_repo.repository.aggregate(
+            noc_sellLimits = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -941,7 +931,7 @@ class DAMBiddingServices:
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
                         {
                             "$group": {
                                 "_id": "$block",
@@ -953,8 +943,10 @@ class DAMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
 
-            typeofExchangeIEX = await self.limit_values_repo.repository.aggregate(
+            typeofExchangeIEX = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -966,7 +958,7 @@ class DAMBiddingServices:
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
                         {
                             "$group": {
                                 "_id": "$block",
@@ -978,8 +970,10 @@ class DAMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
 
-            typeofExchangePXIL = await self.limit_values_repo.repository.aggregate(
+            typeofExchangePXIL = list(
+                self.limit_values_repo.repository.aggregate(
                     "limit_values",
                     [
                         {
@@ -991,7 +985,7 @@ class DAMBiddingServices:
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
                         {
                             "$group": {
                                 "_id": "$block",
@@ -1003,6 +997,7 @@ class DAMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
 
             
 

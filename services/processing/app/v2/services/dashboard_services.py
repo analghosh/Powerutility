@@ -115,7 +115,7 @@ class DashboardService:
             )
 
             # Process and enhance the data
-            processed_data = await self._process_dashboard_data(
+            processed_data = self._process_dashboard_data(
                 dashboard_data=dashboard_data,
                 schedule_date=effective_date_str,
                 current_block=current_block,
@@ -144,7 +144,7 @@ class DashboardService:
         except Exception as e:
             logger.exception(f"Failed to get max updated_at from {collection_name}")
             return None
-    async def _process_dashboard_data(
+    def _process_dashboard_data(
         self,
         dashboard_data: Dict[str, Any],
         schedule_date: str,
@@ -386,7 +386,13 @@ class DashboardService:
                 for s_param in filters["sort"].split(","):
                     field, direction = s_param.strip().split(":")
                     sort_params.append((field, 1 if direction.lower() == "asc" else -1))
-
+            else:
+                
+                if filters.get("type"):
+                   # Only one type → sort by time_block only
+                   sort_params = [("time_block", 1)]
+                else:
+                    sort_params = [("type", 1) ,  ("time_block", 1)] 
             # Pagination
             skip = filters.get("skip", 0)
             limit = filters.get("limit")

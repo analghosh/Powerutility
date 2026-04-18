@@ -43,7 +43,7 @@ class SupplyFillProcessor(BaseProcessor):
         schedule = "0 0 * * *"
         start_time = datetime.now()
 
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {"status": "error", "message": "Failed to record job start"}
@@ -75,7 +75,7 @@ class SupplyFillProcessor(BaseProcessor):
                 "cron_job": "supply_fill"
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -99,7 +99,7 @@ class SupplyFillProcessor(BaseProcessor):
                 "data_type": "supply",
                 "correlation_id": execution_id
             }
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -144,7 +144,7 @@ class SupplyFillProcessor(BaseProcessor):
             # 2. Get all plants
             cursor = self.plant_repository.collection.find({})
             try:
-                plants = await cursor.to_list(None)
+                plants = list(cursor)
             finally:
                 cursor.close()
             new_dc_sg_entities = []

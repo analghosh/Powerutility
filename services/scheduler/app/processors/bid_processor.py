@@ -25,6 +25,9 @@ class BidProcessor(BaseProcessor):
         super().__init__()
         self.repository = BidTradeServeRepository()
 
+        # Preload timeblock mappings for better performance using base processor's caching
+        self.preload_timeblock_mappings()
+
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
         Execute bid data processing as a cron job with correlation ID
@@ -35,7 +38,7 @@ class BidProcessor(BaseProcessor):
         start_time = datetime.now()
 
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -79,7 +82,7 @@ class BidProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -110,7 +113,7 @@ class BidProcessor(BaseProcessor):
                 "cron_job":"bid"
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -129,11 +132,11 @@ class BidProcessor(BaseProcessor):
             # Clear correlation ID after job completion
             self.clear_correlation_id()
 
-    async def process_raw_data_to_serve(
-        self,
-        raw_data: List[Dict[str, Any]],
-        metadata: Dict[str, Any],
-        provider_config: Dict[str, Any]
+    def process_raw_data_to_serve(
+    self,
+    raw_data: List[Dict[str, Any]],
+    metadata: Dict[str, Any],
+    provider_config: Dict[str, Any]
     ) -> bool:
         try:
             if not raw_data:
@@ -180,13 +183,13 @@ class BidProcessor(BaseProcessor):
                         te = item.get("Time_End") or item.get("time_end")
                         if ts and te:
                             # Use base processor's timeblock lookup method
-                            timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                            timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                             if timeblock_data:
                                 item["time_block"] = timeblock_data.get("timeblock")
                             else:
                                 # Fallback to time range string format for _get_timeblock_number
                                 time_range = f"{str(ts).strip()}-{str(te).strip()}"
-                                timeblock_num = await self._get_timeblock_number(time_range)
+                                timeblock_num = self._get_timeblock_number(time_range)
                                 if timeblock_num > 0:
                                     item["time_block"] = timeblock_num
 
@@ -386,13 +389,13 @@ class BidProcessor(BaseProcessor):
                             te = rec_dict.get("Time_End") or rec_dict.get("time_end")
                             if ts and te:
                                 # Use base processor's timeblock lookup method
-                                timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                                timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                                 if timeblock_data:
                                     rec_dict["time_block"] = timeblock_data.get("timeblock")
                                 else:
                                     # Fallback to time range string format for _get_timeblock_number
                                     time_range = f"{str(ts).strip()}-{str(te).strip()}"
-                                    timeblock_num = await self._get_timeblock_number(time_range)
+                                    timeblock_num = self._get_timeblock_number(time_range)
                                     rec_dict["time_block"] = timeblock_num if timeblock_num > 0 else 0
                         calc_val = self._calculate_value_from_exchange(rec_dict["scheduled_at"], rec_dict["time_block"], rec_dict["type"], rec_dict.get("traded", 0))
                         serve_ent = BidTradeServeEntity.from_raw_data(rec_dict, metadata, provider_config, calc_val)
@@ -505,7 +508,7 @@ class BidProcessor(BaseProcessor):
         start_time = datetime.now()
 
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -536,7 +539,7 @@ class BidProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
 
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -563,7 +566,7 @@ class BidProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
 
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -590,7 +593,7 @@ class BidProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -608,6 +611,12 @@ class BidProcessor(BaseProcessor):
         finally:
             # Clear correlation ID after job completion
             self.clear_correlation_id()
+
+
+
+
+    
+
 
     def _get_or_lookup_timeblock(self, record: Dict[str, Any]) -> Optional[int]:
         """

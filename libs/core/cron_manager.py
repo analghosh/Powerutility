@@ -63,7 +63,9 @@ class BaseCronManager(ABC):
             import threading
             self._thread_lock = threading.Lock()
             self._active_threads: Dict[str, threading.Thread] = {}
-
+            
+            # Register service-specific jobs
+            self._register_service_jobs()
         except (OSError, ValueError, TypeError, RuntimeError) as e:
             logger.warning("Could not initialize scheduler for service %s: %s", service_name, str(e))
             self.scheduler = None
@@ -142,19 +144,11 @@ class BaseCronManager(ABC):
                         job_type, self.service_name, str(e))
             return False
         
-    async def start(self):
+    def start(self):
         """Start the cron scheduler with all registered jobs"""
         if not self._is_running:
             try:
                 logger.info("Starting cron scheduler for service: %s...", self.service_name)
-                
-                # Fetch and register jobs dynamically before starting
-                import inspect
-                register_func = self._register_service_jobs
-                if inspect.iscoroutinefunction(register_func):
-                    await register_func()
-                else:
-                    register_func()
                 
                 # Add all enabled jobs to scheduler
                 enabled_jobs = 0
@@ -504,7 +498,7 @@ class BaseCronManager(ABC):
                         job_id, self.service_name, str(e))
             return False
     
-    async def enable_job(self, job_id: str) -> bool:
+    def enable_job(self, job_id: str) -> bool:
         """Enable a job"""
         try:
             if job_id in self._registered_jobs:
@@ -518,7 +512,7 @@ class BaseCronManager(ABC):
                 # Update database if repository is available
                 if self.job_data_repository:
                     try:
-                        await self.job_data_repository.update_job_enabled_status(job_id, True)
+                        self.job_data_repository.update_job_enabled_status(job_id, True)
                         logger.info("Updated job %s enabled status to True in database", job_id)
                     except Exception as db_error:
                         logger.warning("Failed to update job %s in database: %s", job_id, db_error)
@@ -531,7 +525,7 @@ class BaseCronManager(ABC):
                         job_id, self.service_name, str(e))
             return False
     
-    async def disable_job(self, job_id: str) -> bool:
+    def disable_job(self, job_id: str) -> bool:
         """Disable a job"""
         try:
             if job_id in self._registered_jobs:
@@ -545,7 +539,7 @@ class BaseCronManager(ABC):
                 # Update database if repository is available
                 if self.job_data_repository:
                     try:
-                        await self.job_data_repository.update_job_enabled_status(job_id, False)
+                        self.job_data_repository.update_job_enabled_status(job_id, False)
                         logger.info("Updated job %s enabled status to False in database", job_id)
                     except Exception as db_error:
                         logger.warning("Failed to update job %s in database: %s", job_id, db_error)

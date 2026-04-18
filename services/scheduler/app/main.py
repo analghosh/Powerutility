@@ -56,12 +56,12 @@ class HealthResponse(BaseModel):
     timestamp: str
 
 
-async def run_timeblock_seeder():
+def run_timeblock_seeder():
     """Run the timeblock seeder and handle the results."""
     try:
         logger.info("Running timeblock seeder...")
         timeblock_seeder = TimeblockSeeder()
-        seeder_result = await timeblock_seeder.seed()
+        seeder_result = timeblock_seeder.seed()
         
         if seeder_result['status'] == 'success':
             logger.info("Timeblock seeder completed successfully: %s", seeder_result['message'])
@@ -95,12 +95,10 @@ def validate_database_configuration():
         if not settings.AUDIT_DB_NAME:
             raise ValueError("AUDIT_DB_NAME cannot be empty")
         
-        # Use logger (not print) to avoid Windows console encoding issues (cp1252)
-        logger.info("Database configuration validated - using database: %s", settings.AUDIT_DB_NAME)
+        print(f"✅ Database configuration validated - using database: {settings.AUDIT_DB_NAME}")
         
     except Exception as e:
-        # Use ASCII-only message to avoid UnicodeEncodeError on some consoles
-        logger.error("Database configuration error: %s", e)
+        print(f"❌ Database configuration error: {e}")
         raise
 
 
@@ -109,7 +107,7 @@ async def start_cron_manager_async():
     try:
         # Start the cron manager directly in the current event loop
         # since AsyncIOScheduler needs to be started in the same thread as the event loop
-        await cron_manager.start()
+        cron_manager.start()
         logger.info("Cron scheduler started successfully in background")
     except Exception as e:
         logger.error(f"Failed to start cron scheduler in background: {str(e)}")
@@ -119,12 +117,11 @@ async def run_startup_deduplication():
     """Run historical deduplication (blocking startup)"""
     try:
         from .utils.deduplicator import run_historical_deduplication
-        # Avoid emoji in logs for Windows console compatibility
-        logger.info("Starting historical deduplication (Blocking startup)...")
+        logger.info("🛡️ Starting historical deduplication (Blocking startup)...")
         # await run_historical_deduplication()
-        logger.info("Historical deduplication completed")
+        logger.info("✅ Historical deduplication completed")
     except Exception as e:
-        logger.error("Historical deduplication failed: %s", e)
+        logger.error(f"❌ Historical deduplication failed: {e}")
 
 
 @asynccontextmanager
@@ -140,19 +137,11 @@ async def lifespan(app: FastAPI):
     # Step 0: Run historical deduplication - ABSOLUTELY BLOCKING
     # No other tasks (seeding, cron, consumers) should proceed until this is finished
     await run_startup_deduplication()
-
-    # Initialize DummyDataService async resources (time series collections)
-    try:
-        from .services.dummy_data_service import dummy_data_service
-        await dummy_data_service.initialize()
-        logger.info("DummyDataService time series collections initialized")
-    except Exception as e:
-        logger.error(f"Failed to initialize DummyDataService: {e}")
-
+    
     # Validate configuration on startup
     validate_database_configuration()
     # Run timeblock seeder
-    await run_timeblock_seeder()
+    run_timeblock_seeder()
     
     # Step 2: Start the cron scheduler as a background task
     try:
@@ -343,7 +332,7 @@ async def scheduler_diagnostics():
     
     try:
         # Get scheduler status
-        scheduler_status = await cron_manager.get_all_jobs()
+        scheduler_status = cron_manager.get_all_jobs()
         
         # Get registered jobs configuration
         registered_jobs = cron_manager.get_registered_jobs()

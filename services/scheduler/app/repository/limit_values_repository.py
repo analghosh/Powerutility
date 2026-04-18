@@ -4,6 +4,8 @@ Handles limit_values collection access for TM, SEZ, MLTP, and other limit values
 """
 from typing import List, Dict, Any, Optional
 import logging
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, date, timedelta
 
 from services.processing.app.v2.repository.base_repository import GenericRepository
@@ -23,6 +25,50 @@ class LimitValuesRepository(GenericRepository):
         self.collection_name = collection_name
         logger.info(f"LimitValuesRepository initialized with collection: {self.collection_name}")
 
+    def _get_data_sync(
+        self,
+        start_date: date,
+        end_date: date,
+        market: str,
+        ID: str,
+        area: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values data synchronously with filters.
+        
+        Args:
+            start_date: Start date in YYYY-MM-DD format
+            end_date: End date in YYYY-MM-DD format
+            market: Market type (e.g., "RTM", "DAM")
+            ID: Limit value ID (e.g., "TM", "SEZ", "Multiplier")
+            area: Area filter (e.g., "NA", "OB")
+        """
+        try:
+            # Convert date objects to datetime if necessary
+            if isinstance(start_date, date) and not isinstance(start_date, datetime):
+                start_date = datetime.combine(start_date, datetime.min.time())
+            if isinstance(end_date, date) and not isinstance(end_date, datetime):
+                end_date = datetime.combine(end_date, datetime.min.time())
+
+            filter_query = {
+                "scheduled_at": {"$gte": start_date, "$lt": end_date}
+            }
+            
+            # Add optional filters
+            if market and market != "":
+                filter_query["market"] = market
+            if ID and ID != "":
+                filter_query["category"] = ID
+            if area and area != "" and area != "NA":
+                filter_query["area"] = area
+            
+            result = self.find(self.collection_name, filter_query).sort({"scheduled_at":1}).to_list()
+            logger.info(f"Retrieved {len(result)} limit values for market={market}, ID={ID}, area={area}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to retrieve limit values: {str(e)}")
+            return []
+
     async def get_data(
         self,
         start_date,  # Can be str or date
@@ -40,32 +86,58 @@ class LimitValuesRepository(GenericRepository):
             start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
         if isinstance(end_date, str):
             end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+            
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            return await loop.run_in_executor(
+                executor,
+                self._get_data_sync,
+                start_date,
+                end_date,
+                market,
+                id,
+                area
+            )
 
-        # Convert date objects to datetime if necessary
-        if isinstance(start_date, date) and not isinstance(start_date, datetime):
-            start_date = datetime.combine(start_date, datetime.min.time())
-        if isinstance(end_date, date) and not isinstance(end_date, datetime):
-            end_date = datetime.combine(end_date, datetime.min.time())
-
+    def _get_data_byID_with_latest_date_sync(
+        self,
+        ID: str,
+        market: str,
+        category: str,
+        area: str,
+        scheduled_at: datetime
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values by ID with latest date synchronously.
+        
+        Args:
+            ID: Limit value ID (e.g., "RTM_forecasted_price")
+            market: Market type (e.g., "RTM")
+            category: Category filter (optional, pass "" to skip)
+            area: Area filter (optional, pass "" to skip)
+        """
+        tomorrow_date = datetime.now() + timedelta(days=1)
         try:
-            filter_query = {
-                "scheduled_at": {"$gte": start_date, "$lt": end_date}
+            # Build match filter
+            match_filter = {
+                "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date},
+                "id": ID,
+                "market": market
             }
-
+            
+            
             # Add optional filters
-            if market and market != "":
-                filter_query["market"] = market
-            if id and id != "":
-                filter_query["category"] = id
+            if category and category != "":
+                match_filter["category"] = category
             if area and area != "" and area != "NA":
-                filter_query["area"] = area
-
-            cursor = self.find(self.collection_name, filter_query).sort({"scheduled_at": 1})
-            result = await cursor.to_list(length=None)
-            logger.info(f"Retrieved {len(result)} limit values for market={market}, ID={id}, area={area}")
+                match_filter["area"] = area
+            
+            result = self.find(self.collection_name, match_filter).sort([("scheduled_at", 1), ("time_block", 1)]).to_list()
+            
+            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}")
             return result
         except Exception as e:
-            logger.error(f"Failed to retrieve limit values: {str(e)}")
+            logger.error(f"Failed to retrieve limit values by ID: {str(e)}")
             return []
 
     async def get_data_byID_with_latest_date(
@@ -79,31 +151,19 @@ class LimitValuesRepository(GenericRepository):
         """
         Get limit values by ID with latest date asynchronously.
         """
-        tomorrow_date = datetime.now() + timedelta(days=1)
-        try:
-            match_filter = {
-                "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date},
-                "id": ID,
-                "market": market
-            }
-
-            if category and category != "":
-                match_filter["category"] = category
-            if area and area != "" and area != "NA":
-                match_filter["area"] = area
-
-            cursor = self.find(self.collection_name, match_filter).sort(
-                [("scheduled_at", 1), ("time_block", 1)]
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            return await loop.run_in_executor(
+                executor,
+                self._get_data_byID_with_latest_date_sync,
+                ID,
+                market,
+                category,
+                area,
+                scheduled_at
             )
-            result = await cursor.to_list(length=None)
 
-            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}")
-            return result
-        except Exception as e:
-            logger.error(f"Failed to retrieve limit values by ID: {str(e)}")
-            return []
-
-    async def get_by_plant_and_block(
+    def get_by_plant_and_block(
         self,
         schedule_date: str,
         plant_id: str,
@@ -112,28 +172,33 @@ class LimitValuesRepository(GenericRepository):
     ) -> Optional[Dict[str, Any]]:
         """
         Get limit value for a specific plant and time block.
+        
+        Args:
+            schedule_date: Schedule date in YYYY-MM-DD format
+            plant_id: Plant ID
+            time_block: Time block number (1-96)
+            ID: Limit value ID (e.g., "TM", "SEZ")
         """
         try:
             filter_query = {
                 "scheduled_at": datetime.strptime(schedule_date, "%Y-%m-%d"),
-                "id": plant_id,
+                "id": plant_id,  # In limit_values, id field contains plant identifier
                 "block": time_block,
-                "category": ID
+                "category": ID  # Category contains the type (TM, SEZ, etc.)
             }
-
-            result = await self.find_one(self.collection_name, filter_query)
+            
+            result = self.find_one(self.collection_name, filter_query)
             return result
         except Exception as e:
             logger.error(f"Failed to get limit value for plant={plant_id}, block={time_block}: {str(e)}")
             return None
 
-    async def ensure_historical_collection(self):
+    def ensure_historical_collection(self):
         """Create limit_values_historical as a time-series collection if it doesn't exist"""
         hist_collection_name = f"{self.collection_name}_historical"
         try:
-            existing_names = await self.db.list_collection_names()
-            if hist_collection_name not in existing_names:
-                await self.db.create_collection(
+            if hist_collection_name not in self.db.list_collection_names():
+                self.db.create_collection(
                     hist_collection_name,
                     timeseries={
                         "timeField": "scheduled_at",
@@ -147,20 +212,22 @@ class LimitValuesRepository(GenericRepository):
             logger.error(f"Failed to ensure historical collection: {e}")
             return None
 
-    async def archive_to_historical(self, today: datetime) -> Dict[str, Any]:
+    def archive_to_historical(self, today: datetime) -> Dict[str, Any]:
         """
         Move records older than today to the historical time-series collection.
+        
+        Args:
+            today: Today's date (start of day)
         """
         try:
-            hist_collection_name = await self.ensure_historical_collection()
+            hist_collection_name = self.ensure_historical_collection()
             if not hist_collection_name:
                 return {"archived": 0, "deleted": 0, "error": "No historical collection"}
 
             # 1. Fetch records older than today
             query = {"scheduled_at": {"$lt": today}}
-            cursor = self.db[self.collection_name].find(query)
-            candidates = await cursor.to_list(length=None)
-
+            candidates = list(self.db[self.collection_name].find(query))
+            
             if not candidates:
                 logger.info("No records found for archival")
                 return {"archived": 0, "deleted": 0}
@@ -168,6 +235,7 @@ class LimitValuesRepository(GenericRepository):
             # 2. Map to time-series format
             to_insert = []
             for doc in candidates:
+                # Meta-fields for time-series: block, id, market, category, area
                 metadata = {
                     "block": doc.get("block"),
                     "id": doc.get("id"),
@@ -175,7 +243,8 @@ class LimitValuesRepository(GenericRepository):
                     "category": doc.get("category"),
                     "area": doc.get("area")
                 }
-
+                
+                # Document for time-series
                 hist_doc = {
                     "scheduled_at": doc.get("scheduled_at"),
                     "metadata": metadata,
@@ -192,12 +261,12 @@ class LimitValuesRepository(GenericRepository):
             # 3. Bulk insert to historical
             inserted_ids = []
             if to_insert:
-                result = await self.db[hist_collection_name].insert_many(to_insert, ordered=False)
+                result = self.db[hist_collection_name].insert_many(to_insert, ordered=False)
                 inserted_ids = result.inserted_ids
                 logger.info(f"Archived {len(inserted_ids)} records to {hist_collection_name}")
 
             # 4. Delete from main collection
-            delete_result = await self.db[self.collection_name].delete_many(query)
+            delete_result = self.db[self.collection_name].delete_many(query)
             logger.info(f"Deleted {delete_result.deleted_count} archived records from {self.collection_name}")
 
             return {
@@ -260,18 +329,17 @@ class LimitValuesRepository(GenericRepository):
             logger.error(f"Error in bulk_insert_only for {collection_name}: {e}")
             raise
 
-    async def get_approved_tomorrow(self, tomorrow: datetime) -> List[Dict[str, Any]]:
+    def get_approved_tomorrow(self, tomorrow: datetime) -> List[Dict[str, Any]]:
         """
         Fetch approved entries for tomorrow from the approval collection.
         """
         try:
-            approval_collection = "limit_approval"
+            approval_collection = "limit_approval" # Hardcoded as per processor context
             query = {
                 "scheduled_at": tomorrow,
                 "status": "APPROVED"
             }
-            cursor = self.db[approval_collection].find(query)
-            results = await cursor.to_list(length=None)
+            results = list(self.db[approval_collection].find(query))
             logger.info(f"Found {len(results)} approved records for tomorrow ({tomorrow.strftime('%Y-%m-%d')})")
             return results
         except Exception as e:

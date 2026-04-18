@@ -10,7 +10,7 @@ class SchedulingRequisitionCalculationRepository(BaseRepository):
         super().__init__(collection_name=collection_name)
         logger.info(f"DashboardRepository initialized with collection: {collection_name}")
     
-    async def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
+    def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
         scheduledate = (date.today() - timedelta(days=1)).strftime("%Y-%m-%d")
         logger.info(f"DashboardRepository initialized with collection: {scheduledate}")
         try:
@@ -139,7 +139,7 @@ class SchedulingRequisitionCalculationRepository(BaseRepository):
 
 
         # return pipeline
-            return await self.collection.aggregate(pipeline).to_list(None)
+            return list(self.collection.aggregate(pipeline))
         except Exception as e:
             logger.error("Failed serve records: %s", str(e))
             return {"error": str(e)}

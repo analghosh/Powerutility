@@ -59,7 +59,7 @@ class TimeblockHelper:
             current_time = now.strftime("%H:%M")
             
             # Find current timeblock from database
-            current_timeblock_doc = await self.repository.find_one("timeblock_master", {
+            current_timeblock_doc = self.repository.find_one("timeblock_master", {
                 "$and": [
                     {"starttime": {"$lte": current_time}},
                     {"$or": [
@@ -94,7 +94,7 @@ class TimeblockHelper:
             Dictionary containing timeblock information
         """
         try:
-            timeblock_doc = await self.repository.find_one("timeblock_master", {"timeblock": block_id})
+            timeblock_doc = self.repository.find_one("timeblock_master", {"timeblock": block_id})
             if timeblock_doc:
                 return {
                     "timeblock": timeblock_doc.get('timeblock'),
@@ -162,7 +162,7 @@ class TimeblockHelper:
             List of all timeblock documents sorted by timeblock number
         """
         try:
-            return await self.repository.get_all("timeblock_master", {}, sort=[("timeblock", 1)])
+            return self.repository.get_all("timeblock_master", {}, sort=[("timeblock", 1)])
         except Exception as e:
             logger.error(f"Error getting all timeblocks from DB: {e}")
             return []
@@ -179,7 +179,7 @@ class TimeblockHelper:
         """
         try:
             hour_str = f"{hour:02d}:"
-            return await self.repository.get_all("timeblock_master", {
+            return self.repository.get_all("timeblock_master", {
                 "starttime": {"$regex": f"^{hour_str}"}
             }, sort=[("timeblock", 1)])
         except Exception as e:
@@ -197,7 +197,7 @@ class TimeblockHelper:
             True if timeblock exists, False otherwise
         """
         try:
-            timeblock_doc = await self.repository.find_one("timeblock_master", {"timeblock": block_id})
+            timeblock_doc = self.repository.find_one("timeblock_master", {"timeblock": block_id})
             return timeblock_doc is not None
         except Exception as e:
             logger.error(f"Error validating timeblock {block_id}: {e}")

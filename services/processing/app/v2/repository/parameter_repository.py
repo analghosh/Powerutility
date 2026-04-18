@@ -145,7 +145,7 @@ class ParameterRepository:
         """
         try:
             # Get total count
-            total = await self.repo.get_count(self.collection_name)
+            total = self.repo.get_count(self.collection_name)
             
             # Get parameters with pagination
             parameters = await self.repo.get_all_async(
@@ -218,7 +218,7 @@ class ParameterRepository:
             if not ObjectId.is_valid(parameter_id):
                 return False
             
-            result = await self.repo.delete_one(
+            result = self.repo.delete_one(
                 self.collection_name,
                 {"_id": ObjectId(parameter_id)}
             )

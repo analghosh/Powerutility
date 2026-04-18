@@ -2,6 +2,7 @@
 MFA schemas for request/response models
 """
 
+from typing import Optional
 from pydantic import BaseModel, Field
 
 
@@ -45,15 +46,11 @@ class MFARecoveryRequest(BaseModel):
     backup_code: str = Field(..., description="Backup code for account recovery")
 
 
-class AdminDisableMFARequest(BaseModel):
-    """Admin MFA disable request schema"""
-    reason: str = Field(..., description="Reason for disabling MFA")
-
-
 class MFARecoveryResponse(BaseModel):
     """MFA recovery response schema"""
     recovered: bool = Field(..., description="Whether recovery was successful")
     message: str = Field(..., description="Recovery result message")
+    new_backup_codes: Optional[list[str]] = Field(None, description="New backup codes if recovery successful")
 
 
 class MFAStatusResponse(BaseModel):

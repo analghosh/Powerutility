@@ -17,9 +17,6 @@ from datetime import datetime
 from libs.audit_queue.simple_logger import AuditLogger
 
 # Pydantic models for user operations
-class DisableUserRequest(BaseModel):
-    reason: str
-
 class UserCreateRequest(BaseModel):
     username: str
     password: str
@@ -38,7 +35,7 @@ class UserUpdateRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     username: str
-    email: Optional[str] = None
+    email: Optional[str] = None 
     is_active: bool
     is_verified: bool
     roles: List[str]
@@ -71,14 +68,14 @@ async def list_users(
     try:
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-
+        
         # Get users with filters
-        users = await user_repo.get_users_with_pagination(skip=skip, limit=limit, role_filter=role, is_active_filter=is_active)
-
+        users = user_repo.get_users_with_pagination(skip=skip, limit=limit, role_filter=role, is_active_filter=is_active)
+        
         # Log user list access with secure audit logging
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-
+        
         audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
@@ -92,7 +89,7 @@ async def list_users(
             user_agent=user_agent,
             success=True
         )
-
+        
         # Convert to response format
         return [
             UserResponse(
@@ -113,7 +110,7 @@ async def list_users(
         # Log failed user list access with secure audit logging
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-
+        
         audit_logger.log_error_event(
             service="auth",
             error_name="UserListAccessError",
@@ -138,18 +135,18 @@ async def create_user(
     try:
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-
+        
         # Check if user already exists
-        existing_user = await user_repo.get_user_by_username(user_data.username)
+        existing_user = user_repo.get_user_by_username(user_data.username)
         if existing_user:
             raise HTTPException(status_code=400, detail="Username already exists")
-
+        
         # Check email uniqueness only if email is provided
         if user_data.email:
-            existing_email = await user_repo.get_user_by_email(user_data.email)
+            existing_email = user_repo.get_user_by_email(user_data.email)
             if existing_email:
                 raise HTTPException(status_code=400, detail="Email already exists")
-
+        
         first_name = ""
         last_name = ""
 
@@ -157,7 +154,7 @@ async def create_user(
             first_name = user_data.profile.get("first_name", "")
             last_name = user_data.profile.get("last_name", "")
         # Create user with simple defaults
-        user = await user_repo.create_user(
+        user = user_repo.create_user(
             username=user_data.username,
             email=user_data.email or "",  # Empty string if no email provided
             password=user_data.password,
@@ -167,11 +164,11 @@ async def create_user(
             is_active=True,  # Active by default
             is_verified=False  # Not verified by default
         )
-
+        
         # Log successful user creation with secure audit logging
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-
+        
         audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
@@ -187,7 +184,7 @@ async def create_user(
             user_agent=user_agent,
             success=True
         )
-
+        
         return UserResponse(
             id=str(user.id),
             username=user.username,
@@ -206,7 +203,7 @@ async def create_user(
         # Log failed user creation with secure audit logging
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-
+        
         audit_logger.log_error_event(
             service="auth",
             error_name="UserCreationError",
@@ -232,11 +229,11 @@ async def get_user(
     try:
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-
-        user: Optional[UserDTO] = await user_repo.get_user_by_id(user_id)
+        
+        user: Optional[UserDTO] = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
+        
         return UserResponse(
             id=str(user.id),
             username=user.username,
@@ -265,49 +262,40 @@ async def update_user(
     try:
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-
+        
         current_user_id = current_user.user_id
-        is_self_update = (user_id == current_user_id)
-
-        # Non-self updates require users:update permission
-        if not is_self_update and "users:update" not in current_user.effective_permissions and not current_user.is_super_admin:
-            raise HTTPException(status_code=403, detail="Access denied. Missing permissions: users:update")
-
         # Check if user exists
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
+        
         # Update user
         update_data = {}
         if user_data.username is not None:
             update_data['username'] = user_data.username
         if user_data.email is not None:
             update_data['email'] = user_data.email
+        if user_data.roles is not None:
+            update_data['roles'] = user_data.roles
+        if user_data.permissions is not None:
+            update_data['permissions'] = user_data.permissions
         if user_data.profile is not None:
             update_data['profile'] = user_data.profile
-
-        # Privileged fields — only allowed for admins updating other users
-        if not is_self_update or current_user.is_super_admin:
-            if user_data.roles is not None:
-                update_data['roles'] = user_data.roles
-            if user_data.permissions is not None:
-                update_data['permissions'] = user_data.permissions
-            if user_data.is_active is not None:
-                update_data['is_active'] = user_data.is_active
-            if user_data.is_verified is not None:
-                update_data['is_verified'] = user_data.is_verified
+        if user_data.is_active is not None:
+            update_data['is_active'] = user_data.is_active
+        if user_data.is_verified is not None:
+            update_data['is_verified'] = user_data.is_verified
 
         # Track role changes for logging
         user_roles = set(user.roles)
         new_roles = update_data.get('roles', None)
-
+        
         if new_roles is not None:
             new_roles_set = set(new_roles)
             # Find roles that are being added (not previously assigned)
             added_roles = new_roles_set - user_roles
             removed_roles = user_roles - new_roles_set
-
+            
             # Log role changes if any
             if added_roles or removed_roles:
                 audit_logger.log_user_action(
@@ -323,14 +311,14 @@ async def update_user(
                     new_roles=new_roles,
                     success=True
                 )
-
-        success = await user_repo.update_user(user_id, update_data, modified_by=current_user_id)
+        
+        success = user_repo.update_user(user_id, update_data, modified_by=current_user_id)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update user")
-
+        
         # Get updated user
-        updated_user = await user_repo.get_user_by_id(user_id)
-
+        updated_user = user_repo.get_user_by_id(user_id)
+        
         return UserResponse(
             id=str(updated_user.id),
             username=updated_user.username,
@@ -358,18 +346,18 @@ async def delete_user(
     try:
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-
+        
         # Check if user exists
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
+        
         # Delete user
-        success = await user_repo.delete_user(user_id)
-
+        success = user_repo.delete_user(user_id)
+        
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete user")
-
+        
         audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
@@ -379,70 +367,12 @@ async def delete_user(
             target_username=user.username,
             success=True
         )
-
+        
         return {"message": "User deleted successfully", "user_id": user_id}
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting user: {str(e)}")
-
-@router.patch("/{user_id}/disable")
-async def disable_user(
-    user_id: str,
-    request: Request,
-    body: DisableUserRequest,
-    current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
-):
-    """Disable a user account. Immediately invalidates all active sessions."""
-    from ....repository.user_repository import UserRepository
-
-    # Admin-only
-    if "admin" not in current_user.roles and "user:disable" not in current_user.permissions:
-        raise HTTPException(status_code=403, detail="Admin access required")
-
-    # Prevent self-disable
-    if current_user.user_id == user_id:
-        raise HTTPException(status_code=400, detail="You cannot disable your own account")
-
-    user_repo = UserRepository()
-    user = await user_repo.get_user_by_id(user_id)
-    if not user:
-        raise HTTPException(status_code=404, detail="User not found")
-
-    if not user.is_active:
-        raise HTTPException(status_code=400, detail="User account is already disabled")
-
-    success = await user_repo.update_user(
-        user_id,
-        {
-            "is_active": False,
-            "disabled_by": current_user.user_id,
-            "disabled_at": datetime.utcnow(),
-            "disable_reason": body.reason,
-            "sessions": [],
-        },
-        modified_by=current_user.user_id,
-    )
-    if not success:
-        raise HTTPException(status_code=500, detail="Failed to disable user")
-
-    client_ip = request.client.host if request.client else None
-    audit_logger.log_user_action(
-        service="auth",
-        user_id=current_user.user_id,
-        action="disable_user",
-        message=f"Admin {current_user.user_id} disabled user {user.username}. Reason: {body.reason}",
-        client_ip=client_ip,
-        username=current_user.user_id,
-        target_user_id=user_id,
-        target_username=user.username,
-        reason=body.reason,
-        success=True,
-    )
-
-    return {"message": "User account disabled successfully", "user_id": user_id, "username": user.username}
-
 
 # Role and Permission Management
 @router.put("/{user_id}/roles")
@@ -456,15 +386,15 @@ async def assign_roles_to_user(
     try:
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
-
+        
         # Check if user exists
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
 
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
+        
         # Update user roles
-        success = await user_repo.update_user(user_id, {"roles": role_data.roles})
+        success = user_repo.update_user(user_id, {"roles": role_data.roles})
         audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
@@ -477,7 +407,7 @@ async def assign_roles_to_user(
         )
         if not success:
             raise HTTPException(status_code=500, detail="Failed to assign roles")
-
+        
         return {"message": "Roles assigned successfully", "user_id": user_id, "roles": role_data.roles}
     except HTTPException:
         raise
@@ -494,18 +424,18 @@ async def get_user_roles(
     try:
         from ....repository.user_repository import UserRepository
         from ....repository.role_repository import RoleRepository
-
+        
         user_repo = UserRepository()
         role_repo = RoleRepository()
-
-        user = await user_repo.get_user_by_id(user_id)
+        
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
+        
         # Get detailed role information
         role_details = []
         for role_name in user.roles:
-            role = await role_repo.get_role_by_name(role_name)
+            role = role_repo.get_role_by_name(role_name)
             if role:
                 role_details.append({
                     "id": role.id,
@@ -513,7 +443,7 @@ async def get_user_roles(
                     "description": role.description,
                     "created_at": role.created_at.isoformat()
                 })
-
+        
         return {
             "user_id": user_id,
             "username": user.username,
@@ -525,7 +455,7 @@ async def get_user_roles(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error retrieving user roles: {str(e)}")
 
-# Note: Direct permission assignment removed.
+# Note: Direct permission assignment removed. 
 # Permissions are now automatically derived from role menu assignments.
 # Use: 1) Assign menus to roles, 2) Assign roles to users
 
@@ -541,32 +471,32 @@ async def get_user_accessible_menus(
         from ....repository.menu_role_repository import MenuRoleRepository
         from ....repository.menu_repository import MenuRepository
         from ....repository.role_repository import RoleRepository
-
+        
         user_repo = UserRepository()
         menu_role_repo = MenuRoleRepository()
         menu_repo = MenuRepository()
         role_repo = RoleRepository()
-
-        user = await user_repo.get_user_by_id(user_id)
+        
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
+        
         # Get all accessible menus based on user roles
         accessible_menus = []
         menu_permissions_map = {}
-
+        
         # Get role IDs
         role_ids = []
         for role_name in user.roles:
-            role = await role_repo.get_role_by_name(role_name)
+            role = role_repo.get_role_by_name(role_name)
             if role:
                 role_ids.append(role.id)
-
+        
         # Get menu permissions for all roles
         for role_id in role_ids:
-            menu_roles = await menu_role_repo.get_menu_roles_by_role_id(role_id)
+            menu_roles = menu_role_repo.get_menu_roles_by_role_id(role_id)
             for menu_role in menu_roles:
-                menu = await menu_repo.get_menu_by_id(menu_role.menu_id)
+                menu = menu_repo.get_menu_by_id(menu_role.menu_id)
                 if menu:
                     if menu.id not in menu_permissions_map:
                         menu_permissions_map[menu.id] = {
@@ -574,12 +504,12 @@ async def get_user_accessible_menus(
                             "permissions": set()
                         }
                     menu_permissions_map[menu.id]["permissions"].update(menu_role.permissions)
-
+        
         # Build response
         for menu_data in menu_permissions_map.values():
             menu = menu_data["menu"]
             permissions = list(menu_data["permissions"])
-
+            
             accessible_menus.append({
                 "menu_id": menu.id,
                 "menu_name": menu.name,
@@ -588,7 +518,7 @@ async def get_user_accessible_menus(
                 "parent_id": menu.parent_id,
                 "permissions": permissions
             })
-
+        
         return {
             "user_id": user_id,
             "username": user.username,
@@ -601,10 +531,11 @@ async def get_user_accessible_menus(
         raise HTTPException(status_code=500, detail=f"Error getting user accessible menus: {str(e)}")
 
 # REMOVED: Direct user permissions endpoint
-#
+# 
 # Use these endpoints instead to understand user access:
-# - GET /users/{user_id}/roles → See user's assigned roles
+# - GET /users/{user_id}/roles → See user's assigned roles  
 # - GET /users/{user_id}/accessible-menus → See user's accessible menus with permissions
 # - GET /roles/{role_id}/menus → See what menus are assigned to specific roles
 #
 # Permissions are automatically calculated and don't need a separate endpoint.
+

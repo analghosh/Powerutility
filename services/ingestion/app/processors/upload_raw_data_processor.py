@@ -215,7 +215,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                         "provider_found": bool(provider)
                     }
                 )
-                log_id = await self.integration_apilog_repository.save_log(data_type.lower(), log_entity)
+                log_id = self.integration_apilog_repository.save_log(data_type.lower(), log_entity)
                 logger.info("Logged raw upload content to integration log (id: %s)", log_id)
             except Exception as log_error:
                 logger.error("Failed to write integration log for upload %s: %s", upload_id, log_error, exc_info=True)
@@ -245,7 +245,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                 "upload_created_at": upload_created_at,
                 "integration_apilog_id": log_id
             }
-            result = await self.raw_data_service.store_raw_data(
+            result = self.raw_data_service.store_raw_data(
                 raw_data=csv_data,
                 provider=provider,
                 additional_metadata=additional_metadata
@@ -347,7 +347,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error marking upload %s as permanently failed: %s", upload_id, e, exc_info=True)
 
 
-    async def _record_job_completion(self, job_type: str, job_name: str, schedule: str,
+    def _record_job_completion(self, job_type: str, job_name: str, schedule: str,
                               execution_start: datetime, execution_end: datetime, execution_id: str,
                               status: str, success: bool, result: Optional[Dict[str, Any]] = None,
                               error_message: Optional[str] = None) -> None:
@@ -372,13 +372,13 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
         try:
             # Get the job_id (ObjectId) from job_data collection using job_type
-            job_data = await self.job_data_repository.get_job(job_type)
+            job_data = self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return
 
             # Use base class method for job completion recording
-            await self.record_job_completion(
+            self.record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -409,7 +409,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
 
         # Record job start
-        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
 
         # Log job start
         if execution_id:
@@ -428,7 +428,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
         try:
             # Get pending uploads that need processing
-            pending_uploads = await self.upload_tracking_repository.get_uploads_by_status_and_date(
+            pending_uploads = self.upload_tracking_repository.get_uploads_by_status_and_date(
                 status=[RawDataStatus.PENDING, RawDataStatus.FAILED],
                 limit=getattr(settings, 'BACKGROUND_PROCESSING_BATCH_SIZE', 10)
             )
@@ -458,7 +458,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                     )
 
                     # Record job completion in job detail system
-                    await self._record_job_completion(
+                    self._record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "success", True, result
                     )
@@ -616,7 +616,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                 )
 
                 # Record job completion in job detail system
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     status, overall_success, result=result, error_message=error_message
                 )
@@ -652,7 +652,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                 )
 
                 # Record job completion with error in job detail system
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, result=result, error_message=str(e)
                 )
@@ -674,7 +674,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
             provider_service = self.provider_service
 
             # Get provider details directly
-            provider = await provider_service.get_provider_by_code_and_data_type(
+            provider = provider_service.get_provider_by_code_and_data_type(
                 provider_type, data_type.lower()
             )
 

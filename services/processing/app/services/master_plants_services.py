@@ -283,12 +283,12 @@ class ServeMasterPlantsService:
             )
             raise
 
-    async def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int,
+    def list(self, filters: Optional[Dict[str, Any]], page: int, page_size: int,
              actor: Optional[Dict[str, Any]], request_info: Dict[str, Any]) -> Dict[str, Any]:
         try:
             filters = filters or {}
-            result = await self.repo.list(filters=filters, page=page, page_size=page_size, sort=[("plant_name", 1)])
-
+            result = self.repo.list(filters=filters, page=page, page_size=page_size, sort=[("plant_name", 1)])
+            
             # Transform items in the list to legacy format
             if 'items' in result and result['items']:
                 transformed_items = []
@@ -593,11 +593,11 @@ class ServeMasterPlantsService:
                 detail=f"Internal server error: {str(e)}"
             )
     
-    async def get_plants(
-        self,
-        filter_by: Optional[str] = None,
+    def get_plants(
+        self, 
+        filter_by: Optional[str] = None, 
         filter_value: Optional[str] = None,
-        skip: int = 0,
+        skip: int = 0, 
         limit: int = 100
     ) -> List[Dict[str, Any]]:
         """
@@ -633,7 +633,7 @@ class ServeMasterPlantsService:
                 filter_criteria[filter_mapping[filter_by]] = filter_value
             
             # Get plants from repository
-            result = await self.repo.list(
+            result = self.repo.list(
                 filters=filter_criteria,
                 page=(skip // limit) + 1,
                 page_size=limit

@@ -101,7 +101,7 @@ class APIKeyManagementController:
         Returns:
             APIKeyResponse with api_key and secret
         """
-        result = await api_key_management_service.create_api_key(
+        result = api_key_management_service.create_api_key(
             name=request.name,
             description=request.description,
             api_key_prefix=request.api_key_prefix,
@@ -128,7 +128,7 @@ class APIKeyManagementController:
         Returns:
             List of APIKeyInfo
         """
-        keys = await api_key_management_service.list_api_keys(is_active=is_active)
+        keys = api_key_management_service.list_api_keys(is_active=is_active)
         
         result = []
         for key in keys:
@@ -159,7 +159,7 @@ class APIKeyManagementController:
         Returns:
             APIKeyInfo
         """
-        key_data = await api_key_management_service.get_api_key(api_key)
+        key_data = api_key_management_service.get_api_key(api_key)
         
         created_at = key_data.get("created_at")
         updated_at = key_data.get("updated_at")
@@ -186,7 +186,7 @@ class APIKeyManagementController:
         Returns:
             APIKeyStatusResponse
         """
-        result = await api_key_management_service.activate_api_key(api_key)
+        result = api_key_management_service.activate_api_key(api_key)
         return APIKeyStatusResponse(**result)
 
     async def deactivate_api_key(self, api_key: str) -> APIKeyStatusResponse:
@@ -199,7 +199,7 @@ class APIKeyManagementController:
         Returns:
             APIKeyStatusResponse
         """
-        result = await api_key_management_service.deactivate_api_key(api_key)
+        result = api_key_management_service.deactivate_api_key(api_key)
         return APIKeyStatusResponse(**result)
 
 

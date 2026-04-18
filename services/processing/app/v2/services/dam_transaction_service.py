@@ -260,8 +260,8 @@ class DAMTransactionService:
         bid_data: Dict[str, Any],
         ocf_toggle: bool = False,
         bid_area_id: str = "",
-        correlation_id: Optional[str] = None,
-        start_time: Optional[time] = None
+        correlation_id: str = None,
+        start_time: time = None
     ) -> Dict[str, Any]:
         """
         Submit single bid to external exchange API
@@ -590,7 +590,7 @@ class DAMTransactionService:
 
     async def cancel_bid(
         self,
-        correlation_id: Optional[str] = None
+        correlation_id: str = None
     ) -> Dict[str, Any]:
         """
         Cancel all existing DAM bids for today's delivery date.
@@ -783,7 +783,7 @@ class DAMTransactionService:
                 "exchange_response": cancel_result
             }
 
-    async def update_single_bid_dam_in_system(self, delivery_date: int, asset_id: str, bid_area_id: str, correlation_id: Optional[str] = None) -> Dict[str, Any]:
+    async def update_single_bid_dam_in_system(self, delivery_date: int, asset_id: str, bid_area_id: str) -> Dict[str, Any]:
         """
         Fetch DAM Single Bid Book.
         API: /dam/api/v2/singlebid/...
@@ -811,15 +811,11 @@ class DAMTransactionService:
             order_id = bid.get("OrderId")
             order_status = bid.get("OrderStatus")
             if order_status == "Cancelled":
-                dam_single_bid_data = await self.dam_single_bid_repo.find_one_async(
-                    self.dam_single_bid_repo.collection_name,
-                    {"exchangeOrderId": order_id}
-                )
+                dam_single_bid_data = await self.dam_single_bid_repo.find_one_async({"exchangeOrderId": order_id})
                 if dam_single_bid_data:
                     current_revision = dam_single_bid_data.get("revision_no", 0)
                     current_exchange_revision = dam_single_bid_data.get("exchangeRevisionNo", 0)
                     await self.dam_single_bid_repo.update_one_async(
-                        self.dam_single_bid_repo.collection_name,
                         {"_id": dam_single_bid_data["_id"]},
                         {"$set": {
                             "bid_status": "withdrawal_bid",
@@ -829,7 +825,7 @@ class DAMTransactionService:
                             "exchangeError": "Bid is cancelled by user"
                         }}
                     )
-        return {"message": "Data Updated when cancelling bid"}
+        return "Data Updated when cancelling bid"
 
     async def get_trade_book(
         self,
@@ -842,7 +838,7 @@ class DAMTransactionService:
         order_id: int = 0,
         page_number: int = 0,
         page_size: int = 0,
-        correlation_id: Optional[str] = None
+        correlation_id: str = None
     ) -> Dict[str, Any]:
         """
         Fetch DAM trade book data from exchange API.
@@ -912,7 +908,7 @@ class DAMTransactionService:
             delivery_date=delivery_date,
             from_period=from_period,
             to_period=to_period,
-            buy_sell=int(buy_sell),
+            buy_sell=buy_sell,
             bid_area_id=bid_area_id,
             trade_id=trade_id,
             order_id=order_id,
@@ -937,7 +933,7 @@ class DAMTransactionService:
     async def get_price_quantity(
         self,
         delivery_date: Optional[int] = None,
-        correlation_id: Optional[str] = None
+        correlation_id: str = None
     ) -> Dict[str, Any]:
         """
         Fetch DAM Price Quantity (MCP) data from exchange API.
@@ -994,7 +990,7 @@ class DAMTransactionService:
         
         # 4. Fetch price quantity data
         pq_response = await api_client.get_dam_price_quantity(
-            delivery_date=delivery_date or 0
+            delivery_date=delivery_date
         )
         
         pq_details = pq_response.get("PQDetails", [])

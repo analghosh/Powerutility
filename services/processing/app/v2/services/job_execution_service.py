@@ -124,15 +124,15 @@ class JobExecutionService:
             skip = (page - 1) * page_size
             
             # Fetch data from repository
-            job_details_list, total_records = await self.repository.get_job_executions_paginated(
+            job_details_list, total_records = self.repository.get_job_executions_paginated(
                 filter_query, skip, page_size
             )
-
+            
             # Get job IDs
             job_ids = [str(detail["job_id"]) for detail in job_details_list]
-
+            
             # Fetch job data
-            job_data_map = await self.repository.get_job_data_by_ids(job_ids)
+            job_data_map = self.repository.get_job_data_by_ids(job_ids)
             
             # Build response items
             response_items = []
@@ -191,14 +191,14 @@ class JobExecutionService:
         """Get detailed information about a specific job execution"""
         try:
             # Get job detail
-            job_detail = await self.repository.get_job_execution_by_id(execution_id)
-
+            job_detail = self.repository.get_job_execution_by_id(execution_id)
+            
             if not job_detail:
                 return None
-
+            
             # Get job data
             job_id = str(job_detail["job_id"])
-            job_data = await self.repository.get_job_data_by_object_id(job_id)
+            job_data = self.repository.get_job_data_by_object_id(job_id)
             
             # Calculate next execution
             next_execution = None
@@ -251,15 +251,15 @@ class JobExecutionService:
         """Get summary of all jobs with their latest execution status"""
         try:
             # Get all jobs
-            all_jobs = await self.repository.get_all_jobs()
-
+            all_jobs = self.repository.get_all_jobs()
+            
             summary_items = []
-
+            
             for job in all_jobs:
                 job_id = str(job["_id"])
-
+                
                 # Get latest execution for this job
-                latest_execution = await self.repository.get_latest_execution_for_job(job_id)
+                latest_execution = self.repository.get_latest_execution_for_job(job_id)
                 
                 # Calculate next execution
                 schedule = job.get("schedule", "")

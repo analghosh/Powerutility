@@ -36,7 +36,7 @@ class WeatherProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -80,7 +80,7 @@ class WeatherProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -111,7 +111,7 @@ class WeatherProcessor(BaseProcessor):
                 "cron_job":"weather"
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -272,7 +272,7 @@ class WeatherProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -303,7 +303,7 @@ class WeatherProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -330,7 +330,7 @@ class WeatherProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -357,7 +357,7 @@ class WeatherProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

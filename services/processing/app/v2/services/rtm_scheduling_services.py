@@ -576,7 +576,11 @@ class RTMSchedulingServices:
 
             # Add timeout to prevent hanging (180 seconds = 3 minutes)
             try:
-                posted_jobs = await self.supply_repo.aggregate("supply_serve", pipeline)
+                cursor = self.supply_repo.aggregate(pipeline)
+                try:
+                    posted_jobs = list(cursor)
+                finally:
+                    cursor.close()
             except Exception as e:
                 # Error handling remains unchanged
                 posted_jobs = []
@@ -668,7 +672,7 @@ class RTMSchedulingServices:
             logger.info(f"[RTMSchedulingServices] 22:30 cutoff check: current_time={now_time}, cutoff_time={cutoff_time}, is_after_cutoff={is_after_cutoff}")
             
             logger.info(f"[RTMSchedulingServices] Fetching plant data for SG (Schedule Date: {schedule_date})")
-            getplantsData = await self.get_all_plant_data_for_scheduling(schedule_date, "SG")
+            getplantsData = self.get_all_plant_data_for_scheduling(schedule_date, "SG")
             
             # Filter out Central plants from SG data if any slipped through (User Request: RTM should not combine SG and DC)
             # Assuming 'c_s' field distinguishes Central vs State
@@ -701,7 +705,7 @@ class RTMSchedulingServices:
                 getplantsDataDC = []
             else:
                 logger.info(f"[RTMSchedulingServices] Before 22:30 cutoff - Fetching DC data (Schedule Date: {schedule_date})")
-                getplantsDataDC = await self.get_all_plant_data_for_scheduling(schedule_date, "DC")
+                getplantsDataDC = self.get_all_plant_data_for_scheduling(schedule_date, "DC")
                 logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsDataDC)} DC plant data records")
             
             # Extract schedule_date for deletion
@@ -945,7 +949,7 @@ class RTMSchedulingServices:
 
         return reviseDataTotalsupply
 
-    async def get_all_plant_data_for_scheduling(self, schedule_date, dc_sg):
+    def get_all_plant_data_for_scheduling(self, schedule_date, dc_sg):
         """
         Get all plant data for scheduling filtered by DC/SG type.
         Uses supply_serve collection with proper field mappings.
@@ -1231,7 +1235,11 @@ class RTMSchedulingServices:
 
         # Add timeout to prevent hanging (180 seconds = 3 minutes)
         try:
-            posted_jobs = await self.supply_repo.aggregate(pipeline)
+            cursor = self.supply_repo.aggregate(pipeline)
+            try:
+                posted_jobs = list(cursor)
+            finally:
+                cursor.close()
         except Exception as e:
             if "MaxTimeMSExpired" in str(e) or "time limit" in str(e).lower():
                 logger.error(f"[RTMSchedulingServices] get_all_plant_data_for_scheduling: Aggregation timed out for date {schedule_date_used}, dc_sg={dc_sg}. "
@@ -1455,7 +1463,7 @@ class RTMSchedulingServices:
         ]
         return time_block
 
-    async def get_revision_no(self, schedule_date: str) -> Dict[str, Any]:
+    def get_revision_no(self, schedule_date: str) -> Dict[str, Any]:
         """
         Gets latest revision numbers for ISP and SLDC categories
         
@@ -1471,7 +1479,7 @@ class RTMSchedulingServices:
             # Query SR-LDC revision (ISP category) from scheduling_requisition_calculation_table
             collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
             
-            getsrldcrevision = await collection.find_one(
+            getsrldcrevision = collection.find_one(
                 {
                     "schedule_date": schedule_date,
                     "category": "ISP"
@@ -1491,25 +1499,27 @@ class RTMSchedulingServices:
             supply_collection = self.supply_repo.db[self.supply_repo.collection_name]
             
             # For DC: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_dc_doc = await supply_collection.find_one(
+            sldc_revision_dc_doc = supply_collection.find_one(
                 {
                     "scheduled_at": {
                         "$gte": schedule_date_start,
                         "$lt": schedule_date_end
                     },
-                    "dc_sg": "DC"
+                    "dc_sg": "DC",
+                    "source": {"$in":["api","upload"]}
                 },
                 sort=[("source_revision_number", -1), ("system_revision_number", -1)]
             )
             
             # For SG: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_sg_doc = await supply_collection.find_one(
+            sldc_revision_sg_doc = supply_collection.find_one(
                 {
                     "scheduled_at": {
                         "$gte": schedule_date_start,
                         "$lt": schedule_date_end
                     },
-                    "dc_sg": "SG"
+                    "dc_sg": "SG",
+                    "source": {"$in":["api","upload"]}
                 },
                 sort=[("source_revision_number", -1), ("system_revision_number", -1)]
             )
@@ -1681,7 +1691,7 @@ class RTMSchedulingServices:
             logger.error(f"Error in get_scheduling_graph_data: {str(e)}")
             return []
 
-    async def get_realtime_scheduling_tb_data(self, schedule_date: str, from_block: Optional[int] = None, to_block: Optional[int] = None) -> Dict[str, Any]:
+    def get_realtime_scheduling_tb_data(self, schedule_date: str, from_block: Optional[int] = None, to_block: Optional[int] = None) -> Dict[str, Any]:
         """
         Retrieves real-time scheduling data for current and upcoming blocks
         
@@ -1782,7 +1792,7 @@ class RTMSchedulingServices:
             logger.info(f"[RTMSchedulingServices] get_realtime_scheduling_tb_data: Current time {now_time}, Fetching {target_dc_sg} data")
 
             # 3. Fetch specific data type
-            getplantsDataList = await self.get_all_plant_data_for_scheduling(schedule_date, target_dc_sg)
+            getplantsDataList = self.get_all_plant_data_for_scheduling(schedule_date, target_dc_sg)            
             logger.info(f"[RTMSchedulingServices] get_realtime_scheduling_tb_data: Retrieved {len(getplantsDataList)} plant data records for schedule_date={schedule_date}")
             
             if len(getplantsDataList) == 0:
@@ -2118,7 +2128,7 @@ class RTMSchedulingServices:
             logger.error(f"Error in get_realtime_scheduling_tb_data: {str(e)}")
             return {}
 
-    async def get_all_scheduling_data(self, exclude_date_type: str = "all") -> List[Dict[str, Any]]:
+    def get_all_scheduling_data(self, exclude_date_type: str = "all") -> List[Dict[str, Any]]:
         """
         Retrieves historical scheduling data across multiple dates
         
@@ -2166,14 +2176,14 @@ class RTMSchedulingServices:
             # Query using scheduled_at (Date field) which is more reliable than timestamp
             collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
             
-            results = await collection.find(
+            results = list(collection.find(
                 {
                     'scheduled_at': {
                         '$gte': from_date_dt,
                         '$lt': to_date_dt
                     }
                 }
-            ).sort([('scheduled_at', 1), ('time_block', 1)]).to_list(None)
+            ).sort([('scheduled_at', 1), ('time_block', 1)]))
             
             logger.info(f"[RTMSchedulingServices] get_all_scheduling_data: Found {len(results)} records in date range")
             
@@ -2198,9 +2208,9 @@ class RTMSchedulingServices:
             if plant_ids:
                 try:
                     plant_master_collection = self.plants_list_repo.db[self.plants_list_repo.collection_name]
-                    plant_master_records = await plant_master_collection.find(
+                    plant_master_records = list(plant_master_collection.find(
                         {"plant_id": {"$in": list(plant_ids)}}
-                    ).to_list(None)
+                    ))
                     for plant_record in plant_master_records:
                         plant_id_key = plant_record.get('plant_id', '')
                         if plant_id_key:
