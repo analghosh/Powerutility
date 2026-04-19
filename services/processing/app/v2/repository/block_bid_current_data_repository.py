@@ -110,26 +110,15 @@ class BlockBidCurrentDataRepository(GenericRepository):
           that the cron should have already lapsed.
         """
         try:
-            pipeline = [
-                {"$match": {"biding_date": date}},
-                {"$sort": {"revision_no": -1}},
-                {
-                    "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
-                        "doc": {"$first": "$$ROOT"}
-                    }
-                },
-                {"$replaceRoot": {"newRoot": "$doc"}},
-                {"$sort": {"from": 1}},
-            ]
-            docs = await self.collection.aggregate(pipeline).to_list(None)
+            cursor = (
+                self.collection.find({"biding_date": date})
+                .sort([("from", 1), ("trade_session", 1), ("revision_no", 1)])
+            )
             result = []
-
-            for doc in docs:
+            for doc in cursor:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
                 result.append(doc)
-
             return result
 
         except Exception as e:
