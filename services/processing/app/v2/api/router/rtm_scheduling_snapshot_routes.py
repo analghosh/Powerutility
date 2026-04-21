@@ -30,6 +30,18 @@ def now_ist() -> datetime:
     return datetime.now(IST)
 
 
+def _resolve_session_id(
+    session_id: Optional[str],
+    session: Optional[str],
+) -> Optional[str]:
+    """Prefer explicit session_id; accept `session` as alias for frontend compatibility."""
+    if session_id is not None and str(session_id).strip():
+        return str(session_id).strip()
+    if session is not None and str(session).strip():
+        return str(session).strip()
+    return None
+
+
 class V2Response(BaseModel):
     data: Any
     timestamp: str
@@ -44,6 +56,10 @@ class V2Response(BaseModel):
 )
 async def get_rtm_scheduling_snapshot(
     session_id: Optional[str] = Query(None, description="RTM session identifier (optional)"),
+    session: Optional[str] = Query(
+        None,
+        description="Alias for session_id (optional); same value as session_id if your client sends `session`",
+    ),
     run_id: Optional[str] = Query(None, description="Snapshot run_id (optional; narrows to one run)"),
     schedule_date: str = Query(..., description="Schedule date in YYYY-MM-DD format"),
     page: int = Query(1, ge=1, description="Page number (1-based)"),
@@ -67,8 +83,9 @@ async def get_rtm_scheduling_snapshot(
             correlation_id=correlation_id,
             user_id=user_id,
         )
+        effective_session = _resolve_session_id(session_id, session)
         result = await rtm_scheduling_snapshot_controller.get_rtm_scheduling_snapshot_data(
-            session_id=session_id,
+            session_id=effective_session,
             schedule_date=schedule_date,
             page=page,
             page_size=page_size,
@@ -109,6 +126,10 @@ async def get_rtm_scheduling_snapshot(
 )
 async def download_rtm_scheduling_snapshot_excel(
     session_id: Optional[str] = Query(None, description="RTM session identifier (required unless run_id is set)"),
+    session: Optional[str] = Query(
+        None,
+        description="Alias for session_id; use if the client sends `session` instead of `session_id`",
+    ),
     run_id: Optional[str] = Query(None, description="Snapshot run_id (required unless session_id is set)"),
     schedule_date: str = Query(..., description="Schedule date in YYYY-MM-DD format"),
     user_context: Dict[str, Any] = Depends(get_user_context),
@@ -125,8 +146,9 @@ async def download_rtm_scheduling_snapshot_excel(
             correlation_id=correlation_id,
             user_id=user_id,
         )
+        effective_session = _resolve_session_id(session_id, session)
         export_data = await rtm_scheduling_snapshot_controller.get_rtm_scheduling_snapshot_excel(
-            session_id=session_id,
+            session_id=effective_session,
             schedule_date=schedule_date,
             run_id=run_id,
         )
