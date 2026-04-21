@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from ...controller.rtm_scheduling_snapshot_controller import rtm_scheduling_snapshot_controller
 from ...dependencies import get_user_context
+from ...services.rtm_scheduling_snapshot_services import DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE
 from libs.audit_queue.simple_logger import AuditLogger
 from ....core.dependencies import get_audit_logger
 
@@ -43,7 +44,15 @@ class V2Response(BaseModel):
 )
 async def get_rtm_scheduling_snapshot(
     session_id: Optional[str] = Query(None, description="RTM session identifier (optional)"),
+    run_id: Optional[str] = Query(None, description="Snapshot run_id (optional; narrows to one run)"),
     schedule_date: str = Query(..., description="Schedule date in YYYY-MM-DD format"),
+    page: int = Query(1, ge=1, description="Page number (1-based)"),
+    page_size: int = Query(
+        DEFAULT_PAGE_SIZE,
+        ge=1,
+        le=MAX_PAGE_SIZE,
+        description=f"Rows per page (max {MAX_PAGE_SIZE})",
+    ),
     user_context: Dict[str, Any] = Depends(get_user_context),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
@@ -61,6 +70,9 @@ async def get_rtm_scheduling_snapshot(
         result = await rtm_scheduling_snapshot_controller.get_rtm_scheduling_snapshot_data(
             session_id=session_id,
             schedule_date=schedule_date,
+            page=page,
+            page_size=page_size,
+            run_id=run_id,
         )
         audit_logger.log_user_action(
             service="processing",
@@ -96,7 +108,8 @@ async def get_rtm_scheduling_snapshot(
     summary="Download RTM scheduling snapshot excel (V2, standalone)",
 )
 async def download_rtm_scheduling_snapshot_excel(
-    session_id: Optional[str] = Query(None, description="RTM session identifier (optional)"),
+    session_id: Optional[str] = Query(None, description="RTM session identifier (required unless run_id is set)"),
+    run_id: Optional[str] = Query(None, description="Snapshot run_id (required unless session_id is set)"),
     schedule_date: str = Query(..., description="Schedule date in YYYY-MM-DD format"),
     user_context: Dict[str, Any] = Depends(get_user_context),
     audit_logger: AuditLogger = Depends(get_audit_logger),
@@ -115,6 +128,7 @@ async def download_rtm_scheduling_snapshot_excel(
         export_data = await rtm_scheduling_snapshot_controller.get_rtm_scheduling_snapshot_excel(
             session_id=session_id,
             schedule_date=schedule_date,
+            run_id=run_id,
         )
         audit_logger.log_user_action(
             service="processing",
