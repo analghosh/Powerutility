@@ -229,7 +229,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
             match_filter: Dict[str, Any] = {
                 "biding_date": biding_date,
                 "market_type": market_type,
-                "status": {"$in": ["Approved", "Submitted"]},
+                "status": {"$in": ["Submitted", "submitted"]},
             }
             if str(market_type).upper() == "DAM":
                 # Avoid double-counting when stray non-zero trade_session rows exist for DAM
