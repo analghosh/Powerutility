@@ -210,7 +210,7 @@ class DemandforecastService:
         contains_today = start_dt <= today_ist <= end_dt
         results: List[Dict[str, Any]] = []
 
-        def run_pipeline(match_stage: Dict[str, Any]) -> List[Dict[str, Any]]:
+        async def run_pipeline(match_stage: Dict[str, Any]) -> List[Dict[str, Any]]:
             pipeline = [
                 {"$match": match_stage},
                 # only average valid MAPEs
@@ -221,20 +221,20 @@ class DemandforecastService:
                     "count": {"$sum": 1}
                 }}
             ]
-            return list(self.hist_repo.aggregate(pipeline))  # type: ignore
+            return await self.hist_repo.aggregate(pipeline)  # type: ignore
 
         if contains_today:
             # 1) everything before today
             match_past = match_base.copy()
             match_past["schedule_date"] = {"$gte": start_str, "$lt": today_ist.isoformat()}
-            past_rows = run_pipeline(match_past)
+            past_rows = await run_pipeline(match_past)
 
             # 2) today up to current block
             current_block = block_from_hhmm((now_ist + timedelta(seconds=1)).strftime("%H:%M"))
             match_today = match_base.copy()
             match_today["schedule_date"] = today_ist.isoformat()
             match_today["time_block"] = {"$lte": current_block}
-            today_rows = run_pipeline(match_today)
+            today_rows = await run_pipeline(match_today)
 
             # Merge the two sets: sum(count), weighted-average avg_mape
             by_type: Dict[str, Dict[str, float]] = {}
@@ -258,7 +258,7 @@ class DemandforecastService:
             idf = finalize("IDF")
         else:
             # Single pass for entire month
-            rows = run_pipeline(match_base)
+            rows = await run_pipeline(match_base)
             m = {r["_id"]: r for r in rows}
             daf = {
                 "avg": round(float(m.get("DAF", {}).get("avg_mape", 0) or 0), 2),

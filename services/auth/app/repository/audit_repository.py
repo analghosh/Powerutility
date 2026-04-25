@@ -139,7 +139,7 @@ class AuditRepository(BaseRepository):
                 {"$group": {"_id": "$event_type", "count": {"$sum": 1}}},
                 {"$sort": {"count": -1}}
             ]
-            events_by_type = await self.collection.aggregate(pipeline).to_list(None)
+            events_by_type = await self.collection.aggregate(pipeline).to_list(length=10000)
 
             return {
                 "total_events": total_events,

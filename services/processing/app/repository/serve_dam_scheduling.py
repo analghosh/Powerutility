@@ -25,7 +25,7 @@ class serveDamSchedulingRepository(BaseRepository):
         logger.debug("serveDamSchedulingRepository.aggregate | pipeline=%s", pipeline)
         cursor = self.collection.aggregate(pipeline)
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
 
@@ -37,7 +37,7 @@ class serveDamSchedulingRepository(BaseRepository):
         logger.debug("serveDamSchedulingRepository.find_by_date | schedule_date=%s", schedule_date)
         cursor = self.collection.find({"schedule_date": schedule_date})
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
 

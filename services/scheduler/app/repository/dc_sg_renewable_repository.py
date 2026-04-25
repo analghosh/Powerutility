@@ -90,27 +90,27 @@ class DcSgRenewableRepository(BaseRepository):
     # Read helpers
     # ------------------------------------------------------------------
 
-    def find_by_date(self, target_date) -> List[Dict[str, Any]]:
+    async def find_by_date(self, target_date) -> List[Dict[str, Any]]:
         """Return all records for a given date."""
         try:
             start = datetime.combine(target_date, datetime.min.time())
             end = datetime.combine(target_date, datetime.max.time())
-            return list(self.collection.find({"scheduled_at": {"$gte": start, "$lte": end}}))
+            return await self.collection.find({"scheduled_at": {"$gte": start, "$lte": end}}).to_list(length=10000)
         except Exception as e:
             logger.error("Error in dc_sg_renewable find_by_date: %s", str(e))
             return []
 
-    def find_by_date_range(self, start_date, end_date) -> List[Dict[str, Any]]:
+    async def find_by_date_range(self, start_date, end_date) -> List[Dict[str, Any]]:
         """Return all records within an inclusive date range."""
         try:
             start = datetime.combine(start_date, datetime.min.time())
             end = datetime.combine(end_date, datetime.max.time())
-            return list(self.collection.find({"scheduled_at": {"$gte": start, "$lte": end}}))
+            return await self.collection.find({"scheduled_at": {"$gte": start, "$lte": end}}).to_list(length=10000)
         except Exception as e:
             logger.error("Error in dc_sg_renewable find_by_date_range: %s", str(e))
             return []
 
-    def get_latest_record_per_constraint(self) -> List[Dict[str, Any]]:
+    async def get_latest_record_per_constraint(self) -> List[Dict[str, Any]]:
         """
         For each unique (time_block, plant_id, type) combination, return the most recent record.
         Used by the carry-forward job to populate missing records on a new day.
@@ -131,19 +131,16 @@ class DcSgRenewableRepository(BaseRepository):
                 {"$replaceRoot": {"newRoot": "$latest"}},
             ]
             cursor = self.collection.aggregate(pipeline)
-            try:
-                return list(cursor)
-            finally:
-                cursor.close()
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Error in dc_sg_renewable get_latest_record_per_constraint: %s", str(e))
             return []
 
-    def get_existing_keys_for_date(self, target_date) -> set:
+    async def get_existing_keys_for_date(self, target_date) -> set:
         """
         Return a set of (time_block, plant_id, type) tuples that already exist for target_date.
         """
-        records = self.find_by_date(target_date)
+        records = await self.find_by_date(target_date)
         return {(r.get("time_block"), r.get("plant_id"), r.get("type")) for r in records}
 
     # ------------------------------------------------------------------

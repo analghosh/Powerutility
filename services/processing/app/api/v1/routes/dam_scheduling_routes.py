@@ -170,7 +170,7 @@ async def dam_schedule_by_date(
     - Plant ordering by PX price (descending)
     """
     try:
-        payload = dam_scheduling_controller.schedule_by_date(schedule_date)
+        payload = await dam_scheduling_controller.schedule_by_date(schedule_date)
         return DamScheduleResponse(
             timestamp=datetime.now().isoformat(),
             data=payload["data"],

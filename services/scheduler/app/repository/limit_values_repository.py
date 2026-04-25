@@ -163,7 +163,7 @@ class LimitValuesRepository(GenericRepository):
             # 1. Fetch records older than today
             query = {"scheduled_at": {"$lt": today}}
             cursor = self.db[self.collection_name].find(query)
-            candidates = await cursor.to_list(length=None)
+            candidates = await cursor.to_list(length=10000)
 
             if not candidates:
                 logger.info("No records found for archival")
@@ -275,7 +275,7 @@ class LimitValuesRepository(GenericRepository):
                 "status": "APPROVED"
             }
             cursor = self.db[approval_collection].find(query)
-            results = await cursor.to_list(length=None)
+            results = await cursor.to_list(length=10000)
             logger.info(f"Found {len(results)} approved records for tomorrow ({tomorrow.strftime('%Y-%m-%d')})")
             return results
         except Exception as e:

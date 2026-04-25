@@ -61,7 +61,7 @@ class DashboardController:
         """
         try:
             # Assuming service method is async, await it
-            fig_json_dict =  self.dashboard_service.get_dashboard_capacity_chart()
+            fig_json_dict = await self.dashboard_service.get_dashboard_capacity_chart()
             
             if not fig_json_dict or not isinstance(fig_json_dict, dict):
                 raise HTTPException(status_code=500, detail="Empty or invalid chart JSON returned from service")

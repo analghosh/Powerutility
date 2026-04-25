@@ -205,7 +205,7 @@ class RealtimemarketService:
             ]
             cursor = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             try:
-                getplantsData = await cursor.to_list(None)
+                getplantsData = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
            
@@ -225,7 +225,7 @@ class RealtimemarketService:
             plants_list_pipeline = [{"$project": {"_id": 0}}]
             cursor = self.plants_list_repo.repository.aggregate('plant_master', plants_list_pipeline)
             try:
-                plantData = await cursor.to_list(None)
+                plantData = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             plant_dict = {p['plant_id']: p for p in plantData}
@@ -271,7 +271,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                getForecastedValue = await cursor.to_list(None)
+                getForecastedValue = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -287,7 +287,7 @@ class RealtimemarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                forecastedPrice = await cursor.to_list(None)
+                forecastedPrice = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             limit_schedule_date = schedule_date
@@ -302,7 +302,7 @@ class RealtimemarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                bufferPrice = await cursor.to_list(None)
+                bufferPrice = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -317,7 +317,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                ceilingPrice = await cursor.to_list(None)
+                ceilingPrice = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -333,7 +333,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                n_1Limits = await cursor.to_list(None)
+                n_1Limits = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -348,7 +348,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_buyLimits = await cursor.to_list(None)
+                noc_buyLimits = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -363,7 +363,7 @@ class RealtimemarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_sellLimits = await cursor.to_list(None)
+                noc_sellLimits = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -3259,7 +3259,7 @@ class RealtimemarketService:
 
         cursor = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline) # type: ignore
         try:
-            posted_jobs = await cursor.to_list(None)
+            posted_jobs = await cursor.to_list(length=10000)
         finally:
             cursor.close()
         
@@ -3932,7 +3932,7 @@ class RealtimemarketService:
                 }
             }
 
-            result = self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
+            result = await self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
             return result.modified_count  # returns number of documents updated
 
         except Exception as e:

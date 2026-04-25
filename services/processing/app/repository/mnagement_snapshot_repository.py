@@ -21,7 +21,7 @@
 #         return await self.collection.find({
 #             "inserted_date": date,
 #             "cronJob_time": cronjob
-#         }).to_list(None)
+#         }).to_list(length=10000)
 
 
 # services/processing/app/repository/serve_exchange_table_repository.py
@@ -98,7 +98,7 @@ class ServeExchangeTableRepository:
         if collation:
             kwargs["collation"] = collation
         cursor = self._coll.aggregate(list(pipeline), **kwargs)
-        result = await cursor.to_list(length=None)
+        result = await cursor.to_list(length=10000)
         logger.debug("Aggregate returned %d documents", len(result))
         return result
 
@@ -117,7 +117,7 @@ class ServeExchangeTableRepository:
             cursor = cursor.sort(sort)
         if limit:
             cursor = cursor.limit(limit)
-        return await cursor.to_list(length=None)
+        return await cursor.to_list(length=10000)
 
     async def find_one(
         self,

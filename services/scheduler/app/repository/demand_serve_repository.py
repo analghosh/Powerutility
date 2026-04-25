@@ -62,7 +62,7 @@ class DemandServeRepository(BaseServeRepository):
             # 2. Main Collection (Ensure Normal + Safe Migration)
             main_coll_name = settings.MONGODB_DEMAND_SERVE_COLLECTION
 
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -84,7 +84,7 @@ class DemandServeRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({"scheduled_at": {"$gte": start_migration_date}})
-                        all_docs = await cursor.to_list(length=None)
+                        all_docs = await cursor.to_list(length=10000)
 
                         # Deduplicate in memory
                         deduped_map = {}
@@ -182,7 +182,7 @@ class DemandServeRepository(BaseServeRepository):
                 filter_criteria["time_block"] = time_block
 
             cursor = self.serve_collection.find(filter_criteria).sort("inserted_at", -1)
-            all_records = await cursor.to_list(length=None)
+            all_records = await cursor.to_list(length=10000)
 
             if len(all_records) <= 1:
                 return 0  # No duplicates
@@ -324,7 +324,7 @@ class DemandServeRepository(BaseServeRepository):
             "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date}, "type": "IDF"}
 
         cursor = self.serve_collection.find(query).sort([("scheduled_at", 1), ("time_block", 1)])
-        return await cursor.to_list(length=None)
+        return await cursor.to_list(length=10000)
 
     async def get_actual_demand(self, scheduled_at: datetime) -> List[Dict[str, Any]]:
         """Get actual demand serve record by unique key"""
@@ -333,7 +333,7 @@ class DemandServeRepository(BaseServeRepository):
             "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date}, "type": "IDF"}
 
         cursor = self.serve_collection.find(query).sort([("scheduled_at", 1), ("time_block", 1)])
-        return await cursor.to_list(length=None)
+        return await cursor.to_list(length=10000)
 
     async def archive_old_demand_data(self, days_to_keep: int = 2) -> Dict[str, Any]:
         """
@@ -352,7 +352,7 @@ class DemandServeRepository(BaseServeRepository):
                 "scheduled_at": {"$lt": datetime.combine(archive_cutoff, datetime.min.time())}
             })
 
-            archival_candidates = await cursor.to_list(length=None)
+            archival_candidates = await cursor.to_list(length=10000)
 
             if not archival_candidates:
                 logger.info("No demand records found for archival")
@@ -470,7 +470,7 @@ class DemandServeRepository(BaseServeRepository):
         """
         try:
             cursor = self.serve_collection.find(filter_criteria)
-            existing_records = await cursor.to_list(length=None)
+            existing_records = await cursor.to_list(length=10000)
 
             delete_result = await self.serve_collection.delete_many(filter_criteria)
             deleted_count = delete_result.deleted_count
@@ -641,7 +641,7 @@ class DemandServeRepository(BaseServeRepository):
         """
         try:
             cursor = self.serve_collection.find(filter)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error in get_all_async: {str(e)}")
             return []

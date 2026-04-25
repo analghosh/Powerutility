@@ -92,7 +92,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         ]
 
         cursor = self.collection.aggregate(pipeline)
-        result = await cursor.to_list(length=None)
+        result = await cursor.to_list(length=10000)
 
         if result:
             return result[0].get("revision_no", 0)
@@ -104,7 +104,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.find(filters, projection or {})
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find RTM single bid records: %s", str(e))
             return []
@@ -137,7 +137,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to aggregate RTM single bid records: %s", str(e))
             return []
@@ -184,7 +184,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
             ]
 
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(length=None)
+            results = await cursor.to_list(length=10000)
 
             logger.debug(f"Aggregation returned {len(results)} grouped results for date {datebid}")
 
@@ -245,7 +245,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
             ]
 
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(length=None)
+            results = await cursor.to_list(length=10000)
 
             # Convert to dictionary keyed by time_block
             result_dict = {}
@@ -268,7 +268,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         try:
             query = {"bid_date": datebid}
             cursor = self.collection.find(query)
-            results = await cursor.to_list(length=None)
+            results = await cursor.to_list(length=10000)
 
             # Convert to dictionary keyed by time_block
             result_dict = {}

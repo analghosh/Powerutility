@@ -90,7 +90,7 @@ class serveExchangeTableRepository(BaseRepository):
     }
 ]
 
-        return await self.collection.aggregate(pipeline).to_list(None)
+        return await self.collection.aggregate(pipeline).to_list(length=10000)
     
 
     
@@ -163,7 +163,7 @@ class serveExchangeTableRepository(BaseRepository):
 
 
 
-        return await self.collection.aggregate(pipeline).to_list(None)
+        return await self.collection.aggregate(pipeline).to_list(length=10000)
 
 
     

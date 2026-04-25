@@ -62,7 +62,7 @@ class ExchangeRepository(BaseServeRepository):
 
             # 2. Ensure Main Serve collection is a Normal collection (for Updates/Deletes)
             main_coll_name = settings.MONGODB_EXCHANGE_SERVE_COLLECTION
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -83,7 +83,7 @@ class ExchangeRepository(BaseServeRepository):
         try:
             start_date = datetime.now() - timedelta(days=5)
             cursor = self.db[coll_name].find({"scheduled_at": {"$gte": start_date}})
-            all_docs = await cursor.to_list(length=None)
+            all_docs = await cursor.to_list(length=10000)
 
             deduped_data = {}
             for doc in all_docs:
@@ -147,7 +147,7 @@ class ExchangeRepository(BaseServeRepository):
 
             # 1. Fetch candidates from Serve (Anything older than today)
             cursor = self.serve_collection.find({"scheduled_at": {"$lt": today_min}})
-            candidates = await cursor.to_list(length=None)
+            candidates = await cursor.to_list(length=10000)
 
             archived_count = 0
             if not candidates:
@@ -216,7 +216,7 @@ class ExchangeRepository(BaseServeRepository):
             }
             if px_name:
                 query["px_name"] = px_name
-            records = await self.serve_collection.find(query).sort("time_block", 1).to_list(None)
+            records = await self.serve_collection.find(query).sort("time_block", 1).to_list(length=10000)
             logger.info(f"Found {len(records)} exchange records for {market_type} on {start_date.date()}")
             return records
         except Exception as e:
@@ -238,7 +238,7 @@ class ExchangeRepository(BaseServeRepository):
         try:
             query = {"status": {"$in": [RawDataStatus.PENDING, RawDataStatus.FAILED]}}
             cursor = self.raw_collection.find(query).sort("createdAt", 1).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Error getting pending raw data: %s", str(e))
             return []

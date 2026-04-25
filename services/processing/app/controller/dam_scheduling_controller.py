@@ -16,9 +16,9 @@ class DamSchedulingController:
     def __init__(self, dam_services=serve_dam_scheduling_services):
         self.dam_services = dam_services
 
-    def schedule_by_date(self, schedule_date: Optional[str]) -> Dict[str, Any]:
+    async def schedule_by_date(self, schedule_date: Optional[str]) -> Dict[str, Any]:
         try:
-            return self.dam_services.schedule_by_date(schedule_date)
+            return await self.dam_services.schedule_by_date(schedule_date)
         except HTTPException:
             raise
         except Exception:

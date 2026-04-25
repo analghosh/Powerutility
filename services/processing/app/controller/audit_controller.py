@@ -36,21 +36,21 @@ class AuditController:
 
     async def list_logs(self, filters: Dict[str, Any], page: int, page_size: int, sort: Optional[str]):
         try:
-            return self.svc.list_logs(filters, page, page_size, sort)
+            return await self.svc.list_logs(filters, page, page_size, sort)
         except Exception:
             logger.exception("Failed to list audit logs")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list audit logs")
 
     async def user_logs(self, user_id: str, page: int, page_size: int):
         try:
-            return self.svc.user_logs(user_id, page, page_size)
+            return await self.svc.user_logs(user_id, page, page_size)
         except Exception:
             logger.exception("Failed to list user audit logs")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to list user audit logs")
 
     async def stats(self, days: int):
         try:
-            return self.svc.stats(days)
+            return await self.svc.stats(days)
         except Exception:
             logger.exception("Failed to get audit stats")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to get audit stats")

@@ -74,7 +74,7 @@ class ManagementSnapshotServices:
 
 
     # ---------- core ----------
-    def demand_supply_snapshot(
+    async def demand_supply_snapshot(
         self,
         schedule_date: Optional[str] = None,
         from_block: Optional[int] = None,
@@ -261,19 +261,19 @@ class ManagementSnapshotServices:
         ]
 
         try:
-            sup_rows = list(self.repo_supply.aggregate(pipe_supply))
+            sup_rows = await self.repo_supply.aggregate(pipe_supply)
         except Exception:
             logger.exception("Aggregation failed in serve_supply_table")
             sup_rows = []
 
         try:
-            dem_rows = list(self.repo_demand.aggregate(pipe_demand))
+            dem_rows = await self.repo_demand.aggregate(pipe_demand)
         except Exception:
             logger.exception("Aggregation failed in serve_demand_table")
             dem_rows = []
 
         try:
-            trd_rows = list(self.repo_trade.aggregate(pipe_trade))
+            trd_rows = await self.repo_trade.aggregate(pipe_trade)
         except Exception:
             logger.exception("Aggregation failed in serve_px_bid_trade")
             trd_rows = []
@@ -319,7 +319,7 @@ class ManagementSnapshotServices:
 
 
 
-    def iex_dam_rtm_snapshot(
+    async def iex_dam_rtm_snapshot(
         self,
         schedule_date: Optional[str] = None,
         from_block: Optional[int] = None,
@@ -529,7 +529,7 @@ class ManagementSnapshotServices:
         ]
 
         try:
-            rows = list(self.repo.aggregate(pipeline))
+            rows = await self.repo.aggregate(pipeline)
         except Exception:
             logger.exception("Error executing aggregation in serve_exchange_table")
             # In case of unexpected failures, still return a gap-filled shell
@@ -561,7 +561,7 @@ class ManagementSnapshotServices:
             "data": filled,
         }
     
-    def variable_cost_snapshot(
+    async def variable_cost_snapshot(
         self,
         schedule_date: Optional[str] = None,
         from_block: Optional[int] = None,
@@ -762,7 +762,7 @@ class ManagementSnapshotServices:
         ]
 
         try:
-            rows = list(self.repo.aggregate(pipeline))
+            rows = await self.repo.aggregate(pipeline)
         except Exception:
             logger.exception("Aggregation failed in market_book_snapshot")
             rows = []

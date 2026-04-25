@@ -6,7 +6,6 @@ from libs.core.job_entities import JobData
 import logging
 from datetime import datetime, date
 from typing import Dict, Any, List
-from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 
@@ -346,7 +345,7 @@ class LimitValuesProcessor(BaseProcessor):
         """
         return True
 
-    def rename_id_field(self):
+    async def rename_id_field(self):
         """
         Renames the 'ID' field to 'id' in both limit_values and limit_approval collections.
         """
@@ -368,8 +367,8 @@ class LimitValuesProcessor(BaseProcessor):
                 query = {"ID": {"$exists": True}, "id": {"$exists": False}}
                 
                 # Rename the field
-                result = collection.update_many(query, {"$rename": {"ID": "id"}})
-                
+                result = await collection.update_many(query, {"$rename": {"ID": "id"}})
+
                 logger.info(f"[LimitValuesProcessor] In collection '{collection_name}', renamed 'ID' to 'id' in {result.modified_count} documents.")
             
             # Note: Client is managed by MongoClientFactory, no need to close

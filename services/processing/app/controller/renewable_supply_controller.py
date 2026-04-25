@@ -23,7 +23,7 @@ class RenewableSupplyController:
         end   = (today + timedelta(days=1)).isoformat()  # tomorrow
         return start, end
 
-    def renewable_availability_by_day(self, date: Optional[str] = None) -> Dict[str, Any]:
+    async def renewable_availability_by_day(self, date: Optional[str] = None) -> Dict[str, Any]:
         """
         Default to today's date (Asia/Kolkata). If the service raises a 404 (no data),
         return a friendly message (HTTP 200) indicating the current 4-day window.
@@ -33,15 +33,15 @@ class RenewableSupplyController:
             raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
 
         try:
-            return self.renewable_service.renewable_availability_by_day(anchor)
+            return await self.renewable_service.renewable_availability_by_day(anchor)
         except HTTPException as exc:
             if exc.status_code == 404:
                 s, e = self._window_bounds_str()
                 # Hardcoded/friendly message (200 OK)
                 return {"detail": f"No data in current 4-day window {s}..{e}."}
             raise
-    
-    def renewable_schedule_by_day(self, date: Optional[str] = None) -> Dict[str, Any]:
+
+    async def renewable_schedule_by_day(self, date: Optional[str] = None) -> Dict[str, Any]:
         """
         Default to today's date (Asia/Kolkata). If the service raises a 404 (no data),
         return a friendly message (HTTP 200) indicating the current 4-day window.
@@ -51,7 +51,7 @@ class RenewableSupplyController:
             raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
 
         try:
-            return self.renewable_service.renewable_schedule_by_day(anchor)
+            return await self.renewable_service.renewable_schedule_by_day(anchor)
         except HTTPException as exc:
             if exc.status_code == 404:
                 s, e = self._window_bounds_str()

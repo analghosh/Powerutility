@@ -24,9 +24,7 @@ import logging
 from datetime import datetime, timedelta
 import random
 from typing import List, Dict, Any, Optional
-from pymongo import MongoClient
-from pymongo.collection import Collection
-from pymongo.database import Database
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from bson import ObjectId
 
 from libs.models import (
@@ -61,18 +59,18 @@ class DummyDataService:
     def __init__(self):
         """Initialize the service with MongoDB connection"""
         from ..core.database import get_database
-        self.db: Database = get_database()
-        self.dummy_collection: Collection = self.db[settings.MONGODB_DUMMY_COLLECTION]
-        self.demand_serve_collection: Collection = self.db[
+        self.db: AsyncIOMotorDatabase = get_database()
+        self.dummy_collection: AsyncIOMotorCollection = self.db[settings.MONGODB_DUMMY_COLLECTION]
+        self.demand_serve_collection: AsyncIOMotorCollection = self.db[
             settings.MONGODB_DEMAND_SERVE_COLLECTION
         ]
-        self.demand_historical_collection: Collection = self.db[
+        self.demand_historical_collection: AsyncIOMotorCollection = self.db[
             settings.MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION
         ]
-        self.supply_serve_collection: Collection = self.db[
+        self.supply_serve_collection: AsyncIOMotorCollection = self.db[
             settings.MONGODB_SUPPLY_SERVE_COLLECTION
         ]
-        self.supply_historical_collection: Collection = self.db[
+        self.supply_historical_collection: AsyncIOMotorCollection = self.db[
             settings.MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION
         ]
 
@@ -329,7 +327,7 @@ class DummyDataService:
             
             cursor = self.dummy_collection.aggregate(pipeline)
             try:
-                data = await cursor.to_list(None)
+                data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             logger.info(
@@ -893,7 +891,7 @@ class DummyDataService:
         except (ConnectionError, TimeoutError) as e:
             return self._build_error_result(start_time, str(e), data_type)
     
-    def cleanup_old_serve_data(self, retention_days: int) -> int:
+    async def cleanup_old_serve_data(self, retention_days: int) -> int:
         """
         Clean up old serve data based on retention policy
         
@@ -911,7 +909,7 @@ class DummyDataService:
             
             # Clean up old demand_serve data
             if hasattr(self, 'demand_serve_collection') and self.demand_serve_collection is not None:
-                result = self.demand_serve_collection.delete_many({
+                result = await self.demand_serve_collection.delete_many({
                     "inserted_date": {"$lt": cutoff_time}
                 })
                 total_cleaned += result.deleted_count
@@ -919,7 +917,7 @@ class DummyDataService:
             
             # Clean up old supply_serve data
             if hasattr(self, 'supply_serve_collection') and self.supply_serve_collection is not None:
-                result = self.supply_serve_collection.delete_many({
+                result = await self.supply_serve_collection.delete_many({
                     "inserted_date": {"$lt": cutoff_time}
                 })
                 total_cleaned += result.deleted_count
@@ -927,14 +925,14 @@ class DummyDataService:
             
             # Clean up old historical data
             if hasattr(self, 'demand_historical_collection') and self.demand_historical_collection is not None:
-                result = self.demand_historical_collection.delete_many({
+                result = await self.demand_historical_collection.delete_many({
                     "archived_at": {"$lt": cutoff_time}
                 })
                 total_cleaned += result.deleted_count
                 logger.info("Cleaned up %s old demand_historical records", result.deleted_count)
             
             if hasattr(self, 'supply_historical_collection') and self.supply_historical_collection is not None:
-                result = self.supply_historical_collection.delete_many({
+                result = await self.supply_historical_collection.delete_many({
                     "archived_at": {"$lt": cutoff_time}
                 })
                 total_cleaned += result.deleted_count
@@ -1131,25 +1129,25 @@ class DummyDataService:
         except (ConnectionError, TimeoutError) as e:
             logger.warning("Could not create time series indexes: %s", str(e))
 
-    def find_record_by_id(
+    async def find_record_by_id(
         self, record_id: str, collection: str = "historical", data_type: str = "demand"
     ) -> Optional[Dict[str, Any]]:
         """Find a record by its original _id in the specified collection"""
         try:
             if collection == "historical":
                 if data_type == "demand":
-                    record = self.demand_historical_collection.find_one(
+                    record = await self.demand_historical_collection.find_one(
                         {"_id": record_id}
                     )
                 else:
-                    record = self.supply_historical_collection.find_one(
+                    record = await self.supply_historical_collection.find_one(
                         {"_id": record_id}
                     )
             elif collection == "demand_serve":
                 if data_type == "demand":
-                    record = self.demand_serve_collection.find_one({"_id": record_id})
+                    record = await self.demand_serve_collection.find_one({"_id": record_id})
                 else:
-                    record = self.supply_serve_collection.find_one({"_id": record_id})
+                    record = await self.supply_serve_collection.find_one({"_id": record_id})
             else:
                 logger.error("Invalid collection: %s", collection)
                 return None
@@ -1349,16 +1347,16 @@ class DummyDataService:
             logger.error("System reconciliation failed: %s", str(e))
             return error_result
 
-    def execute_demand_data_management(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def execute_demand_data_management(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute the demand data management job (business logic only)"""
         try:
             logger.info("Starting demand data management job")
             if payload:
                 logger.info("Job payload: %s", payload)
-            
+
             # Execute demand data processing
-            result = self.execute_data_management("demand")
-            
+            result = await self.execute_data_management("demand")
+
             # Add job-specific metrics
             result.update({
                 "job_type": "demand_data_management",
@@ -1368,7 +1366,7 @@ class DummyDataService:
                 "data_already_exists": False,  # TODO: Implement existence check
                 "removal_success": True,  # TODO: Implement removal tracking
                 "insertion_success": result.get("status") == "success",
-                "current_demand_serve_records": self._get_current_demand_serve_count()
+                "current_demand_serve_records": await self._get_current_demand_serve_count()
             })
             
             return result
@@ -1382,22 +1380,22 @@ class DummyDataService:
                 "error": str(e)
             }
 
-    def execute_supply_data_management(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def execute_supply_data_management(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Execute the supply data management job"""
         try:
             logger.info("Starting supply data management job")
             if payload:
                 logger.info("Job payload: %s", payload)
-            
+
             # Execute supply data processing
-            result = self.execute_data_management("supply")
-            
+            result = await self.execute_data_management("supply")
+
             # Add job-specific metrics
             result.update({
                 "job_type": "supply_data_management",
                 "job_name": "Supply Data Management",
                 "supply_data_processed": result.get("records_inserted", 0),
-                "current_supply_serve_records": self._get_current_supply_serve_count()
+                "current_supply_serve_records": await self._get_current_supply_serve_count()
             })
             
             return result
@@ -1411,18 +1409,18 @@ class DummyDataService:
                 "error": str(e)
             }
 
-    def _get_current_demand_serve_count(self) -> int:
+    async def _get_current_demand_serve_count(self) -> int:
         """Get current count of demand_serve records"""
         try:
-            return self.demand_serve_collection.count_documents({})
+            return await self.demand_serve_collection.count_documents({})
         except (ValueError, TypeError, ConnectionError, TimeoutError) as e:
             logger.error("Error getting demand_serve count: %s", str(e))
             return 0
 
-    def _get_current_supply_serve_count(self) -> int:
+    async def _get_current_supply_serve_count(self) -> int:
         """Get current count of supply_serve records"""
         try:
-            return self.supply_serve_collection.count_documents({})
+            return await self.supply_serve_collection.count_documents({})
         except (ValueError, TypeError, ConnectionError, TimeoutError) as e:
             logger.error("Error getting supply_serve count: %s", str(e))
             return 0
@@ -1464,7 +1462,7 @@ class DummyDataService:
         
         try:
             # Execute the business logic
-            result = self.execute_demand_data_management(payload=payload)
+            result = await self.execute_demand_data_management(payload=payload)
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
             

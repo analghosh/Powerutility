@@ -86,12 +86,12 @@ class DashboardPGService:
     
 
                                                    
-    def get_dashboard_demand(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
-        current_doc = self.dashboard_repo.get_current_block(schedule_date, current_block_id)
+    async def get_dashboard_demand(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
+        current_doc = await self.dashboard_repo.get_current_block(schedule_date, current_block_id)
         if not current_doc:
             raise HTTPException(status_code=404, detail="Current demand block not found")
 
-        data = self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids)
+        data = await self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids)
 
         time_block_map = {doc["time_block"]: doc for doc in data}
         chart_data = []
@@ -112,9 +112,9 @@ class DashboardPGService:
             }
         }
 
-    def get_dashboard_frequency(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
+    async def get_dashboard_frequency(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
         # Current block data
-        current_doc = self.dashboard_repo.find_one({
+        current_doc = await self.dashboard_repo.find_one({
             "schedule_date": schedule_date,
             "time_block": current_block_id,
             "data_type": "demand"
@@ -127,7 +127,7 @@ class DashboardPGService:
         block_ranges = get_last_24_blocks(current_block_id)
         block_ids = [b["block_id"] for b in block_ranges if isinstance(b["block_id"], int)]
 
-        data = self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids)
+        data = await self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids)
 
         time_block_map = {doc["time_block"]: doc for doc in data}
         chart_data = []
@@ -149,17 +149,17 @@ class DashboardPGService:
             }
         }
 
-    def get_dashboard_ScheduledDrawal(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
+    async def get_dashboard_ScheduledDrawal(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
         full_time_block = get_fifteen_full_time_block_id(current_block_id)
 
-        current_doc = self.dashboard_repo.find_one({
+        current_doc = await self.dashboard_repo.find_one({
             "schedule_date": schedule_date,
             "dc_sg_type": "actual",
             "data_type": "demand",
             "full_time": full_time_block
         })
 
-        data = self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids, dc_sg_type="actual")
+        data = await self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids, dc_sg_type="actual")
 
         time_block_map = {doc["time_block"]: doc for doc in data}
         chart_data = []
@@ -181,11 +181,11 @@ class DashboardPGService:
         }
 
     
-    def get_dashboard_ODUD(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
+    async def get_dashboard_ODUD(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
         full_time_block = get_fifteen_full_time_block_id(current_block_id)
 
         # Fetch current block OD-UD record
-        current_doc = self.dashboard_repo.find_one({
+        current_doc = await self.dashboard_repo.find_one({
             "schedule_date": schedule_date,
             "dc_sg_type": "actual",
             "data_type": "demand",
@@ -202,7 +202,7 @@ class DashboardPGService:
         block_ids = [b["block_id"] for b in block_ranges if isinstance(b["block_id"], int)]
 
         # Fetch data for block range
-        data = self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids, dc_sg_type="actual")
+        data = await self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids, dc_sg_type="actual")
 
         time_block_map = {doc["time_block"]: doc for doc in data}
         chart_data = []
@@ -222,7 +222,7 @@ class DashboardPGService:
         }
 
 
-    def get_dashboard_MCP(self, schedule_date: str, current_block_id: int, block_ranges: List[Dict[str, Any]], block_ids: List[int]) -> Dict[str, Any]:
+    async def get_dashboard_MCP(self, schedule_date: str, current_block_id: int, block_ranges: List[Dict[str, Any]], block_ids: List[int]) -> Dict[str, Any]:
         try:
             # full_time_blocks = [get_fifteen_full_time_block_id(bid) for bid in block_ids]
             rtm_block_ids = [i for i in range(max(1, current_block_id - 11), current_block_id + 1)]
@@ -272,8 +272,8 @@ class DashboardPGService:
                 }}
             ]
 
-            rtm_result = self.dashboard_repo.aggregate_on("iex_rtm_market_snapshot", rtm_pipeline)
-            dam_result = self.dashboard_repo.aggregate_on("iex_market_snapshot", dam_pipeline)
+            rtm_result = await self.dashboard_repo.aggregate_on("iex_rtm_market_snapshot", rtm_pipeline)
+            dam_result = await self.dashboard_repo.aggregate_on("iex_market_snapshot", dam_pipeline)
 
             def process_mcp_data(result: List[Dict[str, Any]]) -> Tuple[float, List[List[Union[str, float]]]]:
                 data = []
@@ -410,10 +410,10 @@ class DashboardPGService:
 
 
 
-    def get_dashboard_acp(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
+    async def get_dashboard_acp(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
         cron_time = self.get_cronjob_time_from_block(current_block_id)
-        
-        current_doc = self.iex_acp_repo.find_one({
+
+        current_doc = await self.iex_acp_repo.find_one({
             "schedule_date": schedule_date,
             "cronJob_time": cron_time
         })
@@ -421,7 +421,7 @@ class DashboardPGService:
             raise HTTPException(status_code=404, detail="Current acp block not found")
 
         # Updated line here
-        data = self.iex_acp_repo.find_many({
+        data = await self.iex_acp_repo.find_many({
             "schedule_date": schedule_date,
             "cronJob_time": {
                 "$in":[self.get_cronjob_time_from_block(b["block_id"]) for b in block_ranges if isinstance(b.get("block_id"), int)]
@@ -451,7 +451,7 @@ class DashboardPGService:
         }
 
 
-    def get_dashboard_DSM(self, schedule_date: str, current_block_id: int, block_ids: List[int]) -> Dict[str, Any]:
+    async def get_dashboard_DSM(self, schedule_date: str, current_block_id: int, block_ids: List[int]) -> Dict[str, Any]:
         try:
             # Define the MongoDB aggregation pipelines for RTM and DAM
             common_pipeline = lambda collection_name: [
@@ -478,8 +478,8 @@ class DashboardPGService:
             ]
 
             # Run aggregations
-            rtm_result = self.dashboard_repo.aggregate_on("iex_rtm_market_snapshot", common_pipeline("iex_rtm_market_snapshot"))
-            dam_result = self.dashboard_repo.aggregate_on("iex_market_snapshot", common_pipeline("iex_market_snapshot"))
+            rtm_result = await self.dashboard_repo.aggregate_on("iex_rtm_market_snapshot", common_pipeline("iex_rtm_market_snapshot"))
+            dam_result = await self.dashboard_repo.aggregate_on("iex_market_snapshot", common_pipeline("iex_market_snapshot"))
 
             # Convert results into block-wise dicts for easy lookup
             rtm_map = {row["time_block"]: row.get("mcp", 0.0) for row in rtm_result}
@@ -510,7 +510,7 @@ class DashboardPGService:
             logger.exception("Error fetching DSM data")
             return {"dsm": {}}
 
-    def get_dashboard_capacity_chart(self) -> Dict[str, Any]:
+    async def get_dashboard_capacity_chart(self) -> Dict[str, Any]:
         """
         Returns hierarchical sunburst data with colors:
         Total Capacity -> display_category -> category -> plant_name (with ppa_mw)
@@ -568,7 +568,7 @@ class DashboardPGService:
                 }}
             ]
 
-            result = list(self.master_plant.aggregate(pipeline))
+            result = await self.master_plant.aggregate(pipeline)
             if not result:
                 raise HTTPException(status_code=404, detail="No capacity data found")
 
@@ -614,9 +614,9 @@ class DashboardPGService:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-    def get_dashboard(self, request: Request) -> Dict[str, Any]:
+    async def get_dashboard(self, request: Request) -> Dict[str, Any]:
         try:
-            now = ist_time()    # called for IST timezone 
+            now = ist_time()    # called for IST timezone
             current_block_id = get_fifteen_time_block((now + timedelta(minutes=0, seconds=1)).strftime("%H:%M"))
             block_ranges = get_surrounding_block_ranges(current_block_id)
             block_ids = [b["block_id"] for b in block_ranges if isinstance(b["block_id"], int)]
@@ -625,14 +625,14 @@ class DashboardPGService:
             schedule_date = "2025-07-27"  # we can replace this with dynamic logic
             schedule_date_old = "2022-07-27"  # we can replace this with dynamic logic
 
-            demand = self.get_dashboard_demand(schedule_date, current_block_id, block_ranges, block_ids)
-            frequency = self.get_dashboard_frequency(schedule_date, current_block_id)
-            schedule_drawal = self.get_dashboard_ScheduledDrawal(schedule_date, current_block_id, block_ranges, block_ids)
-            od_ud = self.get_dashboard_ODUD(schedule_date, current_block_id)
-            mcp = self.get_dashboard_MCP(schedule_date_old, current_block_id, block_ranges, block_ids)        # As date not matched so used "schedule_date_old"
+            demand = await self.get_dashboard_demand(schedule_date, current_block_id, block_ranges, block_ids)
+            frequency = await self.get_dashboard_frequency(schedule_date, current_block_id)
+            schedule_drawal = await self.get_dashboard_ScheduledDrawal(schedule_date, current_block_id, block_ranges, block_ids)
+            od_ud = await self.get_dashboard_ODUD(schedule_date, current_block_id)
+            mcp = await self.get_dashboard_MCP(schedule_date_old, current_block_id, block_ranges, block_ids)        # As date not matched so used "schedule_date_old"
             peak_demand = self.get_dashboard_peak_demand(schedule_date_now, current_block_id)
-            acp = self.get_dashboard_acp(schedule_date_old, current_block_id, block_ranges, block_ids)
-            dsm = self.get_dashboard_DSM(schedule_date_old, current_block_id, block_ids)
+            acp = await self.get_dashboard_acp(schedule_date_old, current_block_id, block_ranges, block_ids)
+            dsm = await self.get_dashboard_DSM(schedule_date_old, current_block_id, block_ids)
 
 
 
@@ -652,7 +652,7 @@ class DashboardPGService:
             logger.exception("Error combining dashboard data")
             raise HTTPException(status_code=500, detail="Failed to get dashboard data")
 
-    def get_daily_peak_demand(self) -> Dict[str, Any]:
+    async def get_daily_peak_demand(self) -> Dict[str, Any]:
         try:
             from_timestamp = 1709231400
             to_timestamp = 1711909799
@@ -695,7 +695,7 @@ class DashboardPGService:
                     }
                 ]
 
-            cursor = self.demand_PG_repo.aggregate(pipeline)
+            cursor = await self.demand_PG_repo.aggregate(pipeline)
             max_item = max(cursor, key=lambda x: x["maxDemand"])
             logger.warning(f' combining dashboard data {cursor[0]["maxDemand"]}')
             return {"data":cursor, "month_peak_demand":max_item}

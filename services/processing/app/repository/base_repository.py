@@ -59,7 +59,7 @@ class BaseRepository:
         """Find multiple documents by filter"""
         try:
             cursor = self.collection.find(filter).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error finding documents in {self.collection_name}: {e}")
             return []
@@ -141,7 +141,7 @@ class BaseRepository:
         """Find documents with pagination"""
         try:
             cursor = self.collection.find(filter).skip(skip).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(
                 f"Error finding documents with pagination in {self.collection_name}: {e}"
@@ -152,7 +152,7 @@ class BaseRepository:
         """Execute aggregation pipeline"""
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error executing aggregation in {self.collection_name}: {e}")
             return []
@@ -164,7 +164,7 @@ class BaseRepository:
         try:
             other_collection = self.db[collection_name]
             cursor = other_collection.aggregate(pipeline)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error executing aggregation on {collection_name}: {e}")
             return []

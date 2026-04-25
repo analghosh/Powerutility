@@ -151,7 +151,7 @@ class JobDataRepository(BaseRepository):
             if service:
                 query["service"] = service
             
-            jobs = await self.collection.find(query).sort("priority", 1).to_list(None)
+            jobs = await self.collection.find(query).sort("priority", 1).to_list(length=10000)
 
             # Convert ObjectId to string for JSON serialization
             for job in jobs:
@@ -180,7 +180,7 @@ class JobDataRepository(BaseRepository):
             if enabled_only:
                 query["enabled"] = True
             
-            jobs = await self.collection.find(query).sort("priority", 1).to_list(None)
+            jobs = await self.collection.find(query).sort("priority", 1).to_list(length=10000)
 
             # Convert ObjectId to string for JSON serialization
             for job in jobs:
@@ -225,7 +225,7 @@ class JobDataRepository(BaseRepository):
             # else:
             #     query = service_query
             
-            jobs = await self.collection.find(query).sort("priority", 1).to_list(None)
+            jobs = await self.collection.find(query).sort("priority", 1).to_list(length=10000)
 
             # Convert ObjectId to string for JSON serialization
             for job in jobs:
@@ -518,7 +518,7 @@ class JobDetailRepository(BaseRepository):
             return await self.collection.find(
                 filter_query,
                 {"_id": 0}
-            ).sort("execution_start", -1).skip(query.skip).limit(query.limit).to_list(None)
+            ).sort("execution_start", -1).skip(query.skip).limit(query.limit).to_list(length=10000)
 
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get execution logs: %s", str(e))
@@ -539,7 +539,7 @@ class JobDetailRepository(BaseRepository):
             return await self.collection.find(
                 {"job_id": job_id},
                 {"_id": 0}
-            ).sort("execution_start", -1).limit(limit).to_list(None)
+            ).sort("execution_start", -1).limit(limit).to_list(length=10000)
 
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get execution history for job %s: %s", job_id, str(e))
@@ -707,7 +707,7 @@ class JobDetailRepository(BaseRepository):
                 }
             ]
             
-            duration_stats = await self.collection.aggregate(pipeline).to_list(None)
+            duration_stats = await self.collection.aggregate(pipeline).to_list(length=10000)
             avg_duration = duration_stats[0]["avg_duration"] if duration_stats else 0
             min_duration = duration_stats[0]["min_duration"] if duration_stats else 0
             max_duration = duration_stats[0]["max_duration"] if duration_stats else 0
@@ -762,7 +762,7 @@ class JobDetailRepository(BaseRepository):
             
             return await self.collection.find({
                 "execution_start": {"$lt": cutoff_time}
-            }).sort("execution_start", 1).to_list(None)
+            }).sort("execution_start", 1).to_list(length=10000)
 
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get old executions for migration: %s", str(e))
@@ -845,7 +845,7 @@ class JobDetailRepository(BaseRepository):
                     "current_step": 1,
                     "estimated_completion": 1
                 }
-            ).sort("execution_start", -1).to_list(None)
+            ).sort("execution_start", -1).to_list(length=10000)
             
             # Calculate runtime for each job and convert ObjectIds to strings
             current_time = datetime.now()
@@ -894,7 +894,7 @@ class JobDetailRepository(BaseRepository):
             # Get execution history (last 10 executions)
             execution_history = await self.collection.find(
                 {"job_id": job_id}
-            ).sort("execution_start", -1).limit(10).to_list(None)
+            ).sort("execution_start", -1).limit(10).to_list(length=10000)
             
             # Convert ObjectIds to strings in history
             for execution in execution_history:
@@ -959,7 +959,7 @@ class JobDetailRepository(BaseRepository):
             # Get jobs from both current and historical collections
             current_jobs = await self.collection.find(
                 {"service": "scheduler"}
-            ).sort("execution_start", -1).limit(limit).to_list(None)
+            ).sort("execution_start", -1).limit(limit).to_list(length=10000)
             
             # Note: historical_collection would need to be initialized if needed
             # For now, just use current collection
@@ -1039,7 +1039,7 @@ class JobDetailRepository(BaseRepository):
             # Get jobs from current collection (execution logs) for success/failure metrics
             jobs = await self.collection.find({
                 "execution_start": {"$gte": cutoff_time}
-            }).to_list(None)
+            }).to_list(length=10000)
             
             # Calculate statistics from execution logs
             total_execution_jobs = len(jobs)
@@ -1266,7 +1266,7 @@ class JobDetailRepository(BaseRepository):
                 # Get all execution records for this job
                 executions_list = await self.collection.find(
                     {"job_id": job_id}
-                ).sort("execution_id", -1).limit(50).to_list(None)  # Limit to last 50 executions
+                ).sort("execution_id", -1).limit(50).to_list(length=10000)  # Limit to last 50 executions
 
                 logger.info("Found %d execution records for job_id: %s", len(executions_list), job_id)
                 

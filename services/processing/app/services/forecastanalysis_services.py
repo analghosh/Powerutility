@@ -156,7 +156,7 @@ class DemandForecastAnalysisServices:
 
 
     # ---------- core ----------
-    def demand_blocks(
+    async def demand_blocks(
         self,
         markets: Optional[List[str]] = None,
         date_from: Optional[str] = None,
@@ -386,7 +386,7 @@ class DemandForecastAnalysisServices:
         ]
 
 
-        docs = list(self.repo.aggregate(core))
+        docs = await self.repo.aggregate(core)
 
         # reshape
         wanted_days = self._date_list_inclusive(start_date_str, end_date_str)
@@ -409,7 +409,7 @@ class DemandForecastAnalysisServices:
 
 
     # ---------- new: demand curve (rank by comp_act_demand) ----------
-    def demand_curve(
+    async def demand_curve(
         self,
         markets: Optional[List[str]] = None,
         date_from: Optional[str] = None,
@@ -614,7 +614,7 @@ class DemandForecastAnalysisServices:
 
 
         logger.debug("Executing demand_curve pipeline: %s", pipeline)
-        rows = list(self.repo.aggregate(pipeline))
+        rows = await self.repo.aggregate(pipeline)
 
         return {
             "result": rows,
@@ -631,7 +631,7 @@ class DemandForecastAnalysisServices:
         }
 
 
-    def mape_curve(
+    async def mape_curve(
         self,
         markets: Optional[List[str]] = None,
         date_from: Optional[str] = None,
@@ -895,7 +895,7 @@ class DemandForecastAnalysisServices:
 
 
         logger.debug("Executing mape_curve pipeline: %s", pipeline)
-        rows = list(self.repo.aggregate(pipeline))
+        rows = await self.repo.aggregate(pipeline)
 
         return {
             "result": rows,
@@ -912,7 +912,7 @@ class DemandForecastAnalysisServices:
         }
 
 
-    def all_three_unified(
+    async def all_three_unified(
         self,
         *,
         markets: Optional[List[str]] = None,
@@ -968,7 +968,7 @@ class DemandForecastAnalysisServices:
                 expected_total = ((d1 - d0).days + 1) * slots_per_day
 
         # Execute all three using the SAME filters and SAME denominator
-        blocks_payload = self.demand_blocks(
+        blocks_payload = await self.demand_blocks(
             markets=eff_markets,
             date_from=start_date_str,
             date_to=end_date_str,
@@ -978,7 +978,7 @@ class DemandForecastAnalysisServices:
             zones=eff_zones,
         )
 
-        demand_curve_payload = self.demand_curve(
+        demand_curve_payload = await self.demand_curve(
             markets=eff_markets,
             date_from=start_date_str,
             date_to=end_date_str,
@@ -988,7 +988,7 @@ class DemandForecastAnalysisServices:
             zones=eff_zones,
         )
 
-        mape_curve_payload = self.mape_curve(
+        mape_curve_payload = await self.mape_curve(
             markets=eff_markets,
             date_from=start_date_str,
             date_to=end_date_str,
@@ -997,9 +997,9 @@ class DemandForecastAnalysisServices:
             denominator=denominator,
             zones=eff_zones,
         )
-        
-        # 🔹 NEW: fetch last 7 days from precomputed table
-        last7_payload = self.demand_forecast_last_7_days()  
+
+        # fetch last 7 days from precomputed table
+        last7_payload = await self.demand_forecast_last_7_days()
 
         # Forecast Demand Status Table Statistics
         overall_stats = self._overall_blocks_stats(blocks_payload)
@@ -1030,7 +1030,7 @@ class DemandForecastAnalysisServices:
     }
 
 
-    def demand_forecast_last_7_days(self) -> Dict[str, Any]:
+    async def demand_forecast_last_7_days(self) -> Dict[str, Any]:
         """
         Read from the precomputed table `peak_demand_31_days`
         and return the last 7 IST dates (today back 6 days), inclusive.
@@ -1059,7 +1059,7 @@ class DemandForecastAnalysisServices:
         ]
 
         logger.debug("Executing demand_forecast_last_7_days pipeline: %s", pipeline)
-        rows = list(repo.aggregate(pipeline))
+        rows = await repo.aggregate(pipeline)
         return {"result": rows}
 
 
@@ -1090,7 +1090,7 @@ class DemandForecastAnalysisServices:
             raise ValueError("You can request at most 10 dates at a time")
         return sorted(uniq)
 
-    def demand_for_selected_days(
+    async def demand_for_selected_days(
         self,
         *,
         dates: List[str],
@@ -1198,7 +1198,7 @@ class DemandForecastAnalysisServices:
         ]
 
         logger.debug("Executing demand_for_selected_days pipeline: %s", pipeline)
-        rows = list(self.repo.aggregate(pipeline))
+        rows = await self.repo.aggregate(pipeline)
 
         # reshape to match grouped/flat shapes
         by_date: Dict[str, List[Dict[str, Any]]] = {}
@@ -1217,7 +1217,7 @@ class DemandForecastAnalysisServices:
                 flat.append({"schedule_date": d, **row})
         return {"result": flat}
 
-    def comp_act_demand_stats_by_date(
+    async def comp_act_demand_stats_by_date(
         self,
         *,
         dates: List[str],
@@ -1361,7 +1361,7 @@ class DemandForecastAnalysisServices:
         ]
 
         logger.debug("Executing comp_act_demand_stats_by_date pipeline: %s", pipeline)
-        rows = list(self.repo.aggregate(pipeline))
+        rows = await self.repo.aggregate(pipeline)
 
         # Ensure all requested dates appear (even if no data)
         present = {r["schedule_date"] for r in rows}

@@ -6,7 +6,6 @@ Calculates DSM rates and net DSM amounts every 15 minutes
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
-from pymongo import MongoClient
 from bson import ObjectId
 
 from .base_processor import BaseProcessor
@@ -178,7 +177,7 @@ class DSMProcessor(BaseProcessor):
             # Fetch all time blocks and create cache
             cursor = time_block_collection.find({}).sort("timeblock", 1)
             try:
-                time_blocks = await cursor.to_list(None)
+                time_blocks = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -359,9 +358,9 @@ class DSMProcessor(BaseProcessor):
                 exchange_collection = db[settings.MONGODB_EXCHANGE_SERVE_COLLECTION]
                 
                 # Check total exchange records
-                total_exchange = exchange_collection.count_documents({})
+                total_exchange = await exchange_collection.count_documents({})
                 logger.debug(f"🔍 DEBUG: Total exchange records in database: {total_exchange}")
-                
+
                 # Check records for this date
                 date_query = {
                     "scheduled_at": {
@@ -369,19 +368,19 @@ class DSMProcessor(BaseProcessor):
                         "$lt": datetime.combine(date, datetime.min.time()) + timedelta(days=1)
                     }
                 }
-                date_records = exchange_collection.count_documents(date_query)
+                date_records = await exchange_collection.count_documents(date_query)
                 logger.debug(f"🔍 DEBUG: Exchange records for date {date}: {date_records}")
-                
+
                 # Check records for this time block and date
                 timeblock_query = {
                     **date_query,
                     "time_block": timeblock
                 }
-                timeblock_records = exchange_collection.count_documents(timeblock_query)
+                timeblock_records = await exchange_collection.count_documents(timeblock_query)
                 logger.debug(f"🔍 DEBUG: Exchange records for date {date} and time_block {timeblock}: {timeblock_records}")
-                
+
                 # Show sample record structure
-                sample_record = exchange_collection.find_one({})
+                sample_record = await exchange_collection.find_one({})
                 if sample_record:
                     logger.debug(f"🔍 DEBUG: Sample exchange record structure: {list(sample_record.keys())}")
                     logger.debug(f"🔍 DEBUG: Sample scheduled_at: {sample_record.get('scheduled_at')}, time_block: {sample_record.get('time_block')}")
@@ -429,9 +428,9 @@ class DSMProcessor(BaseProcessor):
                 demand_collection = db[settings.MONGODB_DEMAND_SERVE_COLLECTION]
                 
                 # Check total demand records
-                total_demand = demand_collection.count_documents({})
+                total_demand = await demand_collection.count_documents({})
                 logger.debug(f"🔍 DEBUG: Total demand records in database: {total_demand}")
-                
+
                 # Check records for this date
                 date_query = {
                     "scheduled_at": {
@@ -439,19 +438,19 @@ class DSMProcessor(BaseProcessor):
                         "$lt": datetime.combine(date, datetime.min.time()) + timedelta(days=1)
                     }
                 }
-                date_records = demand_collection.count_documents(date_query)
+                date_records = await demand_collection.count_documents(date_query)
                 logger.debug(f"🔍 DEBUG: Demand records for date {date}: {date_records}")
-                
+
                 # Check records for this time block and date
                 timeblock_query = {
                     **date_query,
                     "time_block": timeblock
                 }
-                timeblock_records = demand_collection.count_documents(timeblock_query)
+                timeblock_records = await demand_collection.count_documents(timeblock_query)
                 logger.debug(f"🔍 DEBUG: Demand records for date {date} and time_block {timeblock}: {timeblock_records}")
-                
+
                 # Show sample record structure
-                sample_record = demand_collection.find_one({})
+                sample_record = await demand_collection.find_one({})
                 if sample_record:
                     logger.debug(f"🔍 DEBUG: Sample demand record structure: {list(sample_record.keys())}")
                     logger.debug(f"🔍 DEBUG: Sample scheduled_at: {sample_record.get('scheduled_at')}, time_block: {sample_record.get('time_block')}")
@@ -525,7 +524,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(rtm_query)
                     try:
-                        rtm_records = await cursor.to_list(None)
+                        rtm_records = await cursor.to_list(length=10000)
                     finally:
                         cursor.close()
                     logger.debug(f"RTM records from historical collection: {len(rtm_records)}")
@@ -543,7 +542,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(dam_query)
                     try:
-                        dam_records = await cursor.to_list(None)
+                        dam_records = await cursor.to_list(length=10000)
                     finally:
                         cursor.close()
                     logger.debug(f"DAM records from historical collection: {len(dam_records)}")

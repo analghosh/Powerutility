@@ -1699,30 +1699,10 @@ class RTMSchedulingServices:
             # Get session numbers
             # For v2, we use the repository directly
             try:
-                # v2 uses async repo, but this method is sync, so we need to use sync method
-                # Check if repo has sync method first
-                if hasattr(self.rtm_product_hardCoded_data_repo, '_get_data_sync'):
-                    # Use sync method directly
-                    getsessionNoRaw = self.rtm_product_hardCoded_data_repo._get_data_sync()
+                if hasattr(self.rtm_product_hardCoded_data_repo, 'get_Data'):
+                    getsessionNoRaw = await self.rtm_product_hardCoded_data_repo.get_Data()
                 elif hasattr(self.rtm_product_hardCoded_data_repo, 'get_rtm_product_hardcoded_data'):
-                    getsessionNoRaw = self.rtm_product_hardCoded_data_repo.get_rtm_product_hardcoded_data()
-                elif hasattr(self.rtm_product_hardCoded_data_repo, 'get_Data'):
-                    # get_Data is async, but we're in a sync method, so use asyncio.run
-                    import asyncio
-                    try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            # If loop is already running, we can't use asyncio.run
-                            # Use sync method instead
-                            if hasattr(self.rtm_product_hardCoded_data_repo, '_get_data_sync'):
-                                getsessionNoRaw = self.rtm_product_hardCoded_data_repo._get_data_sync()
-                            else:
-                                getsessionNoRaw = []
-                        else:
-                            getsessionNoRaw = loop.run_until_complete(self.rtm_product_hardCoded_data_repo.get_Data())
-                    except RuntimeError:
-                        # No event loop, create a new one
-                        getsessionNoRaw = asyncio.run(self.rtm_product_hardCoded_data_repo.get_Data())
+                    getsessionNoRaw = await self.rtm_product_hardCoded_data_repo.get_rtm_product_hardcoded_data()
                 else:
                     getsessionNoRaw = []
             except Exception as e:
@@ -2173,7 +2153,7 @@ class RTMSchedulingServices:
                         '$lt': to_date_dt
                     }
                 }
-            ).sort([('scheduled_at', 1), ('time_block', 1)]).to_list(None)
+            ).sort([('scheduled_at', 1), ('time_block', 1)]).to_list(length=10000)
             
             logger.info(f"[RTMSchedulingServices] get_all_scheduling_data: Found {len(results)} records in date range")
             
@@ -2200,7 +2180,7 @@ class RTMSchedulingServices:
                     plant_master_collection = self.plants_list_repo.db[self.plants_list_repo.collection_name]
                     plant_master_records = await plant_master_collection.find(
                         {"plant_id": {"$in": list(plant_ids)}}
-                    ).to_list(None)
+                    ).to_list(length=10000)
                     for plant_record in plant_master_records:
                         plant_id_key = plant_record.get('plant_id', '')
                         if plant_id_key:

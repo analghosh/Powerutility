@@ -28,11 +28,11 @@ class DashboardRepository(BaseRepository):
             "schedule_date": schedule_date,
             "time_block": {"$in": [b for b in block_ids if b is not None]},
              "type": "IDF",
-       
-        }
-        
 
-        return self.collection.find(query).sort("time_block", 1)
+        }
+
+        cursor = self.collection.find(query).sort("time_block", 1)
+        return await cursor.to_list(length=10000)
     
     async def get_acp_data_by_time_blocks(self, schedule_date: str, full_time_list: List[str]) -> List[Dict[str, Any]]:
         query = {
@@ -46,6 +46,6 @@ class DashboardRepository(BaseRepository):
         }
         cursor = self.collection.find(query, projection)
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()

@@ -96,7 +96,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return await cursor.to_list(None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to aggregate DAM product data: %s", str(e))
             return []
@@ -137,7 +137,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
     async def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Dict[str, Any]:
         """Update a single document matching the filter (e.g. to add exchange fields after submission)."""
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error(f"Failed to update block bid record: {str(e)}")
@@ -186,7 +186,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 "market_type": market_type
             }
             
-            results = await self.collection.find(query).sort("from", 1).to_list(None)
+            results = await self.collection.find(query).sort("from", 1).to_list(length=10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -511,7 +511,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Find documents by filters with optional projection.
         """
         try:
-            return await self.collection.find(filters, projection or {}).to_list(None)
+            return await self.collection.find(filters, projection or {}).to_list(length=10000)
         except Exception as e:
             logger.error(f"Failed to find block bid records: {str(e)}")
             return []
@@ -542,7 +542,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$sort": {"from": 1}},  # restore chronological order
             ]
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             for doc in results:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
@@ -576,13 +576,13 @@ class BlockBidCurrentDataRepository(GenericRepository):
                     }
                 }
             ]
-            latest_docs = list(self.collection.aggregate(pipeline))
+            latest_docs = await self.collection.aggregate(pipeline).to_list(length=10000)
             ids_to_update = [doc["doc_id"] for doc in latest_docs]
 
             if not ids_to_update:
                 return 0
 
-            result = self.collection.update_many(
+            result = await self.collection.update_many(
                 {"_id": {"$in": ids_to_update}},
                 {"$set": {"status": to_status}}
             )

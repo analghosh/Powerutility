@@ -120,7 +120,7 @@ async def get_supply_demand_trade(
     - Fills every requested block with zeros if data is missing.
     """
     try:
-        payload = management_snapshot_controller.demand_supply_snapshot(
+        payload = await management_snapshot_controller.demand_supply_snapshot(
             schedule_date=schedule_date,
             from_block=from_block,
             to_block=to_block,
@@ -175,7 +175,7 @@ async def iex_dam_rtm_snapshot(
     Always returns each block in the requested range (gap-filled with nulls if not present).
     """
     try:
-        payload = management_snapshot_controller.iex_dam_rtm_snapshot(
+        payload = await management_snapshot_controller.iex_dam_rtm_snapshot(
             schedule_date=schedule_date,
             from_block=from_block,
             to_block=to_block,
@@ -238,7 +238,7 @@ async def get_variable_cost_snapshot(
     - If either market is missing for a block, it’s present with `{"Total": null, "Ours": null}`.
     """
     try:
-        payload = management_snapshot_controller.variable_cost_snapshot(
+        payload = await management_snapshot_controller.variable_cost_snapshot(
             schedule_date=schedule_date,
             from_block=from_block,
             to_block=to_block,
@@ -271,7 +271,7 @@ async def get_variable_cost_snapshot_range(
     exchange: Optional[str]   = Query(None, example="IEX"),
 ):
     try:
-        days = management_snapshot_controller.variable_cost_snapshot_range(
+        days = await management_snapshot_controller.variable_cost_snapshot_range(
             date_from=date_from,
             date_to=date_to,
             from_block=from_block,

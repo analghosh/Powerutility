@@ -164,7 +164,7 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
             
             query = {"inserted_date": inserted_date}
             cursor = self.collection.find(query)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by time_block
             # NOTE: multiple docs can exist per time_block; store list to avoid overwriting
@@ -213,7 +213,7 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
             }
             
             cursor = collection.find(query)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -261,7 +261,7 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
             # PHP orders by submited_bid_response.order_id, but that's nested
             # We'll order by _id first, then sort in Python if needed
             cursor = collection.find(query).sort("_id", 1)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(length=10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -330,7 +330,7 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
             }
 
             cursor = self.collection.find(query).sort("_id", 1)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(length=10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -349,7 +349,7 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
         if not docs:
             return 0
         try:
-            result = self.collection.insert_many(docs, ordered=False)
+            result = await self.collection.insert_many(docs, ordered=False)
             logger.info(f"Bulk inserted {len(result.inserted_ids)} DAM block bid response docs")
             return len(result.inserted_ids)
         except Exception as e:
@@ -359,7 +359,7 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
     async def get_by_order_id(self, order_id: int) -> Optional[Dict[str, Any]]:
         """Get a DAM block bid response document by exchange order_id."""
         try:
-            doc = self.collection.find_one({"order_id": order_id})
+            doc = await self.collection.find_one({"order_id": order_id})
             if doc and "_id" in doc:
                 doc["_id"] = str(doc["_id"])
             return doc
@@ -378,7 +378,7 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
             update = {"status": status}
             if extra_fields:
                 update.update(extra_fields)
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"order_id": order_id},
                 {"$set": update},
             )

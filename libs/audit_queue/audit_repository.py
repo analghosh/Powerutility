@@ -165,7 +165,7 @@ class AuditRepository:
                 query["ts"] = time_filter
 
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by service: %s", e)
             raise
@@ -174,7 +174,7 @@ class AuditRepository:
         """Find all audit logs for a trace ID"""
         try:
             cursor = self.collection.find({"trace.traceId": trace_id}).sort("ts", ASCENDING)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by trace ID: %s", e)
             raise
@@ -183,7 +183,7 @@ class AuditRepository:
         """Find all audit logs for a job ID"""
         try:
             cursor = self.collection.find({"trace.jobId": job_id}).sort("ts", ASCENDING)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by job ID: %s", e)
             raise
@@ -196,7 +196,7 @@ class AuditRepository:
                 .sort("ts", DESCENDING)
                 .limit(limit)
             )
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by actor: %s", e)
             raise
@@ -213,7 +213,7 @@ class AuditRepository:
             if start_time:
                 query["ts"] = {"$gte": start_time}
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by priority: %s", e)
             raise
@@ -232,7 +232,7 @@ class AuditRepository:
             if start_time:
                 query["ts"] = {"$gte": start_time}
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find error audit logs: %s", e)
             raise
@@ -254,7 +254,7 @@ class AuditRepository:
             if start_time:
                 query["ts"] = {"$gte": start_time}
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find approval audit logs: %s", e)
             raise
@@ -284,7 +284,7 @@ class AuditRepository:
                 )
                 .limit(limit)
             )
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to search audit logs: %s", e)
             raise
@@ -323,7 +323,7 @@ class AuditRepository:
             ]
 
             cursor = self.collection.aggregate(pipeline)
-            result = await cursor.to_list(length=None)
+            result = await cursor.to_list(length=10000)
             return result[0] if result else {}
 
         except Exception as e:

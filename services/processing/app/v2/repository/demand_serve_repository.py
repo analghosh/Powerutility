@@ -51,7 +51,7 @@ class DemandServeRepository(GenericRepository):
         except Exception as e:
             logger.warning("demand_serve index ensure skipped: %s", e)
 
-    def _get_demand_sync(self, schedule_date: str) -> List[Dict[str, Any]]:
+    async def _get_demand_sync(self, schedule_date: str) -> List[Dict[str, Any]]:
         """Get demand data synchronously"""
         try:
             # Convert date string to datetime for scheduled_at matching
@@ -105,16 +105,16 @@ class DemandServeRepository(GenericRepository):
                 }
             ]
             
-            result = self.aggregate(self.collection_name, pipeline)
+            result = await self.aggregate(self.collection_name, pipeline)
             return list(result) if result else []
         except Exception as e:
             logger.error(f"Failed to get demand data: {str(e)}")
             return []
 
-    def get_demand_power_optimization(
-        self, 
-        schedule_date: str, 
-        mode: str = "forecast", 
+    async def get_demand_power_optimization(
+        self,
+        schedule_date: str,
+        mode: str = "forecast",
         demand_type: str = "IDF"
     ) -> List[Dict[str, Any]]:
         """
@@ -194,48 +194,45 @@ class DemandServeRepository(GenericRepository):
                 {"$sort": {"time_block": 1}}
             ]
             
-            result = self.aggregate(self.collection_name, pipeline)
-            
+            result = await self.aggregate(self.collection_name, pipeline)
+
             if not result:
                 historical_collection = getattr(settings, 'MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION', "demand_serve_historical")
                 logger.debug(f"PowerOpt: No demand data in {self.collection_name}, trying {historical_collection}")
-                
-                # Copy match_dict for count check
+
                 count_query = match_dict.copy()
-                
+
                 try:
                     collection = self.db[historical_collection]
-                    hist_count = collection.count_documents(count_query, limit=1, maxTimeMS=5000)
+                    hist_count = await collection.count_documents(count_query, limit=1, maxTimeMS=5000)
                 except Exception as hist_err:
                     logger.warning(f"PowerOpt: Historical count check failed: {hist_err}")
                     hist_count = 0
-                
+
                 if hist_count == 0:
                     return []
-                
-                result = self.aggregate(historical_collection, pipeline)
-                
+
+                result = await self.aggregate(historical_collection, pipeline)
+
             return list(result) if result else []
         except Exception as e:
             logger.error(f"PowerOpt: Failed to get demand data: {str(e)}")
             return []
 
-    def get_demand(self, schedule_date: str) -> List[Dict[str, Any]]:
+    async def get_demand(self, schedule_date: str) -> List[Dict[str, Any]]:
         """
         Get demand forecast data for a schedule date.
         Returns data with both old and new field names for compatibility.
-        
+
         Args:
             schedule_date: Date in YYYY-MM-DD format
-            
+
         Returns:
             List of demand records with mapped fields
         """
-        return self._get_demand_sync(schedule_date)
+        return await self._get_demand_sync(schedule_date)
 
     async def get_demand_async(self, schedule_date: str) -> List[Dict[str, Any]]:
-        """Get demand data asynchronously"""
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._get_demand_sync, schedule_date)
+        """Get demand data asynchronously (alias for get_demand)"""
+        return await self._get_demand_sync(schedule_date)
 

@@ -43,7 +43,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -62,7 +62,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -101,7 +101,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
 
             cursor = self.collection.aggregate(pipeline)
 
-            result = await cursor.to_list(None)
+            result = await cursor.to_list(length=10000)
 
             if result:
                 return result[0].get("revision_no", 0)

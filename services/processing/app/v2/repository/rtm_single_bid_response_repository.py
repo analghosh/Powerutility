@@ -134,7 +134,7 @@ class RTMSingleBidResponseRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(length=10000)
             
             if not results:
                 logger.info(f"No RTM single bid response found for date {datebid}")

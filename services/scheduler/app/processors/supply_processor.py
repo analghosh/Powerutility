@@ -191,7 +191,7 @@ class SupplyProcessor(BaseProcessor):
             logger.info(f"Found {len(existing_keys)} existing unique keys (blocks) for today in supply_serve/dc_sg.")
 
             # 2. Fill from plant master and last available data
-            plants = await self.plant_repository.collection.find({}).to_list(length=None)
+            plants = await self.plant_repository.collection.find({}).to_list(length=10000)
             
             new_dc_sg_entities = []
             
@@ -465,7 +465,7 @@ class SupplyProcessor(BaseProcessor):
                      return False
             
             if historical_data:
-                 hist_success = self._process_direct_to_supply_serve_historical(historical_data, metadata, provider_config)
+                 hist_success = await self._process_direct_to_supply_serve_historical(historical_data, metadata, provider_config)
                  if not hist_success:
                       logger.error("Historical data processing failed.")
                       return False
@@ -490,7 +490,7 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error in the main supply processing pipeline: {str(e)}")
             return False
 
-    def _process_direct_to_supply_serve_historical(
+    async def _process_direct_to_supply_serve_historical(
         self,
         raw_data: List[Dict[str, Any]],
         metadata: Dict[str, Any],
@@ -513,7 +513,7 @@ class SupplyProcessor(BaseProcessor):
                 # Reuse the raw parsing logic from dc_sg but mapped to supply directly?
                 # A better approach: Create DCSgEntity to validate, then map to SupplyServeEntity immediately.
                 
-                dc_sg_entity = self._create_dc_sg_entity_from_raw(raw_record, metadata, provider_config, check_updates=False)
+                dc_sg_entity = await self._create_dc_sg_entity_from_raw(raw_record, metadata, provider_config, check_updates=False)
                 if not dc_sg_entity:
                     continue
                 
@@ -597,13 +597,13 @@ class SupplyProcessor(BaseProcessor):
             
             # Fetch by approval_no
             if approval_nos:
-                plants_by_app = await self.plant_repository.collection.find({"approval_no": {"$in": list(approval_nos)}}).to_list(length=None)
+                plants_by_app = await self.plant_repository.collection.find({"approval_no": {"$in": list(approval_nos)}}).to_list(length=10000)
                 for p in plants_by_app:
                     plant_map_by_approval[str(p.get("approval_no")).strip()] = p
             
             # Fetch by plant_id
             if plant_ids:
-                plants_by_id_list = await self.plant_repository.collection.find({"plant_id": {"$in": list(plant_ids)}}).to_list(length=None)
+                plants_by_id_list = await self.plant_repository.collection.find({"plant_id": {"$in": list(plant_ids)}}).to_list(length=10000)
                 for p in plants_by_id_list:
                     plant_map_by_id[str(p.get("plant_id")).strip()] = p
             
@@ -927,7 +927,7 @@ class SupplyProcessor(BaseProcessor):
         return super()._create_dc_sg_entity_from_raw(*args, **kwargs) if hasattr(super(), "_create_dc_sg_entity_from_raw") else None
 
     # Re-implementing _create_dc_sg_entity_from_raw for historical path usage
-    def _create_dc_sg_entity_from_raw(
+    async def _create_dc_sg_entity_from_raw(
         self,
         raw_item: Dict[str, Any],
         metadata: Dict[str, Any],
@@ -945,9 +945,9 @@ class SupplyProcessor(BaseProcessor):
             
             plant_entity = None
             if raw_item.get("approval_no"):
-                plant_entity = self.plant_repository.find_one({"approval_no": str(raw_item.get("approval_no"))})
+                plant_entity = await self.plant_repository.find_one({"approval_no": str(raw_item.get("approval_no"))})
             if not plant_entity and raw_item.get("plant_id"):
-                plant_entity = self.plant_repository.find_one({"plant_id": str(raw_item.get("plant_id"))})
+                plant_entity = await self.plant_repository.find_one({"plant_id": str(raw_item.get("plant_id"))})
             if not plant_entity: return None
             
             plant_id = plant_entity.get("plant_id")
@@ -1083,7 +1083,7 @@ class SupplyProcessor(BaseProcessor):
                 
                 # Manually run find query in thread
                 filter_query = {"$or": chunk}
-                found = await self.supply_repository.serve_collection.find(filter_query).to_list(length=None)
+                found = await self.supply_repository.serve_collection.find(filter_query).to_list(length=10000)
                 for frec in found:
                     k = (
                         frec.get("scheduled_at"),
@@ -1360,7 +1360,7 @@ class SupplyProcessor(BaseProcessor):
             }
             sg_records = await self.supply_repository.collection.find(
                 sg_filter_all
-            ).to_list(length=None)
+            ).to_list(length=10000)
             
             # Group SG records by Plant to process plant-wise (cleaner for logs and batching)
             # Map: plant_id -> list of records
@@ -1486,7 +1486,7 @@ class SupplyProcessor(BaseProcessor):
             }
             dc_records = await self.supply_repository.collection.find(
                 dc_filter_all
-            ).to_list(length=None)
+            ).to_list(length=10000)
             
             # Group DC records by Plant
             dc_by_plant = {}
