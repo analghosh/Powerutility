@@ -14,14 +14,14 @@ class ManagementSnapshotController:
         self.svc = svc
 
 
-    def demand_supply_snapshot(
+    async def demand_supply_snapshot(
         self,
         schedule_date: Optional[str],
         from_block: Optional[int],
         to_block: Optional[int],
     ) -> Dict[str, Any]:
         try:
-            return self.svc.demand_supply_snapshot(
+            return await self.svc.demand_supply_snapshot(
                 schedule_date=schedule_date,
                 from_block=from_block,
                 to_block=to_block,
@@ -36,14 +36,14 @@ class ManagementSnapshotController:
             raise HTTPException(status_code=500, detail="Failed to fetch supply-demand-trade snapshot.")
 
 
-    def iex_dam_rtm_snapshot(
+    async def iex_dam_rtm_snapshot(
         self,
         schedule_date: Optional[str],
         from_block: Optional[int],
         to_block: Optional[int],
     ) -> Dict[str, Any]:
         try:
-            return self.svc.iex_dam_rtm_snapshot(
+            return await self.svc.iex_dam_rtm_snapshot(
                 schedule_date=schedule_date,
                 from_block=from_block,
                 to_block=to_block,
@@ -57,7 +57,7 @@ class ManagementSnapshotController:
             )
             raise HTTPException(status_code=500, detail="Failed to fetch management snapshot.")
 
-    def variable_cost_snapshot(
+    async def variable_cost_snapshot(
         self,
         schedule_date: Optional[str],
         from_block: Optional[int],
@@ -65,7 +65,7 @@ class ManagementSnapshotController:
         exchange: Optional[str],
     ) -> Dict[str, Any]:
         try:
-            return self.svc.variable_cost_snapshot(
+            return await self.svc.variable_cost_snapshot(
                 schedule_date=schedule_date,
                 from_block=from_block,
                 to_block=to_block,
@@ -81,7 +81,7 @@ class ManagementSnapshotController:
             raise HTTPException(status_code=500, detail="Failed to fetch market book snapshot.")
 
 
-    def variable_cost_snapshot_range(
+    async def variable_cost_snapshot_range(
         self,
         date_from: str,
         date_to: str,
@@ -101,7 +101,7 @@ class ManagementSnapshotController:
         out: List[Dict[str, Any]] = []
         cur = d_from
         while cur <= d_to:
-            out.append(self.svc.variable_cost_snapshot(
+            out.append(await self.svc.variable_cost_snapshot(
                 schedule_date=cur.isoformat(),
                 from_block=from_block,
                 to_block=to_block,

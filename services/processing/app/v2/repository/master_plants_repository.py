@@ -103,7 +103,7 @@ class MasterPlantsRepository(GenericRepository):
             List[Dict[str, Any]]: List of all plant documents
         """
         cursor = self.db[self.collection_name].find({}, {"_id": 0})
-        return await cursor.to_list(None)
+        return await cursor.to_list(length=10000)
 
     async def get_plants_map_by_ids(self, plant_ids: List[str]) -> Dict[str, Dict[str, Any]]:
         if not plant_ids:
@@ -111,32 +111,25 @@ class MasterPlantsRepository(GenericRepository):
         unique_ids = list({pid for pid in plant_ids if pid})
         if not unique_ids:
             return {}
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            def _find_sync():
-                cursor = self.db[self.collection_name].find(
-                    {"plant_id": {"$in": unique_ids}},
-                    {
-                        "_id": 0,
-                        "plant_id": 1,
-                        "plant_name": 1,
-                        "category": 1,
-                        "technology": 1,
-                        "dispatch_type": 1,
-                        "display_category": 1,
-                        "c_s": 1,
-                        "px_price": 1,
-                        "fc_price": 1,
-                        "vc_price": 1,
-                        "ppa": 1,
-                        "price_group": 1,
-                    },
-                )
-                try:
-                    docs = list(cursor)
-                finally:
-                    cursor.close()
-                return {doc.get("plant_id"): doc for doc in docs if doc.get("plant_id")}
-            return await loop.run_in_executor(executor, _find_sync)
+        cursor = self.db[self.collection_name].find(
+            {"plant_id": {"$in": unique_ids}},
+            {
+                "_id": 0,
+                "plant_id": 1,
+                "plant_name": 1,
+                "category": 1,
+                "technology": 1,
+                "dispatch_type": 1,
+                "display_category": 1,
+                "c_s": 1,
+                "px_price": 1,
+                "fc_price": 1,
+                "vc_price": 1,
+                "ppa": 1,
+                "price_group": 1,
+            },
+        )
+        docs = await cursor.to_list(length=10000)
+        return {doc.get("plant_id"): doc for doc in docs if doc.get("plant_id")}
 
 master_plants_repository = MasterPlantsRepository()

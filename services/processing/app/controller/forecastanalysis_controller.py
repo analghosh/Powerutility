@@ -11,7 +11,7 @@ class DemandController:
     def __init__(self, demand_services = demand_forecast_analysis_services):
         self.demand_services = demand_services
 
-    def demand_blocks(
+    async def demand_blocks(
         self,
         markets: Optional[List[str]],
         date_from: Optional[str],
@@ -22,7 +22,7 @@ class DemandController:
         zones: Optional[List[str]] = None,   # NEW
     ) -> Dict[str, Any]:
         try:
-            return self.demand_services.demand_blocks(
+            return await self.demand_services.demand_blocks(
                 markets=markets,
                 date_from=date_from,
                 date_to=date_to,
@@ -41,7 +41,7 @@ class DemandController:
             raise HTTPException(status_code=500, detail="Failed to fetch demand blocks.")
         
 
-    def demand_curve(
+    async def demand_curve(
         self,
         markets: Optional[List[str]],
         date_from: Optional[str],
@@ -52,7 +52,7 @@ class DemandController:
         zones: Optional[List[str]],
     ) -> Dict[str, Any]:
         try:
-            return self.demand_services.demand_curve(
+            return await self.demand_services.demand_curve(
                 markets=markets,
                 date_from=date_from,
                 date_to=date_to,
@@ -70,7 +70,7 @@ class DemandController:
             )
             raise HTTPException(status_code=500, detail="Failed to compute demand curve.")
     
-    def mape_curve(
+    async def mape_curve(
         self,
         markets: Optional[List[str]],
         date_from: Optional[str],
@@ -81,7 +81,7 @@ class DemandController:
         zones: Optional[List[str]],
     ) -> Dict[str, Any]:
         try:
-            return self.demand_services.mape_curve(
+            return await self.demand_services.mape_curve(
                 markets=markets,
                 date_from=date_from,
                 date_to=date_to,
@@ -99,7 +99,7 @@ class DemandController:
             )
             raise HTTPException(status_code=500, detail="Failed to compute MAPE curve.")
 
-    def all_three_unified(
+    async def all_three_unified(
         self,
         markets: Optional[List[str]],
         zones: Optional[List[str]],
@@ -111,7 +111,7 @@ class DemandController:
         denominator: Literal["matched", "expected"],
     ) -> Dict[str, Any]:
         try:
-            return self.demand_services.all_three_unified(
+            return await self.demand_services.all_three_unified(
                 markets=markets,
                 zones=zones,
                 date_from=date_from,
@@ -132,9 +132,9 @@ class DemandController:
             raise HTTPException(status_code=500, detail="Failed to compute combined analysis.")
 
 
-    def demand_forecast_last_7_days(self) -> Dict[str, Any]:
+    async def demand_forecast_last_7_days(self) -> Dict[str, Any]:
         try:
-            return self.demand_services.demand_forecast_last_7_days()
+            return await self.demand_services.demand_forecast_last_7_days()
         except HTTPException:
             raise
         except Exception:
@@ -142,7 +142,7 @@ class DemandController:
             raise HTTPException(status_code=500, detail="Failed to fetch last 7 days demand summary.")
 
 
-    def selected_days_blocks_and_stats(
+    async def selected_days_blocks_and_stats(
         self,
         *,
         dates: List[str],
@@ -153,7 +153,7 @@ class DemandController:
         group_by_date: bool,
     ) -> Dict[str, Any]:
         try:
-            blocks_payload = self.demand_services.demand_for_selected_days(
+            blocks_payload = await self.demand_services.demand_for_selected_days(
                 dates=dates,
                 markets=markets,
                 zones=zones,
@@ -161,7 +161,7 @@ class DemandController:
                 to_block=to_block,
                 group_by_date=group_by_date,
             )
-            stats_payload = self.demand_services.comp_act_demand_stats_by_date(
+            stats_payload = await self.demand_services.comp_act_demand_stats_by_date(
                 dates=dates,
                 markets=markets,
                 zones=zones,

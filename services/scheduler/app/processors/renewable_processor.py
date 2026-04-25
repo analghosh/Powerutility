@@ -223,9 +223,7 @@ class RenewableProcessor(BaseProcessor):
             plants_map: Dict[str, Any] = {}
             if plant_ids:
                 try:
-                    found_plants = await asyncio.to_thread(
-                        lambda: list(self.plant_repository.find_many({"plant_id": {"$in": list(plant_ids)}}))
-                    )
+                    found_plants = await self.plant_repository.find_many({"plant_id": {"$in": list(plant_ids)}})
                     for p in found_plants:
                         if p.get("plant_id"):
                             plants_map[p["plant_id"]] = p
@@ -322,17 +320,15 @@ class RenewableProcessor(BaseProcessor):
             target_end = datetime.combine(target_date, datetime.max.time())
 
             # 1. Which plant_ids have ANY record in dc_sg_renewable for today?
-            dc_sg_today = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.find_by_date, target_date
-            )
+            dc_sg_today = await self.dc_sg_renewable_repository.find_by_date(target_date)
             plants_in_dc_sg_today = {r.get("plant_id") for r in dc_sg_today if r.get("plant_id")}
 
             # 2. Which plant_ids have ANY record in renewable_serve for today?
             try:
-                serve_today = list(self.renewable_repository.serve_collection.find(
+                serve_today = await self.renewable_repository.serve_collection.find(
                     {"scheduled_at": {"$gte": target_start, "$lte": target_end}},
                     projection={"plant_id": 1, "_id": 0}
-                ))
+                ).to_list(length=10000)
                 plants_in_serve_today = {r.get("plant_id") for r in serve_today if r.get("plant_id")}
             except Exception as e:
                 logger.error("Error querying renewable_serve for today's plant_ids: %s", e)
@@ -340,9 +336,7 @@ class RenewableProcessor(BaseProcessor):
 
             # 3. All known plants
             try:
-                all_plants = await asyncio.to_thread(
-                    lambda: list(self.plant_repository.collection.find({}, {"plant_id": 1, "_id": 0}))
-                )
+                all_plants = await self.plant_repository.collection.find({}, {"plant_id": 1, "_id": 0}).to_list(length=10000)
                 all_plant_ids = {p.get("plant_id") for p in all_plants if p.get("plant_id")}
             except Exception as e:
                 logger.error("Error fetching all plants for rollover: %s", e)
@@ -362,9 +356,7 @@ class RenewableProcessor(BaseProcessor):
             )
 
             # 5. For each missing plant, fetch yesterday's dc_sg_renewable records
-            yesterday_records = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.find_by_date, yesterday
-            )
+            yesterday_records = await self.dc_sg_renewable_repository.find_by_date(yesterday)
 
             # Index yesterday's records by plant_id
             yesterday_by_plant: Dict[str, List[Dict]] = {}
@@ -421,9 +413,7 @@ class RenewableProcessor(BaseProcessor):
         Unique key: scheduled_at, plant_id, time_block, type
         """
         try:
-            staging_records = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.find_by_date_range, start_date, end_date
-            )
+            staging_records = await self.dc_sg_renewable_repository.find_by_date_range(start_date, end_date)
 
             if not staging_records:
                 logger.info("No dc_sg_renewable records found for %s – %s", start_date, end_date)
@@ -644,7 +634,7 @@ class RenewableProcessor(BaseProcessor):
                 "scheduled_at": {"$lt": datetime.combine(archive_cutoff, datetime.min.time())}
             })
             
-            archival_candidates = await cursor.to_list(None)
+            archival_candidates = await cursor.to_list(length=10000)
             
             if not archival_candidates:
                 logger.info("No renewable records found for archival")
@@ -707,7 +697,7 @@ class RenewableProcessor(BaseProcessor):
             delete_query = {
                 "scheduled_at": {"$lt": datetime.combine(delete_cutoff, datetime.min.time())}
             }
-            del_res = self.renewable_repository.serve_collection.delete_many(delete_query)
+            del_res = await self.renewable_repository.serve_collection.delete_many(delete_query)
             deleted_count = del_res.deleted_count
             logger.info("Cleaned up %d renewable records older than %s", deleted_count, delete_cutoff)
 

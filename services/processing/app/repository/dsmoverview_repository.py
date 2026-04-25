@@ -34,7 +34,7 @@ class DsmoverviewRepository(BaseRepository):
     ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
     
@@ -60,7 +60,7 @@ class DsmoverviewRepository(BaseRepository):
     ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
     
@@ -83,7 +83,7 @@ class DsmoverviewRepository(BaseRepository):
     ]
         cursor = self.collection.aggregate(pipeline)
         try:
-            return await cursor.to_list(None)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
 

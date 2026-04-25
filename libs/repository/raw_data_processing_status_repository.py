@@ -171,7 +171,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             if provider_type:
                 query["provider_type"] = provider_type
 
-            records = await self.collection.find(query).sort("created_at", 1).limit(limit).to_list(None)
+            records = await self.collection.find(query).sort("created_at", 1).limit(limit).to_list(length=10000)
 
             for record in records:
                 record["_id"] = str(record["_id"])
@@ -246,7 +246,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 "retry_count": {"$lt": max_retries}
             }
 
-            records = await self.collection.find(query).sort("updated_at", 1).limit(limit).to_list(None)
+            records = await self.collection.find(query).sort("updated_at", 1).limit(limit).to_list(length=10000)
 
             for record in records:
                 record["_id"] = str(record["_id"])
@@ -285,7 +285,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 }}
             ]
 
-            results = await self.collection.aggregate(pipeline).to_list(None)
+            results = await self.collection.aggregate(pipeline).to_list(length=10000)
 
             stats = {
                 "total": 0,

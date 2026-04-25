@@ -218,7 +218,7 @@ class ExchangeProcessor(BaseProcessor):
                     try:
                         cursor = self.repository.serve_collection.find(query)
                         try:
-                            found = await cursor.to_list(None)
+                            found = await cursor.to_list(length=10000)
                         finally:
                             cursor.close()
                         total_found += len(found)

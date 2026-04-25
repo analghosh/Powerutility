@@ -19,4 +19,4 @@ class AreaPriceRtmRepository(BaseRepository):
         }},
         {"$sort": {"time_block": 1}}  # ascending order
     ]
-        return await self.collection.aggregate(pipeline).to_list(None)
+        return await self.collection.aggregate(pipeline).to_list(length=10000)

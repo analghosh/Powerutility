@@ -1,8 +1,6 @@
 # repositories/rtm_product_hardcoded_data_repository.py
 from typing import List, Dict, Any, Optional
 import logging
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 from .base_repository import GenericRepository
 from ...core.config import settings
@@ -28,11 +26,10 @@ class RTMProductHardCodedDataRepository(GenericRepository):
         self.collection_name = settings.MONGODB_RTM_PRODUCT_HARDCODED_DATA_COLLECTION if hasattr(settings, 'MONGODB_RTM_PRODUCT_HARDCODED_DATA_COLLECTION') else "rtm_product_hardCoded_data"
         logger.info(f"RTMProductHardCodedDataRepository initialized with collection: {self.collection_name}")
 
-    def _get_data_sync(self) -> List[Dict[str, Any]]:
+    async def get_Data(self) -> List[Dict[str, Any]]:
         """
-        Get all RTM product data, sorted by product_code.
-        Maps legacy fields to standard field names in response.
-        Supports both new standard field names and legacy field names.
+        Get all RTM product hardcoded data asynchronously.
+        Returns standardized field names.
         """
         try:
             pipeline = [
@@ -55,42 +52,30 @@ class RTMProductHardCodedDataRepository(GenericRepository):
                     }
                 }
             ]
-            result = self.aggregate(self.collection_name, pipeline)
+            result = await self.aggregate(self.collection_name, pipeline)
             logger.info(f"Retrieved {len(result)} RTM product records")
             return result
         except Exception as e:
             logger.error(f"Failed to retrieve RTM product data: {str(e)}")
             return []
 
-    async def get_Data(self) -> List[Dict[str, Any]]:
+    async def get_period(self, period_time: str) -> Optional[Dict[str, Any]]:
         """
-        Get all RTM product hardcoded data asynchronously.
-        Returns standardized field names.
-        """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._get_data_sync)
+        Get RTM product data by period time asynchronously.
 
-    def _get_period_sync(self, period_time: str) -> Optional[Dict[str, Any]]:
-        """
-        Get RTM product data by period time (from_period_time).
-        Supports both new and legacy field names.
-        
         Args:
             period_time: Period time in HH:MM format
-            
+
         Returns:
-            Document matching the period time, with standardized field names
+            Document with standardized field names
         """
         try:
-            # Try both new and legacy field names
             filter_query = {
                 "$or": [
                     {"from_period_time": period_time},
                     {"From_Period_Id": period_time}
                 ]
             }
-            
             projection = {
                 "_id": 0,
                 "product_code": {"$ifNull": ["$product_code", "$Product_Code"]},
@@ -101,47 +86,29 @@ class RTMProductHardCodedDataRepository(GenericRepository):
                 "delivery_type": {"$ifNull": ["$delivery_type", "$Delivery_Date"]},
                 "session_number": {"$ifNull": ["$session_number", "$Session_Id"]}
             }
-            
-            result = self.find_one(self.collection_name, filter_query, projection)
-            return result
+            return await self.find_one(self.collection_name, filter_query, projection)
         except Exception as e:
             logger.error(f"Failed to get period data for {period_time}: {str(e)}")
             return None
 
-    async def get_period(self, period_time: str) -> Optional[Dict[str, Any]]:
-        """
-        Get RTM product data by period time asynchronously.
-        
-        Args:
-            period_time: Period time in HH:MM format
-            
-        Returns:
-            Document with standardized field names
-        """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._get_period_sync, period_time)
-
-    def get_by_period_code(self, period_code: int) -> Optional[Dict[str, Any]]:
+    async def get_by_period_code(self, period_code: int) -> Optional[Dict[str, Any]]:
         """
         Get RTM product data by period code (from_period_code).
         Supports both new and legacy field names.
-        
+
         Args:
             period_code: Period code (integer)
-            
+
         Returns:
             Document matching the period code, with standardized field names
         """
         try:
-            # Try both new and legacy field names
             filter_query = {
                 "$or": [
                     {"from_period_code": period_code},
                     {"From_Period_Code": period_code}
                 ]
             }
-            
             projection = {
                 "_id": 0,
                 "product_code": {"$ifNull": ["$product_code", "$Product_Code"]},
@@ -152,9 +119,7 @@ class RTMProductHardCodedDataRepository(GenericRepository):
                 "delivery_type": {"$ifNull": ["$delivery_type", "$Delivery_Date"]},
                 "session_number": {"$ifNull": ["$session_number", "$Session_Id"]}
             }
-            
-            result = self.find_one(self.collection_name, filter_query, projection)
-            return result
+            return await self.find_one(self.collection_name, filter_query, projection)
         except Exception as e:
             logger.error(f"Failed to get period code data for {period_code}: {str(e)}")
             return None
@@ -163,18 +128,18 @@ class RTMProductHardCodedDataRepository(GenericRepository):
         """
         Get session data mapped by time_block (from_period_code).
         Returns a dictionary keyed by time_block with session information.
-        
+
         Returns:
             Dictionary with time_block as key and session data as value
         """
         try:
             session_data_raw = await self.get_Data()
             session_mapping = {}
-            
+
             for session_item in session_data_raw:
                 time_block = session_item.get("from_period_code") or session_item.get("From_Period_Code")
                 session_number = session_item.get("session_number") or session_item.get("Session_Id")
-                
+
                 if time_block is not None:
                     session_mapping[time_block] = {
                         "session_number": session_number,
@@ -184,7 +149,7 @@ class RTMProductHardCodedDataRepository(GenericRepository):
                         "to_period_time": session_item.get("to_period_time") or session_item.get("To_Period_Id"),
                         "delivery_type": session_item.get("delivery_type") or session_item.get("Delivery_Date")
                     }
-            
+
             logger.info(f"Created session mapping for {len(session_mapping)} time blocks")
             return session_mapping
         except Exception as e:
@@ -194,7 +159,7 @@ class RTMProductHardCodedDataRepository(GenericRepository):
     async def get_data(self) -> List[Dict[str, Any]]:
         """
         Backward compatibility method - alias for get_Data().
-        
+
         Returns:
             List[Dict[str, Any]]: RTM product hardcoded data
         """

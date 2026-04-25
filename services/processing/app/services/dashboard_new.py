@@ -66,7 +66,7 @@ class DashboardPGService:
 
     # ---------- Internal helpers ----------
 
-    def get_max_updated_at_from_supply(self) -> Optional[str]:
+    async def get_max_updated_at_from_supply(self) -> Optional[str]:
         """
         Get the maximum updated_at timestamp from serve_supply_table.
         Returns ISO formatted datetime string or None if no data.
@@ -76,7 +76,7 @@ class DashboardPGService:
                 {"$group": {"_id": None, "max_updated": {"$max": "$updated_at"}}},
                 {"$project": {"_id": 0, "max_updated": 1}}
             ]
-            result = self.serve_supply_repo.aggregate(pipeline)
+            result = await self.serve_supply_repo.aggregate(pipeline)
             if result and len(result) > 0 and result[0].get("max_updated"):
                 max_updated = result[0]["max_updated"]
                 # Convert to ISO string if it's a datetime object
@@ -88,22 +88,22 @@ class DashboardPGService:
             logger.exception("Failed to get max updated_at from serve_supply_table")
             return None
 
-    def _safe_current_doc(
+    async def _safe_current_doc(
         self, schedule_date: str, current_block_id: int
     ) -> Dict[str, Any]:
-        doc = self.dashboard_repo.get_current_block(schedule_date, current_block_id)
+        doc = await self.dashboard_repo.get_current_block(schedule_date, current_block_id)
         if not doc:
             logger.warning("No current block doc: date=%s block=%s", schedule_date, current_block_id)
             return {}
         return doc
 
-    def _fetch_blocks_map(
+    async def _fetch_blocks_map(
         self, schedule_date: str, block_ids: List[int]
     ) -> Dict[int, Dict[str, Any]]:
-        docs = self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids)
+        docs = await self.dashboard_repo.get_blocks_by_ids(schedule_date, block_ids)
         return {d.get("time_block"): d for d in docs}
 
-    def _metric_series(
+    async def _metric_series(
         self,
         *,
         schedule_date: str,
@@ -125,8 +125,8 @@ class DashboardPGService:
         Generic builder for demand/dsm_rate/net_dsm_amount-like series.
         Uses `actual_key` for blocks <= current; `forecast_key` (if supplied) for > current.
         """
-        current_doc = self._safe_current_doc(schedule_date, current_block_id)
-        blocks_map = self._fetch_blocks_map(schedule_date, block_ids)
+        current_doc = await self._safe_current_doc(schedule_date, current_block_id)
+        blocks_map = await self._fetch_blocks_map(schedule_date, block_ids)
 
         chart: List[Dict[str, Union[int, str, float]]] = []
         for b in block_ranges:
@@ -155,18 +155,18 @@ class DashboardPGService:
             }
         }
 
-    def _with_fallback(
+    async def _with_fallback(
         self,
         schedule_date: str,
         schedule_date_old: str,
-        builder: Callable[[str], Dict[str, Any]],
+        builder: Callable[[str], Any],
         default_factory: Callable[[], Dict[str, Any]],
         log_name: str
     ) -> Dict[str, Any]:
         errors = []
         for date_try in (schedule_date, schedule_date_old):
             try:
-                return builder(date_try)
+                return await builder(date_try)
             except HTTPException as e:
                 errors.append((date_try, f"HTTP {e.status_code}: {e.detail}"))
             except Exception as e:
@@ -176,11 +176,11 @@ class DashboardPGService:
 
     # ---------- Widgets ----------
 
-    def get_dashboard_demand(
+    async def get_dashboard_demand(
         self, schedule_date: str, current_block_id: int, block_ranges, block_ids
     ) -> Dict[str, Any]:
         # Use forecast for future blocks; actual for past/current
-        return self._metric_series(
+        return await self._metric_series(
             schedule_date=schedule_date,
             current_block_id=current_block_id,
             block_ranges=block_ranges,
@@ -193,12 +193,12 @@ class DashboardPGService:
             item_value_key="demand",
         )
 
-    def get_dashboard_frequency(
+    async def get_dashboard_frequency(
         self, schedule_date: str, current_block_id: int, block_ranges, block_ids
     ) -> Dict[str, Any]:
         # frequency is slightly different (switch at current)
-        blocks_map = self._fetch_blocks_map(schedule_date, block_ids)
-        current_doc = self.dashboard_repo.find_one({
+        blocks_map = await self._fetch_blocks_map(schedule_date, block_ids)
+        current_doc = await self.dashboard_repo.find_one({
             "schedule_date": schedule_date, "time_block": current_block_id
         })
         current_frequency = round(float((current_doc or {}).get("Raw_Frequency", 0) or 0), 2)
@@ -224,8 +224,8 @@ class DashboardPGService:
             }
         }
 
-    def get_dashboard_ODUD(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
-        current = self.dashboard_repo.find_one({
+    async def get_dashboard_ODUD(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
+        current = await self.dashboard_repo.find_one({
             "schedule_date": schedule_date,
             "time_block": current_block_id
         }) or {}
@@ -241,7 +241,7 @@ class DashboardPGService:
             blocks.append({"block_id": bid, "full_time": block_label(bid)})
 
         ids = [b["block_id"] for b in blocks]
-        m = self._fetch_blocks_map(schedule_date, ids)
+        m = await self._fetch_blocks_map(schedule_date, ids)
 
         data = []
         for b in blocks:
@@ -279,18 +279,18 @@ class DashboardPGService:
             }},
         ]
 
-    def get_dashboard_MCP(
+    async def get_dashboard_MCP(
         self, schedule_date: str, current_block_id: int, block_ranges, block_ids
     ) -> Dict[str, Any]:
         try:
             rtm_ids = list(range(max(1, current_block_id - 11), current_block_id + 1))
 
             # --- switched to serve_exchange_table ---
-            rtm = self.dashboard_repo.aggregate_on(
+            rtm = await self.dashboard_repo.aggregate_on(
                 "serve_exchange_table",
                 self._exchange_pipeline(market="RTM", schedule_date=schedule_date, time_blocks=rtm_ids),
             )
-            dam = self.dashboard_repo.aggregate_on(
+            dam = await self.dashboard_repo.aggregate_on(
                 "serve_exchange_table",
                 self._exchange_pipeline(market="DAM", schedule_date=schedule_date, time_blocks=block_ids),
             )
@@ -333,7 +333,7 @@ class DashboardPGService:
                 }
             }
 
-    def get_dashboard_ScheduledDrawal(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
+    async def get_dashboard_ScheduledDrawal(self, schedule_date: str, current_block_id: int) -> Dict[str, Any]:
         """
         Build Scheduled Drawal from serve_supply_table:
         - InterState = sum(volume) where c_s == "central"
@@ -383,7 +383,7 @@ class DashboardPGService:
         ]
 
         # Use the generic dashboard_repo to target the desired collection.
-        rows = list(self.dashboard_repo.aggregate_on("serve_supply_table", pipeline))
+        rows = await self.dashboard_repo.aggregate_on("serve_supply_table", pipeline)
         # logger.warning(f"======================={rows}")
         # helper for current values
         current_inter = next((r["InterState"] for r in rows if r["time_block"] == current_block_id), None)
@@ -408,7 +408,7 @@ class DashboardPGService:
             }
         }
 
-    def get_dashboard_peak_demand(self) -> Dict[str, Any]:
+    async def get_dashboard_peak_demand(self) -> Dict[str, Any]:
         try:
             today = ist_now().date()
             start = today - timedelta(days=30)
@@ -422,7 +422,7 @@ class DashboardPGService:
                 }},
                 {"$sort": {"schedule_date": 1}},
             ]
-            recs = list(self.peak_demand_repo.aggregate(pipeline))  # type: ignore
+            recs = await self.peak_demand_repo.aggregate(pipeline)  # type: ignore
             if not recs:
                 return {"error": f"No peak demand records found between {start_str} and {end_str}"}
 
@@ -448,7 +448,7 @@ class DashboardPGService:
             return {"error": str(e)}
 
 
-    def get_dashboard_ACP(
+    async def get_dashboard_ACP(
         self, schedule_date: str, current_block_id: int, block_ranges, block_ids
     ) -> Dict[str, Any]:
         """
@@ -481,7 +481,7 @@ class DashboardPGService:
                 }},
             ]
 
-            rows = self.dashboard_repo.aggregate_on("serve_exchange_table", pipeline)
+            rows = await self.dashboard_repo.aggregate_on("serve_exchange_table", pipeline)
             rows_map = {r.get("time_block"): r for r in rows}
 
             chart = []
@@ -519,8 +519,8 @@ class DashboardPGService:
                 }
             }
         
-    def get_dashboard_dsm_rate(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
-        return self._metric_series(
+    async def get_dashboard_dsm_rate(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
+        return await self._metric_series(
             schedule_date=schedule_date,
             current_block_id=current_block_id,
             block_ranges=block_ranges,
@@ -533,8 +533,8 @@ class DashboardPGService:
             item_value_key="dsm_rate",
         )
 
-    def get_dashboard_net_dsm_amount(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
-        return self._metric_series(
+    async def get_dashboard_net_dsm_amount(self, schedule_date: str, current_block_id: int, block_ranges, block_ids) -> Dict[str, Any]:
+        return await self._metric_series(
             schedule_date=schedule_date,
             current_block_id=current_block_id,
             block_ranges=block_ranges,
@@ -548,7 +548,7 @@ class DashboardPGService:
         )
 
 
-    def get_dashboard_capacity_chart(self) -> Dict[str, Any]:
+    async def get_dashboard_capacity_chart(self) -> Dict[str, Any]:
         """
         Returns hierarchical sunburst data with colors:
         Total Capacity -> c_s -> category -> plant_name (with ppa)
@@ -642,7 +642,7 @@ class DashboardPGService:
                 }
             ]
 
-            result = list(self.plant_repo.aggregate(pipeline))
+            result = await self.plant_repo.aggregate(pipeline)
             if not result:
                 raise HTTPException(status_code=404, detail="No capacity data found")
 
@@ -720,7 +720,7 @@ class DashboardPGService:
     #                 "total": 0.0
     #             }
     #         }
-    def get_dashboard_total_net_dsm_amount(self, schedule_date: str, current_block_id: int,) -> Dict[str, Any]:
+    async def get_dashboard_total_net_dsm_amount(self, schedule_date: str, current_block_id: int,) -> Dict[str, Any]:
         """
         Day-to-date running sum of net_dsm_amount (from block 1 up to current),
         but only returns the last 12 points: past 11 + current.
@@ -729,7 +729,7 @@ class DashboardPGService:
         try:
             # 1) Build full day range 1..current_block_id
             full_ids = list(range(1, current_block_id + 1))
-            docs_map = self._fetch_blocks_map(schedule_date, full_ids)
+            docs_map = await self._fetch_blocks_map(schedule_date, full_ids)
 
             # 2) Compute day-to-date cumulative across 1..current, in chronological order
             cumulative_series = []
@@ -775,7 +775,7 @@ class DashboardPGService:
 
     # ---------- Orchestrator ----------
 
-    def get_dashboard(self, request: Request) -> Dict[str, Any]:
+    async def get_dashboard(self, request: Request) -> Dict[str, Any]:
         """
         Assemble dashboard parts. Each part degrades gracefully and never throws,
         so the endpoint returns 200 with partial data when sources are missing.
@@ -830,46 +830,46 @@ class DashboardPGService:
         }}}
 
         # Compose with real fallbacks
-        demand = self._with_fallback(
+        demand = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_demand(d, current_block, blocks, block_ids),
             dfactory_demand, "demand"
         )
-        frequency = self._with_fallback(
+        frequency = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_frequency(d, current_block, blocks, block_ids),
             dfactory_freq, "frequency"
         )
         # schedule_drawal historically uses old date; keep behavior (or switch to fallback if desired)
-        schedule_drawal = self.get_dashboard_ScheduledDrawal(schedule_date, current_block)
-        od_ud = self._with_fallback(
+        schedule_drawal = await self.get_dashboard_ScheduledDrawal(schedule_date, current_block)
+        od_ud = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_ODUD(d, current_block),
             dfactory_odud, "od_ud"
         )
-        mcp = self._with_fallback(
+        mcp = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_MCP(d, current_block, blocks, block_ids),
             dfactory_mcp, "mcp"
         )
-        peak_demand = self.get_dashboard_peak_demand()
-        acp = self._with_fallback(
+        peak_demand = await self.get_dashboard_peak_demand()
+        acp = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_ACP(d, current_block, blocks, block_ids),
             dfactory_dsm, "acp"
         )
-        dsm_rate = self._with_fallback(
+        dsm_rate = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_dsm_rate(d, current_block, blocks, block_ids),
             dfactory_dsm, "dsm_rate"
         )
-        net_dsm_amount = self._with_fallback(
+        net_dsm_amount = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_net_dsm_amount(d, current_block, blocks, block_ids),
             dfactory_net, "net_dsm_amount"
         )
 
-        total_net_dsm_amount = self._with_fallback(
+        total_net_dsm_amount = await self._with_fallback(
             schedule_date, schedule_date_old,
             lambda d: self.get_dashboard_total_net_dsm_amount(d, current_block),
             dfactory_total_net_sum, "total_net_dsm_amount"
@@ -877,7 +877,7 @@ class DashboardPGService:
 
         # Flatten into your existing response shape
         # Get last_updated_at with fallback to current time if not available
-        last_updated = self.get_max_updated_at_from_supply()
+        last_updated = await self.get_max_updated_at_from_supply()
         if not last_updated:
             # Fallback: use current IST time if field doesn't exist in DB
             last_updated = datetime.now(self.IST).isoformat()

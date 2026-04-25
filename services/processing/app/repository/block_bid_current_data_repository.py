@@ -63,7 +63,7 @@ class BlockBidCurrentDataRepository(BaseRepository):
                 "status": {"$ne": "Submitted"}
             }
 
-            docs = await self.collection.find(query).sort("from", -1).to_list(None)
+            docs = await self.collection.find(query).sort("from", -1).to_list(length=10000)
             result = []
 
             for doc in docs:

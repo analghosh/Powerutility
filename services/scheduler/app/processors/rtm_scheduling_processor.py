@@ -522,7 +522,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                     "$gte": start_of_day,
                     "$lt": end_of_day
                 }
-            }).to_list(None)
+            }).to_list(length=10000)
 
             if not existing_records:
                 return {"archived": 0, "deleted": 0, "revision_no": None}
@@ -1764,7 +1764,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         if all_insert_data:
             try:
                 collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
-                collection.insert_many(all_insert_data)
+                await collection.insert_many(all_insert_data)
                 logger.info(f"[RTMSchedulingServices] Bulk inserted {len(all_insert_data)} scheduling records")
                 if snapshot_run_id:
                     try:
@@ -1791,7 +1791,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                     self.scheduling_repo._db = None
                     try:
                         collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
-                        collection.insert_many(all_insert_data)
+                        await collection.insert_many(all_insert_data)
                         logger.info(f"[RTMSchedulingServices] Bulk inserted {len(all_insert_data)} scheduling records (after reconnect)")
                         if snapshot_run_id:
                             try:
@@ -2206,7 +2206,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         ]
         return time_block
 
-    def get_revision_no(self, schedule_date: str) -> Dict[str, Any]:
+    async def get_revision_no(self, schedule_date: str) -> Dict[str, Any]:
         """
         Gets latest revision numbers for ISP and SLDC categories
         
@@ -2222,7 +2222,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             # Query SR-LDC revision (ISP category) from scheduling_requisition_calculation_table
             collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
             
-            getsrldcrevision = collection.find_one(
+            getsrldcrevision = await collection.find_one(
                 {
                     "schedule_date": schedule_date,
                     "category": "ISP"
@@ -2242,7 +2242,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             supply_collection = self.supply_repo.db[self.supply_repo.collection_name]
             
             # For DC: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_dc_doc = supply_collection.find_one(
+            sldc_revision_dc_doc = await supply_collection.find_one(
                 {
                     "scheduled_at": {
                         "$gte": schedule_date_start,
@@ -2252,9 +2252,9 @@ class RTMSchedulingProcessor(BaseProcessor):
                 },
                 sort=[("source_revision_number", -1), ("system_revision_number", -1)]
             )
-            
+
             # For SG: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_sg_doc = supply_collection.find_one(
+            sldc_revision_sg_doc = await supply_collection.find_one(
                 {
                     "scheduled_at": {
                         "$gte": schedule_date_start,

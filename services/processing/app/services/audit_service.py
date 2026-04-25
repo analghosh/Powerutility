@@ -101,7 +101,7 @@ class AuditService:
             ]
         return q
 
-    def list_logs(
+    async def list_logs(
         self,
         filters: Dict[str, Any],
         page: int = 1,
@@ -122,15 +122,16 @@ class AuditService:
             .skip((max(page, 1) - 1) * page_size)
             .limit(page_size)
         )
-        rows = [self._to_out(d) for d in cursor]
-        total = self.repo.collection.count_documents(q)
+        docs = await cursor.to_list(length=10000)
+        rows = [self._to_out(d) for d in docs]
+        total = await self.repo.collection.count_documents(q)
         return rows, total
 
-    def user_logs(self, user_id: str, page: int = 1, page_size: int = 50):
-        return self.list_logs({"user_id": user_id}, page, page_size)
+    async def user_logs(self, user_id: str, page: int = 1, page_size: int = 50):
+        return await self.list_logs({"user_id": user_id}, page, page_size)
 
-    def stats(self, days: int = 30) -> Dict[str, Any]:
-        return self.repo.get_audit_stats(days=days)
+    async def stats(self, days: int = 30) -> Dict[str, Any]:
+        return await self.repo.get_audit_stats(days=days)
 
 # Global instance
 audit_service = AuditService()

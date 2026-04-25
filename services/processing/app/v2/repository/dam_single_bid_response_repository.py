@@ -134,7 +134,7 @@ class DAMSingleBidResponseRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(None)
+            results = await cursor.to_list(length=10000)
             
             if not results:
                 logger.info(f"No DAM single bid response found for date {datebid}")

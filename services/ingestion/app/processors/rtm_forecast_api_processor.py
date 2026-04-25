@@ -96,17 +96,17 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
     #     return value
 
     async def _cursor_to_docs(self, cursor: Any) -> List[Dict[str, Any]]:
-        """Normalize sync/async cursor types into a plain list of documents."""
+        """Normalize async cursor types into a plain list of documents."""
         if cursor is None:
             return []
         if hasattr(cursor, "to_list"):
-            return await cursor.to_list(length=None)
+            return await cursor.to_list(length=10000)
         if hasattr(cursor, "__aiter__"):
             docs: List[Dict[str, Any]] = []
             async for doc in cursor:
                 docs.append(doc)
             return docs
-        return list(cursor)
+        return []
 
     def _normalize_response_items(self, api_response: Dict[str, Any]) -> List[Dict[str, Any]]:
         """

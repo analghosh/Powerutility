@@ -503,7 +503,7 @@ class BaseProcessor(ABC):
                 {"$replaceRoot": {"newRoot": "$raw_data"}}
             ]
             
-            pending_raw_data = await processing_status_repo.collection.aggregate(pipeline).to_list(length=None)
+            pending_raw_data = await processing_status_repo.collection.aggregate(pipeline).to_list(length=10000)
             
             logger.info(
                 f"Successfully fetched {len(pending_raw_data)} pending raw data records "
@@ -789,7 +789,7 @@ class BaseProcessor(ABC):
             
             # Execute query with sorting
             logger.info(f"TESTING LOGS: Executing query: {query}")
-            timeblock_records = await timeblock_collection.find(query).sort("timeblock", 1).to_list(length=None)
+            timeblock_records = await timeblock_collection.find(query).sort("timeblock", 1).to_list(length=10000)
             
 
             

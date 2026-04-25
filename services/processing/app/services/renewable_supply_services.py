@@ -23,7 +23,7 @@ class RenewableSupplyServices:
         self.serve_supply_repo = SupplyTableRepository(collection_name="serve_supply_table")
 
 
-    def get_max_updated_at_from_supply(self) -> Optional[str]:
+    async def get_max_updated_at_from_supply(self) -> Optional[str]:
         """
         Get the maximum updated_at timestamp from serve_supply_table.
         Returns ISO formatted datetime string or None if no data.
@@ -33,7 +33,7 @@ class RenewableSupplyServices:
                 {"$group": {"_id": None, "max_updated": {"$max": "$updated_at"}}},
                 {"$project": {"_id": 0, "max_updated": 1}}
             ]
-            result = self.serve_supply_repo.aggregate(pipeline)
+            result = await self.serve_supply_repo.aggregate(pipeline)
             if result and len(result) > 0 and result[0].get("max_updated"):
                 max_updated = result[0]["max_updated"]
                 # Convert to ISO string if it's a datetime object
@@ -60,7 +60,7 @@ class RenewableSupplyServices:
         start = anchor - timedelta(days=2)
         return [(start + timedelta(days=i)).isoformat() for i in range(4)]
     
-    def renewable_availability_by_day(self, date_str: str) -> Dict[str, Any]:
+    async def renewable_availability_by_day(self, date_str: str) -> Dict[str, Any]:
         """
         One day, 96 blocks. SG priority, DC fallback. Gap = SG - DC.
         Assumes schedule_date stored as 'YYYY-MM-DD' (string).
@@ -79,7 +79,7 @@ class RenewableSupplyServices:
             {"$limit": 1},
             {"$project": {"_id": 1}}
         ]
-        if not list(self.availability_repo.aggregate(probe)):
+        if not await self.availability_repo.aggregate(probe):
             raise HTTPException(status_code=404, detail=f"No data for {date_str}.")
 
         pipeline = [
@@ -143,7 +143,7 @@ class RenewableSupplyServices:
             {"$sort": {"time_block": 1}}
         ]
 
-        rows: List[Dict[str, Any]] = list(self.availability_repo.aggregate(pipeline))
+        rows: List[Dict[str, Any]] = await self.availability_repo.aggregate(pipeline)
 
         # normalize to 96 blocks
         by_tb = {r["time_block"]: r for r in rows}
@@ -158,9 +158,9 @@ class RenewableSupplyServices:
             }))
         return {
             "data": {"schedule_date": date_str, "blocks": blocks},
-            "last_updated_at": self.get_max_updated_at_from_supply()
+            "last_updated_at": await self.get_max_updated_at_from_supply()
         }
-    
+
 
     # def renewable_schedule_by_day(self, date_str: str):
     #     """
@@ -267,7 +267,7 @@ class RenewableSupplyServices:
     #     docs = list(self.schedule_repo.aggregate(pipeline))
     #     return {"data": docs}
 
-    def renewable_schedule_by_day(self, date_str: str):
+    async def renewable_schedule_by_day(self, date_str: str):
         """
         Source: serve_renewable_table
         Returns separate series for both 'central' and 'state'.
@@ -290,7 +290,7 @@ class RenewableSupplyServices:
 
         # probe for existence
         probe = [{"$match": base_match}, {"$limit": 1}, {"$project": {"_id": 1}}]
-        if not list(self.schedule_repo.aggregate(probe)):
+        if not await self.schedule_repo.aggregate(probe):
             raise HTTPException(status_code=404, detail=f"No schedule data for {date_str}.")
 
         pipeline = [
@@ -351,8 +351,8 @@ class RenewableSupplyServices:
             {"$project": {"cs_order": 0, "tech_order": 0, "type_order": 0}},
         ]
 
-        docs = list(self.schedule_repo.aggregate(pipeline))
-        return {"data": docs, "last_updated_at": self.get_max_updated_at_from_supply()}
+        docs = await self.schedule_repo.aggregate(pipeline)
+        return {"data": docs, "last_updated_at": await self.get_max_updated_at_from_supply()}
 
     
 

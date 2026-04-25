@@ -720,7 +720,7 @@ class DamSchedulingRepository:
                 "staged_by": user_id,
                 "status": "staged"
             })
-            staged_records = await cursor.to_list(None)
+            staged_records = await cursor.to_list(length=10000)
             
             if not staged_records:
                 return {
@@ -874,7 +874,7 @@ class DamSchedulingRepository:
                 }
             ).limit(limit).sort([("schedule_date", 1), ("time_block", 1)])
             
-            staged_records = await cursor.to_list(None)
+            staged_records = await cursor.to_list(length=10000)
 
             total_count = await self.repository.db[self.staging_collection_name].count_documents({
                 "staged_by": user_id,
@@ -947,7 +947,7 @@ class DamSchedulingRepository:
             ).sort([("schedule_date", 1), ("time_block", 1), ("plant_id", 1)]).skip(skip).limit(page_size)
             
             try:
-                staged_records = await cursor.to_list(None)
+                staged_records = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             

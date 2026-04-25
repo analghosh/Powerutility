@@ -460,7 +460,7 @@ class MongoAuditQueue:
             cursor = self.jobs_collection.find(
                 {"status": {"$in": [JobStatus.SAVED, JobStatus.PROCESSING]}},
             ).sort("created_at", 1).limit(limit)
-            return self._run_async(cursor.to_list(length=None))
+            return self._run_async(cursor.to_list(length=10000))
         except Exception as e:
             logger.error("Failed to get pending jobs: %s", e)
             return []

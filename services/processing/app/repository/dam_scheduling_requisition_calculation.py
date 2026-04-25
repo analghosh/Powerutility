@@ -25,7 +25,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -44,7 +44,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -68,7 +68,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             ]
             cursor = self.collection.aggregate(pipeline)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result[0] if result else {}
@@ -87,7 +87,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = await cursor.to_list(None)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result

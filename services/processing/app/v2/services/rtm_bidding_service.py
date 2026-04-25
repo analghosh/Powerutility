@@ -311,12 +311,12 @@ class RTMBiddingService:
                 schedule_date_str = (now + timedelta(days=1)).strftime('%Y-%m-%d')
                 logger.info(f"RTM time > 22:30, using tomorrow's limits: {schedule_date_str}")
 
-            forecastedPrice = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"RTM_forecasted_price","RTM", from_block, to_block, schedule_date_str))
-            bufferPrice = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"Buffer","RTM", from_block, to_block, schedule_date_str))
-            ceilingPrice = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"ceilingPrice","RTM", from_block, to_block, schedule_date_str))
-            n_1Limits = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"n_1","RTM", from_block, to_block, schedule_date_str))
-            noc_buyLimits = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_buy","RTM", from_block, to_block, schedule_date_str))
-            noc_sellLimits = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_sell","RTM", from_block, to_block, schedule_date_str))
+            forecastedPrice = await self.limit_values_repo.get_data_by_ID_market('limit_values',"RTM_forecasted_price","RTM", from_block, to_block, schedule_date_str)
+            bufferPrice = await self.limit_values_repo.get_data_by_ID_market('limit_values',"Buffer","RTM", from_block, to_block, schedule_date_str)
+            ceilingPrice = await self.limit_values_repo.get_data_by_ID_market('limit_values',"ceilingPrice","RTM", from_block, to_block, schedule_date_str)
+            n_1Limits = await self.limit_values_repo.get_data_by_ID_market('limit_values',"n_1","RTM", from_block, to_block, schedule_date_str)
+            noc_buyLimits = await self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_buy","RTM", from_block, to_block, schedule_date_str)
+            noc_sellLimits = await self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_sell","RTM", from_block, to_block, schedule_date_str)
             
             typeofExchangeIEX = "IEX-100"
             typeofExchangePXIL = "PXIL-0"

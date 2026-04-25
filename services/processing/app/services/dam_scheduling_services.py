@@ -68,7 +68,7 @@ class ServeDamSchedulingServices:
 
     # ---------- Main methods ----------
 
-    def schedule_by_date(
+    async def schedule_by_date(
         self, schedule_date: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -88,7 +88,7 @@ class ServeDamSchedulingServices:
 
             for time_block in time_blocks:
                 # Get plant data for this time block
-                plant_data = self._get_plant_data_for_timeblock(date_str, time_block)
+                plant_data = await self._get_plant_data_for_timeblock(date_str, time_block)
                 result_data.append({
                     "time_block": time_block,
                     "plant_data": plant_data
@@ -100,7 +100,7 @@ class ServeDamSchedulingServices:
             logger.exception("schedule_by_date failed | schedule_date=%s", date_str)
             raise HTTPException(status_code=500, detail="Failed to build DAM schedule view.")
 
-    def _get_plant_data_for_timeblock(self, schedule_date: str, time_block: int) -> Dict[str, Any]:
+    async def _get_plant_data_for_timeblock(self, schedule_date: str, time_block: int) -> Dict[str, Any]:
         """
         Get plant data for a specific time block.
         """
@@ -141,13 +141,13 @@ class ServeDamSchedulingServices:
             {"$sort": {"px_price": -1}}  # Sort by px_price in descending order
         ]
 
-        dam_data = list(self.dam_repo.aggregate(dam_pipeline))
+        dam_data = await self.dam_repo.aggregate(dam_pipeline)
 
         # Calculate totals
         total_supply = sum(item.get("schedule_volume", 0) for item in dam_data)
         
         # Get forecast data (assuming it's in limit_values collection)
-        forecast_data = self._get_forecast_data(schedule_date, time_block)
+        forecast_data = await self._get_forecast_data(schedule_date, time_block)
         forecast = forecast_data.get("forecast", 0)
         demand_forecast = forecast_data.get("demand_forecast", 0)
         dam_forecasted_price = forecast_data.get("dam_forecasted_price", 0)
@@ -196,7 +196,7 @@ class ServeDamSchedulingServices:
             "plant_data_order": plant_data_order
         }
 
-    def _get_forecast_data(self, schedule_date: str, time_block: int) -> Dict[str, float]:
+    async def _get_forecast_data(self, schedule_date: str, time_block: int) -> Dict[str, float]:
         """
         Get forecast data from serve_demand_table collection.
         """
@@ -223,7 +223,7 @@ class ServeDamSchedulingServices:
                 }
             ]
 
-            dam_price_data = list(self.limit_repo.aggregate(dam_price_pipeline))
+            dam_price_data = await self.limit_repo.aggregate(dam_price_pipeline)
             dam_forecasted_price = dam_price_data[0].get("dam_forecasted_price", 0) if dam_price_data else 0
 
             # Get forecast data from serve_demand_table
@@ -244,7 +244,7 @@ class ServeDamSchedulingServices:
                 }
             ]
 
-            forecast_data = list(self.demand_repo.aggregate(demand_pipeline))
+            forecast_data = await self.demand_repo.aggregate(demand_pipeline)
             if forecast_data:
                 return {
                     "forecast": forecast_data[0].get("forecast", 0),

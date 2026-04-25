@@ -73,7 +73,7 @@ class AuditLoggerService:
             # Fetch audit logs with pagination
             cursor = audit_logs_collection.find(query).skip(skip).limit(limit).sort("timestamp", -1)
             try:
-                audit_logs = await cursor.to_list(None)
+                audit_logs = await cursor.to_list(length=10000)
             finally:
                 await cursor.close()
             
@@ -150,7 +150,7 @@ class AuditLoggerService:
             # Get total count of unique users with role assignments
             count_pipeline = pipeline[:-1] + [{"$count": "total"}]
             count_cursor = audit_logs_collection.aggregate(count_pipeline)
-            count_result = await count_cursor.to_list(None)
+            count_result = await count_cursor.to_list(length=10000)
             total = count_result[0]["total"] if count_result else 0
             
             # Add pagination to the main pipeline
@@ -161,7 +161,7 @@ class AuditLoggerService:
             
             # Execute aggregation
             agg_cursor = audit_logs_collection.aggregate(pipeline)
-            audit_logs = await agg_cursor.to_list(None)
+            audit_logs = await agg_cursor.to_list(length=10000)
             
             logger.info(f"Found {len(audit_logs)} latest role assignments (total unique users: {total})")
             
@@ -265,7 +265,7 @@ class AuditLoggerService:
                 )
                 
                 try:
-                    users = await cursor.to_list(None)
+                    users = await cursor.to_list(length=10000)
                 finally:
                     await cursor.close()
                 

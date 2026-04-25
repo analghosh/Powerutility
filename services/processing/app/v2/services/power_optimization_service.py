@@ -7,7 +7,6 @@ from typing import List, Dict, Any, Optional, cast
 from datetime import datetime
 import asyncio
 import time
-from concurrent.futures import ThreadPoolExecutor
 
 from ..repository.demand_serve_repository import DemandServeRepository
 from ..repository.supply_serve_repository import SupplyServeRepository
@@ -18,7 +17,7 @@ from ..services.limit_values_services import limit_service
 logger = logging.getLogger(__name__)
 
 # Thread pool for running synchronous repository methods
-_executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="power_opt")
+
 
 class PowerOptimizationService:
     def __init__(self):
@@ -96,19 +95,14 @@ class PowerOptimizationService:
 
         async def process_date_refined(target_date: str):
              logger.info(f"Processing forecast date: {target_date}")
-             loop = asyncio.get_event_loop()
-             
+
              # Fetch raw demand
-             d_future = loop.run_in_executor(
-                 _executor, 
-                 self.demand_repo.get_demand_power_optimization, 
-                 target_date, 
-                 "forecast", 
-                 demand_type
+             d_future = self.demand_repo.get_demand_power_optimization(
+                 target_date, "forecast", demand_type
              )
-             
+
              e_future = self.exchange_repo.get_exchange_power_optimization(target_date, market_filters)
-             
+
              raw_demand, exchange_data = await asyncio.gather(d_future, e_future)
              
              # Process Demand
@@ -190,17 +184,11 @@ class PowerOptimizationService:
 
         # 3. Process Dates
         async def process_date(target_date: str):
-             loop = asyncio.get_event_loop()
-             
              # Fetch Demand & Supply
-             d_future = loop.run_in_executor(
-                 _executor, 
-                 self.demand_repo.get_demand_power_optimization, 
-                 target_date, 
-                 "optimization", 
-                 demand_type
+             d_future = self.demand_repo.get_demand_power_optimization(
+                 target_date, "optimization", demand_type
              )
-             
+
              s_future = self.supply_repo.get_supply_power_optimization(target_date)
              p_future = self.limit_service.latest_all(
                  filters={

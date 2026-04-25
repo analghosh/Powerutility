@@ -63,7 +63,7 @@ class WeatherServeRepository(BaseServeRepository):
 
             # 2. Main (Safe Migration)
             main_coll_name = "weather_serve"
-            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=None)
+            existing_colls = await self.db.list_collections(filter={"name": main_coll_name}).to_list(length=10000)
             existing_coll_info = existing_colls[0] if existing_colls else None
 
             if existing_coll_info:
@@ -83,7 +83,7 @@ class WeatherServeRepository(BaseServeRepository):
                     snapshot_data = []
                     try:
                         cursor = self.db[main_coll_name].find({"timestamp": {"$gte": start_migration_date}})
-                        all_docs = await cursor.to_list(length=None)
+                        all_docs = await cursor.to_list(length=10000)
 
                         deduped_map = {}
                         for doc in all_docs:
@@ -224,7 +224,7 @@ class WeatherServeRepository(BaseServeRepository):
             logger.error(f"Error deleting weather record {record_id}: {str(e)}")
             return False
 
-    def delete_by_time_and_source(self, valid_time_local: str, source: str , city:str) -> int:
+    async def delete_by_time_and_source(self, valid_time_local: str, source: str , city:str) -> int:
         """
         Delete weather records by valid_time_local and source.
         
@@ -237,7 +237,7 @@ class WeatherServeRepository(BaseServeRepository):
         """
         try:
             query = {"valid_time_local": valid_time_local, "source": source, "city": city}
-            result = self.serve_collection.delete_many(query)
+            result = await self.serve_collection.delete_many(query)
             logger.debug(f"Deleted {result.deleted_count} weather records for time '{valid_time_local}' and source '{source}'.")
             return result.deleted_count
         except Exception as e:
@@ -259,7 +259,7 @@ class WeatherServeRepository(BaseServeRepository):
             cursor = self.serve_collection.find({
                 "timestamp": {"$gte": start_yesterday, "$lte": end_yesterday}
             })
-            all_docs = await cursor.to_list(length=None)
+            all_docs = await cursor.to_list(length=10000)
 
             archival_batch = []
             for doc in all_docs:
