@@ -40,7 +40,6 @@ class SupplyDataProcessing:
             logger.info("Starting supply data processing")
             
             # Get raw supply data from raw data collection
-            from pymongo import MongoClient
             from ..core.config import settings
             from libs.enum.raw_data_status import RawDataStatus
             
@@ -56,8 +55,6 @@ class SupplyDataProcessing:
                 raw_data_records = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
-            
-            client.close()
             
             if not raw_data_records:
                 logger.info("No pending supply raw data found")
