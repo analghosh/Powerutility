@@ -39,9 +39,9 @@ class DashboardController:
         }
 
 
-    def dashboard(self, request: Request) -> Dict[str, Any]:
+    async def dashboard(self, request: Request) -> Dict[str, Any]:
         try:
-            return  self.dashboard_service.get_dashboard(request)
+            return await self.dashboard_service.get_dashboard(request)
         except HTTPException as http_exc:
             logger.warning(f"No dashboard data found: {http_exc.detail}")
             raise http_exc
@@ -52,13 +52,13 @@ class DashboardController:
                 detail="Failed to process dashboard request."
             )
 
-    def dashboard_capacity_chart(self):
+    async def dashboard_capacity_chart(self):
         """
         Controller method to fetch and return the sunburst chart data.
         """
         try:
             # Assuming service method is async, await it
-            fig_json_dict =  self.dashboard_service.get_dashboard_capacity_chart()
+            fig_json_dict = await self.dashboard_service.get_dashboard_capacity_chart()
             
             if not fig_json_dict or not isinstance(fig_json_dict, dict):
                 raise HTTPException(status_code=500, detail="Empty or invalid chart JSON returned from service")

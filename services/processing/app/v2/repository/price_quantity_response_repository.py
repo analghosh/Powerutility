@@ -93,7 +93,7 @@ class PriceQuantityResponseRepository(GenericRepository):
         """
         try:
             # Get last record for the date
-            last_record = self.collection.find_one(
+            last_record = await self.collection.find_one(
                 {"inserted_date": datebid},
                 sort=[("_id", -1)]  # descending order
             )
@@ -110,7 +110,7 @@ class PriceQuantityResponseRepository(GenericRepository):
                 "cronJob_time": cron_job_time
             }
             cursor = self.collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -185,7 +185,7 @@ class PriceQuantityResponseRepository(GenericRepository):
             ]
             
             cursor = exchange_collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             if not results:
                 logger.info(f"No RTM MCP data found in exchange_serve for date {datebid}, exchange {exchange}")
@@ -225,7 +225,7 @@ class PriceQuantityResponseRepository(GenericRepository):
         """
         try:
             # Get last record for the date
-            last_record = self.collection.find_one(
+            last_record = await self.collection.find_one(
                 {"inserted_date": datebid},
                 sort=[("_id", -1)]  # descending order
             )
@@ -242,7 +242,7 @@ class PriceQuantityResponseRepository(GenericRepository):
                 "cronJob_time": cron_job_time
             }
             cursor = self.collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -317,7 +317,7 @@ class PriceQuantityResponseRepository(GenericRepository):
             ]
             
             cursor = exchange_collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             if not results:
                 logger.info(f"No DAM MCP data found in exchange_serve for date {datebid}, exchange {exchange}")

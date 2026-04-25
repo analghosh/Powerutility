@@ -18,36 +18,36 @@ class PlantsMasterRepository(BaseRepository):
         logger.info(f"PlantsMasterRepository initialized with collection: {collection_name}")
 
     # ---- Generic passthrough used by the service layer ----
-    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Run an aggregation pipeline and return the list of documents.
         """
         logger.debug("PlantsMasterRepository.aggregate | pipeline=%s", pipeline)
         cursor = self.collection.aggregate(pipeline)
         try:
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
 
-    def find_by_plant_id(self, plant_id: str) -> List[Dict[str, Any]]:
+    async def find_by_plant_id(self, plant_id: str) -> List[Dict[str, Any]]:
         """
         Find plant data by plant_id.
         """
         logger.debug("PlantsMasterRepository.find_by_plant_id | plant_id=%s", plant_id)
         cursor = self.collection.find({"plant_id": plant_id})
         try:
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
 
-    def get_all_plants(self) -> List[Dict[str, Any]]:
+    async def get_all_plants(self) -> List[Dict[str, Any]]:
         """
         Get all plants from the collection.
         """
         logger.debug("PlantsMasterRepository.get_all_plants")
         cursor = self.collection.find({})
         try:
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         finally:
             cursor.close()
 
@@ -66,7 +66,7 @@ class PlantsMasterRepository(BaseRepository):
             ]
             cursor = self.collection.aggregate(pipeline)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 

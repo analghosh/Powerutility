@@ -150,7 +150,7 @@ class DemandTempSyncProcessor(BaseProcessor):
         Returns:
             True if the block was synced, False if skipped (no temp record).
         """
-        temp_record = self.demand_repository.db[self._temp_collection_name].find_one(
+        temp_record = await self.demand_repository.db[self._temp_collection_name].find_one(
             {"time_block": block_num}
         )
 
@@ -185,7 +185,7 @@ class DemandTempSyncProcessor(BaseProcessor):
         rtm_data_val = exchange_data["rtm_data"]
         dam_data_val = exchange_data["dam_data"]
 
-        idf_existing = self.demand_repository.serve_collection.find_one(
+        idf_existing = await self.demand_repository.serve_collection.find_one(
             {"scheduled_at": scheduled_at, "time_block": block_num, "type": "IDF"}
         )
         forecast = float(idf_existing.get("forecast") or 0) if idf_existing else 0.0
@@ -220,7 +220,7 @@ class DemandTempSyncProcessor(BaseProcessor):
             existing_record=idf_existing,
         )
 
-        daf_existing = self.demand_repository.serve_collection.find_one(
+        daf_existing = await self.demand_repository.serve_collection.find_one(
             {"scheduled_at": scheduled_at, "time_block": block_num, "type": "DAF"}
         )
         if daf_existing:
@@ -267,7 +267,7 @@ class DemandTempSyncProcessor(BaseProcessor):
 
             logger.info(f"Syncing temp demand for block {current_block}, date {today}")
 
-            temp_record = self.demand_repository.db[self._temp_collection_name].find_one(
+            temp_record = await self.demand_repository.db[self._temp_collection_name].find_one(
                 {"time_block": current_block}
             )
 
@@ -312,7 +312,7 @@ class DemandTempSyncProcessor(BaseProcessor):
             dam_data_val = exchange_data["dam_data"]
 
             # 5. IDF record
-            idf_existing = self.demand_repository.serve_collection.find_one(
+            idf_existing = await self.demand_repository.serve_collection.find_one(
                 {"scheduled_at": scheduled_at, "time_block": current_block, "type": "IDF"}
             )
             forecast = float(idf_existing.get("forecast") or 0) if idf_existing else 0.0
@@ -348,7 +348,7 @@ class DemandTempSyncProcessor(BaseProcessor):
             )
 
             # 6. Sync DAF if it exists
-            daf_existing = self.demand_repository.serve_collection.find_one(
+            daf_existing = await self.demand_repository.serve_collection.find_one(
                 {"scheduled_at": scheduled_at, "time_block": current_block, "type": "DAF"}
             )
             if daf_existing:
@@ -413,7 +413,7 @@ class DemandTempSyncProcessor(BaseProcessor):
 
     async def _get_supply_volume(self, scheduled_at: datetime, time_block: int) -> float:
         try:
-            record = self.supply_repository.serve_collection.find_one(
+            record = await self.supply_repository.serve_collection.find_one(
                 {
                     "scheduled_at": scheduled_at,
                     "time_block": time_block,
@@ -428,10 +428,10 @@ class DemandTempSyncProcessor(BaseProcessor):
 
     async def _get_exchange_data(self, scheduled_at: datetime, time_block: int) -> Dict[str, float]:
         try:
-            rtm_record = self.exchange_repository.find_one(
+            rtm_record = await self.exchange_repository.find_one(
                 {"scheduled_at": scheduled_at, "time_block": time_block, "market_type": "RTM"}
             )
-            dam_record = self.exchange_repository.find_one(
+            dam_record = await self.exchange_repository.find_one(
                 {"scheduled_at": scheduled_at, "time_block": time_block, "market_type": "DAM"}
             )
 
@@ -498,12 +498,12 @@ class DemandTempSyncProcessor(BaseProcessor):
             "inserted_at": existing_record.get("inserted_at", now) if existing_record else now,
         }
 
-        self.demand_repository.serve_collection.delete_many(filter_query)
-        self.demand_repository.serve_collection.insert_one(full_document)
+        await self.demand_repository.serve_collection.delete_many(filter_query)
+        await self.demand_repository.serve_collection.insert_one(full_document)
 
         full_document_hist = {**full_document, "archived_at": now, "archived_timestamp": now}
-        self.demand_repository.historical_collection.delete_many(filter_query)
-        self.demand_repository.historical_collection.insert_one(full_document_hist)
+        await self.demand_repository.historical_collection.delete_many(filter_query)
+        await self.demand_repository.historical_collection.insert_one(full_document_hist)
 
     async def process_raw_data_to_serve(
         self,

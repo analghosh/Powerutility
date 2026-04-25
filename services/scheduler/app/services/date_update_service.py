@@ -246,7 +246,7 @@ class DateUpdate:
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Failed to record job completion for %s: %s", job_type, str(e))
 
-    def update_demand_date(self):
+    async def update_demand_date(self):
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
@@ -256,7 +256,7 @@ class DateUpdate:
 
         create_data = []
 
-        tommorow_data = self.demand_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tommorow_data = await self.demand_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
 
         if tommorow_data:
             logger.info(f"Found {tommorow_data} documents already scheduled for {tommorow.isoformat()}")
@@ -283,19 +283,19 @@ class DateUpdate:
                     doc_copy.pop('_id', None)  # Remove _id field
                     historical_data.append(doc_copy)
 
-                self.demand_historical_repo.collection.insert_many(historical_data)
+                await self.demand_historical_repo.collection.insert_many(historical_data)
                 logger.info(f"Inserted {len(historical_data)} documents into demand historical collection")
             else:
                 logger.info("No demand documents found to archive")
 
-    def update_supply_date(self):
+    async def update_supply_date(self):
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
         existing_data_count = self.supply_repo.count({})
 
-        tommorow_data = self.supply_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tommorow_data = await self.supply_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tommorow_data :
             logger.info(f"Found {tommorow_data} documents already scheduled for {tommorow.isoformat()}")
 
@@ -324,12 +324,12 @@ class DateUpdate:
                     doc_copy.pop('_id', None)  # Remove _id field
                     historical_data.append(doc_copy)
 
-                self.supply_historical_repo.collection.insert_many(historical_data)
+                await self.supply_historical_repo.collection.insert_many(historical_data)
                 logger.info(f"Inserted {len(historical_data)} documents into supply historical collection")
             else:
                 logger.info("No supply documents found to archive")
 
-    def update_px_bid_table(self):
+    async def update_px_bid_table(self):
         
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
@@ -337,7 +337,7 @@ class DateUpdate:
         day_before_yesterday_str = day_before_yesterday.isoformat()
         existing_data_count = self.px_bid_table_repo.count({})
 
-        tomorrow_data = self.px_bid_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tomorrow_data = await self.px_bid_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tomorrow_data:
             logger.info(f"Found {tomorrow_data} documents already scheduled for {tommorow.isoformat()}")
         else:
@@ -353,7 +353,7 @@ class DateUpdate:
             else:
                 logger.info("No px_bid_table documents found to update")
 
-    def update_exchange_table(self):
+    async def update_exchange_table(self):
         
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
@@ -362,7 +362,7 @@ class DateUpdate:
 
         existing_data_count = self.exchange_table_repo.count({})
 
-        tomorrow_data = self.exchange_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tomorrow_data = await self.exchange_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tomorrow_data:
             logger.info(f"Found {tomorrow_data} documents already scheduled for {tommorow.isoformat()}")
         else:

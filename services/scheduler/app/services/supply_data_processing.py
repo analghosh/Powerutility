@@ -26,7 +26,7 @@ class SupplyDataProcessing:
         """Initialize the supply data processing service"""
         self.supply_repository = SupplyServeRepository()
 
-    def process_supply_data(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    async def process_supply_data(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Process supply data from raw data collection
         
@@ -40,7 +40,6 @@ class SupplyDataProcessing:
             logger.info("Starting supply data processing")
             
             # Get raw supply data from raw data collection
-            from pymongo import MongoClient
             from ..core.config import settings
             from libs.enum.raw_data_status import RawDataStatus
             
@@ -53,11 +52,9 @@ class SupplyDataProcessing:
                 "status": RawDataStatus.PENDING.value
             }).limit(100)
             try:
-                raw_data_records = list(cursor)
+                raw_data_records = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
-            
-            client.close()
             
             if not raw_data_records:
                 logger.info("No pending supply raw data found")

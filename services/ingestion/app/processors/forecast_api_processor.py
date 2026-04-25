@@ -402,7 +402,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
@@ -488,7 +488,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1

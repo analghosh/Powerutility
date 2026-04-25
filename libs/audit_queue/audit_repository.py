@@ -153,7 +153,7 @@ class AuditRepository:
             logger.error("Failed to save audit logs batch: %s", e)
             raise
     
-    def find_by_service(
+    async def find_by_service(
         self,
         service: str,
         start_time: Optional[datetime] = None,
@@ -173,40 +173,43 @@ class AuditRepository:
                 query["ts"] = time_filter
             
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return list(cursor)
-            
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by service: %s", e)
             raise
     
-    def find_by_trace_id(self, trace_id: str) -> List[Dict[str, Any]]:
+    async def find_by_trace_id(self, trace_id: str) -> List[Dict[str, Any]]:
         """Find all audit logs for a trace ID"""
         try:
             cursor = self.collection.find({"trace.traceId": trace_id}).sort("ts", ASCENDING)
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by trace ID: %s", e)
             raise
     
-    def find_by_job_id(self, job_id: str) -> List[Dict[str, Any]]:
+    async def find_by_job_id(self, job_id: str) -> List[Dict[str, Any]]:
         """Find all audit logs for a job ID"""
         try:
             cursor = self.collection.find({"trace.jobId": job_id}).sort("ts", ASCENDING)
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by job ID: %s", e)
             raise
     
-    def find_by_actor(self, actor_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    async def find_by_actor(self, actor_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Find audit logs by actor ID"""
         try:
-            cursor = self.collection.find({"actor.id": actor_id}).sort("ts", DESCENDING).limit(limit)
-            return list(cursor)
+            cursor = (
+                self.collection.find({"actor.id": actor_id})
+                .sort("ts", DESCENDING)
+                .limit(limit)
+            )
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by actor: %s", e)
             raise
     
-    def find_by_priority(
+    async def find_by_priority(
         self,
         priority: Priority,
         start_time: Optional[datetime] = None,
@@ -220,13 +223,12 @@ class AuditRepository:
                 query["ts"] = {"$gte": start_time}
             
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return list(cursor)
-            
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by priority: %s", e)
             raise
     
-    def find_errors(
+    async def find_errors(
         self,
         service: Optional[str] = None,
         start_time: Optional[datetime] = None,
@@ -243,13 +245,12 @@ class AuditRepository:
                 query["ts"] = {"$gte": start_time}
             
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return list(cursor)
-            
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find error audit logs: %s", e)
             raise
     
-    def find_approvals(
+    async def find_approvals(
         self,
         flow: Optional[str] = None,
         action: Optional[str] = None,
@@ -270,13 +271,12 @@ class AuditRepository:
                 query["ts"] = {"$gte": start_time}
             
             cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
-            return list(cursor)
-            
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find approval audit logs: %s", e)
             raise
     
-    def search_logs(
+    async def search_logs(
         self,
         search_text: str,
         service: Optional[str] = None,
@@ -296,19 +296,20 @@ class AuditRepository:
             
             if start_time:
                 query["ts"] = {"$gte": start_time}
-            
-            cursor = self.collection.find(query, {"score": {"$meta": "textScore"}}).sort([
-                ("score", {"$meta": "textScore"}),
-                ("ts", DESCENDING)
-            ]).limit(limit)
-            
-            return list(cursor)
-            
+
+            cursor = (
+                self.collection.find(query, {"score": {"$meta": "textScore"}})
+                .sort(
+                    [("score", {"$meta": "textScore"}), ("ts", DESCENDING)]
+                )
+                .limit(limit)
+            )
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to search audit logs: %s", e)
             raise
     
-    def get_log_statistics(
+    async def get_log_statistics(
         self,
         service: Optional[str] = None,
         start_time: Optional[datetime] = None,
@@ -362,8 +363,9 @@ class AuditRepository:
                     }
                 }}
             ]
-            
-            result = list(self.collection.aggregate(pipeline))
+
+            cursor = self.collection.aggregate(pipeline)
+            result = await cursor.to_list(length=10000)
             return result[0] if result else {}
             
         except Exception as e:

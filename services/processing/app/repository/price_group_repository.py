@@ -11,15 +11,21 @@ class PriceGroupRepository(BaseRepository):
     """
     def __init__(self):
         super().__init__(COLL_PRICE_GROUP)
-        self.ensure_indexes()
+        self._indexes_ensured = False
 
 
-    def ensure_indexes(self):
-        self.create_index([("price_group", 1)], unique=True)
-        self.create_index([("price_from", 1), ("price_to", 1)], unique=False)
-        # Add compound index for common sorting and filtering patterns
-        self.create_index([("price_group", 1), ("created_at", -1)], unique=False)
-        self.create_index([("created_at", -1)], unique=False)  # For default sorting
+    async def ensure_indexes(self):
+        if self._indexes_ensured:
+            return
+        try:
+            await self.create_index([("price_group", 1)], unique=True)
+            await self.create_index([("price_from", 1), ("price_to", 1)], unique=False)
+            await self.create_index([("price_group", 1), ("created_at", -1)], unique=False)
+            await self.create_index([("created_at", -1)], unique=False)
+            self._indexes_ensured = True
+        except Exception as e:
+            import logging
+            logging.getLogger(__name__).warning(f"Failed to ensure indexes: {e}")
 
 
     # Strongly-typed helpers wrapping BaseRepository
@@ -38,7 +44,7 @@ class PriceGroupRepository(BaseRepository):
         return self._dump(doc)
 
 
-    def list(
+    async def list(
         self,
         filters: Optional[Dict[str, Any]] = None,
         page: int = 1,
@@ -48,6 +54,9 @@ class PriceGroupRepository(BaseRepository):
         filters = filters or {}
         sort = sort or [("price_group", 1)]
         skip = (page - 1) * page_size
+        
+        # Lazily ensure indexes on first use
+        await self.ensure_indexes()
         
         import time
         import logging
@@ -85,7 +94,7 @@ class PriceGroupRepository(BaseRepository):
         
         # Check collection stats
         try:
-            stats = self.collection.estimated_document_count()
+            stats = await self.collection.estimated_document_count()
             logger.info(f"🔍 Collection has approximately {stats} documents")
         except Exception as e:
             logger.warning(f"🔍 Could not get collection stats: {e}")
@@ -94,9 +103,9 @@ class PriceGroupRepository(BaseRepository):
             pipeline_start = time.time()
             cursor = self.collection.aggregate(pipeline)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
-                cursor.close()
+                await cursor.close()
             db_time = time.time() - pipeline_start
             
             logger.info(f"🔍 Aggregation completed in {db_time:.3f}s, result length: {len(result)}")
@@ -119,7 +128,7 @@ class PriceGroupRepository(BaseRepository):
             logger.error(f"🔍 Aggregation failed: {e}, falling back to old method")
             # Fallback to old method
             cursor = self.collection.find(filters).sort(sort).skip(skip).limit(page_size)
-            data = list(cursor)
+            data = await cursor.to_list(length=10000)
             total = self.count(filters)
             db_time = time.time() - pipeline_start
         
@@ -139,15 +148,15 @@ class PriceGroupRepository(BaseRepository):
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
-    def update(self, _id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def update(self, _id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not ObjectId.is_valid(_id):
             return None
         if not updates:
-            return self.get(_id)
-        current = super().find_by_id(_id) or {}
+            return await self.get(_id)
+        current = await super().find_by_id(_id) or {}
         # Validate merged state
         PriceGroupEntity(**{**current, **updates})
-        res = self.collection.find_one_and_update(
+        res = await self.collection.find_one_and_update(
             {"_id": ObjectId(_id)},
             {"$set": updates},
             return_document=ReturnDocument.AFTER,

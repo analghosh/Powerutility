@@ -211,7 +211,7 @@ class DayaheadmarketService:
             ]
             cursor = self.supply_repo.aggregate(pipeline)
             try:
-                getplantsData = list(cursor)
+                getplantsData = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             logger.info(f"Found {len(getplantsData)} plant data records for schedule_date: {schedule_date}")
@@ -235,14 +235,14 @@ class DayaheadmarketService:
             ]
             cursor = self.dam_product_hardCoded_data_repo.aggregate(product_hardCoded_pipeline)
             try:
-                getsessionNo = list(cursor)
+                getsessionNo = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
             cursor = self.plants_list_repo.aggregate(plants_list_pipeline)
             try:
-                plantData = list(cursor)
+                plantData = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             plant_dict = {p['plant_id']: p for p in plantData}
@@ -328,7 +328,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                getForecastedValue = list(cursor)
+                getForecastedValue = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -347,7 +347,7 @@ class DayaheadmarketService:
                     {"$limit": 1}
                 ])
                 try:
-                    latest_dam_dates = list(cursor)
+                    latest_dam_dates = await cursor.to_list(length=10000)
                 finally:
                     cursor.close()
                 if latest_dam_dates:
@@ -361,7 +361,7 @@ class DayaheadmarketService:
                         {"$limit": 1}
                     ])
                     try:
-                        latest_dates = list(cursor)
+                        latest_dates = await cursor.to_list(length=10000)
                     finally:
                         cursor.close()
                     if latest_dates:
@@ -385,7 +385,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                dam_forecasted_price_data = list(cursor)
+                dam_forecasted_price_data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -400,7 +400,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1, "ID": 1}}
             ])
             try:
-                set_min_sell_price_data = list(cursor)
+                set_min_sell_price_data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -415,7 +415,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1, "ID": 1}}
             ])
             try:
-                n1_quantum_data = list(cursor)
+                n1_quantum_data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -430,7 +430,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                n1_data = list(cursor)
+                n1_data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -441,7 +441,7 @@ class DayaheadmarketService:
                 {"$limit": 20}
             ])
             try:
-                available_ids = list(cursor)
+                available_ids = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -451,7 +451,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "ID": 1, "schedule_date": 1, "block": 1}}
             ])
             try:
-                any_limit_data = list(cursor)
+                any_limit_data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -484,7 +484,7 @@ class DayaheadmarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                forecastedPrice = list(cursor)
+                forecastedPrice = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -498,7 +498,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                set_min_sell_price_data = list(cursor)
+                set_min_sell_price_data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -512,7 +512,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0, "block": 1, "values": 1}}
             ])
             try:
-                n1_quantum_data = list(cursor)
+                n1_quantum_data = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -528,7 +528,7 @@ class DayaheadmarketService:
                     {"$project": {"_id": 0}}
                 ])
             try:
-                bufferPrice = list(cursor)
+                bufferPrice = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -542,7 +542,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                ceilingPrice = list(cursor)
+                ceilingPrice = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -557,7 +557,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                n_1Limits = list(cursor)
+                n_1Limits = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -571,7 +571,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_buyLimits = list(cursor)
+                noc_buyLimits = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -585,7 +585,7 @@ class DayaheadmarketService:
                 {"$project": {"_id": 0}}
             ])
             try:
-                noc_sellLimits = list(cursor)
+                noc_sellLimits = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
 
@@ -612,7 +612,7 @@ class DayaheadmarketService:
                 {"$limit": 5}
             ])
             try:
-                available_dates = list(cursor)
+                available_dates = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             logger.info(f"Available dates in limit_values: {[d['_id'] for d in available_dates]}")
@@ -2052,9 +2052,9 @@ class DayaheadmarketService:
             allMLTPValues = await self.limit_values_repo.get_data( yesterday, tomorrow, "RTM", "Multiplier", "OB")
             
             
-            getplantsData = self.get_all_plant_data_for_scheduling(schedule_date, "SG")
+            getplantsData = await self.get_all_plant_data_for_scheduling(schedule_date, "SG")
             # return getplantsData
-            getplantsDataDC =  self.get_all_plant_data_for_scheduling(schedule_date, "DC")
+            getplantsDataDC = await self.get_all_plant_data_for_scheduling(schedule_date, "DC")
             
             # countblockSGData = self.get_last_record_of_sg(getplantsData,0)
             
@@ -3229,7 +3229,7 @@ class DayaheadmarketService:
         return reviseDataTotalsupply
         
 
-    def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
+    async def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
         
 
         # scheduledatetimestamp = yesterday midnight (unix timestamp)
@@ -3295,8 +3295,8 @@ class DayaheadmarketService:
             {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
         ]
 
-        posted_jobs = list(self.supply_repo.aggregate(pipeline)) # type: ignore
-        
+        posted_jobs = await self.supply_repo.aggregate(pipeline) # type: ignore
+
         return posted_jobs
 
 
@@ -3925,7 +3925,7 @@ class DayaheadmarketService:
                 }
             }
 
-            result = self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
+            result = await self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
             return result.modified_count  # returns number of documents updated
 
         except Exception as e:

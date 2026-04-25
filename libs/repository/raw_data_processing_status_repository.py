@@ -21,7 +21,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
     Separate from raw data for better performance and organization
     """
     
-    def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
+    async def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
         """
         Initialize raw data processing status repository
         
@@ -40,7 +40,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
         self._create_collection_if_not_exists()
         self._create_indexes()
     
-    def _create_indexes(self):
+    async def _create_indexes(self):
         """Create necessary indexes for efficient querying"""
         try:
             # Index for status-based queries (most common for cron jobs)
@@ -66,7 +66,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
         except Exception as e:
             logger.error("Error creating processing status indexes: %s", e, exc_info=True)
     
-    def create_processing_status(self, entity: RawDataProcessingStatusEntity) -> str:
+    async def create_processing_status(self, entity: RawDataProcessingStatusEntity) -> str:
         """
         Create processing status record
         
@@ -96,7 +96,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error creating processing status record: %s", e, exc_info=True)
             raise
     
-    def update_status(self, status_id: str, status: RawDataStatus, **kwargs) -> bool:
+    async def update_status(self, status_id: str, status: RawDataStatus, **kwargs) -> bool:
         """
         Update processing status
         
@@ -144,7 +144,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error updating processing status for %s: %s", status_id, e, exc_info=True)
             return False
     
-    def get_pending_processing(self, data_type: Optional[str] = None, provider_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_pending_processing(self, data_type: Optional[str] = None, provider_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Get pending processing records for cron jobs
         
@@ -164,11 +164,10 @@ class RawDataProcessingStatusRepository(BaseRepository):
             
             if provider_type:
                 query["provider_type"] = provider_type
-            
-            cursor = self.collection.find(query).sort("created_at", 1).limit(limit)
-            
-            records = []
-            for record in cursor:
+
+            records = await self.collection.find(query).sort("created_at", 1).limit(limit).to_list(length=10000)
+
+            for record in records:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
                 records.append(record)
@@ -182,7 +181,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching pending processing records: %s", e, exc_info=True)
             return []
     
-    def get_by_raw_data_id(self, raw_data_id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_raw_data_id(self, raw_data_id: str) -> Optional[Dict[str, Any]]:
         """
         Get processing status by raw data ID
         
@@ -204,7 +203,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching processing status by raw_data_id %s: %s", raw_data_id, e, exc_info=True)
             return None
     
-    def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
         """
         Get processing status by upload ID
         
@@ -225,7 +224,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching processing status by upload_id %s: %s", upload_id, e, exc_info=True)
             return None
     
-    def get_failed_for_retry(self, max_retries: int = 3, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_failed_for_retry(self, max_retries: int = 3, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Get failed processing records that can be retried
         
@@ -241,11 +240,10 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 "status": RawDataStatus.FAILED.value,
                 "retry_count": {"$lt": max_retries}
             }
-            
-            cursor = self.collection.find(query).sort("updated_at", 1).limit(limit)
-            
-            records = []
-            for record in cursor:
+
+            records = await self.collection.find(query).sort("updated_at", 1).limit(limit).to_list(length=10000)
+
+            for record in records:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
                 records.append(record)
@@ -257,7 +255,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching failed records for retry: %s", e, exc_info=True)
             return []
     
-    def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
+    async def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Get processing status statistics
         
@@ -282,9 +280,9 @@ class RawDataProcessingStatusRepository(BaseRepository):
                     "count": {"$sum": 1}
                 }}
             ]
-            
-            results = list(self.collection.aggregate(pipeline))
-            
+
+            results = await self.collection.aggregate(pipeline).to_list(length=10000)
+
             stats = {
                 "total": 0,
                 "pending": 0,

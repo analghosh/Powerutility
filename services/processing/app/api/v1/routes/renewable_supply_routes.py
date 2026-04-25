@@ -5,7 +5,7 @@ from ....controller.renewable_supply_controller import renewable_supply_controll
 router = APIRouter(prefix="/processing", tags=["Renewable-Supply"])
 
 @router.get("/renewable-supply")
-def get_renewable_availability_day(
+async def get_renewable_availability_day(
     date: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today's date in Asia/Kolkata")
 ):
     """
@@ -13,11 +13,11 @@ def get_renewable_availability_day(
     If no data exists for the day, responds with:
       {"detail": "No data in current 4-day window <D-2>..<D+1>."}
     """
-    return renewable_supply_controller.renewable_availability_by_day(date)
+    return await renewable_supply_controller.renewable_availability_by_day(date)
 
 
 @router.get("/renewable-schedule")
-def get_renewable_schedule_day(
+async def get_renewable_schedule_day(
     date: Optional[str] = Query(None, description="YYYY-MM-DD; defaults to today's date in Asia/Kolkata")
 ):
     """
@@ -33,4 +33,4 @@ def get_renewable_schedule_day(
     If no data exists for the day, responds with:
       {"detail": "No schedule data in current 4-day window <D-2>..<D+1>."}
     """
-    return renewable_supply_controller.renewable_schedule_by_day(date)
+    return await renewable_supply_controller.renewable_schedule_by_day(date)

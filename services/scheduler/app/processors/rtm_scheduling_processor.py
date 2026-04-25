@@ -1,3 +1,4 @@
+import asyncio
 import copy
 import logging
 from datetime import datetime, timedelta, date, timezone
@@ -49,7 +50,7 @@ def round_numeric_value(value):
 
 
 class RTMSchedulingProcessor(BaseProcessor):
-    def __init__(self, collection_name: str = "scheduling_requisition_calculation_table"):
+    async def __init__(self, collection_name: str = "scheduling_requisition_calculation_table"):
         super().__init__()
         
         # Initialize all repositories (scheduler service pattern)
@@ -65,6 +66,8 @@ class RTMSchedulingProcessor(BaseProcessor):
         self._snapshot_ttl_seconds = 30 * 24 * 60 * 60
         self.last_snapshot_run_id: Optional[str] = None
         self.last_snapshot_session_id: Optional[int] = None
+        self._pending_optimized_snapshot_task: Optional[asyncio.Task] = None
+        
         # Calculate current 15-minute block index (0-based, 0-95) from current time
         now = datetime.now()
         minutes_since_midnight = now.hour * 60 + now.minute
@@ -87,17 +90,20 @@ class RTMSchedulingProcessor(BaseProcessor):
         # Initialize custom demand
         self.customdemand = 0
         
-        # Ensure collections and indexes
-        self.create_indexes()
+        # Index creation must be awaited in an async setup method, not in __init__
 
-    def create_indexes(self):
+    async def setup(self):
+        """Async initialization for background tasks and indexes."""
+        await self.create_indexes()
+
+    async def create_indexes(self):
         """Ensure collections exist and create necessary indexes for scheduling calculations."""
         try:
             db = self.scheduling_repo.db
             
             # 1. Working Collection Indexes
             working_collection = db[self.scheduling_repo.collection_name]
-            working_collection.create_index(
+            await working_collection.create_index(
                 [("scheduled_at", 1), ("time_block", 1), ("plant_id", 1)],
                 name="idx_schedule_block_plant",
                 background=True
@@ -105,12 +111,10 @@ class RTMSchedulingProcessor(BaseProcessor):
             
             # 2. History Collection
             history_collection_name = "scheduling_requisition_calculation_history"
-            if history_collection_name not in db.list_collection_names():
-                db.create_collection(history_collection_name)
-                logger.info(f"Created collection: {history_collection_name}")
-            
+            # async motor handles automatic collection creation on insert, 
+            # but we define index which creates it if missing
             history_collection = db[history_collection_name]
-            history_collection.create_index(
+            await history_collection.create_index(
                 [("scheduled_at", 1), ("revision_no", 1), ("time_block", 1), ("plant_id", 1)],
                 name="idx_hist_schedule_rev_block_plant",
                 background=True
@@ -118,12 +122,8 @@ class RTMSchedulingProcessor(BaseProcessor):
             
             # 3. Revision Tracker Collection
             revision_collection_name = "scheduling_revision_tracker"
-            if revision_collection_name not in db.list_collection_names():
-                db.create_collection(revision_collection_name)
-                logger.info(f"Created collection: {revision_collection_name}")
-                
             revision_collection = db[revision_collection_name]
-            revision_collection.create_index(
+            await revision_collection.create_index(
                 [("scheduled_at_int", 1)],
                 name="idx_rev_schedule_int",
                 unique=True,
@@ -132,43 +132,43 @@ class RTMSchedulingProcessor(BaseProcessor):
 
             # 4. Raw Input Snapshot Collection (30-day TTL)
             snapshot_collection = db[self.snapshot_collection_name]
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("run_id", 1)],
                 name="idx_rtm_snapshot_run_id",
                 background=True
             )
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("execution_id", 1)],
                 name="idx_rtm_snapshot_execution_id",
                 background=True
             )
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("source_name", 1), ("schedule_date", 1)],
                 name="idx_rtm_snapshot_source_schedule_date",
                 background=True
             )
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("schedule_date", 1), ("time_block", 1), ("plant_id", 1)],
                 name="idx_rtm_snapshot_schedule_block_plant",
                 background=True
             )
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("created_at", 1)],
                 name="idx_rtm_snapshot_created_at_ttl_30d",
                 expireAfterSeconds=self._snapshot_ttl_seconds,
                 background=True
             )
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("session_id", 1), ("schedule_date", 1)],
                 name="idx_rtm_snapshot_session_schedule_date",
                 background=True
             )
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("session_id", 1), ("run_id", 1)],
                 name="idx_rtm_snapshot_session_run_id",
                 background=True
             )
-            snapshot_collection.create_index(
+            await snapshot_collection.create_index(
                 [("source_name", 1), ("run_id", 1)],
                 name="idx_rtm_snapshot_source_run_id",
                 background=True
@@ -178,7 +178,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         except Exception as e:
             logger.error(f"Failed to create RTM Scheduling indexes: {str(e)}")
         
-    def process_raw_data_to_serve(
+    async def process_raw_data_to_serve(
         self, 
         raw_data: List[Dict[str, Any]], 
         metadata: Dict[str, Any],
@@ -200,7 +200,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         schedule = "*/30 * * * *"  # Every 30 minutes
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -234,7 +234,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 "blocks_calculated": len(result_data) if isinstance(result_data, dict) else 0
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -259,7 +259,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -277,7 +277,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         finally:
             self.clear_correlation_id()
 
-    def _parse_hhmm_to_minutes(self, value: Any) -> Optional[int]:
+    async def _parse_hhmm_to_minutes(self, value: Any) -> Optional[int]:
         """Parse 'HH:MM' or legacy period id strings to minutes from midnight; 24:00 -> 1440."""
         if value is None:
             return None
@@ -298,7 +298,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             return None
         return h * 60 + m
 
-    def _ensure_tz_run_start(self, run_started_at: Optional[datetime]) -> datetime:
+    async def _ensure_tz_run_start(self, run_started_at: Optional[datetime]) -> datetime:
         tz = ZoneInfo(settings.CRON_TIMEZONE)
         if run_started_at is None:
             return datetime.now(tz)
@@ -306,7 +306,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             return run_started_at.replace(tzinfo=tz)
         return run_started_at.astimezone(tz)
 
-    def _session_id_for_run_start(
+    async def _session_id_for_run_start(
         self,
         run_started_at: datetime,
         product_rows: List[Dict[str, Any]],
@@ -348,7 +348,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         )
         return None
 
-    def _build_snapshot_documents(
+    async def _build_snapshot_documents(
         self,
         records: Any,
         source_name: str,
@@ -417,7 +417,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             })
         return docs
 
-    def _store_raw_snapshot(
+    async def _store_raw_snapshot(
         self,
         records: Any,
         source_name: str,
@@ -437,7 +437,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         if not docs:
             return 0
         collection = self.scheduling_repo.db[self.snapshot_collection_name]
-        collection.insert_many(docs, ordered=False)
+        await collection.insert_many(docs, ordered=False)
         logger.info(
             "[RTMSchedulingServices] Snapshot captured | source=%s | count=%s | run_id=%s",
             source_name,
@@ -446,7 +446,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         )
         return len(docs)
 
-    def _store_scheduling_optimized_snapshots(
+    async def _store_scheduling_optimized_snapshots(
         self,
         all_insert_data: List[Dict[str, Any]],
         run_id: str,
@@ -474,7 +474,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 "raw_payload": payload,
                 "created_at": now,
             })
-        collection.insert_many(docs, ordered=False)
+        await collection.insert_many(docs, ordered=False)
         logger.info(
             "[RTMSchedulingServices] Optimized snapshot captured | count=%s | run_id=%s",
             len(docs),
@@ -484,7 +484,7 @@ class RTMSchedulingProcessor(BaseProcessor):
 
 
         
-    def __build_limit_value_dict(self, limit_values_list, include_time_block=True):
+    async def __build_limit_value_dict(self, limit_values_list, include_time_block=True):
         """Convert list of limit values to dictionary with composite keys using ID field"""
         result = {}
         for item in limit_values_list:
@@ -517,19 +517,19 @@ class RTMSchedulingProcessor(BaseProcessor):
             )
 
             # Fetch existing records
-            existing_records = list(working_collection.find({
+            existing_records = await working_collection.find({
                 "scheduled_at": {
                     "$gte": start_of_day,
                     "$lt": end_of_day
                 }
-            }))
+            }).to_list(length=10000)
 
             if not existing_records:
                 return {"archived": 0, "deleted": 0, "revision_no": None}
 
             # Atomic revision increment
             now = datetime.now()
-            revision_doc = revision_collection.find_one_and_update(
+            revision_doc = await revision_collection.find_one_and_update(
                 {"scheduled_at_int": scheduled_at_int},
                 {
                     "$inc": {"latest_revision_no": 1},
@@ -557,10 +557,10 @@ class RTMSchedulingProcessor(BaseProcessor):
 
             # Insert into history
             if existing_records:
-                history_collection.insert_many(existing_records, ordered=False)
+                await history_collection.insert_many(existing_records, ordered=False)
 
             # Delete working records
-            delete_result = working_collection.delete_many({
+            delete_result = await working_collection.delete_many({
                 "scheduled_at": {
                     "$gte": start_of_day,
                     "$lt": end_of_day
@@ -600,15 +600,16 @@ class RTMSchedulingProcessor(BaseProcessor):
                 run_started_aware.isoformat(),
             )
             snapshot_storage_date = self._ensure_tz_run_start(run_started_aware).strftime("%Y-%m-%d")
+            self._pending_optimized_snapshot_task = None
             if snapshot_session_id is not None:
                 snapshot_coll = self.scheduling_repo.db[self.snapshot_collection_name]
-                delete_result = snapshot_coll.delete_many({"session_id": snapshot_session_id})
+                delete_result = await snapshot_coll.delete_many({"session_id": snapshot_session_id})
                 logger.info(
                     "[RTMSchedulingServices] Snapshot replace-by-session | session_id=%s | removed=%s",
                     snapshot_session_id,
                     delete_result.deleted_count,
                 )
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 getsessionNoRaw, "rtm_session_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
 
@@ -628,7 +629,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info("[RTMSchedulingServices] Fetching all plant data from master plants repository")
             getPlantListRaw = await self.plants_list_repo.get_all_plants()
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getPlantListRaw)} plant records")
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 getPlantListRaw, "plant_master_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
             
@@ -665,17 +666,17 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info("[RTMSchedulingServices] Fetching limit values - TM, SEZ, MLTP")
             allTMValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "TM", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allTMValuesRaw)} TM limit values")
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 allTMValuesRaw, "limit_tm_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
             allSEZValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "DAM", "SEZ", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allSEZValuesRaw)} SEZ limit values")
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 allSEZValuesRaw, "limit_sez_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
             allMLTPValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "Multiplier", "Puducherry")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allMLTPValuesRaw)} MLTP limit values")
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 allMLTPValuesRaw, "limit_mltp_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
             
@@ -707,14 +708,14 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.info(f"[RTMSchedulingServices] Fetching plant data for {dc_sg} (Schedule Date: {schedule_date})")
             getplantsData = await self.getAllPlantsDataForScheduling(schedule_date, dc_sg)
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsData)} {dc_sg} plant data records")
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 getplantsData, "supply_sg_dc_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
             
             logger.info(f"[RTMSchedulingServices] Fetching plant data for DC (Schedule Date: {schedule_date})")
             getplantsDataDC = await self.getAllPlantsDataForScheduling(schedule_date, "DC")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getplantsDataDC)} DC plant data records")
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 getplantsDataDC, "supply_dc_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
 
@@ -722,12 +723,12 @@ class RTMSchedulingProcessor(BaseProcessor):
             demand_schedule_date = today_dt.strftime("%Y-%m-%d")
             logger.info(f"[RTMSchedulingServices] Fetching demand forecast and actual data (Using today: {demand_schedule_date})")
 
-            get_forecasted_list = self.serve_demand_repo.get_forcasted_demand(today_dt)
-            get_actual_list = self.serve_demand_repo.get_actual_demand(today_dt)
-            self._store_raw_snapshot(
+            get_forecasted_list = await self.serve_demand_repo.get_forcasted_demand(today_dt)
+            get_actual_list = await self.serve_demand_repo.get_actual_demand(today_dt)
+            await self._store_raw_snapshot(
                 get_forecasted_list or [], "demand_forecast_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 get_actual_list or [], "demand_actual_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
             
@@ -800,7 +801,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 f"[RTMSchedulingServices] Retrieved {len(rtm_forecasted_price_list)} RTM_forecasted_price "
                 f"limit_values rows for {demand_schedule_date}"
             )
-            self._store_raw_snapshot(
+            await self._store_raw_snapshot(
                 rtm_forecasted_price_list or [],
                 "rtm_forecasted_price_raw",
                 run_id,
@@ -857,6 +858,9 @@ class RTMSchedulingProcessor(BaseProcessor):
                 snapshot_schedule_date=snapshot_storage_date,
                 snapshot_session_id=snapshot_session_id,
             )
+            if self._pending_optimized_snapshot_task is not None:
+                await self._pending_optimized_snapshot_task
+                self._pending_optimized_snapshot_task = None
             logger.info(f"[RTMSchedulingServices] SchedulingCalculator completed - Generated scheduling records")
             logger.info(f"[RTMSchedulingServices] Completed calSchedulingTableData successfully - Schedule Date: {schedule_date}")
             # RePturn reviseDataTotalsupply to match V1 behavior
@@ -876,7 +880,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 detail=f"Failed to calculate RTM scheduling table data: {str(e)}"
             )
     
-    def __get_plant_rmp_value(self, plant_data, plant_list_dict):
+    async def __get_plant_rmp_value(self, plant_data, plant_list_dict):
         """Get plant RMP value from plant_master.ramping only (no fallback)"""
         plant_key = plant_data.get("key")
         if plant_key and plant_key in plant_list_dict:
@@ -892,7 +896,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         return 0  # Return 0 if not found in plant_master (no fallback)
     
     # Helper function to safely get multiplier value (handles string "None")
-    def __get_multiplier_value(self,value, default=1):
+    async def __get_multiplier_value(self,value, default=1):
         """Safely convert multiplier value, handling string 'None' and other edge cases"""
         if value is None:
             return default
@@ -910,7 +914,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             return default
     
     # Helper function to create standardized record with ONLY new standard field names
-    def __create_standardized_record(self, base_data, is_after_cutoff=False) -> Dict[str, Any]:
+    async def __create_standardized_record(self, base_data, is_after_cutoff=False) -> Dict[str, Any]:
         """
         Creates a record with ONLY standard field names (new field names).
         Old field names are NOT stored in database.
@@ -1020,7 +1024,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         return record
     
     # Helper function to transform new field names back to old field names for API response
-    def __transform_to_legacy_format(self, data):
+    async def __transform_to_legacy_format(self, data):
         """
         Transforms records with new standard field names back to old field names for API compatibility.
         Used only for API responses to maintain frontend compatibility.
@@ -1103,7 +1107,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             return data
     
     # Helper function to safely get next block data
-    def __get_next_block_volume(self,blk_idx, plnamekey, get_plants_data, reversed_order=False):
+    async def __get_next_block_volume(self,blk_idx, plnamekey, get_plants_data, reversed_order=False):
         """Safely get volume from next block, returning 0 if out of bounds"""
         if blk_idx + 1 < len(get_plants_data):
             next_block_data = get_plants_data[blk_idx + 1]
@@ -1133,7 +1137,7 @@ class RTMSchedulingProcessor(BaseProcessor):
     
         
     
-    def SchedulingCalculator(self,
+    async def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,
@@ -1760,16 +1764,18 @@ class RTMSchedulingProcessor(BaseProcessor):
         if all_insert_data:
             try:
                 collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
-                collection.insert_many(all_insert_data)
+                await collection.insert_many(all_insert_data)
                 logger.info(f"[RTMSchedulingServices] Bulk inserted {len(all_insert_data)} scheduling records")
                 if snapshot_run_id:
                     try:
-                        self._store_scheduling_optimized_snapshots(
-                            all_insert_data,
-                            snapshot_run_id,
-                            snapshot_execution_id or "",
-                            snapshot_schedule_date or "",
-                            snapshot_session_id,
+                        self._pending_optimized_snapshot_task = asyncio.create_task(
+                            self._store_scheduling_optimized_snapshots(
+                                all_insert_data,
+                                snapshot_run_id,
+                                snapshot_execution_id or "",
+                                snapshot_schedule_date or "",
+                                snapshot_session_id,
+                            )
                         )
                     except Exception as snap_err:
                         logger.error(
@@ -1785,16 +1791,18 @@ class RTMSchedulingProcessor(BaseProcessor):
                     self.scheduling_repo._db = None
                     try:
                         collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
-                        collection.insert_many(all_insert_data)
+                        await collection.insert_many(all_insert_data)
                         logger.info(f"[RTMSchedulingServices] Bulk inserted {len(all_insert_data)} scheduling records (after reconnect)")
                         if snapshot_run_id:
                             try:
-                                self._store_scheduling_optimized_snapshots(
-                                    all_insert_data,
-                                    snapshot_run_id,
-                                    snapshot_execution_id or "",
-                                    snapshot_schedule_date or "",
-                                    snapshot_session_id,
+                                self._pending_optimized_snapshot_task = asyncio.create_task(
+                                    self._store_scheduling_optimized_snapshots(
+                                        all_insert_data,
+                                        snapshot_run_id,
+                                        snapshot_execution_id or "",
+                                        snapshot_schedule_date or "",
+                                        snapshot_session_id,
+                                    )
                                 )
                             except Exception as snap_err:
                                 logger.error(
@@ -1811,7 +1819,7 @@ class RTMSchedulingProcessor(BaseProcessor):
 
         return reviseDataTotalsupply
 
-    def _limit_values_lookups(self):
+    async def _limit_values_lookups(self):
         """
         Helper function to return all $lookup stages for limit_values.
         """
@@ -1990,7 +1998,7 @@ class RTMSchedulingProcessor(BaseProcessor):
 
         # Add timeout to prevent hanging (180 seconds = 3 minutes)
         try:
-            posted_jobs = self.supply_repo.aggregate(pipeline)
+            posted_jobs = await self.supply_repo.aggregate(pipeline)
         except Exception as e:
             if "MaxTimeMSExpired" in str(e) or "time limit" in str(e).lower():
                 logger.error(f"[RTMSchedulingServices] get_all_plant_data_for_scheduling: Aggregation timed out for date {schedule_date_used}, dc_sg={dc_sg}. "
@@ -2049,7 +2057,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         
         return posted_jobs
     
-    def total_availability(self, getplantsData, getForecastedValue):
+    async def total_availability(self, getplantsData, getForecastedValue):
         """
         Calculates total availability and surplus/deficit for each block
         
@@ -2132,7 +2140,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             logger.error(f"Error in total_availability: {str(e)}")
             return []
       
-    def check_forecast_price_apply_for_surplus(self, rtmforecastedpriceblk: float, 
+    async def check_forecast_price_apply_for_surplus(self, rtmforecastedpriceblk: float, 
                                                px_price: float, s_d_type: str) -> bool:
         """
         Checks if forecast price condition is met for surplus/deficit
@@ -2187,7 +2195,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                 return rtmforecastedpriceblk > px_price
       
     @staticmethod
-    def get_session_from():
+    async def get_session_from():
         time_block = [
             "00:00", "00:30", "01:00", "01:30", "02:00", "02:30", "03:00", "03:30",
             "04:00", "04:30", "05:00", "05:30", "06:00", "06:30", "07:00", "07:30",
@@ -2198,7 +2206,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         ]
         return time_block
 
-    def get_revision_no(self, schedule_date: str) -> Dict[str, Any]:
+    async def get_revision_no(self, schedule_date: str) -> Dict[str, Any]:
         """
         Gets latest revision numbers for ISP and SLDC categories
         
@@ -2214,7 +2222,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             # Query SR-LDC revision (ISP category) from scheduling_requisition_calculation_table
             collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
             
-            getsrldcrevision = collection.find_one(
+            getsrldcrevision = await collection.find_one(
                 {
                     "schedule_date": schedule_date,
                     "category": "ISP"
@@ -2234,7 +2242,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             supply_collection = self.supply_repo.db[self.supply_repo.collection_name]
             
             # For DC: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_dc_doc = supply_collection.find_one(
+            sldc_revision_dc_doc = await supply_collection.find_one(
                 {
                     "scheduled_at": {
                         "$gte": schedule_date_start,
@@ -2244,9 +2252,9 @@ class RTMSchedulingProcessor(BaseProcessor):
                 },
                 sort=[("source_revision_number", -1), ("system_revision_number", -1)]
             )
-            
+
             # For SG: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_sg_doc = supply_collection.find_one(
+            sldc_revision_sg_doc = await supply_collection.find_one(
                 {
                     "scheduled_at": {
                         "$gte": schedule_date_start,

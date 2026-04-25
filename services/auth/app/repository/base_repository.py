@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class BaseRepository:
     """Base repository with common CRUD operations"""
     
-    def __init__(self, collection_name: str, db_name: str = None):
+    async def __init__(self, collection_name: str, db_name: str = None):
         from ..core.config import settings
         from ..core.database import get_auth_database, get_audit_database
         
@@ -31,7 +31,7 @@ class BaseRepository:
         self.collection: Collection = self.db[collection_name]
         self.collection_name = collection_name
     
-    def create(self, data: Dict[str, Any]) -> str:
+    async def create(self, data: Dict[str, Any]) -> str:
         """Create a new document"""
         try:
             data["created_at"] = datetime.now()
@@ -43,7 +43,7 @@ class BaseRepository:
             logger.error(f"Error creating document in {self.collection_name}: {e}")
             raise
     
-    def find_by_id(self, id: str) -> Optional[Dict[str, Any]]:
+    async def find_by_id(self, id: str) -> Optional[Dict[str, Any]]:
         """Find document by ID"""
         try:
             if not ObjectId.is_valid(id):
@@ -54,7 +54,7 @@ class BaseRepository:
             logger.error(f"Error finding document by ID in {self.collection_name}: {e}")
             return None
     
-    def find_one(self, filter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def find_one(self, filter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Find one document by filter"""
         try:
             doc = self.collection.find_one(filter)
@@ -63,15 +63,14 @@ class BaseRepository:
             logger.error(f"Error finding document in {self.collection_name}: {e}")
             return None
     
-    def find_many(self, filter: Dict[str, Any], limit: int = 100, skip: int = 0, sort: List[tuple] = None) -> List[Dict[str, Any]]:
+    async def find_many(self, filter: Dict[str, Any], limit: int = 100, skip: int = 0, sort: List[tuple] = None) -> List[Dict[str, Any]]:
         """Find multiple documents by filter with pagination and sorting"""
         try:
             cursor = self.collection.find(filter).skip(skip).limit(limit)
             
             if sort:
                 cursor = cursor.sort(sort)
-            
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Error finding documents in {self.collection_name}: {e}")
             return []

@@ -26,7 +26,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -45,7 +45,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -64,7 +64,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -83,7 +83,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
                 update_data["approved_by"] = approved_by
                 update_data["approved_at"] = datetime.now()
             
-            result = self.collection.update_one(query, {"$set": update_data})
+            result = await self.collection.update_one(query, {"$set": update_data})
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Failed to update bid status in {self.collection_name}: {str(e)}")
@@ -100,7 +100,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -119,7 +119,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
                 update_data["approved_by"] = approved_by
                 update_data["approved_at"] = datetime.now()
             
-            result = self.collection.update_many(query, {"$set": update_data})
+            result = await self.collection.update_many(query, {"$set": update_data})
             return result.modified_count
         except Exception as e:
             logger.error(f"Failed to bulk update bid status in {self.collection_name}: {str(e)}")
@@ -131,7 +131,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
         Returns 1 if exists, 0 if not.
         """
         try:
-            result = self.collection.find_one({"time_block": time_block, "schedule_date": schedule_date})
+            result = await self.collection.find_one({"time_block": time_block, "schedule_date": schedule_date})
             if result:
                 return 1
             else:
@@ -145,7 +145,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
         Delete data for a given time_block and schedule_date.
         """
         try:
-            result = self.collection.delete_one({"time_block": time_block, "schedule_date": schedule_date})
+            result = await self.collection.delete_one({"time_block": time_block, "schedule_date": schedule_date})
             return result
         except Exception as e:
             logger.error(f"Failed to delete data in {self.collection_name}: {str(e)}")
@@ -165,7 +165,7 @@ class DAMCurrentBidDataForApprovalRepository(BaseRepository):
                 doc["created_at"] = datetime.now()
                 doc["updated_at"] = datetime.now()
             
-            result = self.collection.insert_many(documents, ordered=False)
+            result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             logger.info(f"Inserted {len(inserted_ids)} documents in {self.collection_name}")
             return inserted_ids

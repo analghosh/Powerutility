@@ -72,7 +72,7 @@ logger = logging.getLogger(__name__)
 class BaseServeRepository(BaseRepository):
     """Base repository for serve entities with common operations"""
     
-    def __init__(self, mongodb_uri: str, database_name: str, 
+    async def __init__(self, mongodb_uri: str, database_name: str, 
                  serve_collection: str, historical_collection: str):
         """
         Initialize the repository with MongoDB connection
@@ -94,7 +94,7 @@ class BaseServeRepository(BaseRepository):
         self.serve_collection: Collection = self.db[serve_collection]
         self.historical_collection: Collection = self.db[historical_collection]
         
-    def insert_serve(self, entity: Any) -> str:
+    async def insert_serve(self, entity: Any) -> str:
         """
         Insert a new serve record
         
@@ -126,7 +126,7 @@ class BaseServeRepository(BaseRepository):
                 raise
             raise DataInsertionError(error_msg) from e
             
-    def insert_historical(self, entity: Any) -> str:
+    async def insert_historical(self, entity: Any) -> str:
         """
         Insert a new historical record
         
@@ -145,7 +145,7 @@ class BaseServeRepository(BaseRepository):
             logger.error("Error inserting historical record: %s", str(e))
             raise
 
-    def bulk_insert_serve(self, entities: List[Any]) -> int:
+    async def bulk_insert_serve(self, entities: List[Any]) -> int:
         """
         Bulk insert serve records
         
@@ -215,7 +215,7 @@ class BaseServeRepository(BaseRepository):
                 raise
             raise DataInsertionError(error_msg) from e
 
-    def bulk_insert_historical(self, entities: List[Any]) -> List[str]:
+    async def bulk_insert_historical(self, entities: List[Any]) -> List[str]:
         """
         Bulk insert historical records
         
@@ -240,7 +240,7 @@ class BaseServeRepository(BaseRepository):
             logger.error("Error bulk inserting historical records: %s", str(e))
             raise
             
-    def delete_serve_by_date(self, scheduled_at: datetime) -> Dict[str, Any]:
+    async def delete_serve_by_date(self, scheduled_at: datetime) -> Dict[str, Any]:
         """
         Delete serve records by scheduled_at date
         
@@ -266,7 +266,7 @@ class BaseServeRepository(BaseRepository):
             logger.error("Error deleting serve records for date %s: %s", scheduled_at, str(e))
             raise
             
-    def find_serve_by_date(self, scheduled_at: datetime) -> List[Dict[str, Any]]:
+    async def find_serve_by_date(self, scheduled_at: datetime) -> List[Dict[str, Any]]:
         """
         Find serve records by scheduled_at date
         
@@ -277,14 +277,15 @@ class BaseServeRepository(BaseRepository):
             List of records found
         """
         try:
-            records = list(self.serve_collection.find({"scheduled_at": scheduled_at}))
+            cursor = self.serve_collection.find({"scheduled_at": scheduled_at})
+            records = await cursor.to_list(length=10000)
             logger.info("Found %d serve records for date: %s", len(records), scheduled_at)
             return records
         except Exception as e:
             logger.error("Error finding serve records for date %s: %s", scheduled_at, str(e))
             raise
             
-    def find_serve_by_date_range(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+    async def find_serve_by_date_range(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
         """
         Find serve records by date range
         
@@ -304,8 +305,14 @@ class BaseServeRepository(BaseRepository):
                     {"scheduled_at": {"$gte": start_date, "$lt": end_date}},
                 ]
             }
-            records = list(self.serve_collection.find(query))
-            logger.info("Found %d serve records for date range: %s to %s", len(records), start_date, end_date)
+            cursor = self.serve_collection.find(query)
+            records = await cursor.to_list(length=10000)
+            logger.info(
+                "Found %d serve records for date range: %s to %s",
+                len(records),
+                start_date,
+                end_date,
+            )
             return records
         except Exception as e:
             logger.error("Error finding serve records for date range %s to %s: %s", start_date, end_date, str(e))

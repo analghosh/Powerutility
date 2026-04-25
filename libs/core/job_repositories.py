@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class JobDataRepository(BaseRepository):
     """Repository for job configuration data"""
     
-    def __init__(self, audit_db_uri: str, audit_db_name: str, job_data_collection: str):
+    async def __init__(self, audit_db_uri: str, audit_db_name: str, job_data_collection: str):
         """Initialize the repository with MongoDB connection"""
         
         super().__init__(
@@ -29,7 +29,7 @@ class JobDataRepository(BaseRepository):
         # Create indexes for better performance
         self._create_indexes()
     
-    def _create_indexes(self):
+    async def _create_indexes(self):
         """Create database indexes for optimal performance"""
         try:
             # Primary indexes
@@ -49,7 +49,7 @@ class JobDataRepository(BaseRepository):
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to create indexes: %s", str(e))
     
-    def create_job(self, job_data: JobData) -> str:
+    async def create_job(self, job_data: JobData) -> str:
         """
         Create a new job configuration
         
@@ -91,7 +91,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to create job: %s", str(e))
             raise
     
-    def get_job(self, job_type: str) -> Optional[Dict[str, Any]]:
+    async def get_job(self, job_type: str) -> Optional[Dict[str, Any]]:
         """
         Get a job by job_type
         
@@ -110,7 +110,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to get job %s: %s", job_type, str(e))
             return None
     
-    def get_job_by_id(self, job_id: str) -> Optional[Dict[str, Any]]:
+    async def get_job_by_id(self, job_id: str) -> Optional[Dict[str, Any]]:
         """
         Get a job by MongoDB _id
         
@@ -130,7 +130,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to get job by id %s: %s", job_id, str(e))
             return None
     
-    def get_all_jobs(self, enabled_only: bool = False, service: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_all_jobs(self, enabled_only: bool = False, service: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all jobs
         
@@ -148,9 +148,8 @@ class JobDataRepository(BaseRepository):
             if service:
                 query["service"] = service
             
-            cursor = self.collection.find(query).sort("priority", 1)
-            jobs = list(cursor)
-            
+            jobs = await self.collection.find(query).sort("priority", 1).to_list(length=10000)
+
             # Convert ObjectId to string for JSON serialization
             for job in jobs:
                 if '_id' in job:
@@ -162,7 +161,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to get all jobs: %s", str(e))
             return []
     
-    def get_jobs_by_type(self, job_type: str, enabled_only: bool = True) -> List[Dict[str, Any]]:
+    async def get_jobs_by_type(self, job_type: str, enabled_only: bool = True) -> List[Dict[str, Any]]:
         """
         Get jobs by type
         
@@ -178,9 +177,8 @@ class JobDataRepository(BaseRepository):
             if enabled_only:
                 query["enabled"] = True
             
-            cursor = self.collection.find(query).sort("priority", 1)
-            jobs = list(cursor)
-            
+            jobs = await self.collection.find(query).sort("priority", 1).to_list(length=10000)
+
             # Convert ObjectId to string for JSON serialization
             for job in jobs:
                 if '_id' in job:
@@ -192,7 +190,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to get jobs by type %s: %s", job_type, str(e))
             return []
     
-    def get_jobs_by_service(self, service: str, enabled_only: bool = True) -> List[Dict[str, Any]]:
+    async def get_jobs_by_service(self, service: str, enabled_only: bool = True) -> List[Dict[str, Any]]:
         """
         Get jobs by service (treats blank/empty service as 'scheduler')
         
@@ -224,9 +222,8 @@ class JobDataRepository(BaseRepository):
             # else:
             #     query = service_query
             
-            cursor = self.collection.find(query).sort("priority", 1)
-            jobs = list(cursor)
-            
+            jobs = await self.collection.find(query).sort("priority", 1).to_list(length=10000)
+
             # Convert ObjectId to string for JSON serialization
             for job in jobs:
                 if '_id' in job:
@@ -407,7 +404,7 @@ class JobDataRepository(BaseRepository):
 class JobDetailRepository(BaseRepository):
     """Repository for job execution logs (time series data)"""
     
-    def __init__(self, audit_db_uri: str, audit_db_name: str, job_detail_collection: str):
+    async def __init__(self, audit_db_uri: str, audit_db_name: str, job_detail_collection: str):
         """Initialize the repository with MongoDB connection"""
         
         super().__init__(
@@ -419,7 +416,7 @@ class JobDetailRepository(BaseRepository):
         # Create indexes for better performance
         self._create_indexes()
     
-    def _create_indexes(self):
+    async def _create_indexes(self):
         """Create database indexes for optimal performance"""
         try:
             # Primary indexes for time series data
@@ -445,7 +442,7 @@ class JobDetailRepository(BaseRepository):
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to create indexes: %s", str(e))
     
-    def log_execution(self, job_detail: JobDetail) -> str:
+    async def log_execution(self, job_detail: JobDetail) -> str:
         """
         Log a job execution
         
@@ -480,7 +477,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to log job execution: %s", str(e))
             raise
     
-    def get_execution_logs(self, query: JobDetailQuery) -> List[Dict[str, Any]]:
+    async def get_execution_logs(self, query: JobDetailQuery) -> List[Dict[str, Any]]:
         """
         Get execution logs based on query parameters
         
@@ -515,15 +512,13 @@ class JobDetailRepository(BaseRepository):
             cursor = self.collection.find(
                 filter_query,
                 {"_id": 0}
-            ).sort("execution_start", -1).skip(query.skip).limit(query.limit)
-            
-            return list(cursor)
-            
+            ).sort("execution_start", -1).skip(query.skip).limit(query.limit).to_list(length=10000)
+
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get execution logs: %s", str(e))
             return []
     
-    def get_job_execution_history(self, job_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_job_execution_history(self, job_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Get execution history for a specific job
         
@@ -538,15 +533,13 @@ class JobDetailRepository(BaseRepository):
             cursor = self.collection.find(
                 {"job_id": job_id},
                 {"_id": 0}
-            ).sort("execution_start", -1).limit(limit)
-            
-            return list(cursor)
-            
+            ).sort("execution_start", -1).limit(limit).to_list(length=10000)
+
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get execution history for job %s: %s", job_id, str(e))
             return []
     
-    def get_recent_executions(self, job_id: str) -> bool:
+    async def get_recent_executions(self, job_id: str) -> bool:
         """
         Get recent successful executions for a job
         
@@ -570,7 +563,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to get recent executions for job %s: %s", job_id, str(e))
             return False
     
-    def get_failed_executions(self, job_id: Optional[str] = None, days: int = 7, service: Optional[str] = None) -> bool:
+    async def get_failed_executions(self, job_id: Optional[str] = None, days: int = 7, service: Optional[str] = None) -> bool:
         """
         Get failed executions
         
@@ -602,7 +595,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to get failed executions: %s", str(e))
             return False
     
-    def get_execution_by_id(self, execution_id: str) -> Optional[Dict[str, Any]]:
+    async def get_execution_by_id(self, execution_id: str) -> Optional[Dict[str, Any]]:
         """
         Get a specific execution by execution_id
         
@@ -622,7 +615,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to get execution %s: %s", execution_id, str(e))
             return None
     
-    def update_execution(self, execution_id: str, update_data: Dict[str, Any]) -> bool:
+    async def update_execution(self, execution_id: str, update_data: Dict[str, Any]) -> bool:
         """
         Update an execution log
         
@@ -652,7 +645,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to update execution %s: %s", execution_id, str(e))
             return False
     
-    def get_job_statistics(self, job_id: str, days: int = 30) -> Dict[str, Any]:
+    async def get_job_statistics(self, job_id: str, days: int = 30) -> Dict[str, Any]:
         """
         Get statistics for a job
         
@@ -708,7 +701,7 @@ class JobDetailRepository(BaseRepository):
                 }
             ]
             
-            duration_stats = list(self.collection.aggregate(pipeline))
+            duration_stats = await self.collection.aggregate(pipeline).to_list(length=10000)
             avg_duration = duration_stats[0]["avg_duration"] if duration_stats else 0
             min_duration = duration_stats[0]["min_duration"] if duration_stats else 0
             max_duration = duration_stats[0]["max_duration"] if duration_stats else 0
@@ -763,10 +756,8 @@ class JobDetailRepository(BaseRepository):
             
             cursor = self.collection.find({
                 "execution_start": {"$lt": cutoff_time}
-            }).sort("execution_start", 1)
-            
-            return list(cursor)
-            
+            }).sort("execution_start", 1).to_list(length=10000)
+
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get old executions for migration: %s", str(e))
             return []
@@ -826,7 +817,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to get execution count: %s", str(e))
             return 0
     
-    def get_running_jobs(self) -> List[Dict[str, Any]]:
+    async def get_running_jobs(self) -> List[Dict[str, Any]]:
         """
         Get all currently running jobs
         
@@ -835,7 +826,7 @@ class JobDetailRepository(BaseRepository):
         """
         try:
             # Find jobs that are currently running (status = "running")
-            running_jobs = list(self.collection.find(
+            running_jobs = await self.collection.find(
                 {"status": "running"},
                 {
                     "job_id": 1,
@@ -848,7 +839,7 @@ class JobDetailRepository(BaseRepository):
                     "current_step": 1,
                     "estimated_completion": 1
                 }
-            ).sort("execution_start", -1))
+            ).sort("execution_start", -1).to_list(length=10000)
             
             # Calculate runtime for each job and convert ObjectIds to strings
             current_time = datetime.now()
@@ -869,7 +860,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting running jobs: %s", str(e))
             return []
     
-    def get_job_execution_trace(self, job_id: str) -> Optional[Dict[str, Any]]:
+    async def get_job_execution_trace(self, job_id: str) -> Optional[Dict[str, Any]]:
         """
         Get detailed execution trace for a specific job
         
@@ -895,9 +886,9 @@ class JobDetailRepository(BaseRepository):
                 latest_execution["_id"] = str(latest_execution["_id"])
             
             # Get execution history (last 10 executions)
-            execution_history = list(self.collection.find(
+            execution_history = await self.collection.find(
                 {"job_id": job_id}
-            ).sort("execution_start", -1).limit(10))
+            ).sort("execution_start", -1).limit(10).to_list(length=10000)
             
             # Convert ObjectIds to strings in history
             for execution in execution_history:
@@ -924,7 +915,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting job execution trace for %s: %s", job_id, str(e))
             return None
     
-    def get_jobs_by_service(self, service: str, limit: int = 50) -> List[Dict[str, Any]]:
+    async def get_jobs_by_service(self, service: str, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Get jobs for a specific service (centralized job monitoring)
         
@@ -938,16 +929,16 @@ class JobDetailRepository(BaseRepository):
         try:
             if service == "scheduler":
                 # Get scheduler jobs from job_detail collections
-                return self._get_scheduler_jobs(limit)
+                return await self._get_scheduler_jobs(limit)
             elif service == "ingestion":
                 # Get ingestion jobs from job_data collection and cross-reference with job_detail
-                return self._get_ingestion_jobs(limit)
+                return await self._get_ingestion_jobs(limit)
             elif service == "processing":
                 # Get processing jobs (placeholder for future implementation)
-                return self._get_processing_jobs(limit)
+                return await self._get_processing_jobs(limit)
             elif service == "auth":
                 # Get auth jobs (placeholder for future implementation)
-                return self._get_auth_jobs(limit)
+                return await self._get_auth_jobs(limit)
             else:
                 logger.warning("Unknown service: %s", service)
                 return []
@@ -956,13 +947,13 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting jobs for service %s: %s", service, str(e))
             return []
     
-    def _get_scheduler_jobs(self, limit: int) -> List[Dict[str, Any]]:
+    async def _get_scheduler_jobs(self, limit: int) -> List[Dict[str, Any]]:
         """Get scheduler service jobs from job_detail collections"""
         try:
             # Get jobs from both current and historical collections
-            current_jobs = list(self.collection.find(
+            current_jobs = await self.collection.find(
                 {"service": "scheduler"}
-            ).sort("execution_start", -1).limit(limit))
+            ).sort("execution_start", -1).limit(limit).to_list(length=10000)
             
             # Note: historical_collection would need to be initialized if needed
             # For now, just use current collection
@@ -989,7 +980,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting scheduler jobs: %s", str(e))
             return []
     
-    def _get_ingestion_jobs(self, limit: int) -> List[Dict[str, Any]]:
+    async def _get_ingestion_jobs(self, limit: int) -> List[Dict[str, Any]]:
         """Get ingestion service jobs from job_data collection"""
         try:
             # This would need access to job_data_repository
@@ -1001,7 +992,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting ingestion jobs: %s", str(e))
             return []
     
-    def _get_processing_jobs(self, limit: int) -> List[Dict[str, Any]]:
+    async def _get_processing_jobs(self, limit: int) -> List[Dict[str, Any]]:
         """Get processing service jobs (placeholder for future implementation)"""
         try:
             # Placeholder for processing service jobs
@@ -1012,7 +1003,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting processing jobs: %s", str(e))
             return []
     
-    def _get_auth_jobs(self, limit: int) -> List[Dict[str, Any]]:
+    async def _get_auth_jobs(self, limit: int) -> List[Dict[str, Any]]:
         """Get auth service jobs (placeholder for future implementation)"""
         try:
             # Placeholder for auth service jobs
@@ -1023,7 +1014,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting auth jobs: %s", str(e))
             return []
     
-    def get_overall_job_statistics(self, hours: int = 24, job_data_repository=None) -> Dict[str, Any]:
+    async def get_overall_job_statistics(self, hours: int = 24, job_data_repository=None) -> Dict[str, Any]:
         """
         Get overall job execution statistics for the specified time period
         For Total Jobs (24H): Shows total count of ALL available jobs from job_data collection
@@ -1040,9 +1031,9 @@ class JobDetailRepository(BaseRepository):
             cutoff_time = datetime.now() - timedelta(hours=hours)
             
             # Get jobs from current collection (execution logs) for success/failure metrics
-            jobs = list(self.collection.find({
+            jobs = await self.collection.find({
                 "execution_start": {"$gte": cutoff_time}
-            }))
+            }).to_list(length=10000)
             
             # Calculate statistics from execution logs
             total_execution_jobs = len(jobs)
@@ -1269,9 +1260,8 @@ class JobDetailRepository(BaseRepository):
                 # Get all execution records for this job
                 executions = self.collection.find(
                     {"job_id": job_id}
-                ).sort("execution_id", -1).limit(50)  # Limit to last 50 executions
-                
-                executions_list = list(executions)
+                ).sort("execution_id", -1).limit(50).to_list(length=10000)  # Limit to last 50 executions
+
                 logger.info("Found %d execution records for job_id: %s", len(executions_list), job_id)
                 
                 

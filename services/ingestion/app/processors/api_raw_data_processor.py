@@ -519,7 +519,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                         update_doc["$set"]["inserted_at"] = record.get("inserted_at")
                     
                     # Upsert the record
-                    result = collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1

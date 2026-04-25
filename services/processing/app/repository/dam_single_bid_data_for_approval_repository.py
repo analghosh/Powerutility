@@ -28,7 +28,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
         try:
             documents = list(documents.values())
             documents = [doc for doc in documents if isinstance(doc, dict)]
-            result = self.collection.insert_many(documents, ordered=False)
+            result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             return inserted_ids
         except Exception as e:
@@ -43,7 +43,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -62,7 +62,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -81,7 +81,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
                 update_data["approved_by"] = approved_by
                 update_data["approved_at"] = datetime.now()
             
-            result = self.collection.update_one(query, {"$set": update_data})
+            result = await self.collection.update_one(query, {"$set": update_data})
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Failed to update bid status in {self.collection_name}: {str(e)}")
@@ -101,11 +101,7 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
 
             cursor = self.collection.aggregate(pipeline)
 
-            try:
-                result = cursor.to_list(length=None)
-            except AttributeError:
-                # Fallback for PyMongo CommandCursor in server environment
-                result = list(cursor)
+            result = await cursor.to_list(length=10000)
 
             if result:
                 return result[0].get("revision_no", 0)
@@ -114,13 +110,13 @@ class DAMSingleBidDataForApprovalRepository(BaseRepository):
             logger.error(f"Failed to get plant data for approval by time in {self.collection_name}: {str(e)}")
             return 0
 
-    def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Any:
+    async def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Any:
         """
         Update one document matching the filter with the update query.
         Returns the result object with modified_count attribute.
         """
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return result
         except Exception as e:
             logger.error(f"Failed to update document in {self.collection_name}: {str(e)}")

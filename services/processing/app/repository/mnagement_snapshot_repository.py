@@ -12,16 +12,16 @@
 #         logger.info(f"MnagementSnapshotRepository initialized with collection: {collection_name}")
     
 #     def get_first_recode(self, schedule_date: str) -> Optional[Dict[str, Any]]:
-#         return self.collection.find_one(
+#         return await self.collection.find_one(
 #         {"inserted_date": date},
 #         sort=[("_id", DESCENDING)]
 #     )
 
 #     def get_market_snapshot_by_date(self, date, cronjob):
-#         return list(self.collection.find({
+#         return await self.collection.find({
 #             "inserted_date": date,
 #             "cronJob_time": cronjob
-#         }))
+#         }).to_list(length=10000)
 
 
 # services/processing/app/repository/serve_exchange_table_repository.py
@@ -30,16 +30,14 @@ import os
 import logging
 from typing import Any, Dict, Iterable, List, Optional
 
-from pymongo import MongoClient
-from pymongo.collection import Collection
-from pymongo.database import Database
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
 
 logger = logging.getLogger(__name__)
 
 
 class ServeExchangeTableRepository:
     """
-    Lightweight repository for the `serve_exchange_table` collection.
+    Async repository for the `serve_exchange_table` collection using Motor.
 
     Env vars (with sensible defaults):
       - MONGO_URI       -> "mongodb://localhost:27017"
@@ -48,30 +46,29 @@ class ServeExchangeTableRepository:
 
     Usage:
         repo = ServeExchangeTableRepository()
-        rows = repo.aggregate(pipeline)
+        rows = await repo.aggregate(pipeline)
     """
 
     def __init__(
         self,
-        client: Optional[MongoClient] = None,
+        client: Optional[AsyncIOMotorClient] = None,
         db_name: Optional[str] = None,
         collection_name: Optional[str] = None,
     ) -> None:
-        # Use provided client or get from centralized factory
         if client is None:
             from libs.database.mongo_client_factory import get_processing_client
             uri = os.getenv("MONGO_URI", os.getenv("MONGODB_URI", "mongodb://localhost:27017"))
-            self._client: MongoClient = get_processing_client(uri)
-            logger.debug("Using centralized MongoClient from factory")
+            self._client: AsyncIOMotorClient = get_processing_client(uri)
+            logger.debug("Using centralized AsyncIOMotorClient from factory")
         else:
-            self._client: MongoClient = client
-            logger.debug("Using injected MongoClient")
+            self._client: AsyncIOMotorClient = client
+            logger.debug("Using injected AsyncIOMotorClient")
 
         dbn = db_name or os.getenv("MONGO_DB_NAME", "epms")
-        self._db: Database = self._client[dbn]
+        self._db: AsyncIOMotorDatabase = self._client[dbn]
 
         coll_name = collection_name or os.getenv("MONGO_COLL_EXCH", "serve_exchange_table")
-        self._coll: Collection = self._db[coll_name]
+        self._coll: AsyncIOMotorCollection = self._db[coll_name]
 
         logger.debug(
             "ServeExchangeTableRepository initialized (db=%s, coll=%s)",
@@ -80,72 +77,68 @@ class ServeExchangeTableRepository:
 
     # ------------- basic accessors -------------
     @property
-    def db(self) -> Database:
+    def db(self) -> AsyncIOMotorDatabase:
         return self._db
 
     @property
-    def collection(self) -> Collection:
+    def collection(self) -> AsyncIOMotorCollection:
         return self._coll
 
     # ------------- read helpers -------------
-    def aggregate(
+    async def aggregate(
         self,
         pipeline: Iterable[Dict[str, Any]],
         *,
         allow_disk_use: bool = True,
         collation: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Run an aggregation and return a list. Designed for read-heavy operations.
-        """
-        logger.debug("Aggregate on %s with pipeline: %s", self._coll.full_name, pipeline)
-        cursor = self._coll.aggregate(
-            list(pipeline),
-            allowDiskUse=allow_disk_use,
-            collation=collation,
-        )
-        result = list(cursor)
+        """Run an aggregation and return a list."""
+        logger.debug("Aggregate on %s", self._coll.full_name)
+        kwargs = {"allowDiskUse": allow_disk_use}
+        if collation:
+            kwargs["collation"] = collation
+        cursor = self._coll.aggregate(list(pipeline), **kwargs)
+        result = await cursor.to_list(length=10000)
         logger.debug("Aggregate returned %d documents", len(result))
         return result
 
-    def find(
+    async def find(
         self,
         filter: Optional[Dict[str, Any]] = None,
         projection: Optional[Dict[str, Any]] = None,
-        **kwargs: Any,
+        sort: Optional[List] = None,
+        limit: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Simple wrapper over find(). Returns a list for convenience.
-        Extra kwargs are passed to pymongo find (e.g., sort, limit).
-        """
+        """Async find returning a list."""
         filter = filter or {}
-        logger.debug("Find on %s filter=%s projection=%s kwargs=%s",
-                     self._coll.full_name, filter, projection, kwargs)
-        cursor = self._coll.find(filter, projection, **kwargs)
-        return list(cursor)
+        logger.debug("Find on %s filter=%s", self._coll.full_name, filter)
+        cursor = self._coll.find(filter, projection)
+        if sort:
+            cursor = cursor.sort(sort)
+        if limit:
+            cursor = cursor.limit(limit)
+        return await cursor.to_list(length=10000)
 
-    def find_one(
+    async def find_one(
         self,
         filter: Optional[Dict[str, Any]] = None,
         projection: Optional[Dict[str, Any]] = None,
     ) -> Optional[Dict[str, Any]]:
         filter = filter or {}
-        logger.debug("Find_one on %s filter=%s projection=%s",
-                     self._coll.full_name, filter, projection)
-        return self._coll.find_one(filter, projection)
+        logger.debug("Find_one on %s filter=%s", self._coll.full_name, filter)
+        return await self._coll.find_one(filter, projection)
 
-    def count_documents(self, filter: Optional[Dict[str, Any]] = None) -> int:
+    async def count_documents(self, filter: Optional[Dict[str, Any]] = None) -> int:
         filter = filter or {}
-        count = self._coll.count_documents(filter)
-        logger.debug("count_documents on %s filter=%s -> %d",
-                     self._coll.full_name, filter, count)
+        count = await self._coll.count_documents(filter)
+        logger.debug("count_documents on %s -> %d", self._coll.full_name, count)
         return count
 
     # ------------- utilities -------------
-    def ping(self) -> bool:
+    async def ping(self) -> bool:
         """Quick connectivity check."""
         try:
-            self._client.admin.command("ping")
+            await self._client.admin.command("ping")
             return True
         except Exception as exc:
             logger.warning("Mongo ping failed: %s", exc)

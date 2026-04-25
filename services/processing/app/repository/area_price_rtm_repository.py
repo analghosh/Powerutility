@@ -11,7 +11,7 @@ class AreaPriceRtmRepository(BaseRepository):
         super().__init__(collection_name=collection_name)
         logger.info(f"DashboardRepository initialized with collection: {collection_name}")
 
-    def get_data(self, schedule_date: str):
+    async def get_data(self, schedule_date: str):
         pipeline = [
         {"$match": {"schedule_date": schedule_date}},
         {"$project": {
@@ -19,4 +19,4 @@ class AreaPriceRtmRepository(BaseRepository):
         }},
         {"$sort": {"time_block": 1}}  # ascending order
     ]
-        return list(self.collection.aggregate(pipeline))
+        return await self.collection.aggregate(pipeline).to_list(length=10000)

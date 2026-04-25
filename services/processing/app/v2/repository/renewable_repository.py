@@ -114,7 +114,7 @@ class RenewableRepository:
                 ("time_block", 1)
             ])
             
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             logger.info(f"Retrieved {len(results)} renewable schedule records for date: {date_str}")
             return results
@@ -163,7 +163,7 @@ class RenewableRepository:
             # Execute query with sorting by time_block
             cursor = collection.find(query, projection).sort("time_block", 1)
             
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             logger.info(f"Retrieved {len(results)} renewable availability records for date: {date_str}")
             return results
@@ -223,7 +223,7 @@ class RenewableRepository:
             
             cursor = collection.aggregate(pipeline)
             try:
-                results = list(cursor)
+                results = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -295,7 +295,7 @@ class RenewableRepository:
                 ("time_block", 1)
             ])
             
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             logger.info(f"Retrieved {len(results)} renewable records by plant for date: {date_str}, plant_id: {plant_id}")
             return results

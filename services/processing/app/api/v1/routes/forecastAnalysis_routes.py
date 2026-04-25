@@ -134,7 +134,7 @@ async def demand_blocks(
     Sorting: schedule_date ASC, time_block ASC.
     """
     try:
-        payload = demand_controller.demand_blocks(
+        payload = await demand_controller.demand_blocks(
             markets=market,
             date_from=date_from,
             date_to=date_to,
@@ -266,7 +266,7 @@ async def demand_curve(
     Build a demand curve and show progress across cumulative blocks.
     """
     try:
-        payload = demand_controller.demand_curve(
+        payload = await demand_controller.demand_curve(
             markets=market,
             date_from=date_from,
             date_to=date_to,
@@ -393,7 +393,7 @@ async def mape_curve(
         - **expected** → `count / (days × slotsPerDay) × 100`, where `slotsPerDay = to_block - from_block + 1`.
     """
     try:
-        payload = demand_controller.mape_curve(
+        payload = await demand_controller.mape_curve(
             markets=market,
             date_from=date_from,
             date_to=date_to,
@@ -531,7 +531,7 @@ async def forecast_analysis_all_unified(
     Returns a single unified `meta`.
     """
     try:
-        payload = demand_controller.all_three_unified(
+        payload = await demand_controller.all_three_unified(
             markets=market,
             zones=zone,
             date_from=date_from,
@@ -572,7 +572,7 @@ async def demand_forecast_last_7_days():
     Sorted by `schedule_date` ascending.
     """
     try:
-        payload = demand_controller.demand_forecast_last_7_days()
+        payload = await demand_controller.demand_forecast_last_7_days()
         # payload = {"result": [...]}
         return {
             "timestamp": now_ist().isoformat(),
@@ -705,7 +705,7 @@ async def selected_days(
     Sorting: schedule_date ASC, time_block ASC.
     """
     try:
-        payload = demand_controller.selected_days_blocks_and_stats(
+        payload = await demand_controller.selected_days_blocks_and_stats(
             dates=date,
             markets=market,
             zones=zone,

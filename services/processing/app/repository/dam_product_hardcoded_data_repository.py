@@ -28,9 +28,9 @@ class DAMProductHardCodedDataRepository(BaseRepository):
                 {"$sort": {"Product_Code": 1}},
                 {"$project": { "_id": 0}}
             ]
-            result = self.collection.aggregate(pipeline)
+            result = await self.collection.aggregate(pipeline).to_list(length=10000)
             logger.info("Successfully retrieved product data")
-            return list(result)
+            return result
         except Exception as e:
             logger.error(f"Failed to retrieve product data from {self.collection_name}: {str(e)}")
             return str(e) # type: ignore
@@ -40,7 +40,7 @@ class DAMProductHardCodedDataRepository(BaseRepository):
         Get data for a specific period.
         """
         try:
-            result = self.collection.find_one({"From_Period_Id": period})
+            result = await self.collection.find_one({"From_Period_Id": period})
             return result
         except Exception as e:
             logger.error(f"Failed to get period data from {self.collection_name}: {str(e)}")
@@ -51,7 +51,7 @@ class DAMProductHardCodedDataRepository(BaseRepository):
         Get product data by product code.
         """
         try:
-            result = self.collection.find_one({"Product_Code": product_code})
+            result = await self.collection.find_one({"Product_Code": product_code})
             return result
         except Exception as e:
             logger.error(f"Failed to get product by code from {self.collection_name}: {str(e)}")
@@ -72,7 +72,7 @@ class DAMProductHardCodedDataRepository(BaseRepository):
                 }},
                 {"$sort": {"Product_Code": 1}}
             ]
-            result = list(self.collection.aggregate(pipeline))
+            result = await self.collection.aggregate(pipeline).to_list(length=10000)
             return result
         except Exception as e:
             logger.error(f"Failed to get all products from {self.collection_name}: {str(e)}")

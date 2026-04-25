@@ -22,7 +22,7 @@ class RawDataRepository(BaseRepository):
     Uses metadata to differentiate between data types and providers
     """
     
-    def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
+    async def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
         """
         Initialize raw data repository
         
@@ -41,7 +41,7 @@ class RawDataRepository(BaseRepository):
         self._create_timeseries_collection_if_not_exists()
         self._create_indexes()
     
-    def _create_timeseries_collection_if_not_exists(self):
+    async def _create_timeseries_collection_if_not_exists(self):
         """
         Create time series collection if it doesn't exist
         Configures MongoDB time series collection for optimal performance
@@ -80,7 +80,7 @@ class RawDataRepository(BaseRepository):
                 logger.error("Error creating fallback collection: %s", fallback_error, exc_info=True)
                 raise
     
-    def _create_indexes(self):
+    async def _create_indexes(self):
         """Create necessary indexes for time series collection"""
         indexes = [
             ([("data_type", 1), ("created_at", -1)], {}),
@@ -101,7 +101,7 @@ class RawDataRepository(BaseRepository):
 
         logger.info("Time series collection indexes created successfully")
     
-    def create_raw_data(self, entity: RawDataEntity) -> str:
+    async def create_raw_data(self, entity: RawDataEntity) -> str:
         """
         Create raw data record in single collection
         
@@ -136,7 +136,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error creating raw data record: %s", e, exc_info=True)
             raise
     
-    def get_raw_data_by_ids(self, raw_data_ids: List[str]) -> List[Dict[str, Any]]:
+    async def get_raw_data_by_ids(self, raw_data_ids: List[str]) -> List[Dict[str, Any]]:
         """
         Get raw data records by their IDs
         
@@ -148,10 +148,9 @@ class RawDataRepository(BaseRepository):
         """
         try:
             object_ids = [ObjectId(rid) for rid in raw_data_ids]
-            cursor = self.collection.find({"_id": {"$in": object_ids}})
-            
-            records = []
-            for record in cursor:
+            records = await self.collection.find({"_id": {"$in": object_ids}}).to_list(length=10000)
+
+            for record in records:
                 record["_id"] = str(record["_id"])
                 records.append(record)
             
@@ -164,7 +163,7 @@ class RawDataRepository(BaseRepository):
     
     
     
-    def get_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:
         """
         Get raw data by document ID
         
@@ -184,7 +183,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error fetching raw data by ID %s: %s", record_id, e, exc_info=True)
             return None
 
-    def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
         """
         Get raw data by upload identifier
         
@@ -204,7 +203,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error fetching raw data by upload_id %s: %s", upload_id, e, exc_info=True)
             return None
     
-    def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
+    async def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Get raw data statistics
         
@@ -229,9 +228,9 @@ class RawDataRepository(BaseRepository):
                     "count": {"$sum": 1}
                 }}
             ]
-            
-            results = list(self.collection.aggregate(pipeline))
-            
+
+            results = await self.collection.aggregate(pipeline).to_list(length=10000)
+
             stats = {
                 "total": 0,
                 "pending": 0,

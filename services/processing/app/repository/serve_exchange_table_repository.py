@@ -14,7 +14,7 @@ class serveExchangeTableRepository(BaseRepository):
         logger.info(f"DashboardRepository initialized with collection: {collection_name}")
 
 
-    def get_exchange(self, schedule_date: str) -> Optional[List[Dict[str, Any]]]:
+    async def get_exchange(self, schedule_date: str) -> Optional[List[Dict[str, Any]]]:
         # Suppose your time_block is hour-based, you can map current hour to block
         
 
@@ -90,11 +90,11 @@ class serveExchangeTableRepository(BaseRepository):
     }
 ]
 
-        return list(self.collection.aggregate(pipeline))
+        return await self.collection.aggregate(pipeline).to_list(length=10000)
     
 
     
-    def get_exchange_by_date_time_block(self, schedule_date: str, time_block) -> Optional[List[Dict[str, Any]]]:
+    async def get_exchange_by_date_time_block(self, schedule_date: str, time_block) -> Optional[List[Dict[str, Any]]]:
         logger.info(f"get_exchange_by_date_time_block +++++++++++++++++++======================= ")
         pipeline = [
     {
@@ -163,7 +163,7 @@ class serveExchangeTableRepository(BaseRepository):
 
 
 
-        return list(self.collection.aggregate(pipeline))
+        return await self.collection.aggregate(pipeline).to_list(length=10000)
 
 
     

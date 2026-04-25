@@ -13,12 +13,12 @@ class limitVallueRepository(BaseRepository):
         super().__init__(collection_name=collection_name)
         logger.info(f"limitVallueRepository initialized with collection: {collection_name}")
 
-    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Run an aggregation pipeline and return the list of documents.
         """
         logger.debug("limitVallueRepository.aggregate | pipeline=%s", pipeline)
-        return list(self.collection.aggregate(pipeline))
+        return await self.collection.aggregate(pipeline).to_list(length=10000)
 
 
     async def insert_many(self, documents: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -59,7 +59,7 @@ class limitVallueRepository(BaseRepository):
 
             logger.info(f"Inserting {len(cleaned_docs)} documents into collection...")
 
-            result = self.collection.insert_many(cleaned_docs, ordered=False)
+            result = await self.collection.insert_many(cleaned_docs, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
 
             logger.info("Bulk insert successful")
@@ -121,7 +121,7 @@ class limitVallueRepository(BaseRepository):
 ]
 
             cursor = self.collection.aggregate(pipeline)
-            data = list(cursor)
+            data = await cursor.to_list(length=10000)
 
 
             return {
@@ -158,7 +158,7 @@ class limitVallueRepository(BaseRepository):
             cursor = self.collection.aggregate(pipeline)
 
 
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to fetch paginated records: %s", str(e))
             return {"data": [], "error": str(e)}
@@ -193,7 +193,7 @@ class limitVallueRepository(BaseRepository):
             cursor = self.collection.aggregate(pipeline)
 
 
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to fetch paginated records: %s", str(e))
             return {"data": [], "error": str(e)}

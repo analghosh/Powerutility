@@ -12,10 +12,10 @@ class serveSupplyTableRepository(BaseRepository):
         logger.info(f"serveSupplyTableRepository initialized with collection: {collection_name}")
 
     # (Optional) keep your usual materialized aggregate but ensure allowDiskUse=True
-    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         try:
             cursor = self.collection.aggregate(pipeline, allowDiskUse=True)
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception:
             logger.exception("aggregate failed on %s", self.collection_name)
             return []

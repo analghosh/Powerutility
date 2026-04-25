@@ -25,7 +25,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -44,7 +44,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -68,7 +68,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             ]
             cursor = self.collection.aggregate(pipeline)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result[0] if result else {}
@@ -87,7 +87,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
             }
             cursor = self.collection.find(query)
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             return result
@@ -100,7 +100,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
         Insert a new calculation record.
         """
         try:
-            result = self.collection.insert_one(calculation_data)
+            result = await self.collection.insert_one(calculation_data)
             return str(result.inserted_id)
         except Exception as e:
             logger.error(f"Failed to insert calculation in {self.collection_name}: {str(e)}")
@@ -111,7 +111,7 @@ class DAMSchedulingRequisitionCalculationRepository(BaseRepository):
         Bulk insert calculation records.
         """
         try:
-            result = self.collection.insert_many(calculations)
+            result = await self.collection.insert_many(calculations)
             return [str(_id) for _id in result.inserted_ids]
         except Exception as e:
             logger.error(f"Failed to bulk insert calculations in {self.collection_name}: {str(e)}")

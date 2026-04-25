@@ -37,7 +37,7 @@ class RealtimemarketService:
     Service class responsible for dashboard business logic.
     """
 
-    def __init__(self, collection_name: str = "serve_supply_table"):
+    async def __init__(self, collection_name: str = "serve_supply_table"):
         self.supply_repo = serveSupplyTableRepository()
         self.single_bid_data_for_approval_repo = RTMSingleBidDataForApprovalRepository(collection_name="rtm_single_bid_data_for_approval")
         self.rtm_product_hardCoded_data_repo = RTMProductHardCodedDataRepository(collection_name="rtm_product_hardCoded_data")
@@ -166,7 +166,7 @@ class RealtimemarketService:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = self.supply_repo.aggregate(pipeline)
+            result = await self.supply_repo.aggregate(pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -203,7 +203,7 @@ class RealtimemarketService:
                 },
                 {"$project": {"_id": 0}}
             ]
-            getplantsData = list(self.supply_repo.aggregate(pipeline))
+            getplantsData = await self.supply_repo.aggregate(pipeline)
            
             if not getplantsData:
                 return {}
@@ -216,10 +216,10 @@ class RealtimemarketService:
                 {"$sort": {"Product_Code": 1}},
                 {"$project": {"_id": 0}}
             ]
-            getsessionNo = list(self.rtm_product_hardCoded_data_repo.aggregate(product_hardCoded_pipeline))
+            getsessionNo = await self.rtm_product_hardCoded_data_repo.aggregate(product_hardCoded_pipeline)
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = list(self.plants_list_repo.aggregate(plants_list_pipeline))
+            plantData = await self.plants_list_repo.aggregate(plants_list_pipeline)
             plant_dict = {p['plant_id']: p for p in plantData}
 
             fix_count = getplantsData[0]['time_block']
@@ -254,18 +254,18 @@ class RealtimemarketService:
                 }
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = list(self.serve_demand_repo.aggregate([
+            getForecastedValue = await self.serve_demand_repo.aggregate([
                 {"$match": {
                     "schedule_date": schedule_date,
                     "type": "IDF",
                     "time_block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ])
 
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             
-            forecastedPrice = list(self.limit_values_repo.aggregate([
+            forecastedPrice = await self.limit_values_repo.aggregate([
                     {"$match": {
                         "schedule_date": schedule_date,
                         "id": "RTM_forecasted_price",
@@ -273,10 +273,10 @@ class RealtimemarketService:
                         "block": {"$gte": from_block, "$lte": to_block}
                     }},
                     {"$project": {"_id": 0}}
-                ]))
+                ])
             limit_schedule_date = schedule_date
             
-            bufferPrice = list(self.limit_values_repo.aggregate([
+            bufferPrice = await self.limit_values_repo.aggregate([
                     {"$match": {
                         "schedule_date": limit_schedule_date,
                         "id": "Buffer",
@@ -284,9 +284,9 @@ class RealtimemarketService:
                         "block": {"$gte": from_block, "$lte": to_block}
                     }},
                     {"$project": {"_id": 0}}
-                ]))
+                ])
             
-            ceilingPrice = list(self.limit_values_repo.aggregate([
+            ceilingPrice = await self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "id": "Ceiling_Price",
@@ -295,10 +295,10 @@ class RealtimemarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ])
             
 
-            n_1Limits = list(self.limit_values_repo.aggregate([
+            n_1Limits = await self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "id": "n_1",
@@ -307,9 +307,9 @@ class RealtimemarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ])
 
-            noc_buyLimits = list(self.limit_values_repo.aggregate([
+            noc_buyLimits = await self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "id": "noc_buy",
@@ -318,9 +318,9 @@ class RealtimemarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ])
 
-            noc_sellLimits = list(self.limit_values_repo.aggregate([
+            noc_sellLimits = await self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "id": "noc_sell",
@@ -329,7 +329,7 @@ class RealtimemarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ])
 
             typeofExchangeIEX = "IEX-100"
             typeofExchangePXIL = "PXIL-0"
@@ -1505,7 +1505,7 @@ class RealtimemarketService:
             dbarray = {}
             
             # Helper function to get block date - extract from time_block_range if time_block_dates missing
-            def get_block_date_data(index):
+            async def get_block_date_data(index):
                 if "time_block_dates" in request_data and index < len(request_data["time_block_dates"]):
                     return request_data["time_block_dates"][index].split("_")
                 elif index < len(request_data["time_block_range"]):
@@ -1712,7 +1712,7 @@ class RealtimemarketService:
         finalbuyarraysorted = {}
         
         # Helper function to get block date - extract from time_block_range if time_block_dates missing
-        def get_block_date(index):
+        async def get_block_date(index):
             if "time_block_dates" in request and index < len(request["time_block_dates"]):
                 return request["time_block_dates"][index].split("_")
             elif index < len(request["time_block_range"]):
@@ -1840,7 +1840,7 @@ class RealtimemarketService:
         finalbuyarraysorted = {}
         
         # Helper function to get block date - extract from time_block_range if time_block_dates missing
-        def get_block_date(index):
+        async def get_block_date(index):
             if "time_block_dates" in request and index < len(request["time_block_dates"]):
                 return request["time_block_dates"][index].split("_")
             elif index < len(request["time_block_range"]):
@@ -1973,9 +1973,9 @@ class RealtimemarketService:
             allMLTPValues = await self.limit_values_repo.get_data( yesterday, tomorrow, "RTM", "Multiplier", "OB")
             
             
-            getplantsData = self.get_all_plant_data_for_scheduling(schedule_date, "SG")
+            getplantsData = await self.get_all_plant_data_for_scheduling(schedule_date, "SG")
             # return getplantsData
-            getplantsDataDC =  self.get_all_plant_data_for_scheduling(schedule_date, "DC")
+            getplantsDataDC = await self.get_all_plant_data_for_scheduling(schedule_date, "DC")
             
             # countblockSGData = self.get_last_record_of_sg(getplantsData,0)
             
@@ -2006,7 +2006,7 @@ class RealtimemarketService:
         except Exception as e:
             return {"status": "error", "message": f"Internal Server Error: {str(e)}"}
     
-    def SchedulingCalculator(self,
+    async def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,
@@ -3155,7 +3155,7 @@ class RealtimemarketService:
         return reviseDataTotalsupply
         
 
-    def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
+    async def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
         
 
         # scheduledatetimestamp = yesterday midnight (unix timestamp)
@@ -3221,12 +3221,12 @@ class RealtimemarketService:
             {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
         ]
 
-        posted_jobs = list(self.supply_repo.aggregate(pipeline)) # type: ignore
-        
+        posted_jobs = await self.supply_repo.aggregate(pipeline) # type: ignore
+
         return posted_jobs
 
 
-    def get_last_record_of_sg(self, plants_data, no_of_block=0):
+    async def get_last_record_of_sg(self, plants_data, no_of_block=0):
         """
         Get the last record of SG plants for a given number of blocks.
         
@@ -3262,7 +3262,7 @@ class RealtimemarketService:
         return {"lastcountedBlockData": count_block_volume}
 
     
-    def get_session_from():
+    async def get_session_from():
         time_block = [
             "00:00", "00:30", "01:00", "01:30", "02:00", "02:30", "03:00", "03:30",
             "04:00", "04:30", "05:00", "05:30", "06:00", "06:30", "07:00", "07:30",
@@ -3273,7 +3273,7 @@ class RealtimemarketService:
         ]
         return time_block
 
-    def total_availability(self, getplantsData, getForecastedValue):
+    async def total_availability(self, getplantsData, getForecastedValue):
         """
         Calculate total availability, surplus/deficit, and forecasted values per block.
         """
@@ -3306,7 +3306,7 @@ class RealtimemarketService:
 
         return data_ar
     
-    def check_forecast_price_apply_for_surplus(self, rtmforecastedpriceblk, px_price, S_D_type):
+    async def check_forecast_price_apply_for_surplus(self, rtmforecastedpriceblk, px_price, S_D_type):
         """
         Check if the forecast price condition applies for surplus/deficit.
 
@@ -3618,7 +3618,7 @@ class RealtimemarketService:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
             raise
 
-    def getFifteenTimeBlockID(self, id):
+    async def getFifteenTimeBlockID(self, id):
         time_block = [
             "00:00","00:15","00:30","00:45","01:00","01:15","01:30","01:45",
             "02:00","02:15","02:30","02:45","03:00","03:15","03:30","03:45",
@@ -3889,7 +3889,7 @@ class RealtimemarketService:
                 }
             }
 
-            result = self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
+            result = await self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
             return result.modified_count  # returns number of documents updated
 
         except Exception as e:

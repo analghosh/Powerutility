@@ -115,7 +115,7 @@ class ServeDataRepository(BaseServeRepository):
         except Exception as e:
             logger.error("Error creating indexes: %s", e, exc_info=True)
     
-    def create_demand_serve_record(self, entity: DemandServeEntity) -> str:
+    async def create_demand_serve_record(self, entity: DemandServeEntity) -> str:
         """Create demand serve record with time-series structure"""
         try:
             now = datetime.now()
@@ -142,7 +142,7 @@ class ServeDataRepository(BaseServeRepository):
                 }
             }
             
-            result = self.demand_serve_collection_obj.insert_one(document)
+            result = await self.demand_serve_collection_obj.insert_one(document)
             document_id = str(result.inserted_id)
             
             logger.info("Created demand serve record: %s", document_id)
@@ -152,7 +152,7 @@ class ServeDataRepository(BaseServeRepository):
             logger.error("Error creating demand serve record: %s", e, exc_info=True)
             raise
     
-    def create_supply_serve_record(self, entity: SupplyServeEntity) -> str:
+    async def create_supply_serve_record(self, entity: SupplyServeEntity) -> str:
         """Create supply serve record with time-series structure"""
         try:
             now = datetime.now()
@@ -181,7 +181,7 @@ class ServeDataRepository(BaseServeRepository):
                 }
             }
             
-            result = self.supply_serve_collection_obj.insert_one(document)
+            result = await self.supply_serve_collection_obj.insert_one(document)
             document_id = str(result.inserted_id)
             
             logger.info("Created supply serve record: %s", document_id)
@@ -191,7 +191,7 @@ class ServeDataRepository(BaseServeRepository):
             logger.error("Error creating supply serve record: %s", e, exc_info=True)
             raise
     
-    def get_demand_serve_data(self, start_time: datetime, end_time: datetime, limit: int = 1000) -> List[Dict[str, Any]]:
+    async def get_demand_serve_data(self, start_time: datetime, end_time: datetime, limit: int = 1000) -> List[Dict[str, Any]]:
         """Get demand serve data for time range"""
         try:
             query = {
@@ -201,16 +201,16 @@ class ServeDataRepository(BaseServeRepository):
                 }
             }
             sort = [("scheduled_at", 1)]
-            
-            records = list(self.demand_serve_collection_obj.find(query).sort(sort).limit(limit))
+
+            records = await self.demand_serve_collection_obj.find(query).sort(sort).limit(limit).to_list(length=limit)
             logger.info("Retrieved %d demand serve records for time range", len(records))
             return records
-            
+
         except Exception as e:
             logger.error("Error retrieving demand serve data: %s", e, exc_info=True)
             return []
-    
-    def get_supply_serve_data(self, start_time: datetime, end_time: datetime, limit: int = 1000) -> List[Dict[str, Any]]:
+
+    async def get_supply_serve_data(self, start_time: datetime, end_time: datetime, limit: int = 1000) -> List[Dict[str, Any]]:
         """Get supply serve data for time range"""
         try:
             query = {
@@ -220,11 +220,11 @@ class ServeDataRepository(BaseServeRepository):
                 }
             }
             sort = [("scheduled_at", 1)]
-            
-            records = list(self.supply_serve_collection_obj.find(query).sort(sort).limit(limit))
+
+            records = await self.supply_serve_collection_obj.find(query).sort(sort).limit(limit).to_list(length=limit)
             logger.info("Retrieved %d supply serve records for time range", len(records))
             return records
-            
+
         except Exception as e:
             logger.error("Error retrieving supply serve data: %s", e, exc_info=True)
             return []

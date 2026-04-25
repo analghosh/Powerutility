@@ -92,11 +92,11 @@ async def dashboard_api(request: Request):
 
 
 @router.get("/capacity-chart", summary="Get Power Plant Capacity Sunburst Chart Data")
-def get_capacity_chart():
+async def get_capacity_chart():
     """
     API endpoint to retrieve the hierarchical data for the power plant capacity sunburst chart.
     """
-    return dashboard_pg_new_controller.dashboard_capacity_chart()
+    return await dashboard_pg_new_controller.dashboard_capacity_chart()
 
 
 @router.get(
@@ -131,7 +131,7 @@ async def dashboard_api_new(request: Request):
     try:
         schedule_date = "2025-07-27"
         # request.scope["query_string"] = f"schedule_date={schedule_date}".encode()
-        result = dashboard_pg_new_controller.dashboard(request= request)
+        result = await dashboard_pg_new_controller.dashboard(request=request)
         return DashboardResponse(
             # message="Demand Data Fetched Successfully.",
             # timestamp=datetime.now().isoformat(),

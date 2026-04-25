@@ -27,7 +27,7 @@ class RTMSingleBidDataForApprovalRepository(BaseRepository):
         # return documents[0]
         documents = list(documents.values())
         documents = [doc for doc in documents if isinstance(doc, dict)]
-        result = self.collection.insert_many(documents, ordered=False)
+        result = await self.collection.insert_many(documents, ordered=False)
         inserted_ids = [str(_id) for _id in result.inserted_ids]
         return inserted_ids
         try:
@@ -48,7 +48,7 @@ class RTMSingleBidDataForApprovalRepository(BaseRepository):
 
             logger.info(f"Inserting {len(clean_docs)} documents into collection...")
             
-            result = self.collection.insert_many(clean_docs, ordered=False)
+            result = await self.collection.insert_many(clean_docs, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
 
             logger.info(f"Bulk insert successful, inserted_ids: {inserted_ids}")
@@ -68,11 +68,7 @@ class RTMSingleBidDataForApprovalRepository(BaseRepository):
 
         cursor = self.collection.aggregate(pipeline)
 
-        try:
-            result =  cursor.to_list(length=None)
-        except AttributeError:
-            # Fallback for PyMongo CommandCursor in server environment
-            result = list(cursor)
+        result = await cursor.to_list(length=10000)
 
         if result:
             return result[0].get("revision_no", 0)

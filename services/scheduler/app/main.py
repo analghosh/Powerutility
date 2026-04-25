@@ -357,19 +357,19 @@ async def scheduler_diagnostics():
             schedule = job_config.get('schedule', '')
             
             # Count executions in last 24 hours
-            count_24h = job_detail_collection.count_documents({
+            count_24h = await job_detail_collection.count_documents({
                 "job_type": job_type,
                 "execution_start": {"$gte": since_24h}
             })
-            
+
             # Count executions in last hour
-            count_1h = job_detail_collection.count_documents({
+            count_1h = await job_detail_collection.count_documents({
                 "job_type": job_type,
                 "execution_start": {"$gte": since_1h}
             })
-            
+
             # Get last execution
-            last_exec = job_detail_collection.find_one(
+            last_exec = await job_detail_collection.find_one(
                 {"job_type": job_type},
                 sort=[("execution_start", -1)]
             )
