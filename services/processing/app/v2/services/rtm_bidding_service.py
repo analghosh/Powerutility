@@ -261,7 +261,7 @@ class RTMBiddingService:
             getsessionNo = await self.rtm_product_hardCoded_data_repo.get_Data()
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = list(self.plants_list_repo.aggregate('plant_master', plants_list_pipeline))
+            plantData = await self.plants_list_repo.aggregate('plant_master', plants_list_pipeline)
             plant_dict = {p['plant_id']: p for p in plantData}
             
             fix_count = getplantsData[0]['time_block']
@@ -2933,7 +2933,7 @@ class RTMBiddingService:
                 {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
             ]
 
-            posted_jobs = list(self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline))
+            posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             
             logger.info(f"Plant data for scheduling retrieved: {len(posted_jobs)} records")
             return posted_jobs

@@ -61,7 +61,7 @@ from .core.config import settings
 # Simple version constant
 APP_VERSION = "2.0.0"
 API_V2_VERSION = "2.0.0"
-from .services.health_service import processing_health_service
+from .v2.services.health_service import processing_health_service
 
 # Configure logging with correlation ID support
 from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware
@@ -115,9 +115,6 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down EPMS Processing Service...")
 
 
-# Import routers using the clean structure
-from .api.v1 import router as v1_router
-
 # Import V2 routers
 from .v2.api.router.dsm_overview import router as dsm_overview_router
 from .v2.api.router.market_overview import router as market_overview_router
@@ -158,6 +155,7 @@ from .v2.api.router.api_key_management_routes import router as api_key_managemen
 from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
 from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
 from .v2.api.router.exchange_config_routes import router as exchange_config_router
+from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -326,6 +324,7 @@ v2_app.include_router(api_key_management_router)
 v2_app.include_router(exchange_trade_router)
 v2_app.include_router(exchange_dsm_router)
 v2_app.include_router(exchange_config_router)
+v2_app.include_router(realtimemarket_router)
 
 
 

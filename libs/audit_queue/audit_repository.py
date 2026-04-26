@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+from motor.motor_asyncio import AsyncIOMotorCollection
 
 from libs.audit_queue.audit_models import AuditLogDoc, LogType, Priority
 
@@ -24,23 +25,26 @@ class AuditRepository:
         self.mongo_client: Optional[MongoClient] = None
         self.db = None
         self.collection = None
+        self.async_collection: Optional[AsyncIOMotorCollection] = None
         self._initialize_connection()
-    
+
     def _initialize_connection(self):
-        """Initialize MongoDB connection using centralized factory"""
+        """Initialize MongoDB connections — sync for writes, Motor for async queries."""
         try:
+            from libs.database.mongo_client_factory import get_audit_queue_client, get_motor_client
             if self.mongo_client is None:
-                from libs.database.mongo_client_factory import get_audit_queue_client
                 self.mongo_client = get_audit_queue_client(self.mongodb_uri)
-            
+
             self.db = self.mongo_client[self.audit_db_name]
             self.collection = self.db[self.audit_collection_name]
-            
-            # Create indexes for optimal performance
+
+            motor_client = get_motor_client(self.mongodb_uri, "audit_motor_client")
+            self.async_collection = motor_client[self.audit_db_name][self.audit_collection_name]
+
             self._create_indexes()
-            
+
             logger.info("Audit repository connection established successfully")
-            
+
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
             logger.error("Failed to connect to MongoDB: %s", e)
             raise
@@ -163,7 +167,7 @@ class AuditRepository:
         """Find audit logs by service with time range"""
         try:
             query = {"meta.service": service}
-            
+
             if start_time or end_time:
                 time_filter = {}
                 if start_time:
@@ -171,36 +175,36 @@ class AuditRepository:
                 if end_time:
                     time_filter["$lte"] = end_time
                 query["ts"] = time_filter
-            
-            cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
+
+            cursor = self.async_collection.find(query).sort("ts", DESCENDING).limit(limit)
             return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by service: %s", e)
             raise
-    
+
     async def find_by_trace_id(self, trace_id: str) -> List[Dict[str, Any]]:
         """Find all audit logs for a trace ID"""
         try:
-            cursor = self.collection.find({"trace.traceId": trace_id}).sort("ts", ASCENDING)
+            cursor = self.async_collection.find({"trace.traceId": trace_id}).sort("ts", ASCENDING)
             return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by trace ID: %s", e)
             raise
-    
+
     async def find_by_job_id(self, job_id: str) -> List[Dict[str, Any]]:
         """Find all audit logs for a job ID"""
         try:
-            cursor = self.collection.find({"trace.jobId": job_id}).sort("ts", ASCENDING)
+            cursor = self.async_collection.find({"trace.jobId": job_id}).sort("ts", ASCENDING)
             return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by job ID: %s", e)
             raise
-    
+
     async def find_by_actor(self, actor_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Find audit logs by actor ID"""
         try:
             cursor = (
-                self.collection.find({"actor.id": actor_id})
+                self.async_collection.find({"actor.id": actor_id})
                 .sort("ts", DESCENDING)
                 .limit(limit)
             )
@@ -208,7 +212,7 @@ class AuditRepository:
         except Exception as e:
             logger.error("Failed to find audit logs by actor: %s", e)
             raise
-    
+
     async def find_by_priority(
         self,
         priority: Priority,
@@ -218,16 +222,16 @@ class AuditRepository:
         """Find audit logs by priority"""
         try:
             query = {"meta.priority": priority}
-            
+
             if start_time:
                 query["ts"] = {"$gte": start_time}
-            
-            cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
+
+            cursor = self.async_collection.find(query).sort("ts", DESCENDING).limit(limit)
             return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find audit logs by priority: %s", e)
             raise
-    
+
     async def find_errors(
         self,
         service: Optional[str] = None,
@@ -237,19 +241,19 @@ class AuditRepository:
         """Find error audit logs"""
         try:
             query = {"error": {"$exists": True}}
-            
+
             if service:
                 query["meta.service"] = service
-            
+
             if start_time:
                 query["ts"] = {"$gte": start_time}
-            
-            cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
+
+            cursor = self.async_collection.find(query).sort("ts", DESCENDING).limit(limit)
             return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find error audit logs: %s", e)
             raise
-    
+
     async def find_approvals(
         self,
         flow: Optional[str] = None,
@@ -260,22 +264,22 @@ class AuditRepository:
         """Find approval audit logs"""
         try:
             query = {"approval": {"$exists": True}}
-            
+
             if flow:
                 query["approval.flow"] = flow
-            
+
             if action:
                 query["approval.action"] = action
-            
+
             if start_time:
                 query["ts"] = {"$gte": start_time}
-            
-            cursor = self.collection.find(query).sort("ts", DESCENDING).limit(limit)
+
+            cursor = self.async_collection.find(query).sort("ts", DESCENDING).limit(limit)
             return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find approval audit logs: %s", e)
             raise
-    
+
     async def search_logs(
         self,
         search_text: str,
@@ -287,28 +291,26 @@ class AuditRepository:
         """Full-text search in audit logs"""
         try:
             query = {"$text": {"$search": search_text}}
-            
+
             if service:
                 query["meta.service"] = service
-            
+
             if log_type:
                 query["meta.type"] = log_type
-            
+
             if start_time:
                 query["ts"] = {"$gte": start_time}
 
             cursor = (
-                self.collection.find(query, {"score": {"$meta": "textScore"}})
-                .sort(
-                    [("score", {"$meta": "textScore"}), ("ts", DESCENDING)]
-                )
+                self.async_collection.find(query, {"score": {"$meta": "textScore"}})
+                .sort([("score", {"$meta": "textScore"}), ("ts", DESCENDING)])
                 .limit(limit)
             )
             return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to search audit logs: %s", e)
             raise
-    
+
     async def get_log_statistics(
         self,
         service: Optional[str] = None,
@@ -318,10 +320,10 @@ class AuditRepository:
         """Get audit log statistics"""
         try:
             match_stage = {}
-            
+
             if service:
                 match_stage["meta.service"] = service
-            
+
             if start_time or end_time:
                 time_filter = {}
                 if start_time:
@@ -329,45 +331,23 @@ class AuditRepository:
                 if end_time:
                     time_filter["$lte"] = end_time
                 match_stage["ts"] = time_filter
-            
+
             pipeline = [
                 {"$match": match_stage},
                 {"$group": {
                     "_id": None,
                     "total_logs": {"$sum": 1},
-                    "by_priority": {
-                        "$push": {
-                            "priority": "$meta.priority",
-                            "count": 1
-                        }
-                    },
-                    "by_type": {
-                        "$push": {
-                            "type": "$meta.type",
-                            "count": 1
-                        }
-                    },
-                    "by_status": {
-                        "$push": {
-                            "status": "$status",
-                            "count": 1
-                        }
-                    },
-                    "error_count": {
-                        "$sum": {
-                            "$cond": [{"$ne": ["$error", None]}, 1, 0]
-                        }
-                    },
-                    "avg_duration": {
-                        "$avg": "$durationMs"
-                    }
-                }}
+                    "by_priority": {"$push": {"priority": "$meta.priority", "count": 1}},
+                    "by_type": {"$push": {"type": "$meta.type", "count": 1}},
+                    "by_status": {"$push": {"status": "$status", "count": 1}},
+                    "error_count": {"$sum": {"$cond": [{"$ne": ["$error", None]}, 1, 0]}},
+                    "avg_duration": {"$avg": "$durationMs"},
+                }},
             ]
 
-            cursor = self.collection.aggregate(pipeline)
-            result = await cursor.to_list(length=10000)
+            result = await self.async_collection.aggregate(pipeline).to_list(length=10000)
             return result[0] if result else {}
-            
+
         except Exception as e:
             logger.error("Failed to get audit log statistics: %s", e)
             raise

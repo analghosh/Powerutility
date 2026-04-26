@@ -2594,7 +2594,7 @@ class RealtimemarketService:
             {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
         ]
 
-        posted_jobs = list(self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)) # type: ignore
+        posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
         
         return posted_jobs
 
