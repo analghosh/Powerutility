@@ -634,8 +634,8 @@ class DAMBiddingServices:
             ]
 
             # Fetch plants data from supply_serve collection
-            getplantsData = list(self.supply_repo.aggregate(pipeline))
-           
+            getplantsData = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+
             if not getplantsData:
                 return {}
 
@@ -648,7 +648,7 @@ class DAMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "dam_tm": 1}}
             ]
-            dc_data = list(self.supply_repo.aggregate(dc_pipeline))
+            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
             # Build lookup: {(plant_id, time_block): dam_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("dam_tm", 0) for d in dc_data}
             
@@ -668,15 +668,13 @@ class DAMBiddingServices:
                 {"$project": {"_id": 0}}
             ]
             # Fetch session data from dam_product_hardcoded_data collection
-            getsessionNo = list(
-                self.dam_product_hardcoded_data_repo.aggregate(
-                    self.dam_product_hardcoded_data_repo.collection_name,
-                    product_hardCoded_pipeline,
-                )
+            getsessionNo = await self.dam_product_hardcoded_data_repo.aggregate(
+                self.dam_product_hardcoded_data_repo.collection_name,
+                product_hardCoded_pipeline,
             )
-            
+
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = list(self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline)) 
+            plantData = await self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline)
             plant_dict = {p['plant_id']: p for p in plantData}
 
             fix_count = getplantsData[0]['time_block']
@@ -712,7 +710,7 @@ class DAMBiddingServices:
                 }
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = list(self.demand_repo.aggregate(
+            getForecastedValue = await self.demand_repo.aggregate(
                 self.demand_repo.collection_name,
                 [
                     {
@@ -725,7 +723,7 @@ class DAMBiddingServices:
                     {"$sort": {"time_block": 1}},
                     {"$project": {"_id": 0}},
                 ],
-            ))
+            )
 
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             

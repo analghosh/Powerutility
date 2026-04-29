@@ -4,17 +4,12 @@ User model for authentication service
 
 from datetime import datetime, timedelta
 from typing import Optional, List
-from pymongo import MongoClient
-from pymongo.collection import Collection
-from pymongo.database import Database
+from motor.motor_asyncio import AsyncIOMotorCollection, AsyncIOMotorDatabase
 from bson import ObjectId
 import bcrypt
 from ..core.config import settings
 from ..core.dto import UserDTO, AuthUserDTO
 from ..services.redis_blacklist import redis_blacklist_service
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 import logging
 
 logger = logging.getLogger(__name__)
@@ -22,67 +17,28 @@ logger = logging.getLogger(__name__)
 
 class User:
     """User model for authentication"""
-    
+
     def __init__(self):
-        # Use the singleton database connection instead of creating new ones
         from ..core.database import get_auth_database
-        self.db: Database = get_auth_database()
-        self.collection: Collection = self.db[settings.MONGODB_AUTH_COLLECTION]
-        self._ensure_indexes()
-    
-    def _ensure_indexes(self):
-        """Ensure database indexes for optimal performance"""
-        try:
-            # Index for username lookups (case-sensitive, unique)
-            self.collection.create_index("username", unique=True, background=True)
-            
-            # Index for email lookups (case-sensitive, not unique to avoid collisions)
-            self.collection.create_index("email", background=True)
-            
-            # Compound index for active users
-            self.collection.create_index([
-                ("is_deleted", 1),
-                ("is_active", 1)
-            ], background=True)
-            
-            # Index for login attempts tracking
-            self.collection.create_index("failed_login_attempts", background=True)
-            
-            # Index for account lockout queries
-            self.collection.create_index("locked_until", background=True)
-            
-            # Index for role-based queries
-            self.collection.create_index("roles", background=True)
-            
-            # Index for MFA users
-            self.collection.create_index("mfa_enabled", background=True)
-            
-            logger.debug("✅ User collection indexes ensured")
-            
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to create user indexes: {e}")
-    
-    def create_user(self, username: str, email: str, password: str, **kwargs) -> UserDTO:
-        """Create a new user (case-insensitive username)"""
-        # Check if user already exists (case-insensitive)
-        if self.get_user_by_username(username):
+        self.db: AsyncIOMotorDatabase = get_auth_database()
+        self.collection: AsyncIOMotorCollection = self.db[settings.MONGODB_AUTH_COLLECTION]
+
+    async def create_user(self, username: str, email: str, password: str, **kwargs) -> UserDTO:
+        if await self.get_user_by_username(username):
             raise ValueError("Username already exists")
-        
-        if self.get_user_by_email(email):
+        if await self.get_user_by_email(email):
             raise ValueError("Email already exists")
-        
-        # Hash password
+
         salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), salt)
-        
-        # Create user document
+
         user_data = {
             "username": username,
             "email": email,
             "password_hash": hashed_password,
             "is_active": True,
             "is_verified": False,
-            "is_deleted": False,  # Hidden field for soft delete
+            "is_deleted": False,
             "created_at": datetime.now(),
             "updated_at": datetime.now(),
             "last_login": None,
@@ -99,227 +55,159 @@ class User:
             "mfa_secret": kwargs.get("mfa_secret"),
             "mfa_backup_codes": kwargs.get("mfa_backup_codes", []),
             "mfa_setup_complete": kwargs.get("mfa_setup_complete", False),
-            "sessions": []
+            "sessions": [],
         }
-        
-        result = self.collection.insert_one(user_data)
+
+        result = await self.collection.insert_one(user_data)
         user_data["_id"] = result.inserted_id
-        
         return UserDTO.from_db_document(user_data)
-    
-    def get_user_by_id(self, user_id: str) -> Optional[UserDTO]:
-        """Get user by ID"""
+
+    async def get_user_by_id(self, user_id: str) -> Optional[UserDTO]:
         try:
-            # Exclude deleted users
-            user_doc = self.collection.find_one({
+            user_doc = await self.collection.find_one({
                 "_id": ObjectId(user_id),
-                "is_deleted": {"$ne": True}
+                "is_deleted": {"$ne": True},
             })
             return UserDTO.from_db_document(user_doc) if user_doc else None
-        except:
+        except Exception:
             return None
-    
-    def get_user_by_username(self, username: str) -> Optional[UserDTO]:
-        """Get user by username (case-insensitive)"""
-        # Username is case-insensitive, so we use case-insensitive match
-        # Exclude deleted users
-        user_doc = self.collection.find_one({
+
+    async def get_user_by_username(self, username: str) -> Optional[UserDTO]:
+        user_doc = await self.collection.find_one({
             "username": {"$regex": f"^{username}$", "$options": "i"},
-            "is_deleted": {"$ne": True}
+            "is_deleted": {"$ne": True},
         })
         return UserDTO.from_db_document(user_doc) if user_doc else None
-    
-    def get_user_by_email(self, email: str) -> Optional[UserDTO]:
-        """Get user by email"""
-        # Exclude deleted users
-        user_doc = self.collection.find_one({
+
+    async def get_user_by_email(self, email: str) -> Optional[UserDTO]:
+        user_doc = await self.collection.find_one({
             "email": email,
-            "is_deleted": {"$ne": True}
+            "is_deleted": {"$ne": True},
         })
         return UserDTO.from_db_document(user_doc) if user_doc else None
-    
-    def authenticate_user(self, username: str, password: str) -> Optional[AuthUserDTO]:
-        """Authenticate user with username/email and password"""
-        # Try to find user by username or email
-        user = self.get_user_by_username(username)
+
+    async def authenticate_user(self, username: str, password: str) -> Optional[AuthUserDTO]:
+        user = await self.get_user_by_username(username)
         if not user:
-            user = self.get_user_by_email(username)
-        
+            user = await self.get_user_by_email(username)
         if not user:
             return None
-        
-        # Check if account is locked
+
         if user.locked_until and user.locked_until > datetime.now():
-            if user_doc.get("requires_admin_unlock", False):
+            user_doc = await self.collection.find_one({"_id": ObjectId(user.id)})
+            if user_doc and user_doc.get("requires_admin_unlock", False):
                 raise ValueError("Account is locked and requires admin unlock")
             else:
                 raise ValueError("Account is locked")
-        
-        # Check if account is active
+
         if not user.is_active:
             raise ValueError("Account is deactivated")
-        
-        # Get raw document for password verification
-        user_doc = self.collection.find_one({"_id": ObjectId(user.id)})
+
+        user_doc = await self.collection.find_one({"_id": ObjectId(user.id)})
         if not user_doc:
             return None
-        
-        # Verify password
+
         if not bcrypt.checkpw(password.encode('utf-8'), user_doc["password_hash"]):
-            # Increment login attempts
-            self._increment_login_attempts(ObjectId(user.id))
-            
-            # Failed login logging handled at route layer to avoid duplication
+            await self._increment_login_attempts(ObjectId(user.id))
             return None
-        
-        # Reset login attempts on successful login
-        self._reset_login_attempts(ObjectId(user.id))
-        
-        # Update last login
-        self.collection.update_one(
+
+        await self._reset_login_attempts(ObjectId(user.id))
+        await self.collection.update_one(
             {"_id": ObjectId(user.id)},
             {"$set": {"last_login": datetime.now()}}
         )
-        
-        # Update the user DTO with new last_login
         user.last_login = datetime.now()
-        
-        # Login success logging handled at route layer to avoid duplication
-        
         return AuthUserDTO.from_user_dto(user)
-    
-    def _increment_login_attempts(self, user_id: ObjectId):
-        """Increment failed login attempts"""
-        user = self.collection.find_one({"_id": user_id})
+
+    async def _increment_login_attempts(self, user_id: ObjectId):
+        user = await self.collection.find_one({"_id": user_id})
         if not user:
             return
         current_attempts = user.get("login_attempts", 0) + 1
-        
         update_data = {"login_attempts": current_attempts}
-        
-        # Lock account if max attempts reached - requires admin unlock
         if current_attempts >= settings.MAX_LOGIN_ATTEMPTS:
-            # Set locked_until to a far future date to require admin intervention
-            lockout_until = datetime.now() + timedelta(days=365)  # 1 year - effectively permanent
-            update_data["locked_until"] = lockout_until
+            update_data["locked_until"] = datetime.now() + timedelta(days=365)
             update_data["requires_admin_unlock"] = True
-        
-        self.collection.update_one(
+        await self.collection.update_one({"_id": user_id}, {"$set": update_data})
+
+    async def _reset_login_attempts(self, user_id: ObjectId):
+        await self.collection.update_one(
             {"_id": user_id},
-            {"$set": update_data}
+            {"$set": {"login_attempts": 0, "locked_until": None, "requires_admin_unlock": False}}
         )
-    
-    def _reset_login_attempts(self, user_id: ObjectId):
-        """Reset login attempts on successful login"""
-        self.collection.update_one(
-            {"_id": user_id},
-            {"$set": {
-                "login_attempts": 0,
-                "locked_until": None,
-                "requires_admin_unlock": False
-            }}
-        )
-    
-    def update_user(self, user_id: str, update_data: dict) -> bool:
-        """Update user data"""
+
+    async def update_user(self, user_id: str, update_data: dict) -> bool:
         try:
             update_data["updated_at"] = datetime.now()
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"_id": ObjectId(user_id)},
                 {"$set": update_data}
             )
-            
-            if result.modified_count > 0:
-                return True
-            return False
+            return result.modified_count > 0
         except Exception as e:
             logger.error(f"Error updating user: {e}")
             return False
-    
-    def delete_user(self, user_id: str) -> bool:
-        """Mark user as deleted (soft delete)"""
+
+    async def delete_user(self, user_id: str) -> bool:
         try:
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"_id": ObjectId(user_id)},
-                {
-                    "$set": {
-                        "is_deleted": True,
-                        "deleted_at": datetime.now(),
-                        "updated_at": datetime.now()
-                    }
-                }
+                {"$set": {"is_deleted": True, "deleted_at": datetime.now(), "updated_at": datetime.now()}}
             )
-            
-            if result.modified_count > 0:
-                return True
-            return False
+            return result.modified_count > 0
         except Exception as e:
             logger.error(f"Error marking user as deleted: {e}")
             return False
-    
-    def add_session(self, user_id: str, session_data: dict) -> bool:
-        """Add session to user (for audit purposes only)"""
+
+    async def add_session(self, user_id: str, session_data: dict) -> bool:
         try:
-            self.collection.update_one(
+            await self.collection.update_one(
                 {"_id": ObjectId(user_id)},
                 {"$push": {"sessions": session_data}}
             )
             return True
-        except:
+        except Exception:
             return False
-    
-    def remove_session(self, user_id: str, session_id: str) -> bool:
-        """Remove session from user (for audit purposes only)"""
+
+    async def remove_session(self, user_id: str, session_id: str) -> bool:
         try:
-            self.collection.update_one(
+            await self.collection.update_one(
                 {"_id": ObjectId(user_id)},
                 {"$pull": {"sessions": {"session_id": session_id}}}
             )
             return True
-        except:
+        except Exception:
             return False
-    
-    def invalidate_refresh_token(self, user_id: str, refresh_token: str) -> bool:
-        """Add refresh token to blacklist (hybrid approach: Redis + Database)"""
+
+    async def invalidate_refresh_token(self, user_id: str, refresh_token: str) -> bool:
         try:
-            # Try Redis first (fast)
             redis_success = redis_blacklist_service.invalidate_refresh_token(refresh_token, user_id)
-            
-            # Always store in database for audit (persistent)
             blacklist_collection = self.db["refresh_token_blacklist"]
-            db_success = blacklist_collection.insert_one({
+            await blacklist_collection.insert_one({
                 "refresh_token": refresh_token,
                 "user_id": user_id,
                 "invalidated_at": datetime.now(),
                 "expires_at": datetime.now() + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS),
-                "redis_success": redis_success
+                "redis_success": redis_success,
             })
-            
             return True
-            
         except Exception as e:
             logger.error(f"Failed to invalidate refresh token: {e}")
             return False
-    
-    def is_refresh_token_blacklisted(self, refresh_token: str) -> bool:
-        """Check if refresh token is blacklisted (hybrid approach: Redis first, then Database)"""
+
+    async def is_refresh_token_blacklisted(self, refresh_token: str) -> bool:
         try:
-            # Check Redis first (fast)
             if redis_blacklist_service.is_refresh_token_blacklisted(refresh_token):
                 return True
-            
-            # Fallback to database (slower but persistent)
             blacklist_collection = self.db["refresh_token_blacklist"]
-            return blacklist_collection.find_one({"refresh_token": refresh_token}) is not None
-            
+            return await blacklist_collection.find_one({"refresh_token": refresh_token}) is not None
         except Exception as e:
             logger.error(f"Failed to check blacklist: {e}")
             return False
-    
-    def admin_unlock_user(self, user_id: str, admin_id: str) -> bool:
-        """Admin unlock user account"""
+
+    async def admin_unlock_user(self, user_id: str, admin_id: str) -> bool:
         try:
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"_id": ObjectId(user_id)},
                 {"$set": {
                     "login_attempts": 0,
@@ -327,39 +215,33 @@ class User:
                     "requires_admin_unlock": False,
                     "unlocked_by_admin": admin_id,
                     "unlocked_at": datetime.now(),
-                    "updated_at": datetime.now()
+                    "updated_at": datetime.now(),
                 }}
             )
             return result.modified_count > 0
         except Exception as e:
             logger.error(f"Error unlocking user: {e}")
             return False
-    
-    def admin_reset_password(self, user_id: str, new_password: str, admin_id: str) -> bool:
-        """Admin reset user password and unlock account"""
+
+    async def admin_reset_password(self, user_id: str, new_password: str, admin_id: str) -> bool:
         try:
-            # Hash new password
             salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
             hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), salt)
-            
-            # Get current user to preserve password history
-            user_doc = self.collection.find_one({"_id": ObjectId(user_id)})
+
+            user_doc = await self.collection.find_one({"_id": ObjectId(user_id)})
             if not user_doc:
                 return False
-            
-            # Update password history
+
             password_history = user_doc.get("password_history", [])
             if user_doc.get("password_hash"):
                 password_history.append({
                     "password_hash": user_doc["password_hash"],
-                    "changed_at": user_doc.get("password_changed_at", datetime.now())
+                    "changed_at": user_doc.get("password_changed_at", datetime.now()),
                 })
-            
-            # Keep only recent passwords
             if len(password_history) > settings.PASSWORD_HISTORY_COUNT:
                 password_history = password_history[-settings.PASSWORD_HISTORY_COUNT:]
-            
-            result = self.collection.update_one(
+
+            result = await self.collection.update_one(
                 {"_id": ObjectId(user_id)},
                 {"$set": {
                     "password_hash": hashed_password,
@@ -371,7 +253,7 @@ class User:
                     "requires_admin_unlock": False,
                     "password_reset_by_admin": admin_id,
                     "password_reset_at": datetime.now(),
-                    "updated_at": datetime.now()
+                    "updated_at": datetime.now(),
                 }}
             )
             return result.modified_count > 0
@@ -380,10 +262,8 @@ class User:
             return False
 
     def close(self):
-        """Close database connection - now handled by singleton"""
-        # Connection is managed by the singleton pattern in database.py
         pass
 
 
-# Create global user model instance
+# Global user model instance
 user_model = User()

@@ -40,6 +40,8 @@ class DemandProcessor(BaseProcessor):
         from ..repository.master_plants_repository import MasterPlantsRepository
         self.master_plants_repository = MasterPlantsRepository()
 
+
+
     def _calculate_demand_multiplier(self, plants: List[Dict[str, Any]]) -> float:
         """
         Calculate the demand multiplier as the average of valid plant multipliers.
@@ -101,14 +103,14 @@ class DemandProcessor(BaseProcessor):
             logger.debug(f"RTM Query: {rtm_query}")
             
             # Try main exchange collection first
-            rtm_records = self.exchange_repository.find_one(rtm_query)
+            rtm_records = await self.exchange_repository.find_one(rtm_query)
             logger.debug(f"RTM Records Found (main): {rtm_records is not None}")
             
             # If not found in main collection, try historical collection
             if not rtm_records:
                 logger.debug("RTM data not found in main collection, checking historical...")
                 try:
-                    rtm_records = self.exchange_repository.historical_collection.find_one(rtm_query)
+                    rtm_records = await self.exchange_repository.historical_collection.find_one(rtm_query)
                     logger.debug(f"RTM Records Found (historical): {rtm_records is not None}")
                 except Exception as e:
                     logger.debug(f"Error querying historical collection for RTM: {e}")
@@ -126,13 +128,13 @@ class DemandProcessor(BaseProcessor):
                 logger.debug(f"RTM Date Range Query: {rtm_date_query}")
                 
                 # Try date range in main collection first
-                rtm_records = self.exchange_repository.find_one(rtm_date_query)
+                rtm_records = await self.exchange_repository.find_one(rtm_date_query)
                 logger.debug(f"RTM Records Found (main date range): {rtm_records is not None}")
                 
                 # If still not found, try date range in historical collection
                 if not rtm_records:
                     try:
-                        rtm_records = self.exchange_repository.historical_collection.find_one(rtm_date_query)
+                        rtm_records = await self.exchange_repository.historical_collection.find_one(rtm_date_query)
                         logger.debug(f"RTM Records Found (historical date range): {rtm_records is not None}")
                     except Exception as e:
                         logger.debug(f"Error querying historical collection for RTM date range: {e}")
@@ -146,14 +148,14 @@ class DemandProcessor(BaseProcessor):
             logger.debug(f"DAM Query: {dam_query}")
             
             # Try main exchange collection first
-            dam_records = self.exchange_repository.find_one(dam_query)
+            dam_records = await self.exchange_repository.find_one(dam_query)
             logger.debug(f"DAM Records Found (main): {dam_records is not None}")
             
             # If not found in main collection, try historical collection
             if not dam_records:
                 logger.debug("DAM data not found in main collection, checking historical...")
                 try:
-                    dam_records = self.exchange_repository.historical_collection.find_one(dam_query)
+                    dam_records = await self.exchange_repository.historical_collection.find_one(dam_query)
                     logger.debug(f"DAM Records Found (historical): {dam_records is not None}")
                 except Exception as e:
                     logger.debug(f"Error querying historical collection for DAM: {e}")
@@ -171,13 +173,13 @@ class DemandProcessor(BaseProcessor):
                 logger.debug(f"DAM Date Range Query: {dam_date_query}")
                 
                 # Try date range in main collection first
-                dam_records = self.exchange_repository.find_one(dam_date_query)
+                dam_records = await self.exchange_repository.find_one(dam_date_query)
                 logger.debug(f"DAM Records Found (main date range): {dam_records is not None}")
                 
                 # If still not found, try date range in historical collection
                 if not dam_records:
                     try:
-                        dam_records = self.exchange_repository.historical_collection.find_one(dam_date_query)
+                        dam_records = await self.exchange_repository.historical_collection.find_one(dam_date_query)
                         logger.debug(f"DAM Records Found (historical date range): {dam_records is not None}")
                     except Exception as e:
                         logger.debug(f"Error querying historical collection for DAM date range: {e}")
@@ -264,7 +266,8 @@ class DemandProcessor(BaseProcessor):
                 "time_block": {"$in": time_blocks}
             }
             
-            all_records = self.exchange_repository.find_many(query, limit=1000)
+            # AWAIT the async find_many cursor builder and resolve to a list
+            all_records = await self.exchange_repository.find_many(query, limit=1000)
             
             # Index by (time_block, market_type)
             exchange_map = {}
@@ -338,7 +341,7 @@ class DemandProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -382,7 +385,7 @@ class DemandProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -412,7 +415,7 @@ class DemandProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -442,7 +445,7 @@ class DemandProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -473,7 +476,7 @@ class DemandProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                self._record_job_completion(
+                await self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -500,7 +503,7 @@ class DemandProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                self._record_job_completion(
+                await self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -528,7 +531,7 @@ class DemandProcessor(BaseProcessor):
                 "cron_job":"demand"
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -700,7 +703,7 @@ class DemandProcessor(BaseProcessor):
                      try:
                          cursor = self.supply_repository.serve_collection.find(query)
                          try:
-                             found = list(cursor)
+                             found = await cursor.to_list(length=10000)
                          finally:
                              cursor.close()
                          for f in found:
@@ -718,7 +721,7 @@ class DemandProcessor(BaseProcessor):
                      try:
                          cursor = self.demand_repository.serve_collection.find(query)
                          try:
-                             found = list(cursor)
+                             found = await cursor.to_list(length=10000)
                          finally:
                              cursor.close()
                          for f in found:
@@ -855,11 +858,7 @@ class DemandProcessor(BaseProcessor):
             if demand_entities:
                 # Use delete-insert strategy via optimized bulk write
                 # Wrap in to_thread to avoid blocking async loop with synchronous pymongo call
-                import asyncio
-                res = await asyncio.to_thread(
-                    self.demand_repository.bulk_insert_demand_serve_with_deduplication, 
-                    demand_entities
-                )
+                res = await self.demand_repository.bulk_insert_demand_serve_with_deduplication(demand_entities)
                 if res.get("error_count", 0) > 0:
                     logger.warning(f"Demand Serve Bulk Insert had errors: {res.get('errors')}")
                 logger.info(f"Demand Serve Bulk Result: {res}")
@@ -867,11 +866,7 @@ class DemandProcessor(BaseProcessor):
             if historical_entities:
                 # Use delete-insert strategy via optimized bulk write
                 # Wrap in to_thread to avoid blocking async loop
-                import asyncio
-                res = await asyncio.to_thread(
-                    self.demand_repository.bulk_insert_demand_historical_with_deduplication,
-                    historical_entities
-                )
+                res = await self.demand_repository.bulk_insert_demand_historical_with_deduplication(historical_entities)
                 if res.get("error_count", 0) > 0:
                     logger.warning(f"Demand Historical Bulk Insert had errors: {res.get('errors')}")
                     hist_ok = False

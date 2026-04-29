@@ -14,7 +14,6 @@ from services.scheduler.app.core.config import settings
 from services.scheduler.app.services.scheduler_exchange_api_client import scheduler_exchange_client
 from services.scheduler.app.repository.bid_trade_serve_repository import BidTradeServeRepository
 from libs.models.bid_trade_serve_entity import BidTradeServeEntity
-from pymongo import MongoClient
 import httpx
 
 from libs.database.base_repository import BaseRepository
@@ -245,7 +244,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             bid_delivery_dt_str = bid_delivery_dt_obj.strftime("%Y-%m-%d")
 
             # --- 2. Raw Sync ---
-            self.db[target_collection_name].update_one({"OrderId": order_id}, {"$set": bid}, upsert=True)
+            await self.db[target_collection_name].update_one({"OrderId": order_id}, {"$set": bid}, upsert=True)
 
             # --- 3. Secondary Sync (Approval Records) ---
             from_period = bid.get("FromPeriodId")
@@ -257,10 +256,10 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             approval_query = {"start_time": from_period, "end_time": to_period, "bid_date": bid_delivery_dt_str, "exchangeStatus": "Submitted"}
             
             # Update approval if exists
-            approval_repo.collection.update_one(
-                approval_query, 
+            await approval_repo.collection.update_one(
+                approval_query,
                 {"$set": {
-                    "clearedVolume": traded_qty / tradeQtyDecimal, 
+                    "clearedVolume": traded_qty / tradeQtyDecimal,
                     "tradedPrice": trade_price / tradePriceDecimal
                 }}
             )
@@ -408,7 +407,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                         price        = safe_float(bid.get("Price", 0))
 
                         # --- 1. Sync into dicision_rtm_block_bid_iex_response ---
-                        self.db["dicision_rtm_block_bid_iex_response"].update_one(
+                        await self.db["dicision_rtm_block_bid_iex_response"].update_one(
                             {"order_id": int(order_id)},
                             {"$set": {
                                 "status":                  order_status,

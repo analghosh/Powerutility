@@ -134,9 +134,9 @@ class WeatherProcessor(BaseProcessor):
 
 # In your WeatherProcessor class
 
-    def process_raw_data_to_serve(
-        self, 
-        raw_data: List[Dict[str, Any]], 
+    async def process_raw_data_to_serve(
+        self,
+        raw_data: List[Dict[str, Any]],
         metadata: Dict[str, Any],
         provider_config: Dict[str, Any]
     ) -> bool:
@@ -172,10 +172,10 @@ class WeatherProcessor(BaseProcessor):
                         continue
 
                     # Find an existing record to check if data has changed
-                    existing_record = self.repository.find_one({
-                        "valid_time_local": valid_time_local, 
+                    existing_record = await self.repository.find_one({
+                        "valid_time_local": valid_time_local,
                         "source": source,
-                        "city": city 
+                        "city": city
                     })
 
                     weather_entity = WeatherServeEntity.from_raw_data(

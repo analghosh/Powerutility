@@ -10,7 +10,6 @@ import time
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
-from pymongo import MongoClient
 import sys
 import os
 

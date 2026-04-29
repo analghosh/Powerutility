@@ -61,7 +61,7 @@ class AuthService:
         """
         try:
             # Authenticate user
-            user = self.user_repo.authenticate_user(username, password)
+            user = await self.user_repo.authenticate_user(username, password)
             
             if not user:
                 # Failed login logging handled at route layer to avoid duplication
@@ -93,7 +93,7 @@ class AuthService:
                 }
             else:
                 # MFA not enabled: complete login immediately (traditional flow)
-                user_with_perms = self.user_repo.get_user_with_permissions(user.username)
+                user_with_perms = await self.user_repo.get_user_with_permissions(user.username)
                 if not user_with_perms:
                     raise HTTPException(403, detail="User role or permissions not found")
                 
@@ -162,13 +162,13 @@ class AuthService:
                 return None
             
             # Get user with permissions (single query optimization)
-            user_with_perms = self.user_repo.get_user_with_permissions_by_id(user_id)
+            user_with_perms = await self.user_repo.get_user_with_permissions_by_id(user_id)
             if not user_with_perms:
                 # Fallback to username-based lookup
-                user = self.user_repo.get_user_by_id(user_id)
+                user = await self.user_repo.get_user_by_id(user_id)
                 if not user:
                     return None
-                user_with_perms = self.user_repo.get_user_with_permissions(user.username)
+                user_with_perms = await self.user_repo.get_user_with_permissions(user.username)
                 if not user_with_perms:
                     raise HTTPException(403, detail="User role or permissions not found")
             else:
@@ -183,7 +183,7 @@ class AuthService:
                     return None
 
                 # Get full user document to access MFA secret and backup codes
-                full_user_doc = self.user_repo.find_one({"_id": ObjectId(user_id)})
+                full_user_doc = await self.user_repo.find_one({"_id": ObjectId(user_id)})
                 if not full_user_doc:
                     logger.error(f"Full user document not found for user_id {user_id}")
                     raise HTTPException(500, detail="MFA configuration error")
@@ -235,7 +235,7 @@ class AuthService:
                     # Consume the used backup code
                     mfa_rate_limiter.record_attempt(rate_limit_key, success=True)
                     hashed_backup_codes.remove(valid_code)
-                    self.user_repo.update_user(user_id, {"mfa_backup_codes": hashed_backup_codes})
+                    await self.user_repo.update_user(user_id, {"mfa_backup_codes": hashed_backup_codes})
                     logger.warning(f"User {user.username} logged in via backup code — {len(hashed_backup_codes)} codes remaining")
 
                 else:
@@ -345,7 +345,7 @@ class AuthService:
             user_id = payload.get("sub") or payload.get("id")
             if not user_id:
                 return None
-            user = self.user_repo.get_user_by_id(user_id)
+            user = await self.user_repo.get_user_by_id(user_id)
             if not user or not user.is_active:
                 return None
             
@@ -459,7 +459,7 @@ class AuthService:
             user_id = payload.get("sub") or payload.get("id")
             if not user_id:
                 return None
-            user = self.user_repo.get_user_by_id(user_id)
+            user = await self.user_repo.get_user_by_id(user_id)
             if not user or not user.is_active:
                 return None
             
@@ -489,16 +489,16 @@ class AuthService:
         """
         try:
             # Get user
-            user = self.user_repo.get_user_by_id(user_id)
+            user = await self.user_repo.get_user_by_id(user_id)
             if not user:
                 return False
             
             # Verify current password
-            if not self.user_repo.authenticate_user(user.username, current_password):
+            if not await self.user_repo.authenticate_user(user.username, current_password):
                 return False
             
             # Update password
-            success = self.user_repo.update_password(user_id, new_password)
+            success = await self.user_repo.update_password(user_id, new_password)
             
             if success:
                 # Log password change with PII protection
@@ -519,10 +519,10 @@ class AuthService:
             logger.error(f"Change password error: {e}")
             return False
 
-    def get_user_by_id(self, user_id: str) -> Optional[UserDTO]:
-        """Retrieve a single user by ID (utility method exposed for service-to-service use and for tests)."""
+    async def get_user_by_id(self, user_id: str) -> Optional[UserDTO]:
+        """Retrieve a single user by ID."""
         try:
-            return self.user_repo.get_user_by_id(user_id)
+            return await self.user_repo.get_user_by_id(user_id)
         except Exception as e:
             logger.error(f"Get user by id error: {e}")
             return None
@@ -531,12 +531,12 @@ class AuthService:
         """Admin unlock user account"""
         try:
             # Get user info for logging
-            user = self.user_repo.get_user_by_id(user_id)
+            user = await self.user_repo.get_user_by_id(user_id)
             if not user:
                 return False
             
             # Unlock the user
-            success = self.user_repo.admin_unlock_user(user_id, admin_id)
+            success = await self.user_repo.admin_unlock_user(user_id, admin_id)
             
             if success:
                 # Log admin unlock action
@@ -572,13 +572,13 @@ class AuthService:
                 return False
             
             # Get user info for logging
-            user = self.user_repo.get_user_by_id(user_id)
+            user = await self.user_repo.get_user_by_id(user_id)
             if not user:
                 logger.warning(f"User not found in auth service for user_id: {user_id}")
                 return False
             
             # Reset password and unlock
-            success = self.user_repo.admin_reset_password(user_id, new_password, admin_id)
+            success = await self.user_repo.admin_reset_password(user_id, new_password, admin_id)
             
             if success:
                 # Log admin password reset action
@@ -602,7 +602,7 @@ class AuthService:
     async def get_lockout_status(self, user_id: str) -> Dict[str, Any]:
         """Get user lockout status"""
         try:
-            return self.user_repo.get_lockout_status(user_id)
+            return await self.user_repo.get_lockout_status(user_id)
         except Exception as e:
             logger.error(f"Get lockout status error: {e}")
             return {"error": str(e)}

@@ -6,7 +6,6 @@ Calculates DSM rates and net DSM amounts every 15 minutes
 import logging
 from datetime import datetime, timedelta
 from typing import Dict, List, Any, Optional
-from pymongo import MongoClient
 from bson import ObjectId
 
 from .base_processor import BaseProcessor
@@ -41,7 +40,7 @@ class DSMProcessor(BaseProcessor):
         # start_time = datetime.now()
         
         # # Generate and record job start to get execution_id (correlation ID)
-        # execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        # execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         # if not execution_id:
         #     logger.error("Failed to record job start for %s", job_type)
         #     return {
@@ -120,7 +119,7 @@ class DSMProcessor(BaseProcessor):
                 # 
             # }
             # 
-            # self._record_job_completion(
+            # await self._record_job_completion(
                 # job_type=job_type,
                 # job_name=job_name,
                 # schedule=schedule,
@@ -151,7 +150,7 @@ class DSMProcessor(BaseProcessor):
                 # "cron_job":"dsm"
             # }
             # 
-            # self._record_job_completion(
+            # await self._record_job_completion(
                 # job_type=job_type,
                 # job_name=job_name,
                 # schedule=schedule,
@@ -168,7 +167,7 @@ class DSMProcessor(BaseProcessor):
             # Clear correlation ID after job completion
             # self.clear_correlation_id()
     
-    def _load_time_blocks_cache(self):
+    async def _load_time_blocks_cache(self):
         """Load all time blocks from database into cache"""
         try:
             from ..core.database import get_database
@@ -178,7 +177,7 @@ class DSMProcessor(BaseProcessor):
             # Fetch all time blocks and create cache
             cursor = time_block_collection.find({}).sort("timeblock", 1)
             try:
-                time_blocks = list(cursor)
+                time_blocks = await cursor.to_list(length=10000)
             finally:
                 cursor.close()
             
@@ -332,7 +331,7 @@ class DSMProcessor(BaseProcessor):
             logger.error(f"Error generating blocks to process: {str(e)}")
             return []
     
-    def _process_time_block(self, block_info: Dict[str, Any]) -> bool:
+    async def _process_time_block(self, block_info: Dict[str, Any]) -> bool:
         """
         Process a single time block to calculate DSM rate and net DSM amount
         
@@ -359,9 +358,9 @@ class DSMProcessor(BaseProcessor):
                 exchange_collection = db[settings.MONGODB_EXCHANGE_SERVE_COLLECTION]
                 
                 # Check total exchange records
-                total_exchange = exchange_collection.count_documents({})
+                total_exchange = await exchange_collection.count_documents({})
                 logger.debug(f"🔍 DEBUG: Total exchange records in database: {total_exchange}")
-                
+
                 # Check records for this date
                 date_query = {
                     "scheduled_at": {
@@ -369,19 +368,19 @@ class DSMProcessor(BaseProcessor):
                         "$lt": datetime.combine(date, datetime.min.time()) + timedelta(days=1)
                     }
                 }
-                date_records = exchange_collection.count_documents(date_query)
+                date_records = await exchange_collection.count_documents(date_query)
                 logger.debug(f"🔍 DEBUG: Exchange records for date {date}: {date_records}")
-                
+
                 # Check records for this time block and date
                 timeblock_query = {
                     **date_query,
                     "time_block": timeblock
                 }
-                timeblock_records = exchange_collection.count_documents(timeblock_query)
+                timeblock_records = await exchange_collection.count_documents(timeblock_query)
                 logger.debug(f"🔍 DEBUG: Exchange records for date {date} and time_block {timeblock}: {timeblock_records}")
-                
+
                 # Show sample record structure
-                sample_record = exchange_collection.find_one({})
+                sample_record = await exchange_collection.find_one({})
                 if sample_record:
                     logger.debug(f"🔍 DEBUG: Sample exchange record structure: {list(sample_record.keys())}")
                     logger.debug(f"🔍 DEBUG: Sample scheduled_at: {sample_record.get('scheduled_at')}, time_block: {sample_record.get('time_block')}")
@@ -389,7 +388,7 @@ class DSMProcessor(BaseProcessor):
             except Exception as debug_error:
                 logger.error(f"Debug query error: {str(debug_error)}")
             
-            exchange_data = self._fetch_exchange_data(timeblock, scheduled_at)
+            exchange_data = await self._fetch_exchange_data(timeblock, scheduled_at)
             if not exchange_data:
                 logger.warning(f"❌ Step 1 FAILED: No exchange data found for time block {timeblock} on {date}")
                 return False
@@ -429,9 +428,9 @@ class DSMProcessor(BaseProcessor):
                 demand_collection = db[settings.MONGODB_DEMAND_SERVE_COLLECTION]
                 
                 # Check total demand records
-                total_demand = demand_collection.count_documents({})
+                total_demand = await demand_collection.count_documents({})
                 logger.debug(f"🔍 DEBUG: Total demand records in database: {total_demand}")
-                
+
                 # Check records for this date
                 date_query = {
                     "scheduled_at": {
@@ -439,19 +438,19 @@ class DSMProcessor(BaseProcessor):
                         "$lt": datetime.combine(date, datetime.min.time()) + timedelta(days=1)
                     }
                 }
-                date_records = demand_collection.count_documents(date_query)
+                date_records = await demand_collection.count_documents(date_query)
                 logger.debug(f"🔍 DEBUG: Demand records for date {date}: {date_records}")
-                
+
                 # Check records for this time block and date
                 timeblock_query = {
                     **date_query,
                     "time_block": timeblock
                 }
-                timeblock_records = demand_collection.count_documents(timeblock_query)
+                timeblock_records = await demand_collection.count_documents(timeblock_query)
                 logger.debug(f"🔍 DEBUG: Demand records for date {date} and time_block {timeblock}: {timeblock_records}")
-                
+
                 # Show sample record structure
-                sample_record = demand_collection.find_one({})
+                sample_record = await demand_collection.find_one({})
                 if sample_record:
                     logger.debug(f"🔍 DEBUG: Sample demand record structure: {list(sample_record.keys())}")
                     logger.debug(f"🔍 DEBUG: Sample scheduled_at: {sample_record.get('scheduled_at')}, time_block: {sample_record.get('time_block')}")
@@ -482,7 +481,7 @@ class DSMProcessor(BaseProcessor):
             logger.error(f"Error processing time block {block_info}: {str(e)}")
             return False
     
-    def _fetch_exchange_data(self, timeblock: int, scheduled_at: datetime) -> List[Dict[str, Any]]:
+    async def _fetch_exchange_data(self, timeblock: int, scheduled_at: datetime) -> List[Dict[str, Any]]:
         """
         Fetch exchange data (RTM and DAM) for the given time block and date using proper repository
         
@@ -525,7 +524,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(rtm_query)
                     try:
-                        rtm_records = list(cursor)
+                        rtm_records = await cursor.to_list(length=10000)
                     finally:
                         cursor.close()
                     logger.debug(f"RTM records from historical collection: {len(rtm_records)}")
@@ -543,7 +542,7 @@ class DSMProcessor(BaseProcessor):
                 try:
                     cursor = exchange_repository.historical_collection.find(dam_query)
                     try:
-                        dam_records = list(cursor)
+                        dam_records = await cursor.to_list(length=10000)
                     finally:
                         cursor.close()
                     logger.debug(f"DAM records from historical collection: {len(dam_records)}")

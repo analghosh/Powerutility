@@ -16,10 +16,10 @@ logger = logging.getLogger(__name__)
 class MenuRoleRepository(BaseRepository):
     """Menu-Role repository with relationship-specific database operations"""
     
-    def __init__(self):
+    async def __init__(self):
         super().__init__("menu_roles", settings.AUTH_DB_NAME)
     
-    def create_menu_role(self, menu_role_data: MenuRoleCreate) -> MenuRoleInDB:
+    async def create_menu_role(self, menu_role_data: MenuRoleCreate) -> MenuRoleInDB:
         """Create a new menu-role relationship"""
         try:
             # Check if relationship already exists
@@ -50,7 +50,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error creating menu-role relationship: {e}")
             raise
     
-    def get_menu_role_by_id(self, menu_role_id: str) -> Optional[MenuRoleInDB]:
+    async def get_menu_role_by_id(self, menu_role_id: str) -> Optional[MenuRoleInDB]:
         """Get menu-role relationship by ID"""
         try:
             menu_role_doc = self.find_one({
@@ -65,7 +65,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error getting menu-role by ID {menu_role_id}: {e}")
             return None
     
-    def get_menu_roles_by_menu_id(self, menu_id: str) -> List[MenuRoleInDB]:
+    async def get_menu_roles_by_menu_id(self, menu_id: str) -> List[MenuRoleInDB]:
         """Get all role relationships for a specific menu"""
         try:
             menu_role_docs = self.find_many({
@@ -79,7 +79,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error getting menu roles for menu {menu_id}: {e}")
             return []
     
-    def get_menu_roles_by_role_id(self, role_id: str) -> List[MenuRoleInDB]:
+    async def get_menu_roles_by_role_id(self, role_id: str) -> List[MenuRoleInDB]:
         """Get all menu relationships for a specific role"""
         try:
             menu_role_docs = self.find_many({
@@ -93,7 +93,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error getting role menus for role {role_id}: {e}")
             return []
     
-    def get_menu_role(self, menu_id: str, role_id: str) -> Optional[MenuRoleInDB]:
+    async def get_menu_role(self, menu_id: str, role_id: str) -> Optional[MenuRoleInDB]:
         """Get specific menu-role relationship"""
         try:
             menu_role_doc = self.find_one({
@@ -109,7 +109,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error getting menu-role relationship: {e}")
             return None
     
-    def update_menu_role(self, menu_role_id: str, update_data: MenuRoleUpdate) -> bool:
+    async def update_menu_role(self, menu_role_id: str, update_data: MenuRoleUpdate) -> bool:
         """Update menu-role relationship"""
         try:
             update_dict = update_data.dict(exclude_unset=True)
@@ -120,7 +120,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error updating menu-role {menu_role_id}: {e}")
             return False
     
-    def delete_menu_role(self, menu_role_id: str) -> bool:
+    async def delete_menu_role(self, menu_role_id: str) -> bool:
         """Soft delete menu-role relationship"""
         try:
             return self.update(menu_role_id, {
@@ -131,7 +131,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error deleting menu-role {menu_role_id}: {e}")
             return False
     
-    def delete_menu_role_by_ids(self, menu_id: str, role_id: str) -> bool:
+    async def delete_menu_role_by_ids(self, menu_id: str, role_id: str) -> bool:
         """Delete menu-role relationship by menu and role IDs"""
         try:
             menu_role = self.get_menu_role(menu_id, role_id)
@@ -142,7 +142,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error deleting menu-role by IDs: {e}")
             return False
     
-    def get_roles_for_menu(self, menu_id: str) -> List[str]:
+    async def get_roles_for_menu(self, menu_id: str) -> List[str]:
         """Get all role IDs that have access to a specific menu"""
         try:
             menu_roles = self.get_menu_roles_by_menu_id(menu_id)
@@ -151,7 +151,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error getting roles for menu {menu_id}: {e}")
             return []
     
-    def get_menus_for_role(self, role_id: str) -> List[str]:
+    async def get_menus_for_role(self, role_id: str) -> List[str]:
         """Get all menu IDs that a specific role has access to"""
         try:
             role_menus = self.get_menu_roles_by_role_id(role_id)
@@ -160,7 +160,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error getting menus for role {role_id}: {e}")
             return []
     
-    def grant_role_menu_access(self, role_id: str, menu_id: str, permissions: List[str] = None) -> bool:
+    async def grant_role_menu_access(self, role_id: str, menu_id: str, permissions: List[str] = None) -> bool:
         """Grant a role access to a menu and sync role permissions"""
         try:
             if permissions is None:
@@ -168,7 +168,7 @@ class MenuRoleRepository(BaseRepository):
 
             # Atomic upsert — avoids race condition and duplicate key errors
             now = datetime.now()
-            self.collection.update_one(
+            await self.collection.update_one(
                 {"role_id": role_id, "menu_id": menu_id},
                 {
                     "$set": {
@@ -183,7 +183,7 @@ class MenuRoleRepository(BaseRepository):
                 upsert=True,
             )
 
-            self._sync_role_permissions(role_id)
+            await self._sync_role_permissions(role_id)
             return True
         except Exception as e:
             logger.error(f"Error granting role menu access: {e}")

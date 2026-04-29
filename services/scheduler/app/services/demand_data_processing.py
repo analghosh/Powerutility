@@ -370,7 +370,7 @@ class DemandDataProcessing:
             logger.error("Error moving old data to historical: %s", e)
             raise
     
-    def _store_demand_entity(self, entity: DemandServeEntity):
+    async def _store_demand_entity(self, entity: DemandServeEntity):
         """
         Store demand entity using delete-insert pattern with updated flag logic
         
@@ -379,7 +379,7 @@ class DemandDataProcessing:
         """
         try:
             # First, check if entity already exists to determine updated flag
-            existing = self.demand_repository.find_one({
+            existing = await self.demand_repository.find_one({
                 "time_block": entity.time_block,
                 "scheduled_at": entity.scheduled_at,
                 "type": entity.type

@@ -334,7 +334,7 @@ class SingleBidBookProcessor(BaseProcessor):
                         }
                         
                         # Perform upsert using PyMongo directly (BaseRepository has no single-doc upsert)
-                        self.approval_repo.collection.update_one(
+                        await self.approval_repo.collection.update_one(
                             {"OrderId": order_id},
                             {"$set": updates},
                             upsert=True

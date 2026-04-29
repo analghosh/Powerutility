@@ -81,7 +81,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
             logger.info(f"Inserting {len(documents)} documents into collection...")
             
-            result= self.collection.insert_many(documents, ordered=False)
+            result= await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             
             logger.info("Bulk insert successful")
@@ -96,7 +96,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to aggregate DAM product data: %s", str(e))
             return []
@@ -127,7 +127,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
         
     async def updatedata(self, record_id, data):
-        result =  self.collection.update_one(
+        result =  await self.collection.update_one(
             {"_id": ObjectId(record_id)},
             {"$set": data}
         )
@@ -137,7 +137,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
     async def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Dict[str, Any]:
         """Update a single document matching the filter (e.g. to add exchange fields after submission)."""
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error(f"Failed to update block bid record: {str(e)}")
@@ -186,8 +186,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 "market_type": market_type
             }
             
-            cursor = self.collection.find(query).sort("from", 1)
-            results = list(cursor)
+            results = await self.collection.find(query).sort("from", 1).to_list(length=10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -201,88 +200,6 @@ class BlockBidCurrentDataRepository(GenericRepository):
             logger.error(f"Error getting block bid data for date {datebid}, market_type {market_type}: {str(e)}")
             return []
 
-    # async def get_approved_block_bid_quantities_by_time_block(
-    #     self,
-    #     biding_date: str,
-    #     market_type: str = "RTM"
-    # ) -> Dict[str, float]:
-    #     """
-    #     Get cumulative total volume of approved block bids grouped by time_block.
-    #     If number_of_bids > 1, quantum is multiplied by number_of_bids to get correct quantity.
-        
-    #     Args:
-    #         biding_date: Schedule date in YYYY-MM-DD format
-    #         market_type: Market type (RTM, DAM, etc.). Defaults to "RTM"
-        
-    #     Returns:
-    #         Dictionary mapping time_block (e.g., "19:00-19:15") to total approved quantum
-    #     """
-    #     try:
-    #         pipeline = [
-    #             {
-    #                 "$match": {
-    #                     "biding_date": biding_date,
-    #                     "market_type": market_type,
-    #                     "status": {"$in": ["submitted", "Submitted"]}  # Handle both lowercase and capital A
-    #                     # "status": {"$in": ["approved", "Approved"]}  # Handle both lowercase and capital A
-    #                 }
-    #             },
-    #             {
-    #                 "$project": {
-    #                     "time_block": 1,
-    #                     "quantum": 1,
-    #                     "number_of_bids": {
-    #                         "$ifNull": ["$number_of_bids", 1]  # Default to 1 if not present
-    #                     },
-    #                     "calculated_quantity": {
-    #                         "$cond": {
-    #                             "if": {"$gt": [{"$ifNull": ["$number_of_bids", 1]}, 1]},
-    #                             "then": {
-    #                                 "$multiply": [
-    #                                     "$quantum",
-    #                                     {"$ifNull": ["$number_of_bids", 1]}
-    #                                 ]
-    #                             },
-    #                             "else": "$quantum"
-    #                         }
-    #                     }
-    #                 }
-    #             },
-    #             {
-    #                 "$group": {
-    #                     "_id": "$time_block",
-    #                     "total_quantum": {"$sum": "$calculated_quantity"}
-    #                 }
-    #             },
-    #             {
-    #                 "$project": {
-    #                     "_id": 0,
-    #                     "time_block": "$_id",
-    #                     "total_quantum": 1
-    #                 }
-    #             }
-    #         ]
-            
-    #         results = await self.aggregate(pipeline)
-            
-    #         # Convert to dictionary: time_block -> total_quantum
-    #         quantities_dict = {}
-    #         for result in results:
-    #             time_block = result.get("time_block", "")
-    #             total_quantum = float(result.get("total_quantum", 0))
-    #             if time_block:
-    #                 quantities_dict[time_block] = total_quantum
-            
-    #         logger.info(f"Retrieved approved block bid quantities for {len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}")
-    #         if quantities_dict:
-    #             logger.debug(f"Approved block bid time blocks found: {list(quantities_dict.keys())}")
-    #         else:
-    #             logger.warning(f"No approved block bids found for date {biding_date}, market_type {market_type}. Check if status is 'approved' or 'Approved' and biding_date matches.")
-    #         return quantities_dict
-            
-    #     except Exception as e:
-    #         logger.error(f"Error getting approved block bid quantities for date {biding_date}, market_type {market_type}: {str(e)}")
-    #         return {}
 
     async def get_approved_block_bid_quantities_by_time_block(
         self,
@@ -512,8 +429,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Find documents by filters with optional projection.
         """
         try:
-            query = self.collection.find(filters, projection or {})
-            return list(query)
+            return await self.collection.find(filters, projection or {}).to_list(length=10000)
         except Exception as e:
             logger.error(f"Failed to find block bid records: {str(e)}")
             return []
@@ -544,7 +460,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$sort": {"from": 1}},  # restore chronological order
             ]
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             for doc in results:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
@@ -578,13 +494,13 @@ class BlockBidCurrentDataRepository(GenericRepository):
                     }
                 }
             ]
-            latest_docs = list(self.collection.aggregate(pipeline))
+            latest_docs = await self.collection.aggregate(pipeline).to_list(length=10000)
             ids_to_update = [doc["doc_id"] for doc in latest_docs]
 
             if not ids_to_update:
                 return 0
 
-            result = self.collection.update_many(
+            result = await self.collection.update_many(
                 {"_id": {"$in": ids_to_update}},
                 {"$set": {"status": to_status}}
             )
