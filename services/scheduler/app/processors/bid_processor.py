@@ -21,7 +21,7 @@ class BidProcessor(BaseProcessor):
     Bid data processor that handles bid trade data processing and storage.
     """
 
-    async def __init__(self):
+    def __init__(self):
         super().__init__()
         self.repository = BidTradeServeRepository()
 

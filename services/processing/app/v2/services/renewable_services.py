@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, status
 
 from ..repository.renewable_repository import renewable_repository
-from ...repository.serve_table_repository import SupplyTableRepository
+from ..repository.serve_supply_table_repository import SupplyTableRepository
 
 from ...core.config import settings
 

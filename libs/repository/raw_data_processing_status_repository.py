@@ -21,7 +21,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
     Separate from raw data for better performance and organization
     """
     
-    async def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
+    def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
         """
         Initialize raw data processing status repository
         

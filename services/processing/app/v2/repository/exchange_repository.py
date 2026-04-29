@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 
 from ...core.config import settings
-from ...services.dashboard_new import ist_now, block_from_hhmm
+from libs.helpers.timeblock_helper import ist_now, block_from_hhmm
 
 logger = logging.getLogger(__name__)
 
