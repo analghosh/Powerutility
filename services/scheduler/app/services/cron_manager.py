@@ -411,7 +411,7 @@ class CronManager(BaseCronManager):
                 if cron_job.enabled:
                     # Get job data from database to get priority
                     job_data = self.job_data_repository.get_job(job_type)
-                    priority = job_data.get('priority', 999) if job_data else 999  # Default to low priority
+                    priority = (await job_data).get('priority', 999) if job_data else 999  # Default to low priority
                     
                     enabled_jobs_with_priority.append({
                         'job_type': job_type,
@@ -505,7 +505,7 @@ class CronManager(BaseCronManager):
                 
                 # Log job start
                 if self.audit_logger:
-                    self.audit_logger.log_system_operation(
+                    await self.audit_logger.log_system_operation(
                         service="scheduler",
                         operation="cron_job_started",
                         message=f"Cron job started: {cron_job.name}",
@@ -530,7 +530,7 @@ class CronManager(BaseCronManager):
 
                 # Log successful completion
                 if self.audit_logger:
-                    self.audit_logger.log_system_operation(
+                    await self.audit_logger.log_system_operation(
                         service="scheduler",
                         operation="cron_job_completed",
                     message=f"Cron job completed: {cron_job.name}",
@@ -551,7 +551,7 @@ class CronManager(BaseCronManager):
                 
                 # Log job failure
                 if self.audit_logger:
-                    self.audit_logger.log_system_operation(
+                    await self.audit_logger.log_system_operation(
                         service="scheduler",
                         operation="cron_job_failed",
                     message=f"Cron job failed: {cron_job.name} - {str(job_error)}",
@@ -592,7 +592,7 @@ class CronManager(BaseCronManager):
         if base_result.get('jobs'):
             for job in base_result['jobs']:
                 try:
-                    job_stats = self.job_detail_repository.get_job_statistics(job['job_id'], days=1)
+                    job_stats = await self.job_detail_repository.get_job_statistics(job['job_id'], days=1)
                     if job_stats:
                         job.update({
                             'total_executions': job_stats.get('total_executions', 0),
@@ -608,7 +608,7 @@ class CronManager(BaseCronManager):
                          execution_start: datetime) -> Optional[str]:
         """Record job start in audit database and return execution_id"""
         try:
-            # Get the job_id (ObjectId) from job_data collection using job_type
+            # Get the job_id (ObjectId) from job_data collection using job_type (now async)
             job_data = self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
@@ -640,7 +640,7 @@ class CronManager(BaseCronManager):
                 }
             )
             
-            self.job_detail_repository.log_execution(job_detail)
+            await self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (job_type: %s, execution_id: %s) in audit database", 
                        job_id, job_type, execution_id)
             return execution_id
@@ -658,7 +658,7 @@ class CronManager(BaseCronManager):
         try:
             duration_seconds = (execution_end - execution_start).total_seconds()
             
-            # Get the job_id (ObjectId) from job_data collection using job_type
+            # Get the job_id (ObjectId) from job_data collection using job_type (now async)
             job_data = self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
@@ -688,7 +688,7 @@ class CronManager(BaseCronManager):
                 }
             )
             
-            self.job_detail_repository.log_execution(job_detail)
+            await self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job completion for %s (job_type: %s, execution_id: %s, status: %s) in audit database", 
                        job_id, job_type, execution_id, status)
                 
@@ -702,7 +702,7 @@ class CronManager(BaseCronManager):
         try:
             # Try to get job data, but proceed even if not found
             job_id = job_type  # Default to job_type as job_id
-            if hasattr(self, 'job_data_repository') and self.job_data_repository:
+            if hasattr(self, 'job_data_repository') and self.job_data_repository: # job_data_repository.get_job is async
                 job_data = self.job_data_repository.get_job(job_type)
                 if job_data:
                     job_id = job_data.get("_id", job_type)
@@ -736,7 +736,7 @@ class CronManager(BaseCronManager):
                 metadata={"logs": logs}  # Store the captured logs in metadata
             )
             
-            self.job_detail_repository.log_execution(job_detail)
+            await self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job completion with logs for %s (job_type: %s, execution_id: %s, status: %s, logs: %d)", 
                        job_name, job_type, execution_id, status, len(logs))
                 
@@ -783,7 +783,7 @@ class CronManager(BaseCronManager):
             from libs.audit_queue.simple_logger import AuditLogger
             
             # Record job start in job detail repository if available
-            if hasattr(self, '_record_job_start'):
+            if hasattr(self, '_record_job_start'): # _record_job_start is async
                 execution_id = self._record_job_start(job_type, job_name, "scheduled", start_time)
                 
                 # Set correlation ID so processors can reuse it
@@ -793,7 +793,7 @@ class CronManager(BaseCronManager):
             
             # Log job start
             if self.audit_logger:
-                self.audit_logger.log_scheduled_job(
+                await self.audit_logger.log_scheduled_job(
                     service=self.service_name,
                     job_id=execution_id or job_type,
                 status="started",
@@ -820,7 +820,7 @@ class CronManager(BaseCronManager):
             duration_ms = int((time.time() - execution_start_timestamp) * 1000)
             
             # Log successful completion
-            if self.audit_logger:
+            if self.audit_logger: # audit_logger methods are async
                 self.audit_logger.log_scheduled_job(
                     service=self.service_name,
                     job_id=execution_id or job_type,
@@ -837,7 +837,7 @@ class CronManager(BaseCronManager):
             # Update job completion record with captured logs
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
                 # Ensure result_data is a dict or None
-                result_data = result if isinstance(result, dict) else None
+                result_data = result if isinstance(result, dict) else None # _record_job_completion_with_logs is async
                 self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "success", 
                                                     duration_ms / 1000, log_capture.get_logs(), result_data)
             
@@ -853,7 +853,7 @@ class CronManager(BaseCronManager):
             # Log job failure
             try:
                 if self.audit_logger:
-                    self.audit_logger.log_scheduled_job(
+                    await self.audit_logger.log_scheduled_job(
                         service=self.service_name,
                         job_id=execution_id or job_type,
                     status="failed",
@@ -871,7 +871,7 @@ class CronManager(BaseCronManager):
             
             # Update job completion record with captured logs (including error logs)
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
-                self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "error", 
+                await self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "error", 
                                                     duration_ms / 1000, log_capture.get_logs(), None, str(e))
             
             raise
@@ -899,7 +899,7 @@ class CronManager(BaseCronManager):
         job_type = "supply_data_management"
         job_name = "Supply Data Management"
         schedule = settings.DEMAND_DATA_CRON_SCHEDULE
-        start_time = datetime.now()
+        start_time = datetime.now() # _record_job_start is async
         
         # Record job start
         execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
@@ -907,7 +907,7 @@ class CronManager(BaseCronManager):
         # Log job start with audit logging
         if execution_id and self.audit_logger:
             self.audit_logger.log_system_operation(
-                service="scheduler",
+                service="scheduler", # audit_logger methods are async
                 operation="cron_job_started",
                 message=f"Cron job started: {job_name}",
                 job_detail_id=execution_id,
@@ -931,7 +931,7 @@ class CronManager(BaseCronManager):
             
             # Log job completion
             if execution_id and self.audit_logger:
-                self.audit_logger.log_system_operation(
+                await self.audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_completed",
                     message=f"Cron job completed: {job_name}",
@@ -944,7 +944,7 @@ class CronManager(BaseCronManager):
                 )
             
             # Record job completion
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id or job_type,
                 "success" if success else "error", success, result
             )
@@ -958,7 +958,7 @@ class CronManager(BaseCronManager):
             
             # Log job failure
             if execution_id and self.audit_logger:
-                self.audit_logger.log_system_operation(
+                await self.audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_failed",
                     message=f"Cron job failed: {job_name} - {str(e)}",
@@ -972,7 +972,7 @@ class CronManager(BaseCronManager):
                 )
             
             # Record job failure
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id or job_type,
                 "error", False, error_message=str(e)
             )
@@ -980,12 +980,12 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
 
     # Missing job execution methods
-    def _execute_demand_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
+    async def _execute_demand_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute demand data management job"""
         # Log job execution
         if self.audit_logger:
-            self.audit_logger.log_system_operation(
-                service="scheduler",
+            await self.audit_logger.log_system_operation( # audit_logger methods are async
+                service="scheduler", # type: ignore
                 operation="cron_job_started",
             message=f"Cron job started: _execute_demand_data_management_job",
             job_type="_execute_demand_data_management_job",
@@ -993,13 +993,13 @@ class CronManager(BaseCronManager):
         )
         
         try:
-            # Use sync wrapper for async delegate
-            return self._run_async_job(self._execute_demand_data_job_delegate(payload))
+            # Await the async delegate
+            return await self._execute_demand_data_job_delegate(payload)
         except Exception as e:
             logger.error("Error delegating demand data management job: %s", str(e))
             return {'status': 'error', 'error': str(e)}
-    
-    def _execute_supply_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
+
+    async def _execute_supply_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute supply data management job"""
         method_name = "_execute_supply_data_management_job"
         try:
@@ -1010,7 +1010,7 @@ class CronManager(BaseCronManager):
             
             # Log successful completion
             if self.audit_logger:
-                self.audit_logger.log_system_operation(
+                await self.audit_logger.log_system_operation( # audit_logger methods are async
                     service="scheduler",
                     operation="cron_job_completed",
                 message=f"Cron job completed: {method_name}",
@@ -1024,7 +1024,7 @@ class CronManager(BaseCronManager):
         except Exception as e:
             # Log job failure
             if self.audit_logger:
-                self.audit_logger.log_system_operation(
+                await self.audit_logger.log_system_operation( # audit_logger methods are async
                     service="scheduler",
                     operation="cron_job_failed",
                     message=f"Cron job failed: {method_name} - {str(e)}",
@@ -1036,14 +1036,14 @@ class CronManager(BaseCronManager):
             logger.error("Error in %s: %s", method_name, str(e))
             return {'status': 'error', 'error': str(e)}
     
-    def _execute_serve_data_reconciliation_job(self, payload: Optional[Dict[str, Any]] = None):
+    async def _execute_serve_data_reconciliation_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute serve data reconciliation job"""
         method_name = "_execute_serve_data_reconciliation_job"
         try:
             logger.info(f"Starting {method_name}")
             
             # Execute reconciliation logic
-            from ..services.dummy_data_service import dummy_data_service
+            from ..services.dummy_data_service import dummy_data_service # dummy_data_service methods are async
             result = dummy_data_service.reconcile_and_rerun_crons()
             
             # Log successful completion
@@ -1062,7 +1062,7 @@ class CronManager(BaseCronManager):
         except Exception as e:
             # Log job failure
             if self.audit_logger:
-                self.audit_logger.log_system_operation(
+                await self.audit_logger.log_system_operation( # audit_logger methods are async
                     service="scheduler",
                     operation="cron_job_failed",
                 message=f"Cron job failed: {method_name} - {str(e)}",
@@ -1074,12 +1074,12 @@ class CronManager(BaseCronManager):
             logger.error("Error in %s: %s", method_name, str(e))
             return {'status': 'error', 'error': str(e)}
     
-    def _execute_demand_data_processing_job(self, payload: Optional[Dict[str, Any]] = None):
+    async def _execute_demand_data_processing_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute demand data processing job"""
         logger.info("Executing demand data processing job")
         try:
             # Import and use demand data processing service
-            from ..services.demand_data_processing import DemandDataProcessor
+            from ..services.demand_data_processing import DemandDataProcessor # process_demand_data is async
             processor = DemandDataProcessor()
             return processor.process_demand_data(payload)
         except Exception as e:
@@ -1087,12 +1087,12 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
     
     def _execute_supply_data_processing_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute supply data processing job"""
+        """Execute supply data processing job""" # process_supply_data is async
         logger.info("Executing supply data processing job")
         try:
             # Import and use supply data processing service
             from ..services.supply_data_processing import SupplyDataProcessing
-            processor = SupplyDataProcessing()
+            processor = SupplyDataProcessing() # process_supply_data is async
             return processor.process_supply_data(payload)
         except Exception as e:
             logger.error("Error in supply data processing job: %s", str(e))
@@ -1235,7 +1235,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_demand_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute demand serve archival job"""
+        """Execute demand serve archival job""" # execute_archival_job is async
         logger.info("Executing demand serve archival job")
         try:
             # Use the demand processor's archival method
@@ -1248,7 +1248,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_supply_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute supply serve archival job"""
+        """Execute supply serve archival job""" # execute_archival_job is async
         logger.info("Executing supply serve archival job")
         try:
             # Use the supply processor's archival method
@@ -1261,7 +1261,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_weather_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute weather serve archival job"""
+        """Execute weather serve archival job""" # execute_archival_job is async
         logger.info("Executing weather serve archival job")
         try:
             # Use the weather processor's archival method
@@ -1274,7 +1274,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_bid_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute bid serve archival job"""
+        """Execute bid serve archival job""" # execute_archival_job is async
         logger.info("Executing bid serve archival job")
         try:
             # Use the bid processor's archival method
@@ -1287,7 +1287,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_renewable_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute renewable serve archival job"""
+        """Execute renewable serve archival job""" # execute_archival_job is async
         logger.info("Executing renewable serve archival job")
         try:
             # Use the renewable processor's archival method
@@ -1360,25 +1360,25 @@ class CronManager(BaseCronManager):
             logger.error("Error in job logs cleanup: %s", str(e))
             return {'status': 'error', 'error': str(e)}
     
-    def get_job_execution_history(self, job_type: str, limit: int = 10) -> List[Dict[str, Any]]:
+    async def get_job_execution_history(self, job_type: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get execution history for a specific job type"""
         try:
             # Get job execution history from the job detail repository
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
                 # The repository method expects job_id, which is the same as job_type in our case
-                return self.job_detail_repository.get_job_execution_history(job_type, limit)
+                return await self.job_detail_repository.get_job_execution_history(job_type, limit)
             else:
                 logger.warning("Job detail repository not available for history retrieval")
                 return []
         except Exception as e:
             logger.error("Failed to get job execution history for %s: %s", job_type, str(e))
             return []
-    
-    def get_all_job_executions(self, limit: int = 50) -> List[Dict[str, Any]]:
+
+    async def get_all_job_executions(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get all job executions across all job types"""
         try:
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
-                return self.job_detail_repository.get_recent_job_executions(limit)
+                return await self.job_detail_repository.get_recent_job_executions(limit)
             else:
                 logger.warning("Job detail repository not available for execution retrieval")
                 return []
