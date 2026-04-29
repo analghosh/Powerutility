@@ -1361,7 +1361,7 @@ class RealtimemarketService:
             
             
             # Fetch data from MongoDB
-            get_forecasted_value =  self.serve_demand_repo.get_demand(schedule_date)
+            get_forecasted_value = await self.serve_demand_repo.get_demand(schedule_date)
             
             totalAvailability =   self.total_availability(getplantsData,get_forecasted_value)
             

@@ -324,7 +324,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         """Alias for create_many_scheduling_records (backward compatibility)."""
         return await self.create_many_scheduling_records(records)
 
-    def get_by_schedule_date_and_block(
+    async def get_by_schedule_date_and_block(
         self,
         schedule_date: str,
         time_block: Optional[int] = None
@@ -410,7 +410,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 {"$sort": {"time_block": 1}}
             ]
             
-            return self.aggregate(self.collection_name, pipeline)
+            return await self.aggregate(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get scheduling records: {str(e)}")
             return []

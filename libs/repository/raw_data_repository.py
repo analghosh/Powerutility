@@ -41,65 +41,77 @@ class RawDataRepository(BaseRepository):
         self._create_timeseries_collection_if_not_exists()
         self._create_indexes()
     
-    async def _create_timeseries_collection_if_not_exists(self):
+    def _create_timeseries_collection_if_not_exists(self):
         """
         Create time series collection if it doesn't exist
         Configures MongoDB time series collection for optimal performance
         """
-        try:
-            # Check if collection already exists
-            existing_collections = self.db.list_collection_names()
-            if self.collection_name in existing_collections:
-                logger.info("Time series collection '%s' already exists", self.collection_name)
-                return
-            
-            # Create time series collection with proper configuration
-            timeseries_options = {
-                "timeField": "created_at",           # Time field for time series
-                "metaField": "metadata",             # Metadata field for grouping
-                "granularity": "minutes"             # Time series granularity
-            }
-            
-            # Create the time series collection
-            self.db.create_collection(
-                self.collection_name,
-                timeseries=timeseries_options
-            )
-            
-            logger.info("Created time series collection '%s' with timeField='created_at', metaField='metadata'", 
-                       self.collection_name)
-            
-        except Exception as e:
-            logger.error("Error creating time series collection '%s': %s", self.collection_name, e, exc_info=True)
-            # If time series creation fails, fall back to regular collection
+        import asyncio
+        async def _do_create():
             try:
-                if self.collection_name not in self.db.list_collection_names():
-                    self.db.create_collection(self.collection_name)
-                    logger.warning("Created regular collection '%s' as fallback", self.collection_name)
-            except Exception as fallback_error:
-                logger.error("Error creating fallback collection: %s", fallback_error, exc_info=True)
-                raise
-    
-    async def _create_indexes(self):
-        """Create necessary indexes for time series collection"""
-        indexes = [
-            ([("data_type", 1), ("created_at", -1)], {}),
-            ([("provider_id", 1), ("created_at", -1)], {}),
-            ("metadata.upload_id", {}),
-        ]
-        for index_spec, kwargs in indexes:
-            try:
-                self.collection.create_index(index_spec, **kwargs)
-            except OperationFailure as e:
-                if e.code == 85:
-                    # IndexOptionsConflict: equivalent index already exists (time series originalSpec ordering), safe to ignore
-                    logger.debug("Index already exists (skipping): %s", e)
-                else:
-                    logger.error("Error creating raw data index: %s", e, exc_info=True)
+                # Check if collection already exists
+                existing_collections = await self.db.list_collection_names()
+                if self.collection_name in existing_collections:
+                    logger.info("Time series collection '%s' already exists", self.collection_name)
+                    return
+                
+                # Create time series collection with proper configuration
+                timeseries_options = {
+                    "timeField": "created_at",           # Time field for time series
+                    "metaField": "metadata",             # Metadata field for grouping
+                    "granularity": "minutes"             # Time series granularity
+                }
+                
+                # Create the time series collection
+                await self.db.create_collection(
+                    self.collection_name,
+                    timeseries=timeseries_options
+                )
+                
+                logger.info("Created time series collection '%s' with timeField='created_at', metaField='metadata'", 
+                           self.collection_name)
+                
             except Exception as e:
-                logger.error("Error creating raw data index: %s", e, exc_info=True)
+                logger.error("Error creating time series collection '%s': %s", self.collection_name, e, exc_info=True)
+                # If time series creation fails, fall back to regular collection
+                try:
+                    if self.collection_name not in await self.db.list_collection_names():
+                        await self.db.create_collection(self.collection_name)
+                        logger.warning("Created regular collection '%s' as fallback", self.collection_name)
+                except Exception as fallback_error:
+                    logger.error("Error creating fallback collection: %s", fallback_error, exc_info=True)
+                    raise
+        try:
+            asyncio.get_running_loop().create_task(_do_create())
+        except RuntimeError:
+            pass
+    
+    def _create_indexes(self):
+        """Create necessary indexes for time series collection"""
+        import asyncio
+        async def _do_create():
+            indexes = [
+                ([("data_type", 1), ("created_at", -1)], {}),
+                ([("provider_id", 1), ("created_at", -1)], {}),
+                ("metadata.upload_id", {}),
+            ]
+            for index_spec, kwargs in indexes:
+                try:
+                    await self.collection.create_index(index_spec, **kwargs)
+                except OperationFailure as e:
+                    if e.code == 85:
+                        # IndexOptionsConflict: equivalent index already exists (time series originalSpec ordering), safe to ignore
+                        logger.debug("Index already exists (skipping): %s", e)
+                    else:
+                        logger.error("Error creating raw data index: %s", e, exc_info=True)
+                except Exception as e:
+                    logger.error("Error creating raw data index: %s", e, exc_info=True)
 
-        logger.info("Time series collection indexes created successfully")
+            logger.info("Time series collection indexes created successfully")
+        try:
+            asyncio.get_running_loop().create_task(_do_create())
+        except RuntimeError:
+            pass
     
     async def create_raw_data(self, entity: RawDataEntity) -> str:
         """
@@ -123,7 +135,7 @@ class RawDataRepository(BaseRepository):
                 raise ValueError("provider_id is required")
 
             # Insert document
-            result = self.collection.insert_one(data)
+            result = await self.collection.insert_one(data)
             
             logger.info("Created raw data record: %s (type: %s, provider: %s)", 
                        result.inserted_id, 
@@ -174,7 +186,7 @@ class RawDataRepository(BaseRepository):
             Dict[str, Any]: Raw data record or None
         """
         try:
-            record = self.collection.find_one({"_id": ObjectId(record_id)})
+            record = await self.collection.find_one({"_id": ObjectId(record_id)})
             if record:
                 record["_id"] = str(record["_id"])
             return record
@@ -194,7 +206,7 @@ class RawDataRepository(BaseRepository):
             Dict[str, Any]: Raw data record or None
         """
         try:
-            record = self.collection.find_one({"metadata.upload_id": upload_id})
+            record = await self.collection.find_one({"metadata.upload_id": upload_id})
             if record:
                 record["_id"] = str(record["_id"])
             return record

@@ -332,7 +332,7 @@ async def scheduler_diagnostics():
     
     try:
         # Get scheduler status
-        scheduler_status = cron_manager.get_all_jobs()
+        scheduler_status = await cron_manager.get_all_jobs()
         
         # Get registered jobs configuration
         registered_jobs = cron_manager.get_registered_jobs()

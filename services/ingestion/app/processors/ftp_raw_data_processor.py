@@ -212,7 +212,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
 
         # Record job start
-        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
 
         logger.info("Starting FTP raw data processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
 
@@ -231,7 +231,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
 
                 # Record job completion
                 if execution_id:
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "success", True, execution_id, result
                     )
@@ -302,7 +302,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             # Record job completion
             if execution_id:
                 error_message = None if overall_success else f"Processed {processed_providers}, failed {failed_providers}"
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     status, overall_success, execution_id, result, error_message
                 )
@@ -324,7 +324,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
 
             # Record job completion with error
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, execution_id, result, str(e)
                 )

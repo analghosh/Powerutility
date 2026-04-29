@@ -266,7 +266,7 @@ class RTMSchedulingController:
         try:
             logger.info(f"[RTMSchedulingController] Starting get_scheduling_graph_data - Schedule Date: {schedule_date}, Correlation ID: {correlation_id}")
             
-            result = self.rtm_scheduling_services.get_scheduling_graph_data(
+            result = await self.rtm_scheduling_services.get_scheduling_graph_data(
                 schedule_date, from_block, to_block
             )
             

@@ -62,7 +62,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
 
         # Record job start
-        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
 
         # Log job start with both audit and regular logging
         logger.info("🚀 Starting scrape raw data processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
@@ -111,7 +111,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                     )
 
                     # Record job completion in job detail system
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "success", True, execution_id, result
                     )
@@ -251,7 +251,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                 )
 
                 # Record job completion in job detail system
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     status, overall_success, execution_id, result, error_message
                 )
@@ -285,7 +285,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                 )
 
                 # Record job completion with error in job detail system
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, execution_id, result, str(e)
                 )

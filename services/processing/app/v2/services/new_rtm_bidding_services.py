@@ -533,32 +533,30 @@ class RTMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
-            )
             
 
-            n_1Limits = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
-                        {
-                            "$match": {
-                                "scheduled_at": {"$lte": target_date_end},
-                                "id": "n_1",
-                                "market": "RTM",
-                                "category": "Limits",
-                                "block": {"$gte": from_block, "$lte": to_block},
-                            }
-                        },
-                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
-                        {
-                            "$group": {
-                                "_id": "$block",
-                                "latest_doc": {"$first": "$$ROOT"}
-                            }
-                        },
-                        {"$replaceRoot": {"newRoot": "$latest_doc"}},
-                        {"$sort": {"block": 1}},
-                        {"$project": {"_id": 0}},
+            n_1Limits = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
+                    {
+                        "$match": {
+                            "scheduled_at": {"$lte": target_date_end},
+                            "id": "n_1",
+                            "market": "RTM",
+                            "category": "Limits",
+                            "block": {"$gte": from_block, "$lte": to_block},
+                        }
+                    },
+                    {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
+                    {
+                        "$group": {
+                            "_id": "$block",
+                            "latest_doc": {"$first": "$$ROOT"}
+                        }
+                    },
+                    {"$replaceRoot": {"newRoot": "$latest_doc"}},
+                    {"$sort": {"block": 1}},
+                    {"$project": {"_id": 0}},
                 ],
             )
 
@@ -3447,7 +3445,7 @@ class RTMBiddingServices:
             # ---------------------------------------------------------
             # 3. Fetch book data ONLY for other users
             # ---------------------------------------------------------
-            book_details = self.generic_repo.find_many(
+            book_details = await self.generic_repo.find_many(
                 self.rtm_book_collection,
                 {
                     "scheduled_at": scheduled_at,
@@ -3470,7 +3468,7 @@ class RTMBiddingServices:
             # 5. Fetch time blocks once
             # ---------------------------------------------------------
             if all_time_pairs:
-                time_blocks = self.generic_repo.find_many(
+                time_blocks = await self.generic_repo.find_many(
                     self.time_block_collection,
                     {
                         "$or": [

@@ -39,11 +39,11 @@ class LimitValuesProcessor(BaseProcessor):
         """
         job_type = "limit_values_approval_processing"
         job_name = "Limit Values Approval Processing"
-        job_detail = self.job_data_repository.get_job(job_type)
+        job_detail = await self.job_data_repository.get_job(job_type)
         start_time = datetime.now()
         schedule = job_detail.get("schedule", "0 0 * * *")
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             return {"status": "error", "message": "Failed to record job start"}
 
@@ -291,7 +291,7 @@ class LimitValuesProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -315,7 +315,7 @@ class LimitValuesProcessor(BaseProcessor):
                 "job_type": job_type,
                 "correlation_id": execution_id
             }
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

@@ -58,7 +58,7 @@ class DemandTestRawDataProcessor(BaseRawDataProcessor):
             logger.info("Processing test_data demand raw data: raw_data_id=%s", raw_data_record.get("_id"))
             
             # Use the DemandDataProcessing service to process the raw data
-            processing_result = self.demand_data_processing.process_demand_record(raw_data_record)
+            processing_result = await self.demand_data_processing.process_demand_record(raw_data_record)
             
             if processing_result.get("success", False):
                 processed_count = processing_result.get("processed_count", 0)

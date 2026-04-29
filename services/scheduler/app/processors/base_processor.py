@@ -468,7 +468,7 @@ class BaseProcessor(ABC):
             )
             
             # Determine the raw data collection name dynamically
-            raw_collection_name = await self.raw_data_repository.collection.name
+            raw_collection_name = self.raw_data_repository.collection.name
             logger.info(f"Joining against collection: {raw_collection_name}")
             
             pipeline = [

@@ -504,7 +504,7 @@ async def dam_schedule_by_date(
             success=True
         )
         
-        payload = dam_scheduling_controller.schedule_by_date(schedule_date)
+        payload = await dam_scheduling_controller.schedule_by_date(schedule_date)
         
         # Log user action
         audit_logger.log_user_action(

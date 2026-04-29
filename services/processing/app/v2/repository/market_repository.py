@@ -143,16 +143,16 @@ class MarketRepository:
             self.serve_px_bid_trade,
         )
 
-    def _aggregate(self, collection: str, pipeline: List[Dict[str, Any]], batch_size=500, max_docs=50000) -> List[Dict[str, Any]]:
+    async def _aggregate(self, collection: str, pipeline: List[Dict[str, Any]], batch_size=500, max_docs=50000) -> List[Dict[str, Any]]:
         try:
-            result = self.repository.aggregate(collection, pipeline, batch_size=batch_size, max_docs=max_docs)
+            result = await self.repository.aggregate(collection, pipeline, batch_size=batch_size, max_docs=max_docs)
             logger.info("[MarketRepository] aggregate on %s returned %d records", collection, len(result))
             return result
         except Exception as e:
             logger.exception("Error during aggregation on %s: %s", collection, str(e))
             return []
 
-    def get_exchange_data(self, schedule_date: str, current_block: Optional[int], use_concatenated: bool = False) -> List[Dict[str, Any]]:
+    async def get_exchange_data(self, schedule_date: str, current_block: Optional[int], use_concatenated: bool = False) -> List[Dict[str, Any]]:
         """Get exchange data grouped by schedule date and exchange, filtering RTM blocks."""
         current_block = max(1, min(int(current_block or BLOCKS_PER_DAY), BLOCKS_PER_DAY))
 
@@ -242,11 +242,11 @@ class MarketRepository:
             {"Schedule Date": schedule_date, "Current Block": current_block},
             pipeline,
         )
-        return self._aggregate(
+        return await self._aggregate(
             self.serve_exchange_table, pipeline, batch_size=500, max_docs=50000
         )
 
-    def get_exchange_table_data(self, schedule_date: str, time_block: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_exchange_table_data(self, schedule_date: str, time_block: Optional[int] = None) -> List[Dict[str, Any]]:
         """Get row-wise exchange table for a given date (optionally filtered by time block), with traded data."""
 
         # REFINED: Create a proper date range for matching against a datetime field.
@@ -328,11 +328,11 @@ class MarketRepository:
             {"Schedule Date": schedule_date, "Time Block": time_block},
             pipeline,
         )
-        return self._aggregate(
+        return await self._aggregate(
             self.serve_exchange_table, pipeline, batch_size=500, max_docs=25000
         )
 
-    def get_bid_trade_data(self, schedule_date: str, use_concatenated: bool = False) -> List[Dict[str, Any]]:
+    async def get_bid_trade_data(self, schedule_date: str, use_concatenated: bool = False) -> List[Dict[str, Any]]:
         """Get bid/trade sums by market and time_block for the date."""
 
         # This logic is now consistent for both traditional and "concatenated" approaches
@@ -383,11 +383,11 @@ class MarketRepository:
             {"Schedule Date": schedule_date},
             pipeline,
         )
-        return self._aggregate(
+        return await self._aggregate(
             self.serve_px_bid_trade, pipeline, batch_size=1000, max_docs=100000
         )
 
-    def get_bid_trade_by_time_block(self, schedule_date: str, time_block: int) -> List[Dict[str, Any]]:
+    async def get_bid_trade_by_time_block(self, schedule_date: str, time_block: int) -> List[Dict[str, Any]]:
         """Get bid/trade rows for a date + time_block, grouped by market, preserving exchange breakdowns."""
         time_block = int(time_block)
     
@@ -449,7 +449,7 @@ class MarketRepository:
             {"Schedule Date": schedule_date, "Time Block": time_block},
             pipeline,
         )
-        return self._aggregate(
+        return await self._aggregate(
             self.serve_px_bid_trade, pipeline, batch_size=500, max_docs=10000
         )
 
