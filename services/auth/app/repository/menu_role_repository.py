@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 class MenuRoleRepository(BaseRepository):
     """Menu-Role repository with relationship-specific database operations"""
     
-    async def __init__(self):
+    def __init__(self):
         super().__init__("menu_roles", settings.AUTH_DB_NAME)
     
     async def create_menu_role(self, menu_role_data: MenuRoleCreate) -> MenuRoleInDB:

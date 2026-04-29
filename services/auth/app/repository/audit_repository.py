@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 class AuditRepository(BaseRepository):
     """Audit repository for audit operations"""
     
-    async def __init__(self):
+    def __init__(self):
         super().__init__(settings.MONGODB_AUDIT_COLLECTION, settings.AUDIT_DB_NAME)
     
     async def log_event(self, 
