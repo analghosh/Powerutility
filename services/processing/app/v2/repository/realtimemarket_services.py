@@ -15,7 +15,7 @@ from bson import ObjectId
 
 from ..repository.serve_supply_table_repository import serveSupplyTableRepository
 from ..repository.rtm_single_bid_data_for_approval_repository import RTMSingleBidDataForApprovalRepository
-from ..repository.limit_value_repository import limitVallueRepository
+from ..repository.limit_values_repository import LimitValuesRepository
 from ..repository.plants_master_repository import PlantsMasterRepository 
 from ..repository.rtm_product_hardcoded_data_repository import RTMProductHardCodedDataRepository
 from ..repository.serve_demand_table_repository import  DashboardRepository
@@ -42,7 +42,7 @@ class RealtimemarketService:
         self.single_bid_data_for_approval_repo = RTMSingleBidDataForApprovalRepository(collection_name="rtm_single_bid_data_for_approval")
         self.rtm_product_hardCoded_data_repo = RTMProductHardCodedDataRepository(collection_name="rtm_product_hardCoded_data")
         self.plants_list_repo = PlantsMasterRepository(collection_name="plant_master")
-        self.limit_values_repo = limitVallueRepository(collection_name="limit_values")
+        self.limit_values_repo = LimitValuesRepository()
         self.serve_demand_repo = DashboardRepository(collection_name="serve_demand_table")
         self.serve_exchange_repo = serveExchangeTableRepository(collection_name="serve_exchange_table")
         self.scheduling_requisition_repo = SchedulingRequisitionCalculationRepository(collection_name="scheduling_requisition_calculation_table")
