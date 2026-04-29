@@ -734,7 +734,7 @@ DEFAULT_PROVIDERS = [
 class ProviderSeeder:
     """Seeder for provider configurations"""
     
-    async def __init__(self):
+    def __init__(self):
         self.client = get_mongo_client(settings.MONGODB_URI)
         self.db = self.client[settings.MONGODB_DATABASE]
         self.collection = self.db.providers

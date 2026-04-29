@@ -50,7 +50,7 @@ def round_numeric_value(value):
 
 
 class RTMSchedulingProcessor(BaseProcessor):
-    async def __init__(self, collection_name: str = "scheduling_requisition_calculation_table"):
+    def __init__(self, collection_name: str = "scheduling_requisition_calculation_table"):
         super().__init__()
         
         # Initialize all repositories (scheduler service pattern)

@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class JobDataRepository(BaseRepository):
     """Repository for job configuration data"""
     
-    async def __init__(self, audit_db_uri: str, audit_db_name: str, job_data_collection: str):
+    def __init__(self, audit_db_uri: str, audit_db_name: str, job_data_collection: str):
         """Initialize the repository with MongoDB connection"""
         
         super().__init__(
@@ -404,7 +404,7 @@ class JobDataRepository(BaseRepository):
 class JobDetailRepository(BaseRepository):
     """Repository for job execution logs (time series data)"""
     
-    async def __init__(self, audit_db_uri: str, audit_db_name: str, job_detail_collection: str):
+    def __init__(self, audit_db_uri: str, audit_db_name: str, job_detail_collection: str):
         """Initialize the repository with MongoDB connection"""
         
         super().__init__(

@@ -22,7 +22,7 @@ class RawDataRepository(BaseRepository):
     Uses metadata to differentiate between data types and providers
     """
     
-    async def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
+    def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
         """
         Initialize raw data repository
         
