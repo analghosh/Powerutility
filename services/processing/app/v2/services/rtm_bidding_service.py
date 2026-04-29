@@ -2861,14 +2861,14 @@ class RTMBiddingService:
             logger.error(f"Error building limit values lookup stages: {str(e)}")
             raise Exception(f"Failed to build limit values lookup stages: {str(e)}")
 
-    def get_all_plant_data_for_scheduling(self, schedule_date, dc_sg):
+    async def get_all_plant_data_for_scheduling(self, schedule_date, dc_sg):
         """
         Get all plant data for scheduling with full RTM complexity.
-        
+
         Args:
             schedule_date: Schedule date for data retrieval
             dc_sg: DC/SG filter for plant data
-            
+
         Returns:
             List[Dict[str, Any]]: Plant data for scheduling
         """

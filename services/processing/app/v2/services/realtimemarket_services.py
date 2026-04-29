@@ -1346,9 +1346,9 @@ class RealtimemarketService:
             allMLTPValues = await self.limit_values_repo.get_data( yesterday, tomorrow, "RTM", "Multiplier", "OB")
             
             
-            getplantsData = self.get_all_plant_data_for_scheduling(schedule_date, "SG")
+            getplantsData = await self.get_all_plant_data_for_scheduling(schedule_date, "SG")
             # return getplantsData
-            getplantsDataDC =  self.get_all_plant_data_for_scheduling(schedule_date, "DC")
+            getplantsDataDC = await self.get_all_plant_data_for_scheduling(schedule_date, "DC")
             
             # countblockSGData = self.get_last_record_of_sg(getplantsData,0)
             
@@ -2528,7 +2528,7 @@ class RealtimemarketService:
         return reviseDataTotalsupply
         
 
-    def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
+    async def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
         
 
         # scheduledatetimestamp = yesterday midnight (unix timestamp)
