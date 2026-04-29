@@ -155,6 +155,8 @@ class RealtimemarketService:
                     {"$sort": {"time_block": 1}}
                 ]
             result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+            result = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -569,6 +571,10 @@ class RealtimemarketService:
     }
 ]
             result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+            result = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+            result = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+            posted_jobs = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")

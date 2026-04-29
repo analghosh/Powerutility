@@ -255,7 +255,7 @@ class RTMBiddingServices:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = await self.supply_repo.aggregate_async(pipeline)
+            result = await self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline)
             return {"data": result}
         except Exception as e:
             logger.exception(f"[RTMBiddingServices] Failed to fetch demand data: {str(e)}")
@@ -322,7 +322,7 @@ class RTMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "rtm_tm": 1}}
             ]
-            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
+            posted_jobs = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
             # Build lookup: {(plant_id, time_block): rtm_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("rtm_tm", 0) for d in dc_data}
             
@@ -460,10 +460,9 @@ class RTMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
+            forecastedPrice = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
@@ -482,15 +481,13 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},  # Replace root with the latest document
                         {"$sort": {"block": 1}},  # Sort by block for consistent ordering
                         {"$project": {"_id": 0}},
-                    ],
-                )
+                ],
             )
             limit_schedule_date = target_date
             
-            bufferPrice = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
+            bufferPrice = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -509,14 +506,12 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                    ],
-                )
+                ],
             )
             
-            ceilingPrice = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
+            ceilingPrice = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -564,14 +559,12 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                    ],
-                )
+                ],
             )
 
-            noc_buyLimits = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
+            noc_buyLimits = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -591,14 +584,12 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                    ],
-                )
+                ],
             )
 
-            noc_sellLimits = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
+            noc_sellLimits = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -618,14 +609,12 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                    ],
-                )
+                ],
             )
 
-            typeofExchangeIEX = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
+            typeofExchangeIEX = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -645,14 +634,12 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                    ],
-                )
+                ],
             )
 
-            typeofExchangePXIL = list(
-                self.limit_values_repo.repository.aggregate(
-                    "limit_values",
-                    [
+            typeofExchangePXIL = await self.limit_values_repo.aggregate(
+                "limit_values",
+                [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -672,8 +659,7 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                    ],
-                )
+                ],
             )
 
             
@@ -1550,7 +1536,8 @@ class RTMBiddingServices:
 
             
             # Insert final data into model
-            response = await self.single_bid_data_for_approval_repo.insert_many(dbarray) # type: ignore
+                documents_to_insert = list(dbarray.values())
+                response = await self.single_bid_data_for_approval_repo.insert_many(documents_to_insert) # type: ignore
             if response:
                 if capture_tasks:
                     loop = asyncio.get_running_loop()
@@ -1953,7 +1940,7 @@ class RTMBiddingServices:
                     }
                 }
             ]
-            data_cursor  = await self.single_bid_data_for_approval_repo.aggregate(pipeline)
+            data_cursor  = await self.single_bid_data_for_approval_repo.aggregate(self.single_bid_data_for_approval_repo.collection_name, pipeline)
             # data_list = list(data_cursor)
             data_list = []
             for doc in data_cursor:

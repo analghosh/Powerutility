@@ -37,7 +37,7 @@ def get_password_policy_service() -> PasswordPolicyService:
 
 async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(security)) -> AuthUserDTO:
     """Get current user from token"""
-    token = credentials.credentials
+    token = credentials.credentials # type: ignore
     user = await auth_controller.get_current_user(token)
     
     if not user:
@@ -156,7 +156,7 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
             )
             return TemporaryTokenResponse(**result)
         else:
-            # Non-MFA user - log successful login
+            # Non-MFA user - log successful login (audit_logger methods are async)
             user_info = result.get("user", {})
             audit_logger.log_security_event(
                 service="auth",
@@ -168,7 +168,7 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
                 mfa_required=False,
                 user_agent=user_agent,
                 login_method="password"
-            )
+            ) # type: ignore
             audit_logger.log_user_action(
                 service="auth",
                 user_id=user_info.get("id", "unknown"),
@@ -178,7 +178,7 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
                 username=login_data.username,
                 user_agent=user_agent,
                 success=True
-            )
+            ) # type: ignore
             return LoginResponse(**result)
             
     except HTTPException as e:
@@ -188,7 +188,7 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
         
         audit_logger.log_security_event(
             service="auth",
-            event_type="login_failed",
+            event_type="login_failed", # type: ignore
             message=f"Login attempt failed: {login_data.username}",
             success=False,
             client_ip=client_ip,
@@ -302,7 +302,7 @@ async def verify_login(verify_data: VerifyLoginRequest, request: Request, audit_
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_security_event(
+        await audit_logger.log_security_event(
             service="auth",
             event_type="mfa_verification_failed",
             message="MFA verification failed",
@@ -331,7 +331,7 @@ async def refresh_token(refresh_data: RefreshTokenRequest, request: Request, aud
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="auth",
             user_id="token_refresh",  # User ID extracted from token in service layer
             action="token_refresh",
@@ -349,7 +349,7 @@ async def refresh_token(refresh_data: RefreshTokenRequest, request: Request, aud
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="TokenRefreshError",
             error_message=f"Token refresh failed: {str(e.detail)}",
@@ -388,7 +388,7 @@ async def logout(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_security_event(
+        await audit_logger.log_security_event(
             service="auth",
             event_type="logout_success",
             message=f"User logout successful: {user_info.get('username', 'unknown')}",
@@ -399,8 +399,8 @@ async def logout(
             user_agent=user_agent,
             success=True
         )
-
-        audit_logger.log_user_action(
+        
+        await audit_logger.log_user_action(
                 service="auth",
                 user_id=user_info.get("id", "unknown"),
                 action="logout",
@@ -409,7 +409,7 @@ async def logout(
                 username=user_info.get("username", "unknown"),
                 user_agent=user_agent,
                 success=True
-            )
+            ) # type: ignore
         
         return result
         
@@ -419,7 +419,7 @@ async def logout(
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
-            service="auth",
+            service="auth", # type: ignore
             error_name="LogoutError",
             error_message=f"Logout failed: {str(e.detail)}",
             client_ip=client_ip,
@@ -468,7 +468,7 @@ async def get_current_user_info(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="auth",
             user_id=current_user.id,
             action="profile_access",
@@ -478,7 +478,7 @@ async def get_current_user_info(
             profile_fields_requested=["basic_info", "roles", "permissions"],
             user_agent=user_agent,
             success=True
-        )
+        ) # type: ignore
         
         # Convert AuthUserDTO to UserResponse
         return UserResponse(
@@ -618,7 +618,7 @@ async def change_password(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_security_event(
+        await audit_logger.log_security_event(
             service="auth",
             event_type="password_change_success",
             message=f"Password changed successfully by admin: {current_user.username}",
@@ -639,7 +639,7 @@ async def change_password(
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
-            service="auth",
+            service="auth", # type: ignore
             error_name="PasswordChangeError",
             error_message=f"Password change failed: {str(e.detail)}",
             user_id=current_user.id,
@@ -746,7 +746,7 @@ async def validate_password(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_system_operation(
+        await audit_logger.log_system_operation(
             service="auth",
             operation="password_validation",
             message="Password validation performed",
@@ -757,7 +757,7 @@ async def validate_password(
             user_id_provided=validation_request.user_id is not None,
             user_agent=user_agent,
             success=True
-        )
+        ) # type: ignore
         
         return PasswordValidationResponse(
             is_valid=result.get("is_valid", False),
@@ -771,7 +771,7 @@ async def validate_password(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="PasswordValidationError",
             error_message=f"Password validation failed: {str(e)}",
@@ -851,7 +851,7 @@ async def get_password_policy(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_system_operation(
+        await audit_logger.log_system_operation(
             service="auth",
             operation="password_policy_access",
             message="Password policy configuration accessed",
@@ -859,7 +859,7 @@ async def get_password_policy(
             policy_accessed=True,
             user_agent=user_agent,
             success=True
-        )
+        ) # type: ignore
         
         return PolicyConfigurationResponse(
             min_password_length=password_service.min_password_length,
@@ -878,7 +878,7 @@ async def get_password_policy(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="PasswordPolicyAccessError",
             error_message=f"Failed to retrieve password policy: {str(e)}",
@@ -958,7 +958,7 @@ async def admin_unlock_user(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_security_event(
+        await audit_logger.log_security_event(
             service="auth",
             event_type="admin_unlock_success",
             message=f"User account unlocked by admin: {current_user.username}",
@@ -969,7 +969,7 @@ async def admin_unlock_user(
             target_user_id=unlock_request.user_id,
             admin_permissions=current_user.permissions,
             user_agent=user_agent,
-            success=True
+            success=True # type: ignore
         )
         
         return result
@@ -979,7 +979,7 @@ async def admin_unlock_user(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="AdminUnlockError",
             error_message=f"Failed to unlock user account: {str(e.detail)}",
@@ -996,7 +996,7 @@ async def admin_unlock_user(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="AdminUnlockSystemError",
             error_message=f"System error during user unlock: {str(e)}",
@@ -1078,7 +1078,7 @@ async def admin_reset_password(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_security_event(
+        await audit_logger.log_security_event(
             service="auth",
             event_type="admin_password_reset_success",
             message=f"Password reset by admin: {current_user.username}",
@@ -1090,7 +1090,7 @@ async def admin_reset_password(
             admin_permissions=current_user.permissions,
             user_agent=user_agent,
             success=True
-        )
+        ) # type: ignore
         
         return result
         
@@ -1099,7 +1099,7 @@ async def admin_reset_password(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="AdminPasswordResetError",
             error_message=f"Failed to reset user password: {str(e.detail)}",
@@ -1116,7 +1116,7 @@ async def admin_reset_password(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="AdminPasswordResetSystemError",
             error_message=f"System error during password reset: {str(e)}",

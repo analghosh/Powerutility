@@ -195,7 +195,7 @@ async def upload_csv_data(
         logger.info("Upload request [%s] completed successfully", request_id)
         
         # Log successful file upload activity
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="upload",
@@ -208,7 +208,7 @@ async def upload_csv_data(
             provider_type=provider_type,
             request_id=request_id,
             endpoint="/file-upload/upload"
-        )
+        ) # type: ignore
         
         # Trigger immediate background processing
         if background_tasks and result.get("success"):
@@ -229,7 +229,7 @@ async def upload_csv_data(
         
     except HTTPException as http_exc:
         # Log failed file upload activity for HTTP exceptions
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="file_upload_failed",
@@ -241,14 +241,14 @@ async def upload_csv_data(
             provider_type=provider_type,
             status_code=http_exc.status_code,
             endpoint="/file-upload/upload"
-        )
+        ) # type: ignore
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
         logger.error("Unexpected error in upload_csv_data endpoint: %s", e)
         
         # Log failed file upload activity for unexpected errors
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="file_upload_error",
@@ -260,7 +260,7 @@ async def upload_csv_data(
             provider_type=provider_type,
             exception_type=type(e).__name__,
             endpoint="/file-upload/upload"
-        )
+        ) # type: ignore
         
         raise HTTPException(
             status_code=500,
@@ -391,7 +391,7 @@ async def get_upload_status(
         result = await controller.get_upload_status(
             upload_id=upload_id,
             user_id=user_id,
-            session_id=session_id
+            session_id=session_id # type: ignore
         )
         
         # Log successful upload status check activity
@@ -405,7 +405,7 @@ async def get_upload_status(
             upload_status=result.get("status"),
             file_name=result.get("file_name"),
             endpoint=f"/file-upload/upload/{upload_id}/status"
-        )
+        ) # type: ignore
         json_result = JSONResponse(status_code=200, content=result)
         logger.info("Upload status retrieved successfully: %s", json_result)
         return json_result
@@ -413,7 +413,7 @@ async def get_upload_status(
     except HTTPException as http_exc:
         # Log failed upload status check for HTTP exceptions
         audit_logger.log_user_action(
-            service="ingestion",
+            service="ingestion", # type: ignore
             user_id=user_id,
             action="upload_status_check_failed",
             message=f"Upload status check failed: {http_exc.detail}",
@@ -422,13 +422,13 @@ async def get_upload_status(
             upload_id=upload_id,
             status_code=http_exc.status_code,
             endpoint=f"/file-upload/upload/{upload_id}/status"
-        )
+        ) # type: ignore
         raise
     except Exception as e:
         logger.error("Unexpected error in get_upload_status endpoint: %s", e)
         
         # Log failed upload status check for unexpected errors
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="upload_status_check_error",
@@ -438,7 +438,7 @@ async def get_upload_status(
             upload_id=upload_id,
             exception_type=type(e).__name__,
             endpoint=f"/file-upload/upload/{upload_id}/status"
-        )
+        ) # type: ignore
         
         raise HTTPException(
             status_code=500,
@@ -679,8 +679,8 @@ async def get_uploads_paginated(
             status_filter=status,
             sort_by=sort_by,
             sort_order=sort_order_int,
-            user_id=user_id,
-            session_id=session_id
+            user_id=user_id, # type: ignore
+            session_id=session_id # type: ignore
         )
         
         logger.info("Paginated uploads request [%s] completed successfully", request_id)
@@ -697,7 +697,7 @@ async def get_uploads_paginated(
             status_filter=status,
             total_count=result["pagination"]["total_count"],
             request_id=request_id,
-            endpoint="/file-upload/uploads"
+            endpoint="/file-upload/uploads" # type: ignore
         )
         
         return JSONResponse(
@@ -707,7 +707,7 @@ async def get_uploads_paginated(
         
     except HTTPException as http_exc:
         # Log failed pagination request for HTTP exceptions
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="uploads_paginated_failed",
@@ -718,15 +718,15 @@ async def get_uploads_paginated(
             page_size=page_size,
             status_filter=status,
             status_code=http_exc.status_code,
-            endpoint="/file-upload/uploads"
-        )
+            endpoint="/file-upload/uploads" # type: ignore
+        ) # type: ignore
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
         logger.error("Unexpected error in get_uploads_paginated endpoint: %s", e)
         
         # Log failed pagination request for unexpected errors
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="uploads_paginated_error",
@@ -737,8 +737,8 @@ async def get_uploads_paginated(
             page_size=page_size,
             status_filter=status,
             exception_type=type(e).__name__,
-            endpoint="/file-upload/uploads"
-        )
+            endpoint="/file-upload/uploads" # type: ignore
+        ) # type: ignore
         
         raise HTTPException(
             status_code=500,
@@ -885,8 +885,8 @@ async def get_csv_format(
         result = await controller.get_csv_format(
             data_type=data_type,
             provider_code=provider_code,
-            user_id=user_id,
-            session_id=session_id
+            user_id=user_id, # type: ignore
+            session_id=session_id # type: ignore
         )
         
         logger.info("CSV format request [%s] completed successfully", request_id)
@@ -901,7 +901,7 @@ async def get_csv_format(
             data_type=data_type,
             provider_code=provider_code,
             request_id=request_id,
-            endpoint=f"/file-upload/csv-format/{data_type}/{provider_code}"
+            endpoint=f"/file-upload/csv-format/{data_type}/{provider_code}" # type: ignore
         )
         
         # Extract CSV template from result
@@ -927,7 +927,7 @@ async def get_csv_format(
         
     except HTTPException as http_exc:
         # Log failed CSV format request for HTTP exceptions
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="csv_format_request_failed",
@@ -937,15 +937,15 @@ async def get_csv_format(
             data_type=data_type,
             provider_code=provider_code,
             status_code=http_exc.status_code,
-            endpoint=f"/file-upload/csv-format/{data_type}/{provider_code}"
-        )
+            endpoint=f"/file-upload/csv-format/{data_type}/{provider_code}" # type: ignore
+        ) # type: ignore
         # Re-raise HTTP exceptions
         raise
     except Exception as e:
         logger.error("Unexpected error in get_csv_format endpoint: %s", e)
         
         # Log failed CSV format request for unexpected errors
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="csv_format_request_error",
@@ -1019,7 +1019,7 @@ async def download_upload_file(
         result = await controller.download_file(
             upload_id=upload_id,
             user_id=user_id,
-            session_id=session_id
+            session_id=session_id # type: ignore
         )
         
         file_path = result.get("file_path")
