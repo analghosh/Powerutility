@@ -16,7 +16,7 @@ from ..repository.dashboard_repository import DashboardRepository
 from ..repository.scheduling_requissition_calculation_repository import SchedulingRequisitionCalculationRepository
 
 
-from ..core.helpers import dsm_calculation
+from ...core.helpers import dsm_calculation
 
 logger = logging.getLogger(__name__)
 
