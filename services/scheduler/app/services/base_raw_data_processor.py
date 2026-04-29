@@ -101,7 +101,7 @@ class BaseRawDataProcessor(ABC):
                     },
                     service="scheduler"
                 )
-                execution_log_id = self.job_detail_repository.log_execution(job_detail)
+                execution_log_id = await self.job_detail_repository.log_execution(job_detail)
                 logger.info("Logged job execution start: %s", execution_id)
             except (ValueError, TypeError, OSError) as log_error:
                 logger.warning("Failed to log job execution start: %s", str(log_error))
@@ -123,7 +123,7 @@ class BaseRawDataProcessor(ABC):
                 # Log job completion with no records
                 if self.job_detail_repository and execution_log_id:
                     try:
-                        self.job_detail_repository.update_execution(execution_id, {
+                        await self.job_detail_repository.update_execution(execution_id, {
                             "execution_end": end_time,
                             "duration_seconds": execution_time,
                             "status": "success",
@@ -256,7 +256,7 @@ class BaseRawDataProcessor(ABC):
             # Log job completion
             if self.job_detail_repository and execution_log_id:
                 try:
-                    self.job_detail_repository.update_execution(execution_id, {
+                    await self.job_detail_repository.update_execution(execution_id, {
                         "execution_end": end_time,
                         "duration_seconds": execution_time,
                         "status": status,
@@ -290,7 +290,7 @@ class BaseRawDataProcessor(ABC):
             # Log job failure
             if self.job_detail_repository and execution_log_id:
                 try:
-                    self.job_detail_repository.update_execution(execution_id, {
+                    await self.job_detail_repository.update_execution(execution_id, {
                         "execution_end": end_time,
                         "duration_seconds": execution_time,
                         "status": "error",

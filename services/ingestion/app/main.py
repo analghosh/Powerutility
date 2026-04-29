@@ -276,7 +276,7 @@ async def cron_status():
     return {
         "service": "ingestion-service",
         "cron_scheduler_running": cron_manager.is_running(),
-        "jobs": cron_manager.get_all_jobs()
+        "jobs": await cron_manager.get_all_jobs()
     }
 
 

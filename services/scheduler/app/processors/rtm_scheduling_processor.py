@@ -2306,8 +2306,8 @@ class RTMSchedulingProcessor(BaseProcessor):
                 'sldc_revision_SG': 0
             }
 
-    def get_scheduling_graph_data(self, schedule_date: str, from_block: Optional[int] = None, 
-                                  to_block: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_scheduling_graph_data(self, schedule_date: str, from_block: Optional[int] = None,
+                                        to_block: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Provides aggregated data for graph visualization
         
@@ -2333,7 +2333,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             
             # Get filterData from supply_serve (replaces availability_PG.filterData)
             # Filter by category
-            filter_data_list = self.supply_repo.get_filter_data_by_category(
+            filter_data_list = await self.supply_repo.get_filter_data_by_category(
                 schedule_date=schedule_date,
                 filter_type="category",
                 dc_sg_type=None,  # Get all DC_SG types
@@ -2349,7 +2349,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                     filter_data_dict[int(time_block)] = item
             
             # Get demand forecast data from demand_serve (replaces availability_PG.Demand_actual_vs_forecast)
-            demand_data = self.serve_demand_repo.get_demand(schedule_date)
+            demand_data = await self.serve_demand_repo.get_demand(schedule_date)
             
             # Convert demand_data to dict keyed by time_block for easier lookup
             demand_dict = {}

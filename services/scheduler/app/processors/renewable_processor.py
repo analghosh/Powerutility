@@ -519,7 +519,7 @@ class RenewableProcessor(BaseProcessor):
         schedule = "0 0 * * *"
         start_time = datetime.now()
 
-        execution_id: str = self._record_job_start(job_type, job_name, schedule, start_time) or ""
+        execution_id: str = await self._record_job_start(job_type, job_name, schedule, start_time) or ""
         if execution_id:
             self.set_correlation_id(execution_id)
 
@@ -557,7 +557,7 @@ class RenewableProcessor(BaseProcessor):
                 "execution_time": execution_time,
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -583,7 +583,7 @@ class RenewableProcessor(BaseProcessor):
                 "error": str(e),
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

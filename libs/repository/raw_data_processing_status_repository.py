@@ -40,31 +40,37 @@ class RawDataProcessingStatusRepository(BaseRepository):
         self._create_collection_if_not_exists()
         self._create_indexes()
     
-    async def _create_indexes(self):
+    def _create_indexes(self):
         """Create necessary indexes for efficient querying"""
-        try:
-            # Index for status-based queries (most common for cron jobs)
-            self.collection.create_index([("status", 1), ("created_at", 1)])
-            
-            # Index for raw_data_id lookups
-            self.collection.create_index("raw_data_id")
-            
-            # Index for upload_id tracking
-            self.collection.create_index("upload_id", sparse=True)
-            
-            # Compound index for data_type and provider filtering
-            self.collection.create_index([("data_type", 1), ("provider_type", 1), ("status", 1)])
+        import asyncio
+        async def _do_create():
+            try:
+                # Index for status-based queries (most common for cron jobs)
+                await self.collection.create_index([("status", 1), ("created_at", 1)])
+                
+                # Index for raw_data_id lookups
+                await self.collection.create_index("raw_data_id")
+                
+                # Index for upload_id tracking
+                await self.collection.create_index("upload_id", sparse=True)
+                
+                # Compound index for data_type and provider filtering
+                await self.collection.create_index([("data_type", 1), ("provider_type", 1), ("status", 1)])
 
-            # Compound index on provider_id and status for created_at in ascending order for efficient retrieval of pending records by provider
-            self.collection.create_index([("provider_id", 1), ("status", 1), ("created_at", 1)])
-            
-            # Index for retry logic
-            self.collection.create_index([("status", 1), ("retry_count", 1)])
-            
-            logger.info("Raw data processing status indexes created successfully")
-            
-        except Exception as e:
-            logger.error("Error creating processing status indexes: %s", e, exc_info=True)
+                # Compound index on provider_id and status for created_at in ascending order for efficient retrieval of pending records by provider
+                await self.collection.create_index([("provider_id", 1), ("status", 1), ("created_at", 1)])
+                
+                # Index for retry logic
+                await self.collection.create_index([("status", 1), ("retry_count", 1)])
+                
+                logger.info("Raw data processing status indexes created successfully")
+                
+            except Exception as e:
+                logger.error("Error creating processing status indexes: %s", e, exc_info=True)
+        try:
+            asyncio.get_running_loop().create_task(_do_create())
+        except RuntimeError:
+            pass
     
     async def create_processing_status(self, entity: RawDataProcessingStatusEntity) -> str:
         """
@@ -85,7 +91,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 raise ValueError("raw_data_id is required")
             
             # Insert document
-            result = self.collection.insert_one(data)
+            result = await self.collection.insert_one(data)
             
             logger.info("Created processing status record: %s (raw_data_id: %s, status: %s)", 
                        result.inserted_id, data.get("raw_data_id"), data.get("status"))
@@ -127,7 +133,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             # Add any additional fields
             update_data.update(kwargs)
             
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"_id": ObjectId(status_id)},
                 {"$set": update_data}
             )
@@ -193,7 +199,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
         """
         try:
             # Note: raw_data_id is stored as a string in this collection
-            record = self.collection.find_one({"raw_data_id": raw_data_id})
+            record = await self.collection.find_one({"raw_data_id": raw_data_id})
             if record:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
@@ -214,7 +220,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             Dict[str, Any]: Processing status record or None
         """
         try:
-            record = self.collection.find_one({"upload_id": upload_id})
+            record = await self.collection.find_one({"upload_id": upload_id})
             if record:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])

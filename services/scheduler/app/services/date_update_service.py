@@ -68,7 +68,7 @@ class DateUpdate:
         start_time = datetime.now()
         
         # Get job data to retrieve payload and other configuration
-        job_data = job_data_repository.get_job(job_type)
+        job_data = await job_data_repository.get_job(job_type)
         if not job_data:
             logger.error("Job data not found for job_type: %s", job_type)
             return
@@ -83,7 +83,7 @@ class DateUpdate:
             logger.info("Job payload: %s", payload)
         
         # Record job start - pass job_data to avoid redundant DB call
-        execution_id = self._record_job_start(job_data, start_time)
+        execution_id = await self._record_job_start(job_data, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return
@@ -108,7 +108,7 @@ class DateUpdate:
             logger.info("   - Execution time: %.2f seconds", execution_time)
             
             success = result.get('status') == 'success'
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -129,7 +129,7 @@ class DateUpdate:
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
             error_result = {'error': str(e), 'execution_time': execution_time}
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -157,7 +157,7 @@ class DateUpdate:
             logger.error("Error in executeUpdateJob: %s", str(e))
             return {'status': 'error', 'details': str(e)}
 
-    def _record_job_start(self, job_data: Dict[str, Any], execution_start: datetime) -> Optional[str]:
+    async def _record_job_start(self, job_data: Dict[str, Any], execution_start: datetime) -> Optional[str]:
         """Record job start in audit database and return execution_id"""
         try:        
             # Extract details from the already-fetched job_data
@@ -190,7 +190,7 @@ class DateUpdate:
                 }
             )
             
-            job_detail_repository.log_execution(job_detail)
+            await job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (job_type: %s, execution_id: %s) in audit database", 
                        job_id, job_type, execution_id)
             return execution_id
@@ -199,7 +199,7 @@ class DateUpdate:
             logger.error("Failed to record job start for %s: %s", job_data.get('job_type', 'unknown'), str(e))
             return None
 
-    def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
+    async def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
                               execution_start: datetime, execution_end: datetime,
                               execution_id: str, status: str, success: bool, 
                               result: Optional[Dict[str, Any]] = None,
@@ -210,7 +210,7 @@ class DateUpdate:
             
             # Get the job_id (ObjectId) from job_data collection using job_type
             
-            job_data = job_data_repository.get_job(job_type)
+            job_data = await job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return
@@ -239,7 +239,7 @@ class DateUpdate:
                 }
             )
             
-            job_detail_repository.log_execution(job_detail)
+            await job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job completion for %s (job_type: %s, execution_id: %s, status: %s) in audit database", 
                        job_id, job_type, execution_id, status)
                 

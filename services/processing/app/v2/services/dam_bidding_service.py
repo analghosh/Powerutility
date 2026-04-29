@@ -285,9 +285,9 @@ class DAMBiddingService:
             # Complex demand forecast data retrieval similar to RTM
             from datetime import date
             target_date = datetime.strptime(schedule_date, '%Y-%m-%d').date()
-            demand_forecast = self.demand_repo.get_demand_forecast_data_pipeline(
-                collection_name="demand_serve", 
-                target_date=target_date, 
+            demand_forecast = await self.demand_repo.get_demand_forecast_data_pipeline(
+                collection_name="demand_serve",
+                target_date=target_date,
                 market_type="DAF"
             )
             

@@ -109,7 +109,7 @@ class DAMBiddingServices:
             # ---------------------------------------------------------
             # 3. Fetch book data ONLY for other users
             # ---------------------------------------------------------
-            book_details = self.generic_repo.find_many(
+            book_details = await self.generic_repo.find_many(
                 self.dam_book_collection,
                 {
                     "scheduled_at": scheduled_at,
@@ -132,7 +132,7 @@ class DAMBiddingServices:
             # 5. Fetch time blocks once
             # ---------------------------------------------------------
             if all_time_pairs:
-                time_blocks = self.generic_repo.find_many(
+                time_blocks = await self.generic_repo.find_many(
                     self.time_block_collection,
                     {
                         "$or": [

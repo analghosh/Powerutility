@@ -298,7 +298,7 @@ class RTMBiddingService:
                 
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = list(self.demand_repo.get_data_pipeline("demand_serve", from_block, to_block, scheduled_at))
+            getForecastedValue = await self.demand_repo.get_data_pipeline("demand_serve", from_block, to_block, scheduled_at)
             
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             
@@ -1111,15 +1111,15 @@ class RTMBiddingService:
             logger.info(f"Retrieved scheduling data: {len(scheduling_data) if scheduling_data else 0} records")
             
             # Additional complex calculations similar to RTM
-            demand_forecast = self.demand_repo.get_demand_forecast_data_pipeline(
+            demand_forecast = await self.demand_repo.get_demand_forecast_data_pipeline(
                 collection_name="demand_serve",  # Using demand_serve instead of serve_demand
-                target_date=datetime.strptime(schedule_date, '%Y-%m-%d').date(), 
+                target_date=datetime.strptime(schedule_date, '%Y-%m-%d').date(),
                 market_type="IDF"  # Using IDF for RTM instead of DAF
             )
-            
+
             logger.info(f"Retrieved demand forecast: {len(demand_forecast) if demand_forecast else 0} records")
-            
-            exchange_data = self.exchange_repo.get_exchange_data(
+
+            exchange_data = await self.exchange_repo.get_exchange_data(
                 schedule_date=schedule_date,
                 current_block=self.currentBlk  # Using current block for RTM
             )
@@ -1306,9 +1306,9 @@ class RTMBiddingService:
             logger.info(f"Retrieved plant data for scheduling: {len(getplantsData) if getplantsData else 0} records")
             
             # Get demand forecast data
-            get_forecasted_value = self.demand_repo.get_demand_forecast_data_pipeline(
+            get_forecasted_value = await self.demand_repo.get_demand_forecast_data_pipeline(
                 collection_name="demand_serve",  # Using demand_serve instead of serve_demand
-                target_date=datetime.strptime(schedule_date, '%Y-%m-%d').date(), 
+                target_date=datetime.strptime(schedule_date, '%Y-%m-%d').date(),
                 market_type="IDF"  # Using IDF for RTM
             )
             

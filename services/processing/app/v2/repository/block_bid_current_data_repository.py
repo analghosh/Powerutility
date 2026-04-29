@@ -58,7 +58,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 }
             ]
             cursor = self.collection.aggregate(pipeline)
-            return {(doc["_id"]["trade_session"], doc["_id"]["time_block"]): doc["max_revision"] for doc in cursor}
+            docs = await cursor.to_list(length=1000)
+            return {(doc["_id"]["trade_session"], doc["_id"]["time_block"]): doc["max_revision"] for doc in docs}
         except Exception as e:
             logger.error(f"Failed to get max revisions: {str(e)}")
             return {}
@@ -114,11 +115,10 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 self.collection.find({"biding_date": date})
                 .sort([("from", 1), ("trade_session", 1), ("revision_no", 1)])
             )
-            result = []
-            for doc in cursor:
+            result = await cursor.to_list(length=10000)
+            for doc in result:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
-                result.append(doc)
             return result
 
         except Exception as e:
@@ -414,8 +414,9 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$replaceRoot": {"newRoot": "$doc"}},
             ]
             cursor = self.collection.aggregate(pipeline)
+            docs = await cursor.to_list(length=1000)
             result: Dict[tuple, Dict[str, Any]] = {}
-            for doc in cursor:
+            for doc in docs:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
                 result[(int(doc["trade_session"]), doc.get("time_block", ""))] = doc

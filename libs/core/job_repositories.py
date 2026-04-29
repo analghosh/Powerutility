@@ -3,6 +3,7 @@ Shared Job Repositories
 Database repositories for job-related operations that can be used across all services
 """
 
+import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -29,25 +30,32 @@ class JobDataRepository(BaseRepository):
         # Create indexes for better performance
         self._create_indexes()
     
-    async def _create_indexes(self):
+    def _create_indexes(self):
         """Create database indexes for optimal performance"""
+        async def _do_create():
+            try:
+                # Primary indexes
+                await self.collection.create_index([("job_type", 1)], unique=True)
+                await self.collection.create_index([("enabled", 1)])
+                await self.collection.create_index([("type", 1)])
+                await self.collection.create_index([("priority", 1)])
+                await self.collection.create_index([("service", 1)])
+                
+                # Compound indexes
+                await self.collection.create_index([("enabled", 1), ("type", 1)])
+                await self.collection.create_index([("enabled", 1), ("service", 1)])
+                await self.collection.create_index([("created_at", -1)])
+                await self.collection.create_index([("updated_at", -1)])
+                
+                logger.info("Created indexes for job_data collection")
+            except (ValueError, TypeError, OSError) as e:
+                logger.error("Failed to create indexes: %s", str(e))
+        
         try:
-            # Primary indexes
-            self.collection.create_index([("job_type", 1)], unique=True)
-            self.collection.create_index([("enabled", 1)])
-            self.collection.create_index([("type", 1)])
-            self.collection.create_index([("priority", 1)])
-            self.collection.create_index([("service", 1)])
-            
-            # Compound indexes
-            self.collection.create_index([("enabled", 1), ("type", 1)])
-            self.collection.create_index([("enabled", 1), ("service", 1)])
-            self.collection.create_index([("created_at", -1)])
-            self.collection.create_index([("updated_at", -1)])
-            
-            logger.info("Created indexes for job_data collection")
-        except (ValueError, TypeError, OSError) as e:
-            logger.error("Failed to create indexes: %s", str(e))
+            loop = asyncio.get_running_loop()
+            loop.create_task(_do_create())
+        except RuntimeError:
+            pass
     
     async def create_job(self, job_data: JobData) -> str:
         """
@@ -65,7 +73,7 @@ class JobDataRepository(BaseRepository):
                 raise ValueError("Service field is required when creating a job")
             
             # Check if job already exists for this service
-            existing_job = self.get_job(job_data.job_type)
+            existing_job = await self.get_job(job_data.job_type)
             if existing_job:
                 # If it exists but for a different service, that's an error
                 if existing_job.get("service") != job_data.service:
@@ -80,7 +88,7 @@ class JobDataRepository(BaseRepository):
             # Ensure service field is included in the document
             job_dict["service"] = job_data.service
             
-            result = self.collection.insert_one(job_dict)
+            result = await self.collection.insert_one(job_dict)
             job_id = str(result.inserted_id)
             
             logger.info("Created job: %s (ID: %s, Service: %s)", 
@@ -102,7 +110,7 @@ class JobDataRepository(BaseRepository):
             Job data or None if not found
         """
         try:
-            job = self.collection.find_one({"job_type": job_type})
+            job = await self.collection.find_one({"job_type": job_type})
             if job and '_id' in job:
                 job['_id'] = str(job['_id'])
             return job
@@ -122,7 +130,7 @@ class JobDataRepository(BaseRepository):
         """
         try:
             from bson import ObjectId
-            job = self.collection.find_one({"_id": ObjectId(job_id)})
+            job = await self.collection.find_one({"_id": ObjectId(job_id)})
             if job and '_id' in job:
                 job['_id'] = str(job['_id'])
             return job
@@ -235,7 +243,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to get jobs by service %s: %s", service, str(e))
             return []
     
-    def update_job(self, job_type: str, update_data: JobDataUpdate) -> bool:
+    async def update_job(self, job_type: str, update_data: JobDataUpdate) -> bool:
         """
         Update a job configuration
         
@@ -250,7 +258,7 @@ class JobDataRepository(BaseRepository):
             update_dict = update_data.model_dump(exclude_none=True)
             update_dict["updated_at"] = datetime.now()
             
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"job_type": job_type},
                 {
                     "$set": update_dict,
@@ -269,7 +277,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to update job %s: %s", job_type, str(e))
             return False
     
-    def enable_job(self, job_type: str) -> bool:
+    async def enable_job(self, job_type: str) -> bool:
         """
         Enable a job
         
@@ -279,9 +287,9 @@ class JobDataRepository(BaseRepository):
         Returns:
             bool: True if enabled successfully
         """
-        return self.update_job(job_type, JobDataUpdate(enabled=True))
+        return await self.update_job(job_type, JobDataUpdate(enabled=True))
     
-    def disable_job(self, job_type: str) -> bool:
+    async def disable_job(self, job_type: str) -> bool:
         """
         Disable a job
         
@@ -291,9 +299,9 @@ class JobDataRepository(BaseRepository):
         Returns:
             bool: True if disabled successfully
         """
-        return self.update_job(job_type, JobDataUpdate(enabled=False))
+        return await self.update_job(job_type, JobDataUpdate(enabled=False))
     
-    def update_job_enabled_status(self, job_type: str, enabled: bool) -> bool:
+    async def update_job_enabled_status(self, job_type: str, enabled: bool) -> bool:
         """
         Update the enabled status of a job
         
@@ -304,9 +312,9 @@ class JobDataRepository(BaseRepository):
         Returns:
             bool: True if successful, False otherwise
         """
-        return self.update_job(job_type, JobDataUpdate(enabled=enabled))
+        return await self.update_job(job_type, JobDataUpdate(enabled=enabled))
     
-    def delete_job(self, job_type: str) -> bool:
+    async def delete_job(self, job_type: str) -> bool:
         """
         Delete a job configuration
         
@@ -317,7 +325,7 @@ class JobDataRepository(BaseRepository):
             bool: True if deleted successfully
         """
         try:
-            result = self.collection.delete_one({"job_type": job_type})
+            result = await self.collection.delete_one({"job_type": job_type})
             
             if result.deleted_count > 0:
                 logger.info("Deleted job: %s", job_type)
@@ -330,7 +338,7 @@ class JobDataRepository(BaseRepository):
             logger.error("Failed to delete job %s: %s", job_type, str(e))
             return False
     
-    def job_exists(self, job_type: str) -> bool:
+    async def job_exists(self, job_type: str) -> bool:
         """
         Check if a job exists
         
@@ -341,13 +349,13 @@ class JobDataRepository(BaseRepository):
             bool: True if job exists
         """
         try:
-            count = self.collection.count_documents({"job_type": job_type})
+            count = await self.collection.count_documents({"job_type": job_type})
             return count > 0
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to check job existence %s: %s", job_type, str(e))
             return False
     
-    def get_enabled_jobs(self, service: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_enabled_jobs(self, service: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get all enabled jobs
         
@@ -357,9 +365,9 @@ class JobDataRepository(BaseRepository):
         Returns:
             List of enabled job configurations
         """
-        return self.get_all_jobs(enabled_only=True, service=service)
+        return await self.get_all_jobs(enabled_only=True, service=service)
     
-    def get_job_count(self, enabled_only: bool = False, service: Optional[str] = None) -> int:
+    async def get_job_count(self, enabled_only: bool = False, service: Optional[str] = None) -> int:
         """
         Get total job count
         
@@ -377,13 +385,13 @@ class JobDataRepository(BaseRepository):
             if service:
                 query["service"] = service
             
-            return self.collection.count_documents(query)
+            return await self.collection.count_documents(query)
             
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get job count: %s", str(e))
             return 0
     
-    def get_all_services(self) -> List[str]:
+    async def get_all_services(self) -> List[str]:
         """
         Get list of all unique services from job_data collection
         
@@ -392,7 +400,7 @@ class JobDataRepository(BaseRepository):
         """
         try:
             # Use distinct to get unique service values
-            services = self.collection.distinct("service")
+            services = await self.collection.distinct("service")
             # Filter out None/empty values and return sorted list
             return sorted([s for s in services if s])
             
@@ -416,31 +424,38 @@ class JobDetailRepository(BaseRepository):
         # Create indexes for better performance
         self._create_indexes()
     
-    async def _create_indexes(self):
+    def _create_indexes(self):
         """Create database indexes for optimal performance"""
+        async def _do_create():
+            try:
+                # Primary indexes for time series data
+                await self.collection.create_index([("job_id", 1)])
+                await self.collection.create_index([("execution_id", 1)])
+                await self.collection.create_index([("status", 1)])
+                await self.collection.create_index([("success", 1)])
+                await self.collection.create_index([("service", 1)])
+                
+                # Time-based indexes (most important for time series)
+                await self.collection.create_index([("execution_start", -1)])
+                await self.collection.create_index([("created_at", -1)])
+                
+                # Compound indexes for common query patterns
+                await self.collection.create_index([("job_id", 1), ("execution_start", -1)])
+                await self.collection.create_index([("job_id", 1), ("status", 1)])
+                await self.collection.create_index([("job_id", 1), ("success", 1)])
+                await self.collection.create_index([("service", 1), ("execution_start", -1)])
+                await self.collection.create_index([("status", 1), ("execution_start", -1)])
+                await self.collection.create_index([("success", 1), ("execution_start", -1)])
+                
+                logger.info("Created indexes for job_detail collection")
+            except (ValueError, TypeError, OSError) as e:
+                logger.error("Failed to create indexes: %s", str(e))
+        
         try:
-            # Primary indexes for time series data
-            self.collection.create_index([("job_id", 1)])
-            self.collection.create_index([("execution_id", 1)])
-            self.collection.create_index([("status", 1)])
-            self.collection.create_index([("success", 1)])
-            self.collection.create_index([("service", 1)])
-            
-            # Time-based indexes (most important for time series)
-            self.collection.create_index([("execution_start", -1)])
-            self.collection.create_index([("created_at", -1)])
-            
-            # Compound indexes for common query patterns
-            self.collection.create_index([("job_id", 1), ("execution_start", -1)])
-            self.collection.create_index([("job_id", 1), ("status", 1)])
-            self.collection.create_index([("job_id", 1), ("success", 1)])
-            self.collection.create_index([("service", 1), ("execution_start", -1)])
-            self.collection.create_index([("status", 1), ("execution_start", -1)])
-            self.collection.create_index([("success", 1), ("execution_start", -1)])
-            
-            logger.info("Created indexes for job_detail collection")
-        except (ValueError, TypeError, OSError) as e:
-            logger.error("Failed to create indexes: %s", str(e))
+            loop = asyncio.get_running_loop()
+            loop.create_task(_do_create())
+        except RuntimeError:
+            pass
     
     async def log_execution(self, job_detail: JobDetail) -> str:
         """
@@ -466,7 +481,7 @@ class JobDetailRepository(BaseRepository):
             # Ensure service field is included in the document
             job_dict["service"] = job_detail.service
             
-            result = self.collection.insert_one(job_dict)
+            result = await self.collection.insert_one(job_dict)
             execution_id = str(result.inserted_id)
             
             logger.info("Logged job execution: %s (Service: %s, Execution ID: %s)", 
@@ -509,7 +524,7 @@ class JobDetailRepository(BaseRepository):
                 filter_query["execution_start"] = date_filter
             
             # Execute query with pagination
-            cursor = self.collection.find(
+            cursor = await self.collection.find(
                 filter_query,
                 {"_id": 0}
             ).sort("execution_start", -1).skip(query.skip).limit(query.limit).to_list(length=10000)
@@ -530,7 +545,7 @@ class JobDetailRepository(BaseRepository):
             List of execution logs for the job
         """
         try:
-            cursor = self.collection.find(
+            cursor = await self.collection.find(
                 {"job_id": job_id},
                 {"_id": 0}
             ).sort("execution_start", -1).limit(limit).to_list(length=10000)
@@ -550,7 +565,7 @@ class JobDetailRepository(BaseRepository):
             bool: True if recent successful execution logs exist
         """
         try:
-            count = self.collection.count_documents(
+            count = await self.collection.count_documents(
                 {
                     "job_id": job_id,
                     "status": "success"
@@ -588,7 +603,7 @@ class JobDetailRepository(BaseRepository):
             if service:
                 filter_query["service"] = service
             
-            count = self.collection.count_documents(filter_query)
+            count = await self.collection.count_documents(filter_query)
             return count > 0
             
         except (ValueError, TypeError, OSError) as e:
@@ -606,7 +621,7 @@ class JobDetailRepository(BaseRepository):
             Execution log or None if not found
         """
         try:
-            execution = self.collection.find_one(
+            execution = await self.collection.find_one(
                 {"execution_id": execution_id},
                 {"_id": 0}
             )
@@ -629,7 +644,7 @@ class JobDetailRepository(BaseRepository):
         try:
             update_data["updated_at"] = datetime.now()
             
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"execution_id": execution_id},
                 {"$set": update_data}
             )
@@ -660,20 +675,20 @@ class JobDetailRepository(BaseRepository):
             cutoff_time = datetime.now() - timedelta(days=days)
             
             # Get total executions
-            total_executions = self.collection.count_documents({
+            total_executions = await self.collection.count_documents({
                 "job_id": job_id,
                 "execution_start": {"$gte": cutoff_time}
             })
             
             # Get successful executions
-            successful_executions = self.collection.count_documents({
+            successful_executions = await self.collection.count_documents({
                 "job_id": job_id,
                 "success": True,
                 "execution_start": {"$gte": cutoff_time}
             })
             
             # Get failed executions
-            failed_executions = self.collection.count_documents({
+            failed_executions = await self.collection.count_documents({
                 "job_id": job_id,
                 "success": False,
                 "execution_start": {"$gte": cutoff_time}
@@ -707,7 +722,7 @@ class JobDetailRepository(BaseRepository):
             max_duration = duration_stats[0]["max_duration"] if duration_stats else 0
             
             # Get last execution
-            last_execution = self.collection.find_one(
+            last_execution = await self.collection.find_one(
                 {"job_id": job_id},
                 {"_id": 0},
                 sort=[("execution_start", -1)]
@@ -741,7 +756,7 @@ class JobDetailRepository(BaseRepository):
                 "last_execution": None
             }
     
-    def get_old_executions_for_migration(self, days_old: int) -> List[Dict[str, Any]]:
+    async def get_old_executions_for_migration(self, days_old: int) -> List[Dict[str, Any]]:
         """
         Get old executions for migration to historical collection
         
@@ -754,7 +769,7 @@ class JobDetailRepository(BaseRepository):
         try:
             cutoff_time = datetime.now() - timedelta(days=days_old)
             
-            cursor = self.collection.find({
+            cursor = await self.collection.find({
                 "execution_start": {"$lt": cutoff_time}
             }).sort("execution_start", 1).to_list(length=10000)
 
@@ -762,7 +777,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to get old executions for migration: %s", str(e))
             return []
     
-    def delete_old_executions(self, days_old: int) -> int:
+    async def delete_old_executions(self, days_old: int) -> int:
         """
         Delete old executions from the active collection
         
@@ -775,7 +790,7 @@ class JobDetailRepository(BaseRepository):
         try:
             cutoff_time = datetime.now() - timedelta(days=days_old)
             
-            result = self.collection.delete_many({
+            result = await self.collection.delete_many({
                 "execution_start": {"$lt": cutoff_time}
             })
             
@@ -787,7 +802,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to delete old executions: %s", str(e))
             return 0
     
-    def get_execution_count(self, job_id: Optional[str] = None, days: Optional[int] = None, service: Optional[str] = None) -> int:
+    async def get_execution_count(self, job_id: Optional[str] = None, days: Optional[int] = None, service: Optional[str] = None) -> int:
         """
         Get count of execution logs
         
@@ -811,7 +826,7 @@ class JobDetailRepository(BaseRepository):
                 cutoff_time = datetime.now() - timedelta(days=days)
                 filter_query["execution_start"] = {"$gte": cutoff_time}
             
-            return self.collection.count_documents(filter_query)
+            return await self.collection.count_documents(filter_query)
             
         except (ValueError, TypeError, OSError) as e:
             logger.error("Failed to get execution count: %s", str(e))
@@ -872,7 +887,7 @@ class JobDetailRepository(BaseRepository):
         """
         try:
             # Get the most recent execution record
-            latest_execution = self.collection.find_one(
+            latest_execution = await self.collection.find_one(
                 {"job_id": job_id},
                 sort=[("execution_start", -1)]
             )
@@ -1046,7 +1061,7 @@ class JobDetailRepository(BaseRepository):
             if job_data_repository:
                 try:
                     # Get total count of ALL enabled jobs from job_data collection
-                    total_jobs = job_data_repository.get_job_count(enabled_only=True)
+                    total_jobs = await job_data_repository.get_job_count(enabled_only=True)
                     logger.info("Total available jobs in system: %d", total_jobs)
                 except Exception as e:
                     logger.warning("Failed to get total job_data count: %s", str(e))
@@ -1084,7 +1099,7 @@ class JobDetailRepository(BaseRepository):
             if job_data_repository:
                 try:
                     # Get all jobs to ensure we include all services (including "unknown")
-                    all_jobs = job_data_repository.get_all_jobs(enabled_only=True)
+                    all_jobs = await job_data_repository.get_all_jobs(enabled_only=True)
                     
                     # Group jobs by service (treat blank/empty service as 'scheduler')
                     service_job_counts = {}
@@ -1149,7 +1164,7 @@ class JobDetailRepository(BaseRepository):
                 "generated_at": datetime.now().isoformat()
             }
     
-    def update_job_progress(self, job_id: str, progress: int, current_step: str = "",
+    async def update_job_progress(self, job_id: str, progress: int, current_step: str = "",
                            estimated_completion: Optional[datetime] = None) -> bool:
         """
         Update job progress for a running job
@@ -1173,7 +1188,7 @@ class JobDetailRepository(BaseRepository):
             if estimated_completion:
                 update_data["estimated_completion"] = estimated_completion
             
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"job_id": job_id, "status": "running"},
                 {"$set": update_data}
             )
@@ -1217,7 +1232,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting all jobs from job_data: %s", str(e))
             return []
     
-    def get_job_execution_details(self, job_id: str, job_data_repository=None) -> Dict[str, Any]:
+    async def get_job_execution_details(self, job_id: str, job_data_repository=None) -> Dict[str, Any]:
         """
         Get detailed execution information for a specific job
         
@@ -1234,7 +1249,7 @@ class JobDetailRepository(BaseRepository):
             if job_data_repository:
                 try:
                     logger.info("Getting job data for job_id: %s", job_id)
-                    job_data = job_data_repository.get_job_by_id(job_id)
+                    job_data = await job_data_repository.get_job_by_id(job_id)
                     logger.info("Job data retrieved: %s", job_data)
                     if job_data:
                         job_info = {
@@ -1258,7 +1273,7 @@ class JobDetailRepository(BaseRepository):
             try:
                 logger.info("Getting execution history for job_id: %s", job_id)
                 # Get all execution records for this job
-                executions = self.collection.find(
+                executions = await self.collection.find(
                     {"job_id": job_id}
                 ).sort("execution_id", -1).limit(50).to_list(length=10000)  # Limit to last 50 executions
 
@@ -1545,7 +1560,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error cleaning up old logs: %s", str(e))
             return 0
     
-    def find_by_unique_key(self, job_type: str) -> Dict[str, Any]:
+    async def find_by_unique_key(self, job_type: str) -> Dict[str, Any]:
         """
         Find job by unique key
         
@@ -1556,7 +1571,7 @@ class JobDetailRepository(BaseRepository):
             Dict[str, Any]: Job configuration
         """
         try:
-            return self.collection.find_one({"job_type": job_type})
+            return await self.collection.find_one({"job_type": job_type})
             
         except Exception as e:
             logger.error("Error finding job by unique key: %s", str(e))

@@ -21,7 +21,7 @@ class DemandForecastRepository:
     def __init__(self):
         self.repository = GenericRepository()
 
-    def get_demand_forecast_data_pipeline(
+    async def get_demand_forecast_data_pipeline(
         self,
         collection_name: str,
         target_date: date,
@@ -78,13 +78,13 @@ class DemandForecastRepository:
                 }
             ]
             
-            result = self.repository.aggregate(collection_name, pipeline)
+            result = await self.repository.aggregate(collection_name, pipeline)
             return result
         except Exception as e:
             logger.exception(f"[DemandForecastRepository] Failed to execute demand forecast data pipeline: {str(e)}")
             raise
 
-    def get_monthly_average_mape_pipeline(
+    async def get_monthly_average_mape_pipeline(
         self,
         collection_name: str,
         match_stage: Dict[str, Any]
@@ -112,13 +112,13 @@ class DemandForecastRepository:
                 }}
             ]
             
-            result = self.repository.aggregate(collection_name, pipeline)
+            result = await self.repository.aggregate(collection_name, pipeline)
             return result
         except Exception as e:
             logger.exception(f"[DemandForecastRepository] Failed to execute monthly average MAPE pipeline: {str(e)}")
             raise
     
-    def get_data_pipeline(
+    async def get_data_pipeline(
     self,
     collection_name: str,
     from_block: int,
@@ -147,7 +147,7 @@ class DemandForecastRepository:
                 {"$project": {"_id": 0}}
             ]
             
-            result = self.repository.aggregate(collection_name, pipeline)
+            result = await self.repository.aggregate(collection_name, pipeline)
             return result
         except Exception as e:
             logger.exception(f"[DemandForecastRepository] Failed to execute monthly average MAPE pipeline: {str(e)}")

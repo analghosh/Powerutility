@@ -178,11 +178,11 @@ class CronManager(BaseCronManager):
                 
             # First, ensure jobs are seeded
             logger.info("Seeding default jobs...")
-            seeding_result = self.cron_job_seeder.seed_default_jobs()
+            seeding_result = self._safe_run_async(self.cron_job_seeder.seed_default_jobs())
             logger.info("Job seeding result: %s", seeding_result)
             
             # Get all enabled jobs from database
-            jobs = self.job_data_repository.get_all_jobs(enabled_only=True)
+            jobs = self._safe_run_async(self.job_data_repository.get_all_jobs(enabled_only=True))
             
             registered_count = 0
             for job_config in jobs:
@@ -410,8 +410,8 @@ class CronManager(BaseCronManager):
             for job_type, cron_job in self._registered_jobs.items():
                 if cron_job.enabled:
                     # Get job data from database to get priority
-                    job_data = self.job_data_repository.get_job(job_type)
-                    priority = (await job_data).get('priority', 999) if job_data else 999  # Default to low priority
+                    job_data = await self.job_data_repository.get_job(job_type)
+                    priority = job_data.get('priority', 999) if job_data else 999  # Default to low priority
                     
                     enabled_jobs_with_priority.append({
                         'job_type': job_type,
@@ -498,7 +498,7 @@ class CronManager(BaseCronManager):
             try:
                 # Record job start and get job detail ID for correlation
                 execution_start = datetime.now()
-                job_detail_id = self._record_job_start(job_type, cron_job.name, "parallel", execution_start)
+                job_detail_id = await self._record_job_start(job_type, cron_job.name, "parallel", execution_start)
                 
                 logger.info("     Starting parallel job: %s (Type: %s, Priority: %s)", 
                           cron_job.name, job_type, priority)
@@ -584,7 +584,7 @@ class CronManager(BaseCronManager):
                   len(successful_jobs), len(failed_jobs))
     
     # Enhanced job status methods with audit database integration
-    def get_all_jobs(self) -> Dict[str, Any]:
+    async def get_all_jobs(self) -> Dict[str, Any]:
         """Get status of all jobs with scheduler-specific enhancements"""
         base_result = super().get_all_jobs()
         
@@ -604,12 +604,12 @@ class CronManager(BaseCronManager):
         
         return base_result
     
-    def _record_job_start(self, job_type: str, job_name: str, schedule: str, 
+    async def _record_job_start(self, job_type: str, job_name: str, schedule: str, 
                          execution_start: datetime) -> Optional[str]:
         """Record job start in audit database and return execution_id"""
         try:
             # Get the job_id (ObjectId) from job_data collection using job_type (now async)
-            job_data = self.job_data_repository.get_job(job_type)
+            job_data = await self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return None
@@ -649,7 +649,7 @@ class CronManager(BaseCronManager):
             logger.error("Failed to record job start for %s: %s", job_type, str(e))
             return None
 
-    def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
+    async def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
                               execution_start: datetime, execution_end: datetime,
                               execution_id: str, status: str, success: bool, 
                               result: Optional[Dict[str, Any]] = None,
@@ -659,7 +659,7 @@ class CronManager(BaseCronManager):
             duration_seconds = (execution_end - execution_start).total_seconds()
             
             # Get the job_id (ObjectId) from job_data collection using job_type (now async)
-            job_data = self.job_data_repository.get_job(job_type)
+            job_data = await self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return
@@ -695,7 +695,7 @@ class CronManager(BaseCronManager):
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Failed to record job completion for %s: %s", job_type, str(e))
     
-    def _record_job_completion_with_logs(self, job_type: str, job_name: str, execution_id: str, 
+    async def _record_job_completion_with_logs(self, job_type: str, job_name: str, execution_id: str, 
                                        status: str, duration_seconds: float, logs: list, 
                                        result_data: Optional[Dict[str, Any]] = None, error_message: Optional[str] = None):
         """Record job completion with captured execution logs"""
@@ -703,7 +703,7 @@ class CronManager(BaseCronManager):
             # Try to get job data, but proceed even if not found
             job_id = job_type  # Default to job_type as job_id
             if hasattr(self, 'job_data_repository') and self.job_data_repository: # job_data_repository.get_job is async
-                job_data = self.job_data_repository.get_job(job_type)
+                job_data = await self.job_data_repository.get_job(job_type)
                 if job_data:
                     job_id = job_data.get("_id", job_type)
                 else:
@@ -784,7 +784,7 @@ class CronManager(BaseCronManager):
             
             # Record job start in job detail repository if available
             if hasattr(self, '_record_job_start'): # _record_job_start is async
-                execution_id = self._record_job_start(job_type, job_name, "scheduled", start_time)
+                execution_id = await self._record_job_start(job_type, job_name, "scheduled", start_time)
                 
                 # Set correlation ID so processors can reuse it
                 from services.scheduler.app.processors.base_processor import set_correlation_id as set_proc_correlation_id
@@ -838,7 +838,7 @@ class CronManager(BaseCronManager):
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
                 # Ensure result_data is a dict or None
                 result_data = result if isinstance(result, dict) else None # _record_job_completion_with_logs is async
-                self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "success", 
+                await self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "success", 
                                                     duration_ms / 1000, log_capture.get_logs(), result_data)
             
             return result
@@ -902,7 +902,7 @@ class CronManager(BaseCronManager):
         start_time = datetime.now() # _record_job_start is async
         
         # Record job start
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         
         # Log job start with audit logging
         if execution_id and self.audit_logger:

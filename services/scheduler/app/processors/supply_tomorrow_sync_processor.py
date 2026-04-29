@@ -39,7 +39,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
         schedule = "manual/trigger"
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         self.set_correlation_id(execution_id)
 
         logger.info("=== EXECUTING SUPPLY TOMORROW SYNC JOB ===")
@@ -57,7 +57,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                 "data_type": "supply_sync"
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
