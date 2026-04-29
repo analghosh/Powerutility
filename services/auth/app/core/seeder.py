@@ -173,7 +173,6 @@ class DatabaseSeeder:
             logger.error(f"Error seeding page-role relationships: {e}")
             return False
     
-    def seed_menus(self, force_reload: bool = False) -> bool:
     async def seed_menus(self, force_reload: bool = False) -> bool:
         """Seed default menus into the database asynchronously"""
         try:
