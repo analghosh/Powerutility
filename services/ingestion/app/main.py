@@ -74,6 +74,14 @@ async def lifespan(_: FastAPI):
     cron_manager = CronManager(audit_logger)
     app.state.cron_manager = cron_manager
 
+    # Ensure provider indexes
+    try:
+        from libs.repository.provider_repository import ProviderRepository
+        _provider_repo = ProviderRepository(settings.MONGODB_URI, settings.MONGODB_DATABASE)
+        await _provider_repo.ensure_indexes()
+    except Exception as idx_error:
+        logger.warning("Failed to ensure provider indexes: %s", idx_error)
+
     # Seed default providers (e.g., forecast_api_provider)
     try:
         from .seeders.provider_seeder import seed_providers

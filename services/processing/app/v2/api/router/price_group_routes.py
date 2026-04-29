@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import logging
 
-from ..repository.price_group_repository import PriceGroupRepository
-from ..services.price_group_service import PriceGroupService
-from ..controller.price_group_controller import PriceGroupController
+from ...repository.price_group_repository import PriceGroupRepository
+from ...services.price_group_service import PriceGroupService
+from ...controller.price_group_controller import PriceGroupController
 from libs.models.price_group_entity import PriceGroupCreate, PriceGroupUpdate
 from libs.audit_queue.simple_logger import AuditLogger
 from libs.middleware import get_correlation_id
