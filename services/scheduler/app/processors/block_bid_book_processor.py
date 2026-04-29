@@ -175,7 +175,7 @@ class BlockBidBookProcessor(BaseProcessor):
             bid["market_type"]  = "rtm"
 
             # --- 1. Raw upsert into rtm_block_bid_book_status ---
-            self.db[self.block_bid_book_collection].update_one(
+            await self.db[self.block_bid_book_collection].update_one(
                 {"OrderId": order_id},
                 {"$set": bid},
                 upsert=True,
@@ -186,7 +186,7 @@ class BlockBidBookProcessor(BaseProcessor):
             quantity     = safe_float(bid.get("Quantity", 0))
             price        = safe_float(bid.get("Price", 0))
 
-            self.db["dicision_rtm_block_bid_iex_response"].update_one(
+            await self.db["dicision_rtm_block_bid_iex_response"].update_one(
                 {"order_id": int(order_id)},
                 {"$set": {
                     "status":                  order_status,

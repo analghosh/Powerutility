@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 class AuditRepository(BaseRepository):
     """Audit repository for audit operations"""
     
-    def __init__(self):
+    async def __init__(self):
         super().__init__(settings.MONGODB_AUDIT_COLLECTION, settings.AUDIT_DB_NAME)
     
-    def log_event(self, 
+    async def log_event(self, 
                   event_type: str, 
                   user_id: Optional[str] = None,
                   username: Optional[str] = None,
@@ -66,7 +66,7 @@ class AuditRepository(BaseRepository):
             logger.error(f"Error logging audit event: {e}")
             raise
     
-    def get_user_audit_logs(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
+    async def get_user_audit_logs(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Get audit logs for a specific user"""
         try:
             return self.find_many({"user_id": user_id}, limit=limit)
@@ -74,7 +74,7 @@ class AuditRepository(BaseRepository):
             logger.error(f"Error getting audit logs for user {user_id}: {e}")
             return []
     
-    def get_audit_logs(self, 
+    async def get_audit_logs(self, 
                        event_type: Optional[str] = None,
                        start_date: Optional[datetime] = None,
                        end_date: Optional[datetime] = None,
@@ -99,7 +99,7 @@ class AuditRepository(BaseRepository):
             logger.error(f"Error getting audit logs: {e}")
             return []
     
-    def get_failed_attempts(self, user_id: str, hours: int = 24) -> List[Dict[str, Any]]:
+    async def get_failed_attempts(self, user_id: str, hours: int = 24) -> List[Dict[str, Any]]:
         """Get failed login attempts for a user in the last N hours"""
         try:
             cutoff_time = datetime.now() - timedelta(hours=hours)
@@ -113,7 +113,7 @@ class AuditRepository(BaseRepository):
             logger.error(f"Error getting failed attempts for user {user_id}: {e}")
             return []
     
-    def get_audit_stats(self, days: int = 30) -> Dict[str, Any]:
+    async def get_audit_stats(self, days: int = 30) -> Dict[str, Any]:
         """Get audit statistics for the last N days"""
         try:
             cutoff_time = datetime.now() - timedelta(days=days)
@@ -139,8 +139,8 @@ class AuditRepository(BaseRepository):
                 {"$group": {"_id": "$event_type", "count": {"$sum": 1}}},
                 {"$sort": {"count": -1}}
             ]
-            events_by_type = self.aggregate(pipeline)
-            
+            events_by_type = await self.collection.aggregate(pipeline).to_list(length=10000)
+
             return {
                 "total_events": total_events,
                 "successful_events": successful_events,

@@ -261,7 +261,7 @@ class RTMBiddingService:
             getsessionNo = await self.rtm_product_hardCoded_data_repo.get_Data()
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = list(self.plants_list_repo.aggregate('plant_master', plants_list_pipeline))
+            plantData = await self.plants_list_repo.aggregate('plant_master', plants_list_pipeline)
             plant_dict = {p['plant_id']: p for p in plantData}
             
             fix_count = getplantsData[0]['time_block']
@@ -311,12 +311,12 @@ class RTMBiddingService:
                 schedule_date_str = (now + timedelta(days=1)).strftime('%Y-%m-%d')
                 logger.info(f"RTM time > 22:30, using tomorrow's limits: {schedule_date_str}")
 
-            forecastedPrice = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"RTM_forecasted_price","RTM", from_block, to_block, schedule_date_str))
-            bufferPrice = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"Buffer","RTM", from_block, to_block, schedule_date_str))
-            ceilingPrice = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"ceilingPrice","RTM", from_block, to_block, schedule_date_str))
-            n_1Limits = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"n_1","RTM", from_block, to_block, schedule_date_str))
-            noc_buyLimits = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_buy","RTM", from_block, to_block, schedule_date_str))
-            noc_sellLimits = list(self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_sell","RTM", from_block, to_block, schedule_date_str))
+            forecastedPrice = await self.limit_values_repo.get_data_by_ID_market('limit_values',"RTM_forecasted_price","RTM", from_block, to_block, schedule_date_str)
+            bufferPrice = await self.limit_values_repo.get_data_by_ID_market('limit_values',"Buffer","RTM", from_block, to_block, schedule_date_str)
+            ceilingPrice = await self.limit_values_repo.get_data_by_ID_market('limit_values',"ceilingPrice","RTM", from_block, to_block, schedule_date_str)
+            n_1Limits = await self.limit_values_repo.get_data_by_ID_market('limit_values',"n_1","RTM", from_block, to_block, schedule_date_str)
+            noc_buyLimits = await self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_buy","RTM", from_block, to_block, schedule_date_str)
+            noc_sellLimits = await self.limit_values_repo.get_data_by_ID_market('limit_values',"noc_sell","RTM", from_block, to_block, schedule_date_str)
             
             typeofExchangeIEX = "IEX-100"
             typeofExchangePXIL = "PXIL-0"
@@ -2933,7 +2933,7 @@ class RTMBiddingService:
                 {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
             ]
 
-            posted_jobs = list(self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline))
+            posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             
             logger.info(f"Plant data for scheduling retrieved: {len(posted_jobs)} records")
             return posted_jobs

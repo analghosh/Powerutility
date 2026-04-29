@@ -17,13 +17,13 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
     def __init__(self, collection_name: Optional[str] = None):
         if collection_name is None:
             collection_name = settings.MONGODB_DAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION
-        
+
         super().__init__(
             collection_name=collection_name,
             mongodb_uri=settings.AUDIT_DB_URI,
             database_name=settings.AUDIT_DB_NAME
         )
-        
+
         logger.info(f"DAMSingleBidDataForApprovalRepository initialized with collection: {collection_name}")
 
 
@@ -34,7 +34,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         Insert multiple documents into the collection asynchronously.
         Returns {"data": True} if successful.
         """
-        try:    
+        try:
             if not documents:
                 raise ValueError("documents must be a non-empty list")
 
@@ -44,8 +44,8 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
                     raise TypeError(f"Document at index {i} is not a dict: {type(doc)}")
 
             logger.info(f"Inserting {len(documents)} documents into DAM single bid collection...")
-            
-            result = self.collection.insert_many(documents, ordered=False)
+
+            result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
 
             logger.info("DAM single bid bulk insert successful")
@@ -59,8 +59,8 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         Find documents by filters with optional projection.
         """
         try:
-            query = self.collection.find(filters, projection or {})
-            return list(query)
+            cursor = self.collection.find(filters, projection or {})
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find DAM single bid records: %s", str(e))
             return []
@@ -70,7 +70,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         Update a single document matching the filter.
         """
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error("Failed to update DAM single bid record: %s", str(e))
@@ -82,7 +82,7 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to aggregate DAM single bid records: %s", str(e))
             return []

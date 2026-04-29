@@ -440,11 +440,11 @@ class RTMBidLapseProcessor:
                 }},
                 {"$match": {"status": {"$in": BLOCK_BID_LAPSABLE_STATUSES}}}
             ]
-            latest_docs = list(self.block_bid_repo.collection.aggregate(pipeline))
+            latest_docs = await self.block_bid_repo.collection.aggregate(pipeline).to_list(length=10000)
             for doc in latest_docs:
                 status = doc["status"]
                 lapsed_status = f"{status}_lapse"
-                result = self.block_bid_repo.collection.update_one(
+                result = await self.block_bid_repo.collection.update_one(
                     {"_id": doc["doc_id"]},
                     {"$set": {"status": lapsed_status}}
                 )
@@ -530,11 +530,11 @@ class RTMBidLapseProcessor:
                 }},
                 {"$match": {"status": {"$in": BLOCK_BID_LAPSABLE_STATUSES}}}
             ]
-            latest_docs = list(self.block_bid_repo.collection.aggregate(pipeline))
+            latest_docs = await self.block_bid_repo.collection.aggregate(pipeline).to_list(length=10000)
             for doc in latest_docs:
                 status = doc["status"]
                 lapsed_status = f"{status}_lapse"
-                result = self.block_bid_repo.collection.update_one(
+                result = await self.block_bid_repo.collection.update_one(
                     {"_id": doc["doc_id"]},
                     {"$set": {"status": lapsed_status}}
                 )

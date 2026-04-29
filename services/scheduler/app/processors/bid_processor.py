@@ -21,7 +21,7 @@ class BidProcessor(BaseProcessor):
     Bid data processor that handles bid trade data processing and storage.
     """
 
-    def __init__(self):
+    async def __init__(self):
         super().__init__()
         self.repository = BidTradeServeRepository()
 
@@ -132,7 +132,7 @@ class BidProcessor(BaseProcessor):
             # Clear correlation ID after job completion
             self.clear_correlation_id()
 
-    def process_raw_data_to_serve(
+    async def process_raw_data_to_serve(
     self,
     raw_data: List[Dict[str, Any]],
     metadata: Dict[str, Any],
@@ -263,7 +263,7 @@ class BidProcessor(BaseProcessor):
                     "type": p["type"]
                 } for p in processed_items]
                 
-                existing_records_list = self.repository.find_by_unique_keys(unique_keys)
+                existing_records_list = await self.repository.find_by_unique_keys(unique_keys)
                 
                 # Create map for fast lookup: (date_str, time_block, type) -> record
                 existing_map = {}
@@ -353,7 +353,7 @@ class BidProcessor(BaseProcessor):
                 # 3. Execute Bulk Ops
                 if bulk_ops:
                     try:
-                        res = self.repository.bulk_upsert_custom(bulk_ops)
+                        res = await self.repository.bulk_upsert_custom(bulk_ops)
                         logger.info(f"Bulk processed bid trade serve entities: {res}")
                     except Exception as e:
                          # Re-raise as DataInsertionError for consistent handling
@@ -365,7 +365,7 @@ class BidProcessor(BaseProcessor):
 
             if historical_buffer:
                 logger.info(f"Processing {len(historical_buffer)} historical records.")
-                latest_entry = self.repository.historical_collection.find_one(sort=[("scheduled_at", -1)])
+                latest_entry = await self.repository.historical_collection.find_one(sort=[("scheduled_at", -1)])
                 latest_date_in_db = latest_entry['scheduled_at'].date() if latest_entry else None
                 logger.info(f"Latest date in historical DB is: {latest_date_in_db}")
                 to_insert_new = []
@@ -379,7 +379,7 @@ class BidProcessor(BaseProcessor):
                     logger.info(f"Replacing {len(to_replace_latest_day)} records for date {latest_date_in_db}")
                     start_of_day = datetime.combine(latest_date_in_db, datetime.min.time())
                     end_of_day = datetime.combine(latest_date_in_db, datetime.max.time())
-                    self.repository.historical_collection.delete_many({"scheduled_at": {"$gte": start_of_day, "$lte": end_of_day}})
+                    await self.repository.historical_collection.delete_many({"scheduled_at": {"$gte": start_of_day, "$lte": end_of_day}})
                     to_insert_new.extend(to_replace_latest_day)
                 if to_insert_new:
                     historical_entities_to_insert = []
@@ -410,7 +410,7 @@ class BidProcessor(BaseProcessor):
                         
                         historical_entities_to_insert.append(BidTradeServeHistoricalEntity(**serve_ent.dict()))
                     if historical_entities_to_insert:
-                        self.repository.bulk_insert_bid_trade_historical_with_deduplication(historical_entities_to_insert)
+                        await self.repository.bulk_insert_bid_trade_historical_with_deduplication(historical_entities_to_insert)
                         logger.info(f"Inserted/Updated {len(historical_entities_to_insert)} records in historical collection.")
                 else:
                     logger.info("No new or updated historical records to process.")
@@ -421,7 +421,7 @@ class BidProcessor(BaseProcessor):
             logger.error(f"Error in process_raw_data_to_serve: {e}", exc_info=True)
             return False
             
-    def _calculate_value_from_exchange(self, scheduled_at: datetime, time_block: int,
+    async def _calculate_value_from_exchange(self, scheduled_at: datetime, time_block: int,
                                          bid_type: str, traded: float) -> float:
         """
         Calculate value by looking up ACP from exchange collection
@@ -463,7 +463,7 @@ class BidProcessor(BaseProcessor):
             logger.error(f"Error calculating value from exchange: {str(e)}")
             return 0.0
 
-    def _has_bid_data_changed(self, existing_record: Dict[str, Any], new_record: Dict[str, Any],
+    async def _has_bid_data_changed(self, existing_record: Dict[str, Any], new_record: Dict[str, Any],
                               new_calculated_value: float) -> bool:
         """
         Check if bid data has changed by comparing key fields
@@ -525,7 +525,7 @@ class BidProcessor(BaseProcessor):
 
         try:
             # Archive old bid trade data (older than 4 days)
-            archive_result = self.repository.archive_old_bid_data(days_to_keep=4)
+            archive_result = await self.repository.archive_old_bid_data(days_to_keep=4)
 
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()

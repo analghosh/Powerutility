@@ -308,8 +308,8 @@ class RTMBiddingServices:
             ]
 
             # Fetch plants data from supply_serve collection
-            getplantsData = list(self.supply_repo.aggregate(pipeline))
-           
+            getplantsData = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+
             if not getplantsData:
                 return {}
 
@@ -322,7 +322,7 @@ class RTMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "rtm_tm": 1}}
             ]
-            dc_data = list(self.supply_repo.aggregate(dc_pipeline))
+            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
             # Build lookup: {(plant_id, time_block): rtm_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("rtm_tm", 0) for d in dc_data}
             
@@ -341,15 +341,13 @@ class RTMBiddingServices:
                 {"$project": {"_id": 0}}
             ]
             # Fetch session data from rtm_product_hardcoded_data collection
-            getsessionNo = list(
-                self.rtm_product_hardcoded_data_repo.aggregate(
-                    self.rtm_product_hardcoded_data_repo.collection_name,
-                    product_hardCoded_pipeline,
-                )
+            getsessionNo = await self.rtm_product_hardcoded_data_repo.aggregate(
+                self.rtm_product_hardcoded_data_repo.collection_name,
+                product_hardCoded_pipeline,
             )
-            
+
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = list(self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline)) 
+            plantData = await self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline)
             plant_dict = {p['plant_id']: p for p in plantData}
 
             fix_count = getplantsData[0]['time_block']
@@ -385,7 +383,7 @@ class RTMBiddingServices:
                 }
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = list(self.demand_repo.aggregate(
+            getForecastedValue = await self.demand_repo.aggregate(
                 self.demand_repo.collection_name,
                 [
                     {
@@ -398,7 +396,7 @@ class RTMBiddingServices:
                     {"$sort": {"time_block": 1}},
                     {"$project": {"_id": 0}},
                 ],
-            ))
+            )
            
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             
