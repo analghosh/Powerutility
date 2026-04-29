@@ -23,47 +23,26 @@ class ProviderRepository(BaseRepository):
     def __init__(self, mongodb_uri: str, database_name: str):
         self.collection_name = "providers"
         super().__init__(self.collection_name, mongodb_uri, database_name)
-        self._ensure_collection()
-    
-    def _ensure_collection(self):
-        """Ensure the providers collection exists with proper indexes"""
+
+    async def ensure_indexes(self):
+        """Ensure indexes exist on the providers collection — call from app startup"""
         try:
-            # Create collection if it doesn't exist
-            if self.collection_name not in self.db.list_collection_names():
-                self.db.create_collection(self.collection_name)
-                logger.info("Created providers collection")
-            
-            # Create indexes for efficient queries
-            collection = self.db[self.collection_name]
-            
-            # Unique compound index for provider code + ingestion_type + data_type
-            collection.create_index([
+            await self.collection.create_index([
                 ("code", 1),
                 ("ingestion_type", 1),
                 ("data_type", 1)
             ], unique=True)
-            
-            # Compound index for provider queries
-            collection.create_index([
+            await self.collection.create_index([
                 ("ingestion_type", 1),
                 ("data_type", 1),
                 ("enabled", 1)
             ])
-            
-            # Index for enabled providers
-            collection.create_index([("enabled", 1)])
-            
-            # Index for ingestion type
-            collection.create_index([("ingestion_type", 1)])
-            
-            # Index for data type
-            collection.create_index([("data_type", 1)])
-            
+            await self.collection.create_index([("enabled", 1)])
+            await self.collection.create_index([("ingestion_type", 1)])
+            await self.collection.create_index([("data_type", 1)])
             logger.info("Created indexes for providers collection")
-            
         except Exception as e:
-            logger.error("Error ensuring providers collection: %s", e)
-            raise
+            logger.error("Error ensuring providers indexes: %s", e)
     
     def create_provider(self, provider: ProviderEntity) -> str:
         """
