@@ -307,7 +307,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error getting processing status statistics: %s", e, exc_info=True)
             return {"error": str(e)}
     
-    def cleanup_old_completed(self, older_than_days: int = 30) -> int:
+    async def cleanup_old_completed(self, older_than_days: int = 30) -> int:
         """
         Clean up old completed processing status records
         
