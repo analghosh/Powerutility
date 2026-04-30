@@ -148,10 +148,10 @@ class DateUpdate:
 
     async def executeUpdateJob(self, payload: Optional[Dict[str, Any]] = None, manual: bool = False) -> Dict[str, Any]:
         try:
-            self.update_demand_date()
-            self.update_supply_date()
-            self.update_px_bid_table()
-            self.update_exchange_table()
+            await self.update_demand_date()
+            await self.update_supply_date()
+            await self.update_px_bid_table()
+            await self.update_exchange_table()
             return {'status': 'success', 'details': 'All date updates completed successfully'}
         except Exception as e:
             logger.error("Error in executeUpdateJob: %s", str(e))
@@ -252,7 +252,7 @@ class DateUpdate:
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
 
-        existing_data_count = self.demand_repo.count({})
+        existing_data_count = await self.demand_repo.count({})
 
         create_data = []
 
@@ -262,13 +262,13 @@ class DateUpdate:
             logger.info(f"Found {tommorow_data} documents already scheduled for {tommorow.isoformat()}")
         
         else:
-            existing_data = self.demand_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = await self.demand_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             if len(existing_data) > 0:
                 create_data = existing_data
                 for data in create_data:
                     data["schedule_date"] = tommorow.isoformat()
 
-                self.demand_repo.bulk_upsert(
+                await self.demand_repo.bulk_upsert(
                     create_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )
@@ -293,14 +293,14 @@ class DateUpdate:
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
-        existing_data_count = self.supply_repo.count({})
+        existing_data_count = await self.supply_repo.count({})
 
         tommorow_data = await self.supply_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tommorow_data :
             logger.info(f"Found {tommorow_data} documents already scheduled for {tommorow.isoformat()}")
 
         else:
-            existing_data = self.supply_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = await self.supply_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             logger.info(f"Found {len(existing_data)} documents matching the filter")
 
             if len(existing_data) > 0:
@@ -309,7 +309,7 @@ class DateUpdate:
                 for data in create_data:
                     data["schedule_date"] = tommorow.isoformat()
 
-                self.supply_repo.bulk_upsert(
+                await self.supply_repo.bulk_upsert(
                     create_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )
@@ -335,18 +335,18 @@ class DateUpdate:
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
-        existing_data_count = self.px_bid_table_repo.count({})
+        existing_data_count = await self.px_bid_table_repo.count({})
 
         tomorrow_data = await self.px_bid_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tomorrow_data:
             logger.info(f"Found {tomorrow_data} documents already scheduled for {tommorow.isoformat()}")
         else:
-            existing_data = self.px_bid_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = await self.px_bid_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             if len(existing_data) > 0:
                 for data in existing_data:
                     data["schedule_date"] = tommorow.isoformat()
 
-                self.px_bid_table_repo.bulk_upsert(
+                await self.px_bid_table_repo.bulk_upsert(
                     existing_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )
@@ -360,18 +360,18 @@ class DateUpdate:
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
 
-        existing_data_count = self.exchange_table_repo.count({})
+        existing_data_count = await self.exchange_table_repo.count({})
 
         tomorrow_data = await self.exchange_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tomorrow_data:
             logger.info(f"Found {tomorrow_data} documents already scheduled for {tommorow.isoformat()}")
         else:
-            existing_data = self.exchange_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = await self.exchange_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             if len(existing_data) > 0:
                 for data in existing_data:
                     data["schedule_date"] = tommorow.isoformat()
     
-                self.exchange_table_repo.bulk_upsert(
+                await self.exchange_table_repo.bulk_upsert(
                     existing_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )
