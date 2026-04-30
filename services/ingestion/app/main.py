@@ -23,7 +23,7 @@ from pydantic import BaseModel
 
 from .core.config import settings
 from .services.cron_manager import CronManager
-from .core.dependencies import get_audit_logger
+from .core.dependencies import get_audit_logger, cleanup_audit_resources
 
 # Configure logging with correlation ID support
 from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware
@@ -72,6 +72,7 @@ async def lifespan(_: FastAPI):
     # Create audit logger and cron manager
     audit_logger = get_audit_logger()
     cron_manager = CronManager(audit_logger)
+    await cron_manager.initialize_jobs()
     app.state.cron_manager = cron_manager
 
     # Ensure provider indexes
@@ -126,6 +127,8 @@ async def lifespan(_: FastAPI):
         logger.info("Cron scheduler stopped successfully")
     except (RuntimeError, OSError, AttributeError) as e:
         logger.error("Failed to stop cron scheduler: %s", str(e))
+
+    cleanup_audit_resources()
 
 
 # Create FastAPI app

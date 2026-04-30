@@ -65,9 +65,6 @@ class CronManager(BaseCronManager):
         # Set the seeder after base class initialization
         self.cron_job_seeder = cron_job_seeder
         
-        # Now register the jobs since seeder is available
-        self._register_service_jobs()
-        
         logger.info("Initialized ingestion cron manager")
     
     
@@ -99,12 +96,13 @@ class CronManager(BaseCronManager):
 
     def _register_service_jobs(self):
         """Register ingestion-specific jobs"""
-        logger.info("Registering ingestion-specific cron jobs...")
-        
-        # Skip if seeder is not available yet (will be called again after initialization)
+        # BaseCronManager calls this during super().__init__ before this subclass
+        # has finished creating the seeder. Startup calls initialize_jobs() after.
         if not hasattr(self, 'cron_job_seeder') or self.cron_job_seeder is None:
-            logger.info("Job seeder not available yet, skipping job registration")
+            logger.debug("Job seeder not available yet, skipping early job registration")
             return
+
+        logger.info("Registering ingestion-specific cron jobs...")
         
         # Try to seed jobs from shared seeder first
         try:
@@ -128,6 +126,40 @@ class CronManager(BaseCronManager):
                             registered_count += 1
                 logger.info("Registered %s ingestion jobs from database", registered_count)
                 return
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
+            logger.warning("Failed to register jobs from database: %s", str(e))
+
+    async def initialize_jobs(self):
+        """Seed and register ingestion jobs from the async FastAPI startup context."""
+        if self.cron_job_seeder is None:
+            logger.warning("Job seeder not available, skipping job registration")
+            return
+
+        logger.info("Registering ingestion-specific cron jobs...")
+        try:
+            await self.cron_job_seeder.seed_default_jobs()
+
+            if not self.job_data_repository:
+                logger.warning("Job data repository not available, skipping job registration")
+                return
+
+            jobs = await self.job_data_repository.get_all_jobs(enabled_only=True, service="ingestion")
+            registered_count = 0
+            for job_config in jobs:
+                job_function = self._get_job_function(job_config['job_type'])
+                if job_function:
+                    success = self.register_job(
+                        job_type=job_config['job_type'],
+                        name=job_config['name'],
+                        schedule=job_config['schedule'],
+                        func=job_function,
+                        enabled=job_config['enabled'],
+                        timezone=job_config.get('timezone', 'UTC')
+                    )
+                    if success:
+                        registered_count += 1
+
+            logger.info("Registered %s ingestion jobs from database", registered_count)
         except (OSError, ValueError, TypeError, RuntimeError) as e:
             logger.warning("Failed to register jobs from database: %s", str(e))
     
