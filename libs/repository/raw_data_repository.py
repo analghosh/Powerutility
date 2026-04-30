@@ -264,7 +264,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error getting raw data statistics: %s", e, exc_info=True)
             return {"error": str(e)}
     
-    def cleanup_old_records(self, older_than_days: int = 30) -> int:
+    async def cleanup_old_records(self, older_than_days: int = 30) -> int:
         """
         Clean up old raw data records
         
