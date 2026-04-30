@@ -1033,7 +1033,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
         try:
             # Get provider details - if data_type is None, get all enabled FTP providers
             if data_type:
-                providerResponse = self.provider_service.get_all_providers(
+                providerResponse = await self.provider_service.get_all_providers(
                     ingestion_type=ingestion_type, data_type=data_type, enabled=True
                 )
             else:

@@ -119,7 +119,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         try:
             # Get all enabled API providers
-            provider_response = self.provider_service.get_all_providers(
+            provider_response = await self.provider_service.get_all_providers(
                 ingestion_type=IngestionType.API, enabled=True
             )
             
