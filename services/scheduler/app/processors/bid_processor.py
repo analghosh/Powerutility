@@ -25,6 +25,9 @@ class BidProcessor(BaseProcessor):
         super().__init__()
         self.repository = BidTradeServeRepository()
 
+        # Preload timeblock mappings for better performance using base processor's caching
+        self.preload_timeblock_mappings()
+
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
         Execute bid data processing as a cron job with correlation ID
@@ -130,10 +133,10 @@ class BidProcessor(BaseProcessor):
             self.clear_correlation_id()
 
     async def process_raw_data_to_serve(
-        self,
-        raw_data: List[Dict[str, Any]],
-        metadata: Dict[str, Any],
-        provider_config: Dict[str, Any]
+    self,
+    raw_data: List[Dict[str, Any]],
+    metadata: Dict[str, Any],
+    provider_config: Dict[str, Any]
     ) -> bool:
         try:
             if not raw_data:
@@ -143,6 +146,7 @@ class BidProcessor(BaseProcessor):
 
             bid_entities = []
             historical_buffer: List[Dict[str, Any]] = []
+            processed_items: List[Dict[str, Any]] = []
 
             # --- FIX: Define a clear 4-day window for the serve collection ---
             today = datetime.now().date()
@@ -180,13 +184,13 @@ class BidProcessor(BaseProcessor):
                         te = item.get("Time_End") or item.get("time_end")
                         if ts and te:
                             # Use base processor's timeblock lookup method
-                            timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                            timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                             if timeblock_data:
                                 item["time_block"] = timeblock_data.get("timeblock")
                             else:
                                 # Fallback to time range string format for _get_timeblock_number
                                 time_range = f"{str(ts).strip()}-{str(te).strip()}"
-                                timeblock_num = await self._get_timeblock_number(time_range)
+                                timeblock_num = self._get_timeblock_number(time_range)
                                 if timeblock_num > 0:
                                     item["time_block"] = timeblock_num
 
@@ -231,7 +235,7 @@ class BidProcessor(BaseProcessor):
                         time_block_int = int(time_block)
                         bid_type_str = str(bid_type).upper()
                         traded = float(item.get("traded") or 0)
-                        calculated_value = self._calculate_value_from_exchange(scheduled_at, time_block_int, bid_type_str, traded)
+                        calculated_value = await self._calculate_value_from_exchange(scheduled_at, time_block_int, bid_type_str, traded)
                         
                         source_revision = item.get("revision_number") or item.get("version") or item.get("rev_no")
                         
@@ -296,7 +300,7 @@ class BidProcessor(BaseProcessor):
                             existing_source_revision = existing_record.get("source_revision_number")
                             source_revision = existing_source_revision if existing_source_revision is not None else system_revision
                         
-                        if self._has_bid_data_changed(existing_record, item, calculated_value):
+                        if await self._has_bid_data_changed(existing_record, item, calculated_value):
                             # Changed: Need update (Delete + Insert)
                             bid_entity = BidTradeServeEntity.from_raw_data(item, metadata, provider_config, calculated_value)
                             bid_entity.updated_flag = UpdatedFlag.UPDATED
@@ -386,15 +390,15 @@ class BidProcessor(BaseProcessor):
                             te = rec_dict.get("Time_End") or rec_dict.get("time_end")
                             if ts and te:
                                 # Use base processor's timeblock lookup method
-                                timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                                timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                                 if timeblock_data:
                                     rec_dict["time_block"] = timeblock_data.get("timeblock")
                                 else:
                                     # Fallback to time range string format for _get_timeblock_number
                                     time_range = f"{str(ts).strip()}-{str(te).strip()}"
-                                    timeblock_num = await self._get_timeblock_number(time_range)
+                                    timeblock_num = self._get_timeblock_number(time_range)
                                     rec_dict["time_block"] = timeblock_num if timeblock_num > 0 else 0
-                        calc_val = self._calculate_value_from_exchange(rec_dict["scheduled_at"], rec_dict["time_block"], rec_dict["type"], rec_dict.get("traded", 0))
+                        calc_val = await self._calculate_value_from_exchange(rec_dict["scheduled_at"], rec_dict["time_block"], rec_dict["type"], rec_dict.get("traded", 0))
                         serve_ent = BidTradeServeEntity.from_raw_data(rec_dict, metadata, provider_config, calc_val)
                         
                         # Add revision tracking for historical records
@@ -418,7 +422,7 @@ class BidProcessor(BaseProcessor):
             logger.error(f"Error in process_raw_data_to_serve: {e}", exc_info=True)
             return False
             
-    def _calculate_value_from_exchange(self, scheduled_at: datetime, time_block: int,
+    async def _calculate_value_from_exchange(self, scheduled_at: datetime, time_block: int,
                                          bid_type: str, traded: float) -> float:
         """
         Calculate value by looking up ACP from exchange collection
@@ -460,7 +464,7 @@ class BidProcessor(BaseProcessor):
             logger.error(f"Error calculating value from exchange: {str(e)}")
             return 0.0
 
-    def _has_bid_data_changed(self, existing_record: Dict[str, Any], new_record: Dict[str, Any],
+    async def _has_bid_data_changed(self, existing_record: Dict[str, Any], new_record: Dict[str, Any],
                               new_calculated_value: float) -> bool:
         """
         Check if bid data has changed by comparing key fields
@@ -608,6 +612,12 @@ class BidProcessor(BaseProcessor):
         finally:
             # Clear correlation ID after job completion
             self.clear_correlation_id()
+
+
+
+
+    
+
 
     def _get_or_lookup_timeblock(self, record: Dict[str, Any]) -> Optional[int]:
         """

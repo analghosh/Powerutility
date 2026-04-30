@@ -59,7 +59,7 @@ async def lifespan(app_instance: FastAPI):
         admin_user = await seeder.user_repository.get_user_by_username(settings.ADMIN_USERNAME)
         if not admin_user:
             logger.info("Admin user not found, running minimal seeding...")
-            await seeder.seed_roles()
+            await seeder.seed_roles() # This is now async
             await seeder.ensure_admin_user()
         else:
             logger.info("Admin user exists, skipping heavy seeding operations")

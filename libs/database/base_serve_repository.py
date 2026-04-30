@@ -1,11 +1,12 @@
 """
-Async base repository for serve entities (demand and supply) using Motor
+Base repository for serve entities (demand and supply)
 """
 
 import logging
 from datetime import datetime
 from typing import Dict, Any, List
 from motor.motor_asyncio import AsyncIOMotorCollection
+from pymongo import UpdateOne
 
 from .base_repository import BaseRepository
 
@@ -28,50 +29,30 @@ class DataInsertionError(Exception):
 
 
 class DataValidationError(DataInsertionError):
-    """Exception for data validation failures during insertion"""
-
     def __init__(self, message: str, validation_errors: list = None):
         super().__init__(message, "VALIDATION", {"validation_errors": validation_errors or []})
         self.validation_errors = validation_errors or []
 
 
 class DatabaseConnectionError(DataInsertionError):
-    """Exception for database connection failures during insertion"""
-
     def __init__(self, message: str, connection_details: dict = None):
-        super().__init__(
-            message, "CONNECTION", {"connection_details": connection_details or {}}
-        )
+        super().__init__(message, "CONNECTION", {"connection_details": connection_details or {}})
         self.connection_details = connection_details or {}
 
 
 class BulkInsertPartialFailureError(DataInsertionError):
-    """Exception for partial failures in bulk insert operations"""
-
-    def __init__(
-        self,
-        message: str,
-        expected_count: int,
-        actual_count: int,
-        failed_indices: list = None,
-    ):
-        super().__init__(
-            message,
-            "PARTIAL_FAILURE",
-            {
-                "expected_count": expected_count,
-                "actual_count": actual_count,
-                "failed_indices": failed_indices or [],
-            },
-        )
+    def __init__(self, message: str, expected_count: int, actual_count: int, failed_indices: list = None):
+        super().__init__(message, "PARTIAL_FAILURE", {
+            "expected_count": expected_count,
+            "actual_count": actual_count,
+            "failed_indices": failed_indices or [],
+        })
         self.expected_count = expected_count
         self.actual_count = actual_count
         self.failed_indices = failed_indices or []
 
 
 class DataMappingError(DataInsertionError):
-    """Exception for data mapping/transformation failures during insertion"""
-
     def __init__(self, message: str, mapping_errors: list = None):
         super().__init__(message, "MAPPING", {"mapping_errors": mapping_errors or []})
         self.mapping_errors = mapping_errors or []
@@ -81,32 +62,20 @@ logger = logging.getLogger(__name__)
 
 
 class BaseServeRepository(BaseRepository):
-    """Async base repository for serve entities with common operations"""
+    """Base repository for serve entities with Motor async operations."""
 
-    def __init__(
-        self,
-        mongodb_uri: str,
-        database_name: str,
-        serve_collection: str,
-        historical_collection: str,
-    ):
-        super().__init__(
-            collection_name=serve_collection,
-            mongodb_uri=mongodb_uri,
-            database_name=database_name,
-        )
+    def __init__(self, mongodb_uri: str, database_name: str,
+                 serve_collection: str, historical_collection: str):
+        super().__init__(collection_name=serve_collection, mongodb_uri=mongodb_uri, database_name=database_name)
         self.serve_collection: AsyncIOMotorCollection = self.db[serve_collection]
         self.historical_collection: AsyncIOMotorCollection = self.db[historical_collection]
 
     async def insert_serve(self, entity: Any) -> str:
-        """Insert a new serve record"""
         try:
             entity_dict = entity.model_dump(by_alias=True)
             result = await self.serve_collection.insert_one(entity_dict)
             if not result.inserted_id:
-                error_msg = "Failed to insert serve record - no ID returned from database"
-                logger.error(error_msg)
-                raise DataInsertionError(error_msg)
+                raise DataInsertionError("Failed to insert serve record - no ID returned")
             logger.info("Inserted serve record with ID: %s", result.inserted_id)
             return str(result.inserted_id)
         except Exception as e:
@@ -117,7 +86,6 @@ class BaseServeRepository(BaseRepository):
             raise DataInsertionError(error_msg) from e
 
     async def insert_historical(self, entity: Any) -> str:
-        """Insert a new historical record"""
         try:
             entity_dict = entity.model_dump(by_alias=True)
             result = await self.historical_collection.insert_one(entity_dict)
@@ -128,15 +96,11 @@ class BaseServeRepository(BaseRepository):
             raise
 
     async def bulk_insert_serve(self, entities: List[Any]) -> int:
-        """Bulk insert serve records"""
         try:
             if not entities:
-                logger.info("No entities to insert")
                 return 0
-
             entity_dicts = []
             invalid_entities = []
-
             for i, entity in enumerate(entities):
                 try:
                     if hasattr(entity, "model_dump"):
@@ -144,46 +108,30 @@ class BaseServeRepository(BaseRepository):
                     elif isinstance(entity, dict):
                         entity_dicts.append(entity)
                     else:
-                        logger.warning(
-                            f"Unsupported entity type at index {i}: {type(entity)}"
-                        )
+                        logger.warning(f"Unsupported entity type at index {i}: {type(entity)}")
                         invalid_entities.append(i)
                         continue
                 except Exception as entity_error:
                     logger.error(f"Error processing entity at index {i}: {str(entity_error)}")
                     invalid_entities.append(i)
                     continue
-
             if not entity_dicts:
-                error_msg = "No valid entities to insert after processing"
-                logger.error(error_msg)
                 raise DataValidationError(
-                    error_msg,
+                    "No valid entities to insert",
                     [f"Entity at index {i} is invalid" for i in invalid_entities],
                 )
-
             if invalid_entities:
-                logger.warning(
-                    f"Skipped {len(invalid_entities)} invalid entities at indices: {invalid_entities}"
-                )
-
+                logger.warning(f"Skipped {len(invalid_entities)} invalid entities")
             result = await self.serve_collection.insert_many(entity_dicts)
             inserted_count = len(result.inserted_ids)
-
             if inserted_count != len(entity_dicts):
-                error_msg = (
-                    f"Bulk insert partial failure: expected {len(entity_dicts)} records, "
-                    f"got {inserted_count}"
-                )
-                logger.error(error_msg)
                 raise BulkInsertPartialFailureError(
-                    error_msg,
+                    f"Bulk insert partial failure: expected {len(entity_dicts)}, got {inserted_count}",
                     expected_count=len(entity_dicts),
                     actual_count=inserted_count,
                     failed_indices=invalid_entities,
                 )
-
-            logger.info("Bulk inserted %d serve records successfully", inserted_count)
+            logger.info("Bulk inserted %d serve records", inserted_count)
             return inserted_count
         except Exception as e:
             error_msg = f"Error bulk inserting serve records: {str(e)}"
@@ -193,10 +141,8 @@ class BaseServeRepository(BaseRepository):
             raise DataInsertionError(error_msg) from e
 
     async def bulk_insert_historical(self, entities: List[Any]) -> List[str]:
-        """Bulk insert historical records"""
         try:
             if not entities:
-                logger.info("No historical entities to insert")
                 return []
             entity_dicts = [entity.model_dump(by_alias=True) for entity in entities]
             result = await self.historical_collection.insert_many(entity_dicts)
@@ -208,7 +154,6 @@ class BaseServeRepository(BaseRepository):
             raise
 
     async def delete_serve_by_date(self, scheduled_at: datetime) -> Dict[str, Any]:
-        """Delete serve records by scheduled_at date"""
         try:
             deleted_records = await self.find_serve_by_date(scheduled_at)
             result = await self.serve_collection.delete_many({"scheduled_at": scheduled_at})
@@ -220,20 +165,16 @@ class BaseServeRepository(BaseRepository):
             raise
 
     async def find_serve_by_date(self, scheduled_at: datetime) -> List[Dict[str, Any]]:
-        """Find serve records by scheduled_at date"""
         try:
             cursor = self.serve_collection.find({"scheduled_at": scheduled_at})
-            records = await cursor.to_list(length=10000)
+            records = await cursor.to_list(length=1000)
             logger.info("Found %d serve records for date: %s", len(records), scheduled_at)
             return records
         except Exception as e:
             logger.error("Error finding serve records for date %s: %s", scheduled_at, str(e))
             raise
 
-    async def find_serve_by_date_range(
-        self, start_date: datetime, end_date: datetime
-    ) -> List[Dict[str, Any]]:
-        """Find serve records by date range"""
+    async def find_serve_by_date_range(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
         try:
             query = {
                 "$or": [
@@ -244,25 +185,14 @@ class BaseServeRepository(BaseRepository):
                 ]
             }
             cursor = self.serve_collection.find(query)
-            records = await cursor.to_list(length=10000)
-            logger.info(
-                "Found %d serve records for date range: %s to %s",
-                len(records),
-                start_date,
-                end_date,
-            )
+            records = await cursor.to_list(length=1000)
+            logger.info("Found %d serve records for date range: %s to %s", len(records), start_date, end_date)
             return records
         except Exception as e:
-            logger.error(
-                "Error finding serve records for date range %s to %s: %s",
-                start_date,
-                end_date,
-                str(e),
-            )
+            logger.error("Error finding serve records for date range %s to %s: %s", start_date, end_date, str(e))
             raise
 
     async def count_serve(self) -> int:
-        """Count total serve records"""
         try:
             count = await self.serve_collection.count_documents({})
             logger.info("Serve collection count: %d", count)
@@ -272,7 +202,6 @@ class BaseServeRepository(BaseRepository):
             raise
 
     async def count_historical(self) -> int:
-        """Count total historical records"""
         try:
             count = await self.historical_collection.count_documents({})
             logger.info("Historical collection count: %d", count)
@@ -281,35 +210,24 @@ class BaseServeRepository(BaseRepository):
             logger.error("Error counting historical records: %s", str(e))
             raise
 
-    async def upsert_serve_record(
-        self, filter_query: Dict[str, Any], record_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """Upsert serve record for time series collections."""
+    async def upsert_serve_record(self, filter_query: Dict[str, Any], record_data: Dict[str, Any]) -> Dict[str, Any]:
         try:
             existing_record = await self.serve_collection.find_one(filter_query)
-
             operation_type = "insert"
             record_id = None
-            createdTime = None
+            created_time = None
 
             if existing_record:
                 record_id = existing_record["_id"]
-                createdTime = existing_record["created_at"]
-
+                created_time = existing_record.get("created_at")
                 delete_result = await self.serve_collection.delete_one({"_id": record_id})
                 if delete_result.deleted_count == 0:
                     logger.error("Failed to delete existing record for upsert")
-                    return {
-                        "success": False,
-                        "error": "Failed to delete existing record",
-                        "operation_type": "failed_delete",
-                        "record_id": None,
-                    }
+                    return {"success": False, "error": "Failed to delete existing record", "operation_type": "failed_delete", "record_id": None}
                 operation_type = "replace"
-                logger.debug("Deleted existing record with ID: %s for upsert", record_id)
-
                 record_data["_id"] = record_id
-                record_data["created_at"] = createdTime
+                if created_time:
+                    record_data["created_at"] = created_time
             else:
                 record_data = {k: v for k, v in record_data.items() if k != "_id"}
 
@@ -317,89 +235,42 @@ class BaseServeRepository(BaseRepository):
             final_record_id = record_id if record_id else insert_result.inserted_id
 
             if not final_record_id:
-                logger.error("Failed to insert new record for upsert")
-                return {
-                    "success": False,
-                    "error": "Failed to insert new record",
-                    "operation_type": "failed_insert",
-                    "record_id": None,
-                }
+                return {"success": False, "error": "Failed to insert new record", "operation_type": "failed_insert", "record_id": None}
 
-            logger.info(
-                "TESTING LOGS: %s record with ID: %s for query: %s",
-                "Replaced" if operation_type == "replace" else "Inserted",
-                final_record_id,
-                filter_query,
-            )
-
-            return {
-                "success": True,
-                "operation_type": operation_type,
-                "record_id": str(final_record_id),
-            }
-
+            logger.info("%s record with ID: %s for query: %s",
+                        "Replaced" if operation_type == "replace" else "Inserted",
+                        final_record_id, filter_query)
+            return {"success": True, "operation_type": operation_type, "record_id": str(final_record_id)}
         except Exception as e:
             logger.error("Error upserting serve record: %s", str(e))
-            return {
-                "success": False,
-                "error": str(e),
-                "operation_type": "error",
-                "record_id": None,
-            }
+            return {"success": False, "error": str(e), "operation_type": "error", "record_id": None}
 
-    async def bulk_upsert_serve_records(
-        self, records_with_filters: List[Dict[str, Any]]
-    ) -> Dict[str, Any]:
-        """Bulk upsert serve records for time series collections."""
+    async def bulk_upsert_serve_records(self, records_with_filters: List[Dict[str, Any]]) -> Dict[str, Any]:
         try:
             if not records_with_filters:
-                return {
-                    "success": True,
-                    "inserted_count": 0,
-                    "replaced_count": 0,
-                    "total_count": 0,
-                    "failed_count": 0,
-                }
-
+                return {"success": True, "inserted_count": 0, "replaced_count": 0, "total_count": 0, "failed_count": 0}
             inserted_count = 0
             replaced_count = 0
             failed_count = 0
-
             for record_info in records_with_filters:
                 filter_query = record_info.get("filter_query")
                 record_data = record_info.get("record_data")
-
                 if not filter_query or not record_data:
                     logger.warning("Skipping record missing filter_query or record_data")
                     failed_count += 1
                     continue
-
                 result = await self.upsert_serve_record(filter_query, record_data)
-
                 if result.get("success"):
-                    logger.info(
-                        f"TESTING LOGS: Successfully upserted block "
-                        f"{filter_query.get('time_block')} ({filter_query.get('type')})"
-                    )
                     if result.get("operation_type") == "insert":
                         inserted_count += 1
                     elif result.get("operation_type") == "replace":
                         replaced_count += 1
                 else:
                     failed_count += 1
-                    logger.warning(
-                        "TESTING LOGS: Failed to upsert record: %s", result.get("error")
-                    )
-
+                    logger.warning("Failed to upsert record: %s", result.get("error"))
             total_count = inserted_count + replaced_count
-            logger.info(
-                "Bulk upsert completed: %d inserted, %d replaced, %d failed out of %d records",
-                inserted_count,
-                replaced_count,
-                failed_count,
-                len(records_with_filters),
-            )
-
+            logger.info("Bulk upsert completed: %d inserted, %d replaced, %d failed",
+                        inserted_count, replaced_count, failed_count)
             return {
                 "success": failed_count == 0,
                 "inserted_count": inserted_count,
@@ -407,7 +278,6 @@ class BaseServeRepository(BaseRepository):
                 "total_count": total_count,
                 "failed_count": failed_count,
             }
-
         except Exception as e:
             logger.error("Error in bulk upsert serve records: %s", str(e))
             return {
@@ -419,22 +289,10 @@ class BaseServeRepository(BaseRepository):
                 "failed_count": len(records_with_filters) if records_with_filters else 0,
             }
 
-    async def bulk_upsert_optimized(
-        self, records: List[Dict[str, Any]], unique_key_fields: List[str]
-    ) -> Dict[str, Any]:
-        """Optimized bulk upsert using MongoDB bulk_write operations."""
+    async def bulk_upsert_optimized(self, records: List[Dict[str, Any]], unique_key_fields: List[str]) -> Dict[str, Any]:
         try:
             if not records:
-                return {
-                    "success": True,
-                    "inserted_count": 0,
-                    "modified_count": 0,
-                    "upserted_count": 0,
-                    "total_processed": 0,
-                }
-
-            from pymongo import UpdateOne
-
+                return {"success": True, "inserted_count": 0, "modified_count": 0, "upserted_count": 0, "total_processed": 0}
             operations = []
             for record in records:
                 filter_query = {field: record.get(field) for field in unique_key_fields}
@@ -444,22 +302,15 @@ class BaseServeRepository(BaseRepository):
                 update_data["updated_at"] = current_time
                 created_at_val = record.get("created_at") or current_time
                 inserted_at_val = record.get("inserted_at") or current_time
-                set_on_insert = {
-                    "created_at": created_at_val,
-                    "inserted_at": inserted_at_val,
-                }
                 op = UpdateOne(
                     filter_query,
-                    {"$set": update_data, "$setOnInsert": set_on_insert},
+                    {"$set": update_data, "$setOnInsert": {"created_at": created_at_val, "inserted_at": inserted_at_val}},
                     upsert=True,
                 )
                 operations.append(op)
-
             if not operations:
                 return {"success": True, "total_processed": 0}
-
             result = await self.serve_collection.bulk_write(operations, ordered=False)
-
             return {
                 "success": True,
                 "inserted_count": result.upserted_count,
@@ -468,7 +319,6 @@ class BaseServeRepository(BaseRepository):
                 "matched_count": result.matched_count,
                 "total_processed": len(records),
             }
-
         except Exception as e:
             logger.error(f"Error in bulk_upsert_optimized: {str(e)}")
             return {"success": False, "error": str(e), "total_processed": 0}

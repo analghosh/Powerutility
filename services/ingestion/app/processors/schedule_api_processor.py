@@ -11,7 +11,6 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 from libs.database.mongo_client_factory import get_mongo_client
-from libs.database.mongo_client_factory import get_mongo_database
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
 from services.ingestion.app.core.config import settings
 from services.ingestion.app.core.logger import get_ingestion_logger
@@ -167,19 +166,18 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
             Optional[Dict[str, Any]]: API configuration or None
         """
         try:
-            # client = get_mongo_client(self.mongo_uri, "schedule_api_config")
-            # db = client[self.database_name]
-            db = get_mongo_database(self.mongo_uri, self.database_name)
+            client = get_mongo_client(self.mongo_uri, "schedule_api_config")
+            db = client[self.database_name]
             
             # Look for a provider with code "schedule_api_provider"
-            provider = await db["providers"].find_one({
+            provider = db["providers"].find_one({
                 "code": "schedule_api_provider",
                 "enabled": True
             })
             
             if not provider:
                 # Also try looking for provider type
-                provider = await db["providers"].find_one({
+                provider = db["providers"].find_one({
                     "provider_type": "schedule_api",
                     "enabled": True
                 })

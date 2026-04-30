@@ -40,7 +40,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
         start_time = datetime.now()
 
         execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
-        self.set_correlation_id(execution_id or "")
+        self.set_correlation_id(execution_id)
 
         logger.info("=== EXECUTING SUPPLY TOMORROW SYNC JOB ===")
 
@@ -63,7 +63,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                 schedule=schedule,
                 execution_start=start_time,
                 execution_end=end_time,
-                execution_id=execution_id or "",
+                execution_id=execution_id,
                 status=result["status"],
                 success=success,
                 result=result
@@ -224,8 +224,8 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                     if isinstance(scheduled_at, str):
                         try: scheduled_at = datetime.fromisoformat(scheduled_at.replace('Z', '+00:00'))
                         except: pass
-
-                    if not isinstance(scheduled_at, datetime):
+                    
+                    if not scheduled_at: 
                         continue
                         
                     # Recalculate TMs if needed or perform direct copy
@@ -242,18 +242,14 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                         px_price=safe_float(rec.get("px_price")),
                         vc_price=safe_float(rec.get("vc_price")),
                         price_group=rec.get("price_group"),
+                        # Use existing calculated TMs if present
                         dam_tm=safe_float(rec.get("dam_tm")),
                         rtm_tm=safe_float(rec.get("rtm_tm")),
                         multiplier=safe_float(rec.get("multiplier")),
                         ramping=str(rec.get("ramping", "")),
-                        ramp_up=safe_float(rec.get("ramp_up")) if rec.get("ramp_up") is not None else None,
-                        ramp_down=safe_float(rec.get("ramp_down")) if rec.get("ramp_down") is not None else None,
-                        dc_afterloss=safe_float(rec.get("dc_afterloss")) if rec.get("dc_afterloss") is not None else None,
-                        max_mw_dc=safe_float(rec.get("max_mw_dc")) if rec.get("max_mw_dc") is not None else None,
-                        eightThirtyValue=safe_float(rec.get("eightThirtyValue")) if rec.get("eightThirtyValue") is not None else None,
                         updated_flag=UpdatedFlag.UPDATED,
-                        source=rec.get("source", "tomorrow_sync_proc"),
-                        source_revision_number=safe_int(rec.get("source_revision_number")),
+                        source=rec.get("source"),
+                        revision_no=safe_int(rec.get("revision_no")),
                         system_revision_number=safe_int(rec.get("system_revision_number", 1)),
                         created_at=datetime.now(),
                         updated_at=datetime.now(),
@@ -272,7 +268,10 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             # 3. Bulk Upsert into Supply Serve
             logger.info(f"Upserting {len(entities_to_upsert)} entities into supply_serve...")
             
-            res = await self.supply_repository.bulk_insert_supply_serve_with_deduplication(entities_to_upsert)
+            res = await asyncio.to_thread(
+                self.supply_repository.bulk_insert_supply_serve_with_deduplication,
+                entities_to_upsert
+            )
             
             logger.info(f"Sync complete. Result: {res}")
             return True

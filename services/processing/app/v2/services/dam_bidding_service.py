@@ -80,24 +80,6 @@ class DAMBiddingService:
         except (ValueError, TypeError):
             logger.warning(f"Cannot convert '{value}' to int, using default {default}")
             return default
-        
-        # For DAM, we show all 96 blocks, but keep the complex calculation logic
-        # Calculate today's current block (but use all blocks for DAM)
-        today_current_block = (2 * passed_sessions_count) - 1 + 95
-        print(f"session_times {current_time}")
-        
-        # Set class attributes (keeping RTM complexity but adapting for DAM)
-        self.currentBlk = 96  # Show all blocks for DAM (instead of today_current_block)
-        self.actualCurrentBlk = today_current_block  # Keep the actual calculation for reference
-
-        self.shiftingBlockNo = 2
-        self.shiftingBlockNoRuningTo = 5
-        self.shiftingBlockNoREQFrom = 5
-        self.shiftingBlockNoREQTo = 18
-
-        # For DAM, these calculations are kept but we use all blocks
-        self.BlkNoForRunSchedule = self.currentBlk + self.shiftingBlockNo
-        self.BlkNoToRunSchedule = self.currentBlk + self.shiftingBlockNoRuningTo
 
         self.BlkNoFromRunReq = self.currentBlk + self.shiftingBlockNoREQFrom
         self.BlkNoToRunReq = self.currentBlk + self.shiftingBlockNoREQTo
@@ -285,9 +267,9 @@ class DAMBiddingService:
             # Complex demand forecast data retrieval similar to RTM
             from datetime import date
             target_date = datetime.strptime(schedule_date, '%Y-%m-%d').date()
-            demand_forecast = self.demand_repo.get_demand_forecast_data_pipeline(
-                collection_name="demand_serve", 
-                target_date=target_date, 
+            demand_forecast = await self.demand_repo.get_demand_forecast_data_pipeline(
+                collection_name="demand_serve",
+                target_date=target_date,
                 market_type="DAF"
             )
             

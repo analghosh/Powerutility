@@ -77,11 +77,11 @@ def get_correlation_id() -> Optional[str]:
     return _correlation_id.get()
 
 
-def set_correlation_id(correlation_id: Optional[str]) -> None:
+def set_correlation_id(correlation_id: str) -> None:
     """
     Set correlation ID in context
-
+    
     Args:
-        correlation_id: Correlation ID to set, or None to clear
+        correlation_id: Correlation ID to set
     """
     _correlation_id.set(correlation_id)

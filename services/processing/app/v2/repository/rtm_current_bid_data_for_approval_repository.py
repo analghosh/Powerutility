@@ -48,7 +48,7 @@ class RTMCurrentBidDataForApprovalRepository(GenericRepository):
 
             logger.info(f"Inserting {len(documents)} documents into collection...")
             
-            result= await self.collection.insert_many(documents, ordered=False)
+            result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             
             logger.info("Bulk insert successful")
@@ -60,7 +60,7 @@ class RTMCurrentBidDataForApprovalRepository(GenericRepository):
 
     async def getData(self, time_block: str, schedule_date: str) -> int:
         
-        result =  await self.collection.find_one({"time_block": time_block, "schedule_date":schedule_date})
+        result = await self.collection.find_one({"time_block": time_block, "schedule_date":schedule_date})
     
         if result:
             return 1
@@ -73,7 +73,7 @@ class RTMCurrentBidDataForApprovalRepository(GenericRepository):
 
     async def createData(self, entity_dict):
         
-        result =  await self.collection.insert_many([entity_dict])
+        result = await self.collection.insert_many([entity_dict])
         inserted_ids = [str(_id) for _id in result.inserted_ids]
         logger.info("Bulk insert successful")
         return {"data": True}

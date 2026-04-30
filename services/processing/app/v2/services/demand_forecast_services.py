@@ -279,7 +279,7 @@ class DemandForecastService:
             idf = finalize("IDF")
         else:
             # Single pass for entire month
-            rows = run_pipeline(match_base)
+            rows = await run_pipeline(match_base)
             m = {r["_id"]: r for r in rows}
             daf = {
                 "avg": round(float(m.get("DAF", {}).get("avg_mape", 0) or 0), 2),
@@ -299,16 +299,6 @@ class DemandForecastService:
         }
 
     async def _get_demand_forecast_data(self, target_date: date, market_type: str) -> List[Dict[str, Any]]:
-        """
-        Get demand forecast data for a specific date and market type using proper entity field mapping.
-        
-        Args:
-            target_date: The target date to query
-            market_type: Either "IDF" or "DAF"
-            
-        Returns:
-            List of demand forecast records
-        """
         return await self.demand_forecast_repo.get_demand_forecast_data_pipeline(
             "demand_serve", target_date, market_type
         )

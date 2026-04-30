@@ -24,7 +24,7 @@ class DemandDataProcessing:
         self.demand_repository = DemandServeRepository()
 
     
-    def process_demand_record(self, raw_data_record: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_demand_record(self, raw_data_record: Dict[str, Any]) -> Dict[str, Any]:
         """
         Process a single demand raw data record
         
@@ -73,7 +73,7 @@ class DemandDataProcessing:
                 }
             
             # Handle 4-day rolling window
-            self._handle_four_day_rolling_window(processed_entities)
+            await self._handle_four_day_rolling_window(processed_entities)
             
             logger.info("Successfully processed %s demand entities", len(processed_entities))
             
@@ -295,7 +295,7 @@ class DemandDataProcessing:
         except (ValueError, TypeError):
             return None
     
-    def _handle_four_day_rolling_window(self, entities: List[DemandServeEntity]):
+    async def _handle_four_day_rolling_window(self, entities: List[DemandServeEntity]):
         """
         Handle 4-day rolling window logic
         
@@ -311,7 +311,7 @@ class DemandDataProcessing:
             tomorrow = today + timedelta(days=1)
             
             # Get existing demand serve data
-            existing_data = self.demand_repository.find_many({}, limit=10000)
+            existing_data = await self.demand_repository.find_many({}, limit=10000)
             
             # Process each entity
             for entity in entities:
@@ -333,7 +333,7 @@ class DemandDataProcessing:
                     self._move_old_data_to_historical(day_before_yesterday)
                 
                 # Store/update the entity
-                self._store_demand_entity(entity)
+                await self._store_demand_entity(entity)
             
         except (ValueError, TypeError, KeyError, AttributeError) as e:
             logger.error("Error handling 4-day rolling window: %s", e)
@@ -409,7 +409,7 @@ class DemandDataProcessing:
             
             # Use delete-insert method
             if should_insert:
-                result = self.demand_repository.delete_insert_demand_serve(
+                result = await self.demand_repository.delete_insert_demand_serve(
                     filter_criteria={
                         "time_block": entity.time_block,
                         "scheduled_at": entity.scheduled_at,

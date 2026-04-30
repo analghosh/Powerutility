@@ -32,7 +32,7 @@ class JobMonitoringService(IJobMonitoringService):
     async def get_running_jobs(self) -> List[Dict[str, Any]]:
         """Get all currently running jobs"""
         try:
-            return await self._job_detail_repository.get_running_jobs()
+            return self._job_detail_repository.get_running_jobs()
         except Exception as e:
             self._logger.error(f"Failed to get running jobs: {str(e)}")
             raise
@@ -222,7 +222,7 @@ class JobMonitoringService(IJobMonitoringService):
     async def get_all_jobs_from_job_data(self) -> List[Dict[str, Any]]:
         """Get all jobs from job data collection"""
         try:
-            return await self._job_detail_repository.get_all_jobs_from_job_data()
+            return self._job_detail_repository.get_all_jobs_from_job_data()
         except Exception as e:
             self._logger.error(f"Failed to get all jobs from job data: {str(e)}")
             raise

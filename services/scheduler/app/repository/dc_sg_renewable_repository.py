@@ -147,7 +147,7 @@ class DcSgRenewableRepository(BaseRepository):
     # Day carry-forward logic
     # ------------------------------------------------------------------
 
-    def carry_forward_for_date(self, target_date) -> Dict[str, Any]:
+    async def carry_forward_for_date(self, target_date) -> Dict[str, Any]:
         """
         For each unique (time_block, plant_id, type) that has NO record on target_date,
         carry the most recent existing record forward to target_date.
@@ -165,10 +165,10 @@ class DcSgRenewableRepository(BaseRepository):
             target_start = datetime.combine(target_date, datetime.min.time())
 
             # Keys that already exist on target_date
-            existing_keys = self.get_existing_keys_for_date(target_date)
+            existing_keys = await self.get_existing_keys_for_date(target_date)
 
             # Latest record per constraint from all historical data
-            latest_records = self.get_latest_record_per_constraint()
+            latest_records = await self.get_latest_record_per_constraint()
 
             carry_docs = []
             skipped = 0

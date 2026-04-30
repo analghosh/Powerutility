@@ -718,11 +718,7 @@ class NewDSMProcessor(BaseProcessor):
                 }
             ]
             
-            cursor = supply_serve_repository.serve_collection.aggregate(pipeline)
-            try:
-                results = await cursor.to_list(length=10000)
-            finally:
-                cursor.close()
+            results = await supply_serve_repository.serve_collection.aggregate(pipeline).to_list(length=10000)
             
             if results and len(results) > 0:
                 total_schedule = results[0].get('total_schedule', 0)

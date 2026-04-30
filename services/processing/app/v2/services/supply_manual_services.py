@@ -46,7 +46,7 @@ class SupplyManualService:
             Dictionary with data and metadata.
         """
         try:
-            records = await self.dc_sg_repository.get_manual_supply_async(
+            records = await self.dc_sg_repository.get_manual_supply(
                 plant_id=plant_id,
                 dc_sg=dc_sg,
                 process_type=process_type,
@@ -98,7 +98,7 @@ class SupplyManualService:
         """
         try:
             # Step 1: Get records to sync BEFORE update (need scheduled_at dates)
-            records_to_sync = self.dc_sg_repository.get_records_for_sync(
+            records_to_sync = await self.dc_sg_repository.get_records_for_sync(
                 plant_id=plant_id,
                 dc_sg=dc_sg,
                 process_type=process_type,

@@ -63,7 +63,9 @@ class BaseCronManager(ABC):
             import threading
             self._thread_lock = threading.Lock()
             self._active_threads: Dict[str, threading.Thread] = {}
-
+            
+            # Register service-specific jobs
+            self._register_service_jobs()
         except (OSError, ValueError, TypeError, RuntimeError) as e:
             logger.warning("Could not initialize scheduler for service %s: %s", service_name, str(e))
             self.scheduler = None
@@ -142,19 +144,11 @@ class BaseCronManager(ABC):
                         job_type, self.service_name, str(e))
             return False
         
-    async def start(self):
+    def start(self):
         """Start the cron scheduler with all registered jobs"""
         if not self._is_running:
             try:
                 logger.info("Starting cron scheduler for service: %s...", self.service_name)
-                
-                # Fetch and register jobs dynamically before starting
-                import inspect
-                register_func = self._register_service_jobs
-                if inspect.iscoroutinefunction(register_func):
-                    await register_func()
-                else:
-                    register_func()
                 
                 # Add all enabled jobs to scheduler
                 enabled_jobs = 0

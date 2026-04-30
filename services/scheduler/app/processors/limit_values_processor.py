@@ -41,7 +41,7 @@ class LimitValuesProcessor(BaseProcessor):
         job_name = "Limit Values Approval Processing"
         job_detail = await self.job_data_repository.get_job(job_type)
         start_time = datetime.now()
-        schedule = job_detail.get("schedule", "0 0 * * *") if job_detail else "0 0 * * *"
+        schedule = job_detail.get("schedule", "0 0 * * *")
 
         execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
@@ -353,10 +353,11 @@ class LimitValuesProcessor(BaseProcessor):
             logger.info("[LimitValuesProcessor] Starting 'ID' to 'id' field rename process")
             
             from libs.database.mongo_client_factory import get_scheduler_client
+            from services.scheduler.app.core.config import settings
             
             # Use centralized MongoDB client (singleton pattern)
-            client = get_scheduler_client(self.mongodb_uri)
-            db = client[self.database_name]
+            client = get_scheduler_client(settings.MONGODB_URI)
+            db = client[settings.MONGODB_DATABASE]
             
             collections_to_migrate = [self.final_collection_name, self.approval_collection_name]
             

@@ -170,12 +170,12 @@ class DummyDataService:
             logger.info("Could not create time series collections: %s", str(e))
             logger.info("Using regular collections with timestamp indexes")
 
-    def check_if_cron_has_run_before(self, job_id: Optional[str] = None) -> bool:
+    async def check_if_cron_has_run_before(self, job_id: Optional[str] = None) -> bool:
         """Check if cron jobs have run before by examining execution logs"""
         try:
             logger.info("Checking if cron jobs have run before...")
             
-            cron_execution_status = self._check_recent_cron_executions(job_id)
+            cron_execution_status = await self._check_recent_cron_executions(job_id)
 
             logger.info("Cron serve data reconciliation execution status: %s", cron_execution_status)
             return cron_execution_status
@@ -184,14 +184,14 @@ class DummyDataService:
             logger.error("Error checking if cron has run before: %s", str(e))
             return False
     
-    def _check_recent_cron_executions(self, job_id: Optional[str] = None) -> bool:
+    async def _check_recent_cron_executions(self, job_id: Optional[str] = None) -> bool:
         """Check for recent cron job execution logs in job_detail collection"""
         try:
             if not job_id:
                 logger.warning("Job ID is required to check recent cron executions")
                 return False
             
-            execution_status = job_detail_repository.get_recent_executions(
+            execution_status = await job_detail_repository.get_recent_executions(
                 job_id=str(job_id)
             )
             
@@ -1320,12 +1320,12 @@ class DummyDataService:
                 "error": str(e),
             }
 
-    def reconcile_and_rerun_crons(self, job_id: Optional[str] = None) -> Dict[str, Any]:
+    async def reconcile_and_rerun_crons(self, job_id: Optional[str] = None) -> Dict[str, Any]:
         """Simple reconciliation - just run startup if needed then execute cron"""
         try:
             logger.info("Starting system reconciliation...")
 
-            startup_result = self._process_startup_data_flow(job_id)
+            startup_result = await self._process_startup_data_flow(job_id)
 
             if startup_result["status"] == "success":
                 logger.info("Startup reconciliation completed - cron jobs will run on schedule")
@@ -1444,7 +1444,7 @@ class DummyDataService:
         start_time = datetime.now()
         
         # Get job data to retrieve payload and other configuration
-        job_data = job_data_repository.get_job(job_type)
+        job_data = await job_data_repository.get_job(job_type)
         if job_data:
             job_name = job_data.get('name', job_name)
             schedule = job_data.get('schedule', schedule)
@@ -1455,7 +1455,7 @@ class DummyDataService:
             logger.info("Job payload: %s", payload)
         
         # Record job start
-        execution_id = self._record_job_start(job_detail_repository, job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_detail_repository, job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {'status': 'error', 'error': 'Failed to record job start'}
@@ -1478,7 +1478,7 @@ class DummyDataService:
             logger.info("   - Current demand_serve records: %s", result.get('current_demand_serve_records', 0))
             
             success = result.get('status') in ['success', 'partial_success']
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_detail_repository,
                 job_type=job_type,
                 job_name=job_name,
@@ -1508,7 +1508,7 @@ class DummyDataService:
             logger.error("Exception in %s after %.2fs: %s", job_type, execution_time, str(e))
             
             # Record job failure
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_detail_repository,
                 job_type=job_type,
                 job_name=job_name,
@@ -1527,13 +1527,13 @@ class DummyDataService:
                 'execution_time': execution_time
             }
     
-    def _record_job_start(self, job_detail_repository, job_type: str, job_name: str, schedule: str, execution_start: datetime) -> Optional[str]:
+    async def _record_job_start(self, job_detail_repository, job_type: str, job_name: str, schedule: str, execution_start: datetime) -> Optional[str]:
         """Record job start in audit database"""
         from libs.core.job_entities import JobDetail
         
         try:
             # Get the job_id (ObjectId) from job_data collection using job_type
-            job_data = job_data_repository.get_job(job_type)
+            job_data = await job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return None
@@ -1565,7 +1565,7 @@ class DummyDataService:
                 created_at=datetime.now()
             )
             
-            job_detail_repository.log_execution(job_detail)
+            await job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (job_type: %s, execution_id: %s) in audit database", 
                        job_name, job_type, execution_id)
             
@@ -1575,7 +1575,7 @@ class DummyDataService:
             logger.error("Failed to record job start for %s: %s", job_type, str(e))
             return None
     
-    def _record_job_completion(self, job_detail_repository, job_type: str, job_name: str, schedule: str,
+    async def _record_job_completion(self, job_detail_repository, job_type: str, job_name: str, schedule: str,
                               execution_start: datetime, execution_end: datetime, execution_id: str,
                               status: str, success: bool, result: Optional[Dict[str, Any]] = None,
                               error_message: Optional[str] = None) -> None:
@@ -1586,7 +1586,7 @@ class DummyDataService:
             duration_seconds = (execution_end - execution_start).total_seconds()
             
             # Get the job_id (ObjectId) from job_data collection using job_type
-            job_data = job_data_repository.get_job(job_type)
+            job_data = await job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return
@@ -1615,7 +1615,7 @@ class DummyDataService:
                 created_at=datetime.now()
             )
             
-            job_detail_repository.log_execution(job_detail)
+            await job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job completion for %s (job_type: %s, execution_id: %s, status: %s) in audit database",
                        job_name, job_type, execution_id, status)
                 

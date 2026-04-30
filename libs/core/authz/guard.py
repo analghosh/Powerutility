@@ -264,7 +264,6 @@ async def get_current_user(
             authz_version=user_authz_ver,
             effective_permissions=effective,
             roles=payload.roles or [],
-            must_change_password=bool(user_doc.get("must_change_password", False)),
         )
         
     except HTTPException:
@@ -301,16 +300,6 @@ async def global_authz_guard(
     start_time = time.time()
     
     try:
-        # Force password change: block everything except the change-password endpoint
-        if user.must_change_password:
-            path = request.url.path
-            if not path.rstrip("/").endswith("/auth/change-password"):
-                raise HTTPException(
-                    status_code=428,
-                    detail="Password change required. Please call POST /auth/change-password."
-                )
-            return
-
         # Super admin bypass with logging
         if user.is_super_admin:
             _log_security_event("SUPER_ADMIN_ACCESS", {
@@ -353,12 +342,6 @@ async def global_authz_guard(
                 }, request, user.user_id)
                 return
         
-        # Self-update exemption: a user updating their own record needs no extra permission
-        if method in ("PUT", "PATCH"):
-            target_user_id = request.path_params.get("user_id")
-            if target_user_id and target_user_id == user.user_id:
-                return
-
         # Detailed permission checking
         missing = [p for p in required if p not in user_permissions]
         

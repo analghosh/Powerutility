@@ -145,7 +145,7 @@ class ParameterRepository:
         """
         try:
             # Get total count
-            total = await self.repo.get_count(self.collection_name)
+            total = self.repo.get_count(self.collection_name)
             
             # Get parameters with pagination
             parameters = await self.repo.get_all_async(

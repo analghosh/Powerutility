@@ -74,6 +74,14 @@ async def lifespan(_: FastAPI):
     cron_manager = CronManager(audit_logger)
     app.state.cron_manager = cron_manager
 
+    # Ensure provider indexes
+    try:
+        from libs.repository.provider_repository import ProviderRepository
+        _provider_repo = ProviderRepository(settings.MONGODB_URI, settings.MONGODB_DATABASE)
+        await _provider_repo.ensure_indexes()
+    except Exception as idx_error:
+        logger.warning("Failed to ensure provider indexes: %s", idx_error)
+
     # Seed default providers (e.g., forecast_api_provider)
     try:
         from .seeders.provider_seeder import seed_providers
@@ -82,39 +90,9 @@ async def lifespan(_: FastAPI):
     except Exception as seed_error:
         logger.warning("Failed to seed providers: %s", seed_error)
 
-    # Initialize provider repository (creates indexes, etc.)
-    try:
-        from .api.v1.routes.providers import provider_service
-        await provider_service.initialize()
-        logger.info("Provider repository initialized")
-    except Exception as e:
-        logger.error("Failed to initialize provider repository: %s", e)
-
-    # Initialize upload tracking repository (creates collection + indexes once)
-    try:
-        from .repository.upload_tracking_repository import UploadTrackingRepository
-        upload_repo = UploadTrackingRepository(
-            mongodb_uri=settings.MONGODB_URI,
-            database_name=settings.MONGODB_DATABASE
-        )
-        await upload_repo.initialize()
-        logger.info("Upload tracking repository initialized")
-    except Exception as e:
-        logger.error("Failed to initialize upload tracking repository: %s", e)
-
-    # Initialize raw data repositories (creates timeseries collections + indexes once)
-    try:
-        from libs.repository.raw_data_repository import RawDataRepository
-        for data_type in (None, "demand", "supply"):
-            raw_repo = RawDataRepository(settings.MONGODB_URI, settings.MONGODB_DATABASE, data_type)
-            await raw_repo.initialize()
-        logger.info("Raw data repositories initialized")
-    except Exception as e:
-        logger.error("Failed to initialize raw data repositories: %s", e)
-
     # Start the cron scheduler
     try:
-        await cron_manager.start()
+        cron_manager.start()
         logger.info("Cron scheduler started successfully")
         
         # Execute background file processing immediately on startup
@@ -298,7 +276,7 @@ async def cron_status():
     return {
         "service": "ingestion-service",
         "cron_scheduler_running": cron_manager.is_running(),
-        "jobs": cron_manager.get_all_jobs()
+        "jobs": await cron_manager.get_all_jobs()
     }
 
 

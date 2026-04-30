@@ -160,13 +160,13 @@ class APIKeyManagementService:
         """
         try:
             key_doc = await self.repository.find_by_api_key(api_key)
-
+            
             if not key_doc:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"API key not found: {api_key}"
                 )
-
+            
             created_at = key_doc.get("created_at")
             updated_at = key_doc.get("updated_at")
             last_used_at = key_doc.get("last_used_at")
@@ -211,7 +211,7 @@ class APIKeyManagementService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"API key not found: {api_key}"
                 )
-
+            
             # Activate the key
             success = await self.repository.update_api_key(api_key, {"is_active": True})
             
@@ -256,7 +256,7 @@ class APIKeyManagementService:
                     status_code=status.HTTP_404_NOT_FOUND,
                     detail=f"API key not found: {api_key}"
                 )
-
+            
             # Deactivate the key (revoke)
             success = await self.repository.revoke_api_key(api_key)
             

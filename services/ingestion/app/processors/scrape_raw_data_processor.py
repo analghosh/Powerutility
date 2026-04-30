@@ -309,7 +309,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
             logger.debug("🔍 Processing provider: %s, data type: %s", provider_code, data_type)
             
             # Get full provider entity for processing
-            full_provider = await self._get_full_provider_entity(provider_code)
+            full_provider = self._get_full_provider_entity(provider_code)
             if not full_provider:
                 logger.error("❌ Could not retrieve full provider entity for: %s", provider_code)
                 return {'success': False, 'error': 'Provider entity not found'}
@@ -375,7 +375,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
             unique_log_ids = list(set(all_log_ids))
             
             # Store data using raw data service
-            storage_result = await self._store_scraped_data(mapped_data, full_provider, unique_log_ids)
+            storage_result = self._store_scraped_data(mapped_data, full_provider, unique_log_ids)
             
             if storage_result["success"]:
                 stored_records = storage_result.get("stored_records", 0)
@@ -403,10 +403,10 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
     async def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
         """
         Get full provider entity by code
-
+        
         Args:
             provider_code: Provider code to retrieve
-
+            
         Returns:
             Optional[ProviderEntity]: Full provider entity or None if not found
         """
@@ -416,14 +416,14 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
             if provider_entity:
                 return provider_entity
             else:
-                logger.error("Provider not found for code: %s", provider_code)
+                logger.error("❌ Provider not found for code: %s", provider_code)
                 return None
         except Exception as e:
-            logger.error("Error retrieving provider entity for code %s: %s (%s)",
+            logger.error("💥 Error retrieving provider entity for code %s: %s (%s)", 
                         provider_code, str(e), type(e).__name__)
             return None
 
-    async def _store_scraped_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _store_scraped_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Store scraped data using the raw data service
         
@@ -447,7 +447,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids
 
             # Use raw data service to store the data
-            result = await self.raw_data_service.store_raw_data(
+            result = self.raw_data_service.store_raw_data(
                 raw_data=data,
                 provider=provider,
                 additional_metadata=additional_metadata
@@ -1037,7 +1037,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                     ingestion_type=ingestion_type, data_type=data_type, enabled=True
                 )
             else:
-                # Get all enabled SCRAPE providers regardless of data type
+                # Get all enabled FTP providers regardless of data type
                 providerResponse = await self.provider_service.get_all_providers(
                     ingestion_type=ingestion_type, enabled=True
                 )

@@ -30,22 +30,20 @@ class SupplyManualRepository(GenericRepository):
         """Get the collection object for direct access"""
         return self.db[self.collection_name]
 
-    def _find_sync(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Execute find operation synchronously"""
+    async def _find(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Execute find operation asynchronously"""
         try:
-            result = self.collection.find(query)
-            return list(result) if result else []
+            result = await self.collection.find(query).to_list(length=10000)
+            return result
         except Exception as e:
             logger.error(f"Failed to execute find: {str(e)}")
             return []
 
     async def find_async(self, query: Dict[str, Any]) -> List[Dict[str, Any]]:
         """Execute find operation asynchronously"""
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._find_sync, query)
+        return await self._find(query)
 
-    def get_manual_supply(
+    async def get_manual_supply(
         self,
         plant_id: Optional[str] = None,
         dc_sg: str = "DC",
@@ -80,7 +78,7 @@ class SupplyManualRepository(GenericRepository):
                 query["time_block"] = time_block
             
             logger.info(f"Querying dc_sg with filters: {query}")
-            result = self._find_sync(query)
+            result = await self._find(query)
             logger.info(f"Found {len(result)} records in dc_sg")
             return result
             
@@ -97,12 +95,7 @@ class SupplyManualRepository(GenericRepository):
         time_block: Optional[int] = None
     ) -> List[Dict[str, Any]]:
         """Async version of get_manual_supply"""
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(
-                executor, 
-                lambda: self.get_manual_supply(plant_id, dc_sg, process_type, updated_flag, time_block)
-            )
+        return await self.get_manual_supply(plant_id, dc_sg, process_type, updated_flag, time_block)
 
     async def update_manual_supply_to_zero(
         self,
@@ -155,7 +148,7 @@ class SupplyManualRepository(GenericRepository):
             logger.error(f"Failed to update manual supply: {str(e)}")
             return {"matched_count": 0, "modified_count": 0, "error": str(e)}
 
-    def get_records_for_sync(
+    async def get_records_for_sync(
         self,
         plant_id: str,
         dc_sg: str,
@@ -185,7 +178,7 @@ class SupplyManualRepository(GenericRepository):
             if time_block is not None:
                 query["time_block"] = time_block
             
-            return self._find_sync(query)
+            return await self._find(query)
             
         except Exception as e:
             logger.error(f"Failed to get records for sync: {str(e)}")

@@ -86,7 +86,7 @@ class DemandScheduleProcessor(BaseProcessor):
         Logic to update demand schedule based on aggregated supply data.
         """
         try:
-            supply_map = self._get_supply_schedule_map(target_dates)
+            supply_map = await self._get_supply_schedule_map(target_dates)
             if not supply_map:
                 logger.info("No supply schedule data found for update.")
                 return True
@@ -154,7 +154,7 @@ class DemandScheduleProcessor(BaseProcessor):
             logger.error(f"Error updating demand schedule logic: {e}")
             return False
     
-    def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
+    async def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
         """Fetch supply schedule data for the dates in raw_data (list of dicts or list of dates)"""
         try:
             unique_dates = set()
@@ -189,7 +189,7 @@ class DemandScheduleProcessor(BaseProcessor):
             start_date = datetime.combine(sorted_dates[0], datetime.min.time())
             end_date = datetime.combine(sorted_dates[-1] + timedelta(days=1), datetime.min.time())
             
-            aggregated_schedule = self.supply_repository.aggregate_supply_schedule(start_date, end_date)
+            aggregated_schedule = await self.supply_repository.aggregate_supply_schedule(start_date, end_date)
             
             schedule_map = {}
             for item in aggregated_schedule:
