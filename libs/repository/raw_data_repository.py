@@ -264,7 +264,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error getting raw data statistics: %s", e, exc_info=True)
             return {"error": str(e)}
     
-    def cleanup_old_records(self, older_than_days: int = 30) -> int:
+    async def cleanup_old_records(self, older_than_days: int = 30) -> int:
         """
         Clean up old raw data records
         
@@ -279,7 +279,7 @@ class RawDataRepository(BaseRepository):
             
             query = {"created_at": {"$lt": cutoff_date}}
             
-            result = self.collection.delete_many(query)
+            result = await self.collection.delete_many(query)
             
             logger.info("Cleaned up %d old raw data records (older than %d days)", 
                        result.deleted_count, older_than_days)
@@ -290,7 +290,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error cleaning up old raw data records: %s", e, exc_info=True)
             return 0
     
-    def is_timeseries_collection(self) -> bool:
+    async def is_timeseries_collection(self) -> bool:
         """
         Check if the collection is properly configured as a time series collection
         
@@ -299,7 +299,7 @@ class RawDataRepository(BaseRepository):
         """
         try:
             # Get collection info to check if it's a time series collection
-            collection_info = self.db.command("listCollections", filter={"name": self.collection_name})
+            collection_info = await self.db.command("listCollections", filter={"name": self.collection_name})
             collections = collection_info.get("cursor", {}).get("firstBatch", [])
             
             if collections:
@@ -322,7 +322,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error checking time series configuration for '%s': %s", self.collection_name, e)
             return False
     
-    def get_timeseries_stats(self) -> Dict[str, Any]:
+    async def get_timeseries_stats(self) -> Dict[str, Any]:
         """
         Get time series collection statistics
         
@@ -330,11 +330,11 @@ class RawDataRepository(BaseRepository):
             Dict[str, Any]: Time series statistics
         """
         try:
-            if not self.is_timeseries_collection():
+            if not await self.is_timeseries_collection():
                 return {"error": "Collection is not configured as time series"}
             
             # Get collection stats
-            stats = self.db.command("collStats", self.collection_name)
+            stats = await self.db.command("collStats", self.collection_name)
             
             timeseries_stats = {
                 "is_timeseries": True,
