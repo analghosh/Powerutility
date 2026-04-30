@@ -267,7 +267,6 @@ async def debug_staging_status(
     
     # Get staging collection info
     repo = dam_scheduling_controller.service.repository
-    
     staging_col = repo.repository.db[repo.staging_collection_name]
 
     # Count all staged records for this user
@@ -277,15 +276,18 @@ async def debug_staging_status(
     staged_with_status = await staging_col.count_documents({"staged_by": user_id, "status": "staged"})
 
     # Get sample records with different filters
-    sample_records_all = await staging_col.find({"staged_by": user_id}).limit(3).to_list(3)
+    sample_records_all = await staging_col.find({"staged_by": user_id}).limit(3).to_list(length=3)
 
-    sample_records_with_status = await staging_col.find({"staged_by": user_id, "status": "staged"}).limit(3).to_list(3)
+    sample_records_with_status = await staging_col.find({
+        "staged_by": user_id,
+        "status": "staged"
+    }).limit(3).to_list(length=3)
 
     # Get any records for this user (to see field structure)
     any_user_records = await staging_col.find(
         {"staged_by": user_id},
         {"staged_by": 1, "status": 1, "plant_id": 1, "staged_at": 1, "_id": 1}
-    ).limit(5).to_list(5)
+    ).limit(5).to_list(length=5)
 
     # Count all records in staging collection (any user)
     total_all_staged = await staging_col.count_documents({})

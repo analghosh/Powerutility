@@ -93,9 +93,9 @@ class MarketService:
             
             # Repository just fetches data - no business logic
             result = await self.market_repository.get_bid_trade_data(scheduled_at)
-            
+
             return self._flatten_data(result)  # Return flattened data
-            
+
         except Exception as e:
             logger.exception(f"[MarketService] Failed to fetch overview graph data: {str(e)}")
             raise

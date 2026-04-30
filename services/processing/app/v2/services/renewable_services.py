@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, status
 
 from ..repository.renewable_repository import renewable_repository
-from ...repository.serve_table_repository import SupplyTableRepository
+from ..repository.serve_supply_table_repository import SupplyTableRepository
 
 from ...core.config import settings
 
@@ -94,7 +94,7 @@ class RenewableServices:
 
             # Probe for existence (same as v1)
             probe = [{"$match": base_match}, {"$limit": 1}, {"$project": {"_id": 1}}]
-            if not (await self.schedule_repo.aggregate(probe)):
+            if not await self.schedule_repo.aggregate(probe):
                 raise HTTPException(status_code=404, detail=f"No schedule data for {date_str}.")
 
             # Use the exact same aggregation pipeline as v1
@@ -246,7 +246,7 @@ class RenewableServices:
                 {"$limit": 1},
                 {"$project": {"_id": 1}}
             ]
-            if not (await self.availability_repo.aggregate(probe)):
+            if not await self.availability_repo.aggregate(probe):
                 raise HTTPException(status_code=404, detail=f"No data for {date_str}.")
 
             # Use the exact same aggregation pipeline as v1

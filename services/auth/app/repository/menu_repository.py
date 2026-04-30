@@ -15,17 +15,17 @@ logger = logging.getLogger(__name__)
 
 class MenuRepository(BaseRepository):
     """Menu repository with menu-specific database operations"""
-
+    
     def __init__(self):
         super().__init__("menus", settings.AUTH_DB_NAME)
-
+    
     async def create_menu(self, menu_data: MenuCreate) -> MenuInDB:
         """Create a new menu item"""
         try:
-            # Check if menu already exists
+            # Check if menu already exists (await the async method)
             if await self.get_menu_by_name(menu_data.name):
                 raise ValueError(f"Menu '{menu_data.name}' already exists")
-
+            
             # Create menu document
             menu_doc = {
                 "name": menu_data.name,
@@ -38,10 +38,10 @@ class MenuRepository(BaseRepository):
                 "created_at": datetime.now(),
                 "updated_at": datetime.now()
             }
-
+            
             menu_id = await self.create(menu_doc)
             menu_doc["_id"] = str(menu_id)
-
+            
             return MenuInDB(**menu_doc)
         except Exception as e:
             logger.error(f"Error creating menu: {e}")
@@ -79,7 +79,7 @@ class MenuRepository(BaseRepository):
                 query["parent_id"] = None
             else:
                 query["parent_id"] = parent_id
-
+            
             menu_docs = await self.find_many(query, sort=[("order", 1)])
             return [MenuInDB(**doc) for doc in menu_docs]
         except Exception as e:
@@ -113,11 +113,11 @@ class MenuRepository(BaseRepository):
             if not menus:
                 logger.warning("No menus provided for tree building")
                 return []
-
+            
             # Create menu dictionary with validation
             menu_dict = {}
             valid_menu_ids = set()
-
+            
             for menu in menus:
                 menu_dict[menu.id] = MenuWithChildren(
                     id=menu.id,
@@ -130,14 +130,14 @@ class MenuRepository(BaseRepository):
                     children=[]
                 )
                 valid_menu_ids.add(menu.id)
-
+            
             # Build tree structure with validation
             root_menus = []
             orphaned_menus = []
-
+            
             for menu in menus:
                 menu_with_children = menu_dict[menu.id]
-
+                
                 if menu.parent_id is None:
                     root_menus.append(menu_with_children)
                 else:
@@ -152,18 +152,18 @@ class MenuRepository(BaseRepository):
                     else:
                         logger.warning(f"Menu '{menu.name}' has non-existent parent_id: {menu.parent_id}")
                         orphaned_menus.append(menu_with_children)
-
+            
             # Add orphaned menus to root level
             root_menus.extend(orphaned_menus)
-
+            
             # Sort by order
             root_menus.sort(key=lambda x: x.order)
             for menu in menu_dict.values():
                 menu.children.sort(key=lambda x: x.order)
-
+            
             logger.info(f"Built menu tree with {len(root_menus)} root menus and {len(menus)} total menus")
             return root_menus
-
+            
         except Exception as e:
             logger.error(f"Error building menu tree: {e}")
             return []
@@ -171,9 +171,9 @@ class MenuRepository(BaseRepository):
     async def update_menu(self, menu_id: str, update_data: MenuUpdate) -> bool:
         """Update menu information"""
         try:
-            update_dict = update_data.dict(exclude_unset=True)
+            update_dict = update_data.model_dump(exclude_unset=True)
             update_dict["updated_at"] = datetime.now()
-
+            
             return await self.update(menu_id, update_dict)
         except Exception as e:
             logger.error(f"Error updating menu {menu_id}: {e}")

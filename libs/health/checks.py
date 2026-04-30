@@ -75,13 +75,13 @@ async def check_mongodb_health(mongo_url: Optional[str] = None) -> ComponentHeal
         ComponentHealth object
     """
     try:
-        from motor.motor_asyncio import AsyncIOMotorClient
-
+        from pymongo import AsyncMongoClient
+        
         # Use provided URL or default
         url = mongo_url or "mongodb://localhost:27017"
-
+        
         # Create MongoDB client with connection pool limits
-        client = AsyncIOMotorClient(
+        client = AsyncMongoClient(
             url, 
             serverSelectionTimeoutMS=5000,
             maxPoolSize=2,  # Limit pool for health checks

@@ -27,8 +27,7 @@ class UserDTO:
     mfa_enabled: bool
     mfa_setup_complete: bool
     accessible_menus: list = None  # List of accessible menu IDs
-    must_change_password: bool = False  # True when admin created the account; forces password change on first login
-
+    
     @classmethod
     def from_db_document(cls, user_doc: Dict[str, Any]) -> 'UserDTO':
         """Create UserDTO from database document"""
@@ -49,8 +48,7 @@ class UserDTO:
             password_expires_at=user_doc.get("password_expires_at"),
             mfa_enabled=user_doc.get("mfa_enabled", False),
             mfa_setup_complete=user_doc.get("mfa_setup_complete", False),
-            accessible_menus=[],  # Will be populated by user repository when fetching permissions
-            must_change_password=user_doc.get("must_change_password", False)
+            accessible_menus=[]  # Will be populated by user repository when fetching permissions
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -71,8 +69,7 @@ class UserDTO:
             "password_expires_at": self.password_expires_at.isoformat() if self.password_expires_at else None,
             "mfa_enabled": self.mfa_enabled,
             "mfa_setup_complete": self.mfa_setup_complete,
-            "accessible_menus": self.accessible_menus or [],
-            "must_change_password": self.must_change_password
+            "accessible_menus": self.accessible_menus or []
         }
 
 
@@ -91,8 +88,7 @@ class AuthUserDTO:
     mfa_enabled: bool
     mfa_setup_complete: bool
     accessible_menus: list = None  # List of accessible menu IDs
-    must_change_password: bool = False
-
+    
     @classmethod
     def from_user_dto(cls, user_dto: UserDTO) -> 'AuthUserDTO':
         """Create AuthUserDTO from UserDTO"""
@@ -108,8 +104,7 @@ class AuthUserDTO:
             created_at=user_dto.created_at,
             mfa_enabled=user_dto.mfa_enabled,
             mfa_setup_complete=user_dto.mfa_setup_complete,
-            accessible_menus=user_dto.accessible_menus or [],
-            must_change_password=user_dto.must_change_password
+            accessible_menus=user_dto.accessible_menus or []
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -125,6 +120,5 @@ class AuthUserDTO:
             "last_login": self.last_login.isoformat() if self.last_login else None,
             "mfa_enabled": self.mfa_enabled,
             "mfa_setup_complete": self.mfa_setup_complete,
-            "accessible_menus": self.accessible_menus or [],
-            "must_change_password": self.must_change_password
-        }
+            "accessible_menus": self.accessible_menus or []
+        } 

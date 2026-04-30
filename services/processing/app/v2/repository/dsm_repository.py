@@ -72,7 +72,7 @@ class DsmRepository:
             result = await self.repository.aggregate(
                 collection_name, pipeline, max_time_ms=30000
             )  # 30 second timeout
-            
+
             logger.info(f"[DsmRepository] Aggregation result type: {type(result)}")
 
             if not result:
@@ -313,7 +313,7 @@ class DsmRepository:
         """
         try:
             logger.info(f"[DsmRepository] Testing collection access: {collection_name}")
-            result = await self.repository.get_all(collection_name, limit=limit)
+            result = self.repository.get_all(collection_name, limit=limit)
             logger.info(f"[DsmRepository] Collection test - found {len(result)} documents")
             if result:
                 logger.info(f"[DsmRepository] Sample document: {result[0]}")

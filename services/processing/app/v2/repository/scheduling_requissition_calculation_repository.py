@@ -221,7 +221,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         """
         return await self.getRTMAllPlantDataForScheduling()
 
-    def create(self, record_data: Dict[str, Any]) -> str:
+    async def create(self, record_data: Dict[str, Any]) -> str:
         """
         Create a new scheduling requisition calculation record (backward compatibility alias).
         Handles both standard and legacy field names.
@@ -232,7 +232,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         Returns:
             Inserted document ID
         """
-        return self.create_scheduling_record(record_data)
+        return await self.create_scheduling_record(record_data)
 
     async def create_scheduling_record(self, record_data: Dict[str, Any]) -> str:
         """
@@ -324,7 +324,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         """Alias for create_many_scheduling_records (backward compatibility)."""
         return await self.create_many_scheduling_records(records)
 
-    def get_by_schedule_date_and_block(
+    async def get_by_schedule_date_and_block(
         self,
         schedule_date: str,
         time_block: Optional[int] = None
@@ -410,7 +410,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 {"$sort": {"time_block": 1}}
             ]
             
-            return self.aggregate(self.collection_name, pipeline)
+            return await self.aggregate(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get scheduling records: {str(e)}")
             return []

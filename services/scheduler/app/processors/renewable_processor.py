@@ -519,7 +519,7 @@ class RenewableProcessor(BaseProcessor):
         schedule = "0 0 * * *"
         start_time = datetime.now()
 
-        execution_id: str = self._record_job_start(job_type, job_name, schedule, start_time) or ""
+        execution_id: str = await self._record_job_start(job_type, job_name, schedule, start_time) or ""
         if execution_id:
             self.set_correlation_id(execution_id)
 
@@ -530,15 +530,11 @@ class RenewableProcessor(BaseProcessor):
             tomorrow = today + timedelta(days=1)
 
             # Carry forward for today
-            today_result = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.carry_forward_for_date, today
-            )
+            today_result = await self.dc_sg_renewable_repository.carry_forward_for_date(today)
             logger.info("Carry-forward today (%s): %s", today, today_result)
 
             # Carry forward for tomorrow
-            tomorrow_result = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.carry_forward_for_date, tomorrow
-            )
+            tomorrow_result = await self.dc_sg_renewable_repository.carry_forward_for_date(tomorrow)
             logger.info("Carry-forward tomorrow (%s): %s", tomorrow, tomorrow_result)
 
             # Promote carried records to renewable_serve
@@ -557,7 +553,7 @@ class RenewableProcessor(BaseProcessor):
                 "execution_time": execution_time,
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -583,7 +579,7 @@ class RenewableProcessor(BaseProcessor):
                 "error": str(e),
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

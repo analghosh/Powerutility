@@ -17,6 +17,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..'))
 from libs.audit_queue.simple_logger import AuditLogger
+from ....core.dependencies import get_audit_logger
 
 router = APIRouter(prefix="/auth", tags=["user-management"])
 security = HTTPBearer()
@@ -67,7 +68,8 @@ class PermissionValidationResponse(BaseModel):
 async def get_user_info(
     user_id: str,
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user)
+    current_user: UserPrincipal = Depends(get_current_user),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
 ) -> UserInfoResponse:
     """
     Get user information by ID for service-to-service communication
@@ -95,7 +97,7 @@ async def get_user_info(
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
         
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -157,7 +159,8 @@ async def get_user_info(
 )
 async def validate_token_and_get_user(
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user)
+    current_user: UserPrincipal = Depends(get_current_user),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
 ) -> Dict[str, Any]:
     """
     Validate JWT token and return user information
@@ -230,7 +233,8 @@ async def validate_token_and_get_user(
 )
 async def get_available_roles(
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user)
+    current_user: UserPrincipal = Depends(get_current_user),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
 ) -> List[RoleResponse]:
     """
     Get all available roles in the system
@@ -307,7 +311,8 @@ async def get_available_roles(
 )
 async def get_available_permissions(
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user)
+    current_user: UserPrincipal = Depends(get_current_user),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
 ) -> List[PermissionResponse]:
     """
     Get all available permissions in the system
@@ -385,7 +390,8 @@ async def validate_user_permissions(
     user_id: str = Query(..., description="User ID to validate permissions for"),
     permission_request: PermissionValidationRequest = ...,
     request: Request = ...,
-    current_user: UserPrincipal = Depends(get_current_user)
+    current_user: UserPrincipal = Depends(get_current_user),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
 ) -> PermissionValidationResponse:
     """
     Validate if a user has specific permissions
@@ -413,7 +419,7 @@ async def validate_user_permissions(
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
         
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,

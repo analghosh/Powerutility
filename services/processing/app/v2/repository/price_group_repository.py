@@ -2,15 +2,15 @@ from typing import Any, Dict, List, Optional, Tuple
 from pymongo import ReturnDocument
 from bson import ObjectId
 from libs.models.price_group_entity import PriceGroupEntity, COLL_PRICE_GROUP
-from .base_repository import BaseRepository
+from libs.database.base_repository import BaseRepository
 
 
 class PriceGroupRepository(BaseRepository):
-    """Data access for price_group collection built on your BaseRepository.
-    Change the collection once in libs/models/price_group_entity.py
-    """
+    """Data access for price_group collection built on BaseRepository."""
+
     def __init__(self):
-        super().__init__(COLL_PRICE_GROUP)
+        from services.processing.app.core.config import settings
+        super().__init__(COLL_PRICE_GROUP, settings.MONGODB_URI, settings.MONGODB_DATABASE)
         self._indexes_ensured = False
 
 
@@ -28,19 +28,18 @@ class PriceGroupRepository(BaseRepository):
             logging.getLogger(__name__).warning(f"Failed to ensure indexes: {e}")
 
 
-    # Strongly-typed helpers wrapping BaseRepository
-    def create(self, data: Dict[str, Any]) -> str: # type: ignore[override]
+    async def create(self, data: Dict[str, Any]) -> str:  # type: ignore[override]
         entity = PriceGroupEntity(**data)
-        return super().create(entity.model_dump(by_alias=True, exclude_none=True))
+        return await super().create(entity.model_dump(by_alias=True, exclude_none=True))
 
 
-    def get(self, _id: str) -> Optional[Dict[str, Any]]:
-        doc = super().find_by_id(_id)
+    async def get(self, _id: str) -> Optional[Dict[str, Any]]:
+        doc = await super().find_by_id(_id)
         return self._dump(doc)
 
 
-    def get_by_group(self, price_group: str) -> Optional[Dict[str, Any]]:
-        doc = super().find_one({"price_group": price_group})
+    async def get_by_group(self, price_group: str) -> Optional[Dict[str, Any]]:
+        doc = await super().find_one({"price_group": price_group})
         return self._dump(doc)
 
 
@@ -54,16 +53,13 @@ class PriceGroupRepository(BaseRepository):
         filters = filters or {}
         sort = sort or [("price_group", 1)]
         skip = (page - 1) * page_size
-        
-        # Lazily ensure indexes on first use
+
         await self.ensure_indexes()
-        
+
         import time
         import logging
         logger = logging.getLogger(__name__)
-        
-        # Use aggregation to get both data and count in a single query
-        # Add index hint for better performance
+
         pipeline = [
             {"$match": filters},
             {"$facet": {
@@ -71,7 +67,7 @@ class PriceGroupRepository(BaseRepository):
                     {"$sort": dict(sort)},
                     {"$skip": skip},
                     {"$limit": page_size},
-                    {"$project": {  # Only select needed fields
+                    {"$project": {
                         "price_group": 1,
                         "price_from": 1,
                         "price_to": 1,
@@ -85,20 +81,16 @@ class PriceGroupRepository(BaseRepository):
                 ]
             }}
         ]
-        
-        logger.info(f"🔍 Pipeline: {pipeline}")
-        
+
         total_start = time.time()
-        logger.info(f"🔍 Starting price_group list query with filters: {filters}, page: {page}, page_size: {page_size}")
-        logger.info(f"🔍 Collection: {self.collection.name}, Database: {self.collection.database.name}")
-        
-        # Check collection stats
+        logger.info(f"Starting price_group list query with filters: {filters}, page: {page}, page_size: {page_size}")
+
         try:
             stats = await self.collection.estimated_document_count()
-            logger.info(f"🔍 Collection has approximately {stats} documents")
+            logger.info(f"Collection has approximately {stats} documents")
         except Exception as e:
-            logger.warning(f"🔍 Could not get collection stats: {e}")
-        
+            logger.warning(f"Could not get collection stats: {e}")
+
         try:
             pipeline_start = time.time()
             cursor = self.collection.aggregate(pipeline)
@@ -107,44 +99,29 @@ class PriceGroupRepository(BaseRepository):
             finally:
                 await cursor.close()
             db_time = time.time() - pipeline_start
-            
-            logger.info(f"🔍 Aggregation completed in {db_time:.3f}s, result length: {len(result)}")
-            
+
             if not result:
-                logger.warning("🔍 Aggregation returned empty result")
                 return {"items": [], "total": 0, "page": page, "page_size": page_size}
-            
+
             data = result[0]["data"]
             count_result = result[0]["count"]
             total = count_result[0]["total"] if count_result else 0
-            
-            logger.info(f"🔍 Extracted data: {len(data)} items, total count: {total}")
-            
-            # DEBUG: Log the actual data being returned
-            for i, item in enumerate(data):
-                logger.info(f"🔍 DEBUG Item {i}: {item}")
-            
+
         except Exception as e:
-            logger.error(f"🔍 Aggregation failed: {e}, falling back to old method")
-            # Fallback to old method
+            logger.error(f"Aggregation failed: {e}, falling back to old method")
+            pipeline_start = time.time()
             cursor = self.collection.find(filters).sort(sort).skip(skip).limit(page_size)
-            data = await cursor.to_list(length=10000)
-            total = self.count(filters)
+            data = await cursor.to_list(length=page_size)
+            total = await self.count(filters)
             db_time = time.time() - pipeline_start
-        
+
         processing_start = time.time()
         items = [self._dump(d) for d in data]
         processing_time = time.time() - processing_start
-        
         total_time = time.time() - total_start
-        
-        # DEBUG: Log the final processed items
-        for i, item in enumerate(items):
-            logger.info(f"🔍 DEBUG Final Item {i}: {item}")
-        
-        # Log comprehensive performance metrics
-        logger.info(f"⚡ PERFORMANCE: DB query: {db_time:.3f}s, Processing: {processing_time:.3f}s, Total: {total_time:.3f}s, Items: {len(items)}, Total count: {total}")
-        
+
+        logger.info(f"PERFORMANCE: DB query: {db_time:.3f}s, Processing: {processing_time:.3f}s, Total: {total_time:.3f}s, Items: {len(items)}, Total count: {total}")
+
         return {"items": items, "total": total, "page": page, "page_size": page_size}
 
 
@@ -154,7 +131,6 @@ class PriceGroupRepository(BaseRepository):
         if not updates:
             return await self.get(_id)
         current = await super().find_by_id(_id) or {}
-        # Validate merged state
         PriceGroupEntity(**{**current, **updates})
         res = await self.collection.find_one_and_update(
             {"_id": ObjectId(_id)},
@@ -164,25 +140,17 @@ class PriceGroupRepository(BaseRepository):
         return self._dump(res)
 
 
-    def delete(self, _id: str) -> bool:
-       return super().delete(_id)
+    async def delete(self, _id: str) -> bool:
+        return await super().delete(_id)
 
 
     def _dump(self, doc: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         if not doc:
             return None
-
-        # Fast path: avoid Pydantic validation for read operations
-        # Only do basic field mapping and type conversion
         result = {}
-        
-        # Copy known fields directly
         for field in ["price_group", "price_from", "price_to", "inserted_date", "created_at", "updated_at"]:
             if field in doc:
                 result[field] = doc[field]
-        
-        # Handle ID conversion
         if "_id" in doc and doc["_id"] is not None:
             result["price_group_id"] = str(doc["_id"])
-        
         return result

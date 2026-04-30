@@ -192,10 +192,10 @@ class JobExecutionService:
         try:
             # Get job detail
             job_detail = await self.repository.get_job_execution_by_id(execution_id)
-
+            
             if not job_detail:
                 return None
-
+            
             # Get job data
             job_id = str(job_detail["job_id"])
             job_data = await self.repository.get_job_data_by_object_id(job_id)
@@ -252,12 +252,12 @@ class JobExecutionService:
         try:
             # Get all jobs
             all_jobs = await self.repository.get_all_jobs()
-
+            
             summary_items = []
-
+            
             for job in all_jobs:
                 job_id = str(job["_id"])
-
+                
                 # Get latest execution for this job
                 latest_execution = await self.repository.get_latest_execution_for_job(job_id)
                 

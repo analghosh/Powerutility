@@ -133,7 +133,7 @@ class RTMSchedulingServices:
             logger.exception(f"[RTMSchedulingServices] Error in getAllPlantDataForScheduling: {str(e)}")
             return []
             
-    async def rtm_scheduling_table(self, schedule_date):
+    async def rtm_scheduling_table(self, schedule_date, dc_sg="DC_SG"):
         """
         Fetch DSM (Deviation Settlement Mechanism) data for a given schedule date.
         """
@@ -712,7 +712,7 @@ class RTMSchedulingServices:
             # Fetch data from MongoDB for Demand Forecast
             yesterday_dt = datetime.now() - timedelta(days=1)
             demand_schedule_date = yesterday_dt.strftime("%Y-%m-%d")
-            get_forecasted_value = self.serve_demand_repo.get_demand(demand_schedule_date)
+            get_forecasted_value = await self.serve_demand_repo.get_demand(demand_schedule_date)
             
             # Call total_availability and limit fetching (Logic remains the same)
             totalAvailability = self.total_availability(getplantsData, get_forecasted_value)
@@ -727,7 +727,7 @@ class RTMSchedulingServices:
             blk_no_to_run_schedule = 96
             
             logger.info(f"[RTMSchedulingServices] Starting SchedulingCalculator - Block range: {blk_no_for_run_schedule} to {blk_no_to_run_schedule}")
-            reviseDataTotalsupply = self.SchedulingCalculator(
+            reviseDataTotalsupply = await self.SchedulingCalculator(
                 total_availability=totalAvailability,
                 rtm_forecasted_price=rtm_forecasted_price,
                 get_plants_data=getplantsData,
@@ -750,7 +750,7 @@ class RTMSchedulingServices:
             )
     
     # LINE 681: START OF MODIFIED SCHEDULING CALCULATOR METHOD
-    def SchedulingCalculator(self,
+    async def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,
@@ -911,7 +911,7 @@ class RTMSchedulingServices:
                         }
                         
                         insertData = self.create_standardized_record(base_insert_data)
-                        self.scheduling_repo.create(insertData)
+                        await self.scheduling_repo.create(insertData)
                         
                     # After iterating all plants: Update system totals for the NEXT block
                     time_block_num = TotalblkwiseData.get("BlockNo") or TotalblkwiseData.get("time_block")
@@ -1231,7 +1231,7 @@ class RTMSchedulingServices:
 
         # Add timeout to prevent hanging (180 seconds = 3 minutes)
         try:
-            posted_jobs = await self.supply_repo.aggregate(pipeline)
+            posted_jobs = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
         except Exception as e:
             if "MaxTimeMSExpired" in str(e) or "time limit" in str(e).lower():
                 logger.error(f"[RTMSchedulingServices] get_all_plant_data_for_scheduling: Aggregation timed out for date {schedule_date_used}, dc_sg={dc_sg}. "
@@ -1555,8 +1555,8 @@ class RTMSchedulingServices:
                 'sldc_revision_SG': 0
             }
 
-    def get_scheduling_graph_data(self, schedule_date: str, from_block: Optional[int] = None, 
-                                  to_block: Optional[int] = None) -> List[Dict[str, Any]]:
+    async def get_scheduling_graph_data(self, schedule_date: str, from_block: Optional[int] = None,
+                                        to_block: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Provides aggregated data for graph visualization
         
@@ -1582,7 +1582,7 @@ class RTMSchedulingServices:
             
             # Get filterData from supply_serve (replaces availability_PG.filterData)
             # Filter by category
-            filter_data_list = self.supply_repo.get_filter_data_by_category(
+            filter_data_list = await self.supply_repo.get_filter_data_by_category(
                 schedule_date=schedule_date,
                 filter_type="category",
                 dc_sg_type=None,  # Get all DC_SG types
@@ -1598,7 +1598,7 @@ class RTMSchedulingServices:
                     filter_data_dict[int(time_block)] = item
             
             # Get demand forecast data from demand_serve (replaces availability_PG.Demand_actual_vs_forecast)
-            demand_data = self.serve_demand_repo.get_demand(schedule_date)
+            demand_data = await self.serve_demand_repo.get_demand(schedule_date)
             
             # Convert demand_data to dict keyed by time_block for easier lookup
             demand_dict = {}
@@ -1775,7 +1775,7 @@ class RTMSchedulingServices:
             # V1 behavior: Always use yesterday for demand forecast to match plant data
             yesterday_dt = datetime.now() - timedelta(days=1)
             demand_schedule_date = yesterday_dt.strftime("%Y-%m-%d")
-            demand_data = self.serve_demand_repo.get_demand(demand_schedule_date)
+            demand_data = await self.serve_demand_repo.get_demand(demand_schedule_date)
             
             # Convert demand_data to dict keyed by time_block for easier lookup
             demand_dict = {}

@@ -340,7 +340,7 @@ class SupplyServeRepository(GenericRepository):
             logger.error(traceback.format_exc())
             return []
 
-    def get_filter_data_by_category(
+    async def get_filter_data_by_category(
         self,
         schedule_date: str,
         filter_type: str = "category",
@@ -482,7 +482,8 @@ class SupplyServeRepository(GenericRepository):
                 }
             ]
             
-            result = self._aggregate_sync(pipeline)
+            cursor = self.collection.aggregate(pipeline)
+            result = await cursor.to_list(length=10000)
             logger.info(f"Calculated filterData for {len(result)} time blocks (filter_type={filter_type}, schedule_date={schedule_date})")
             return result
             
@@ -490,7 +491,7 @@ class SupplyServeRepository(GenericRepository):
             logger.error(f"Failed to get filter data by category: {str(e)}")
             return []
 
-    def aggregate_supply_schedule(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+    async def aggregate_supply_schedule(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
         """
         Aggregates supply schedule grouped by scheduled_at and time_block.
         Returns separate totals for Central (c_s='central') and State (c_s='state') plants.
@@ -550,7 +551,8 @@ class SupplyServeRepository(GenericRepository):
                 }
             ]
             
-            return self._aggregate_sync(pipeline)
+            cursor = self.collection.aggregate(pipeline)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Failed to aggregate supply schedule: {str(e)}")
             return []

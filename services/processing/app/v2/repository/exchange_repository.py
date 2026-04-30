@@ -6,7 +6,7 @@ import logging
 from datetime import datetime, timedelta
 
 from ...core.config import settings
-from ...services.dashboard_new import ist_now, block_from_hhmm
+from libs.helpers.timeblock_helper import ist_now, block_from_hhmm
 
 logger = logging.getLogger(__name__)
 
@@ -226,7 +226,7 @@ class ExchangeRepository(GenericRepository):
             logger.error(f"PowerOpt: Failed to get exchange data: {str(e)}")
             return []
 
-    def _get_exchange_by_date_time_block_sync(self, schedule_date: str, time_block: int) -> List[Dict[str, Any]]:
+    async def _get_exchange_by_date_time_block(self, schedule_date: str, time_block: int) -> List[Dict[str, Any]]:
         """
         Get exchange data by schedule date and time block, using exchange_serve fields.
         
@@ -317,7 +317,7 @@ class ExchangeRepository(GenericRepository):
             }
         ]
 
-        return self.aggregate(self.collection_name, pipeline)
+        return await self.aggregate(self.collection_name, pipeline)
 
     async def get_exchange_by_date_time_block(self, schedule_date: str, time_block: int) -> List[Dict[str, Any]]:
         """
@@ -330,16 +330,9 @@ class ExchangeRepository(GenericRepository):
         Returns:
             List of exchange data with trade data joined
         """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(
-                executor,
-                self._get_exchange_by_date_time_block_sync,
-                schedule_date,
-                time_block
-            )
+        return await self._get_exchange_by_date_time_block(schedule_date, time_block)
 
-    def get_exchange_by_market(self, schedule_date: str, market_type: str, px_name: Optional[str] = None) -> List[Dict[str, Any]]:
+    async def get_exchange_by_market(self, schedule_date: str, market_type: str, px_name: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get exchange data filtered by market type and optionally by exchange name.
         Uses exchange_serve fields.
@@ -388,7 +381,7 @@ class ExchangeRepository(GenericRepository):
                 {"$sort": {"time_block": 1}}
             ]
             
-            return self.aggregate(self.collection_name, pipeline)
+            return await self.aggregate(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get exchange by market: {str(e)}")
             return []

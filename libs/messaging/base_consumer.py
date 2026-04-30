@@ -80,16 +80,6 @@ class BaseConsumer(ABC, threading.Thread):
         except Exception as e:
             logger.warning(f"Error closing consumer connection: {e}")
 
-    def _cleanup(self):
-        """Cleanup connection and channel"""
-        try:
-            if self.channel and self.channel.is_open:
-                self.channel.close()
-            if self.connection and self.connection.is_open:
-                self.connection.close()
-        except Exception as e:
-            logger.warning(f"Error during consumer cleanup: {e}")
-
     def setup_topology(self):
         """Setup queue and binding if needed"""
         # Ensure base topology (exchanges) exists

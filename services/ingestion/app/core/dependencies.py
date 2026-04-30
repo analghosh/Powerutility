@@ -2,6 +2,8 @@
 Dependency Injection for Ingestion Service
 """
 
+from __future__ import annotations
+
 from libs.audit_queue.unified_queue_service import UnifiedQueueService
 from libs.audit_queue.simple_logger import AuditLogger
 from .config import settings
@@ -38,7 +40,7 @@ def get_file_upload_service() -> FileUploadApplicationService:
         file_storage=file_storage
     )
 
-def get_upload_raw_data_processor() -> 'UploadRawDataProcessor':
+def get_upload_raw_data_processor():
     """Create and return an UploadRawDataProcessor instance"""
     # Import inside function to avoid circular imports if any
     from ..processors.upload_raw_data_processor import UploadRawDataProcessor

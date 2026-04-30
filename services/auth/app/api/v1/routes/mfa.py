@@ -16,7 +16,7 @@ from ....core.dto import AuthUserDTO
 from ....schemas.mfa import (
     EnableMFARequest, EnableMFAResponse, VerifyMFARequest, VerifyMFAResponse,
     DisableMFARequest, DisableMFAResponse, MFARecoveryRequest, MFARecoveryResponse,
-    MFAStatusResponse, AdminDisableMFARequest
+    MFAStatusResponse
 )
 
 # Create router
@@ -299,36 +299,41 @@ async def get_mfa_status(credentials: HTTPAuthorizationCredentials = Depends(sec
     return await mfa_controller.get_mfa_status(user.id)
 
 
-@router.post("/admin/disable-mfa/{target_user_id}")
-async def admin_disable_mfa(
+@router.post("/admin/emergency-disable/{target_user_id}")
+async def emergency_disable_mfa(
     target_user_id: str,
-    body: AdminDisableMFARequest,
+    reason: str,
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Disable MFA for any user (admin only).
-
+    Emergency MFA disable by admin (for account recovery)
+    
     Requires:
-    - Valid admin access token (admin role or mfa:emergency_disable permission)
+    - Valid admin access token
     - Target user ID
-    - Reason (in request body)
+    - Reason for emergency disable
+    
+    Returns:
+    - Emergency disable result
     """
+    # Get current admin user
     token = credentials.credentials
     admin_user = await auth_controller.get_current_user(token)
-
+    
     if not admin_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid access token"
         )
-
+    
+    # Check admin permissions (require admin role or specific permission)
     if "admin" not in admin_user.roles and "mfa:emergency_disable" not in admin_user.permissions:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin permissions required to disable user MFA"
+            detail="Admin permissions required for emergency MFA disable"
         )
-
-    return await mfa_controller.emergency_disable_mfa(target_user_id, admin_user.id, body.reason)
+    
+    return await mfa_controller.emergency_disable_mfa(target_user_id, admin_user.id, reason)
 
 
 @router.post("/admin/reset-rate-limit/{target_user_id}")

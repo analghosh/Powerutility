@@ -194,9 +194,6 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # Fallback: If no auth client configured, raise error
             else:
                 raise AuthenticationError("Authentication service not configured")
-                user_info["token"] = token
-                
-                return user_info
             
         except (MissingTokenError, InvalidAuthHeaderError) as e:
             raise e

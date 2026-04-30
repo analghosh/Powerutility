@@ -57,22 +57,22 @@ async def assign_menu_to_role(
         role = await role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
+        
         # Verify menu exists
         menu = await menu_repo.get_menu_by_id(menu_assignment.menu_id)
         if not menu:
             raise HTTPException(status_code=404, detail="Menu not found")
-
-        # Assign menu to role
+        
+        # Assign menu to role (now async)
         success = await menu_role_repo.grant_role_menu_access(
             role_id=role_id,
             menu_id=menu_assignment.menu_id,
             permissions=menu_assignment.permissions
         )
-
+        
         if not success:
             raise HTTPException(status_code=500, detail="Failed to assign menu to role")
-
+        
         return {
             "message": "Menu assigned to role successfully",
             "role_id": role_id,
@@ -96,10 +96,10 @@ async def bulk_assign_menus_to_role(
         role = await role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
+        
         successful_assignments = []
         failed_assignments = []
-
+        
         for assignment in bulk_assignment.menu_assignments:
             try:
                 # Verify menu exists
@@ -110,14 +110,14 @@ async def bulk_assign_menus_to_role(
                         "error": "Menu not found"
                     })
                     continue
-
+                
                 # Assign menu to role
                 success = await menu_role_repo.grant_role_menu_access(
                     role_id=role_id,
                     menu_id=assignment.menu_id,
                     permissions=assignment.permissions
                 )
-
+                
                 if success:
                     successful_assignments.append({
                         "menu_id": assignment.menu_id,
@@ -133,7 +133,7 @@ async def bulk_assign_menus_to_role(
                     "menu_id": assignment.menu_id,
                     "error": str(e)
                 })
-
+        
         return {
             "message": f"Bulk assignment completed. {len(successful_assignments)} successful, {len(failed_assignments)} failed",
             "role_id": role_id,
@@ -156,10 +156,10 @@ async def get_role_menu_permissions(
         role = await role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
-        # Get menu-role relationships
+        
+        # Get menu-role relationships (now async)
         menu_roles = await menu_role_repo.get_menu_roles_by_role_id(role_id)
-
+        
         menu_permissions = []
         for menu_role in menu_roles:
             menu = await menu_repo.get_menu_by_id(menu_role.menu_id)
@@ -171,7 +171,7 @@ async def get_role_menu_permissions(
                     permissions=menu_role.permissions,
                     assigned_at=menu_role.created_at.isoformat()
                 ))
-
+        
         return menu_permissions
     except HTTPException:
         raise
@@ -191,24 +191,24 @@ async def update_role_menu_permissions(
         role = await role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
+        
         # Verify menu exists
         menu = await menu_repo.get_menu_by_id(menu_id)
         if not menu:
             raise HTTPException(status_code=404, detail="Menu not found")
         
-        # Upsert: create relationship if it doesn't exist, otherwise update
-        menu_role = menu_role_repo.get_menu_role(menu_id, role_id)
+        # Upsert: create relationship if it doesn't exist, otherwise update (now async)
+        menu_role = await menu_role_repo.get_menu_role(menu_id, role_id)
         if not menu_role:
-            success = menu_role_repo.grant_role_menu_access(
+            success = await menu_role_repo.grant_role_menu_access(
                 role_id=role_id,
                 menu_id=menu_id,
                 permissions=permission_update.permissions
             )
             if not success:
                 raise HTTPException(status_code=500, detail="Failed to create menu-role relationship")
-        else:
-            success = menu_role_repo.update_menu_role(
+        else: # Update existing menu_role (now async)
+            success = await menu_role_repo.update_menu_role(
                 menu_role.id,
                 MenuRoleUpdate(permissions=permission_update.permissions)
             )
@@ -241,17 +241,17 @@ async def revoke_role_menu_access(
         role = await role_repo.get_role_by_id(role_id)
         if not role:
             raise HTTPException(status_code=404, detail="Role not found")
-
+        
         # Verify menu exists
         menu = await menu_repo.get_menu_by_id(menu_id)
         if not menu:
             raise HTTPException(status_code=404, detail="Menu not found")
-
-        # Revoke access
+        
+        # Revoke access (now async)
         success = await menu_role_repo.revoke_role_menu_access(role_id, menu_id)
         if not success:
             raise HTTPException(status_code=404, detail="Menu-role relationship not found or already revoked")
-
+        
         return {
             "message": "Menu access revoked successfully",
             "role_id": role_id,
@@ -273,10 +273,10 @@ async def get_menu_role_assignments(
         menu = await menu_repo.get_menu_by_id(menu_id)
         if not menu:
             raise HTTPException(status_code=404, detail="Menu not found")
-
-        # Get menu-role relationships
+        
+        # Get menu-role relationships (now async)
         menu_roles = await menu_role_repo.get_menu_roles_by_menu_id(menu_id)
-
+        
         role_assignments = []
         for menu_role in menu_roles:
             role = await role_repo.get_role_by_id(menu_role.role_id)
@@ -287,7 +287,7 @@ async def get_menu_role_assignments(
                     "permissions": menu_role.permissions,
                     "assigned_at": menu_role.created_at.isoformat()
                 })
-
+        
         return {
             "menu_id": menu_id,
             "menu_name": menu.name,
@@ -307,19 +307,19 @@ async def get_all_role_menu_assignments(
     try:
         # Get all roles or filter by name
         if role_name:
-            role = await role_repo.get_role_by_name(role_name)
+            role = role_repo.get_role_by_name(role_name)
             roles = [role] if role else []
         else:
-            roles = await role_repo.get_all_active_roles()
-
+            roles = role_repo.get_all_active_roles()
+        
         role_menu_summary = []
         for role in roles:
             # Get menu permissions for this role
-            menu_roles = await menu_role_repo.get_menu_roles_by_role_id(role.id)
-
+            menu_roles = menu_role_repo.get_menu_roles_by_role_id(role.id)
+            
             menu_permissions = []
             for menu_role in menu_roles:
-                menu = await menu_repo.get_menu_by_id(menu_role.menu_id)
+                menu = menu_repo.get_menu_by_id(menu_role.menu_id)
                 if menu:
                     menu_permissions.append(MenuPermissionResponse(
                         menu_id=menu_role.menu_id,
@@ -328,13 +328,13 @@ async def get_all_role_menu_assignments(
                         permissions=menu_role.permissions,
                         assigned_at=menu_role.created_at.isoformat()
                     ))
-
+            
             role_menu_summary.append(RoleMenuResponse(
                 role_id=role.id,
                 role_name=role.name,
                 menus=menu_permissions
             ))
-
+        
         return role_menu_summary
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting role-menu summary: {str(e)}")

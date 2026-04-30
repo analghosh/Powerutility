@@ -83,7 +83,7 @@ class SchedulerService(ISchedulerService):
     async def reconcile_and_rerun_crons(self) -> Dict[str, Any]:
         """Reconcile data gaps and rerun all cron jobs"""
         try:
-            return self._dummy_data_service.reconcile_and_rerun_crons()
+            return await self._dummy_data_service.reconcile_and_rerun_crons()
         except Exception as e:
             self._logger.error(f"Reconciliation failed: {str(e)}")
             raise

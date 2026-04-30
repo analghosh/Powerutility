@@ -50,7 +50,7 @@ class DemandTempSyncProcessor(BaseProcessor):
         schedule = "*/15 * * * *"
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         self.set_correlation_id(execution_id or "")
 
         logger.info("=== EXECUTING DEMAND TEMP SYNC JOB ===")
@@ -71,7 +71,7 @@ class DemandTempSyncProcessor(BaseProcessor):
                 "data_type": "demand_temp_sync",
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

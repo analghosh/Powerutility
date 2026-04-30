@@ -74,7 +74,7 @@ class IexApiDetailRepository(GenericRepository):
         Returns:
             Document if found, None otherwise
         """
-        query: Dict[str, Any] = {"_id": ObjectId(id)}
+        query = {"_id": ObjectId(id)}
         if not include_deleted:
             query["is_deleted"] = {"$ne": True}
         
@@ -171,7 +171,7 @@ class IexApiDetailRepository(GenericRepository):
     async def deactivate_other_environment(
         self,
         exchange: str,
-        exclude_id: Optional[str] = None
+        exclude_id: str = None
     ):
         query = {
             "exchange": exchange,

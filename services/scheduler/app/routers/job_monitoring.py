@@ -82,7 +82,7 @@ async def get_running_jobs(audit_logger: AuditLogger = Depends(get_audit_logger)
 
 
 @router.get("/trace/{job_id}", response_model=JobTraceResponse)
-async def get_job_trace(job_id: str):
+async def get_job_trace(job_id: str, audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Get detailed trace information for a specific job"""
     try:
         # Log user action for job_monitoring_trace
@@ -125,7 +125,7 @@ async def get_job_trace(job_id: str):
 
 
 @router.get("/service/{service_name}")
-async def get_jobs_by_service(service_name: str):
+async def get_jobs_by_service(service_name: str, limit: int = 100, audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Get all jobs for a specific service"""
     try:
         # Log user action for job_monitoring_by_service
@@ -173,7 +173,7 @@ async def get_jobs_by_service(service_name: str):
 
 
 @router.get("/statistics", response_model=JobStatisticsResponse)
-async def get_job_statistics(hours: int = 24):
+async def get_job_statistics(hours: int = 24, audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Get job statistics for the specified time period"""
     try:
         # Log user action for job_monitoring_statistics
@@ -208,7 +208,7 @@ async def get_job_statistics(hours: int = 24):
 
 
 @router.put("/progress/{job_id}")
-async def update_job_progress(job_id: str):
+async def update_job_progress(job_id: str, progress: int = 0, current_step: str = "", estimated_completion: str = "", audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Update job progress"""
     try:
         # Log user action for job_monitoring_update_progress
@@ -268,7 +268,7 @@ async def update_job_progress(job_id: str):
 
 
 @router.get("/dashboard", response_model=DashboardResponse)
-async def get_job_dashboard() -> DashboardResponse:
+async def get_job_dashboard(audit_logger: AuditLogger = Depends(get_audit_logger)) -> DashboardResponse:
     """
     Get comprehensive job dashboard data
     
@@ -308,7 +308,7 @@ async def get_job_dashboard() -> DashboardResponse:
 
 
 @router.get("/health")
-async def get_job_system_health() -> Dict[str, Any]:
+async def get_job_system_health(audit_logger: AuditLogger = Depends(get_audit_logger)) -> Dict[str, Any]:
     """
     Get job system health status
     
@@ -391,7 +391,7 @@ async def get_job_system_health() -> Dict[str, Any]:
 
 
 @router.get("/all-jobs")
-async def get_all_jobs_from_job_data() -> Dict[str, Any]:
+async def get_all_jobs_from_job_data(audit_logger: AuditLogger = Depends(get_audit_logger)) -> Dict[str, Any]:
     """
     Get all jobs from job_data collection
     
@@ -433,7 +433,7 @@ async def get_all_jobs_from_job_data() -> Dict[str, Any]:
 
 
 @router.get("/execution-details/{job_id}", response_model=JobExecutionDetailsResponse)
-async def get_job_execution_details(job_id: str):
+async def get_job_execution_details(job_id: str, audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Get detailed execution information for a job"""
     try:
         # Log user action for job_monitoring_execution_details
@@ -476,7 +476,7 @@ async def get_job_execution_details(job_id: str):
 
 
 @router.get("/service-jobs/{service}")
-async def get_service_jobs_from_job_data(service: str, enabled_only: bool = True):
+async def get_service_jobs_from_job_data(service: str, enabled_only: bool = True, audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Get jobs for a specific service from job data"""
     try:
         # Log user action for job_monitoring_service_jobs
@@ -531,7 +531,7 @@ async def get_service_jobs_from_job_data(service: str, enabled_only: bool = True
 
 # Audit Logs Endpoints
 @router.get("/audit-logs/by-job")
-async def get_audit_logs_by_job_id(job_id: str):
+async def get_audit_logs_by_job_id(job_id: str, limit: int = 100, priority: str = "", status: str = "", audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Get audit logs for a specific job ID"""
     try:
         # Log user action for job_monitoring_audit_logs
@@ -559,20 +559,11 @@ async def get_audit_logs_by_job_id(job_id: str):
         Dict containing audit logs for the job
     """
     try:
-        # Get audit logs by job ID
-        audit_logs = get_audit_logs_by_job(job_id)
-        
-        # Apply filters
-        if priority:
-            audit_logs = [log for log in audit_logs 
-                         if log.get('meta', {}).get('priority', '').lower() == priority.lower()]
-        
-        if status:
-            audit_logs = [log for log in audit_logs 
-                         if log.get('status', '').lower() == status.lower()]
-        
-        # Limit results
-        audit_logs = audit_logs[:limit]
+        # Use application service instead of direct repository access
+        job_monitoring_service = container.get_job_monitoring_service()
+        audit_logs = await job_monitoring_service.get_audit_logs_by_job(
+            job_id, priority=priority or None, status=status or None, limit=limit
+        )
         
         return {
             "status": "success",
@@ -596,7 +587,7 @@ async def get_audit_logs_by_job_id(job_id: str):
 
 
 @router.get("/audit-logs/search")
-async def search_job_audit_logs(search_text: str):
+async def search_job_audit_logs(search_text: str, job_id: str = "", service: str = "scheduler", limit: int = 100, audit_logger: AuditLogger = Depends(get_audit_logger)):
     """Search job audit logs by text"""
     try:
         # Log user action for job_monitoring_search_logs
@@ -624,18 +615,14 @@ async def search_job_audit_logs(search_text: str):
         Dict containing search results
     """
     try:
-        # Perform search
-        search_results = search_audit_logs(
+        # Use application service instead of direct repository access
+        job_monitoring_service = container.get_job_monitoring_service()
+        search_results = await job_monitoring_service.search_audit_logs(
             search_text=search_text,
+            job_id=job_id or None,
             service=service,
-            log_type="job",
             limit=limit
         )
-        
-        # Filter by job_id if provided
-        if job_id:
-            search_results = [log for log in search_results 
-                            if log.get('trace', {}).get('jobId') == job_id]
         
         return {
             "status": "success",

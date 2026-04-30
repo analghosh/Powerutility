@@ -40,15 +40,6 @@ class WeatherService:
     def __init__(self, repository=weather_repository):
         self.repository = repository
 
-    # Fahrenheit → Celsius conversion
-    def _f_to_c(self, value):
-        try:
-            if value is None:
-                return None
-            return round((float(value) - 32) * 5 / 9, 2)
-        except Exception:
-            return value
-
     async def get_weather_forecast(
         self,
         forecast_days: int,
