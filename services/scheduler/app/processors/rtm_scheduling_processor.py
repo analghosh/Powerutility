@@ -1755,7 +1755,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         # Bulk upsert computed sell/buy bids to exchange_serve (only when run_with_exchange=True)
         if run_with_exchange and block_exchange_updates:
             try:
-                self.serve_exchange_repo.bulk_upsert_exchange_records(block_exchange_updates)
+                await self.serve_exchange_repo.bulk_upsert_exchange_records(block_exchange_updates)
                 logger.info(f"[RTMSchedulingServices] Upserted {len(block_exchange_updates)} exchange bid records to exchange_serve")
             except Exception as e:
                 logger.error(f"[RTMSchedulingServices] Failed to upsert exchange bids to exchange_serve: {str(e)}")

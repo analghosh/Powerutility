@@ -234,7 +234,7 @@ class BidMarketRepository:
             if not ObjectId.is_valid(bid_market_id):
                 return False
             
-            result = self.repo.delete_one(
+            result = await self.repo.delete_one(
                 self.collection_name,
                 {"_id": ObjectId(bid_market_id)}
             )

@@ -781,7 +781,7 @@ class ProviderSeeder:
             if "created_at" in update_data["$set"]:
                 del update_data["$set"]["created_at"]
 
-            self.collection.update_one(
+            await self.collection.update_one(
                 {"code": code},
                 update_data,
                 upsert=True

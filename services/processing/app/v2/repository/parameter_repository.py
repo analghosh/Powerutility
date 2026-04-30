@@ -218,7 +218,7 @@ class ParameterRepository:
             if not ObjectId.is_valid(parameter_id):
                 return False
             
-            result = self.repo.delete_one(
+            result = await self.repo.delete_one(
                 self.collection_name,
                 {"_id": ObjectId(parameter_id)}
             )

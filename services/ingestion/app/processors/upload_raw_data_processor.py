@@ -428,7 +428,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
         try:
             # Get pending uploads that need processing
-            pending_uploads = self.upload_tracking_repository.get_uploads_by_status_and_date(
+            pending_uploads = await self.upload_tracking_repository.get_uploads_by_status_and_date(
                 status=[RawDataStatus.PENDING, RawDataStatus.FAILED],
                 limit=getattr(settings, 'BACKGROUND_PROCESSING_BATCH_SIZE', 10)
             )

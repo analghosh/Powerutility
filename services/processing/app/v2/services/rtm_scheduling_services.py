@@ -750,7 +750,7 @@ class RTMSchedulingServices:
             )
     
     # LINE 681: START OF MODIFIED SCHEDULING CALCULATOR METHOD
-    def SchedulingCalculator(self,
+    async def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,
@@ -911,7 +911,7 @@ class RTMSchedulingServices:
                         }
                         
                         insertData = self.create_standardized_record(base_insert_data)
-                        self.scheduling_repo.create(insertData)
+                        await self.scheduling_repo.create(insertData)
                         
                     # After iterating all plants: Update system totals for the NEXT block
                     time_block_num = TotalblkwiseData.get("BlockNo") or TotalblkwiseData.get("time_block")

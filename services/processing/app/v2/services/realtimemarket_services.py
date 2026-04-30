@@ -1371,7 +1371,7 @@ class RealtimemarketService:
             blk_no_to_run_schedule = 96 
             
             
-            data = self.SchedulingCalculator(
+            data = await self.SchedulingCalculator(
             total_availability=totalAvailability,
             rtm_forecasted_price=rtm_forecasted_price,
             get_plants_data=getplantsData,
@@ -1385,7 +1385,7 @@ class RealtimemarketService:
         except Exception as e:
             return {"status": "error", "message": f"Internal Server Error: {str(e)}"}
     
-    def SchedulingCalculator(self,
+    async def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,
@@ -2446,7 +2446,7 @@ class RealtimemarketService:
                             "scheduling_requisition_type": "NA",
                         }
                         # return insertData
-                        self.scheduling_requisition_repo.create(insertData)
+                        await self.scheduling_requisition_repo.create(insertData)
                         # Replace this with actual DB insert
                         # db.session.add(SchedulingRequisitionCalculation(**insertData))
                         # db.session.commit()
@@ -2514,7 +2514,7 @@ class RealtimemarketService:
                         }
                        
                         # return insertData
-                        self.scheduling_requisition_repo.create(insertData)
+                        await self.scheduling_requisition_repo.create(insertData)
                         
                         plkey += 1
                         
