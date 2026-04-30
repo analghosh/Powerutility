@@ -279,7 +279,7 @@ class RawDataRepository(BaseRepository):
             
             query = {"created_at": {"$lt": cutoff_date}}
             
-            result = self.collection.delete_many(query)
+            result = await self.collection.delete_many(query)
             
             logger.info("Cleaned up %d old raw data records (older than %d days)", 
                        result.deleted_count, older_than_days)
@@ -322,7 +322,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error checking time series configuration for '%s': %s", self.collection_name, e)
             return False
     
-    def get_timeseries_stats(self) -> Dict[str, Any]:
+    async def get_timeseries_stats(self) -> Dict[str, Any]:
         """
         Get time series collection statistics
         
@@ -334,7 +334,7 @@ class RawDataRepository(BaseRepository):
                 return {"error": "Collection is not configured as time series"}
             
             # Get collection stats
-            stats = self.db.command("collStats", self.collection_name)
+            stats = await self.db.command("collStats", self.collection_name)
             
             timeseries_stats = {
                 "is_timeseries": True,

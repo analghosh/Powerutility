@@ -89,10 +89,11 @@ class CronManager(BaseCronManager):
         import asyncio
         try:
             loop = asyncio.get_running_loop()
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, coro)
-                return future.result()
+            # Submit to the running loop from this sync context using run_coroutine_threadsafe.
+            # Do NOT use asyncio.run() in a thread here — it creates and then closes a new
+            # event loop in that thread, which can cause Motor to bind to a closed loop.
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            return future.result()
         except RuntimeError:
             return asyncio.run(coro)
 

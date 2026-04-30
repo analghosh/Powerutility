@@ -28,13 +28,12 @@ class DcSgRenewableRepository(BaseRepository):
             database_name=settings.MONGODB_DATABASE,
             collection_name=getattr(settings, "MONGODB_DC_SG_RENEWABLE_COLLECTION", "dc_sg_renewable")
         )
-        self.create_indexes()
 
-    def create_indexes(self):
+    async def create_indexes(self):
         """Create indexes for the dc_sg_renewable collection."""
         try:
             # Unique compound index — unique key for upsert operations
-            self.collection.create_index(
+            await self.collection.create_index(
                 [
                     ("scheduled_at", 1),
                     ("plant_id", 1),
@@ -45,7 +44,7 @@ class DcSgRenewableRepository(BaseRepository):
                 name="unique_dc_sg_renewable_key"
             )
             # Supporting index for date-range scans
-            self.collection.create_index([("scheduled_at", 1)], name="idx_dc_sg_renewable_scheduled_at")
+            await self.collection.create_index([("scheduled_at", 1)], name="idx_dc_sg_renewable_scheduled_at")
             logger.info("Indexes created for dc_sg_renewable collection")
         except Exception as e:
             logger.error("Error creating indexes for dc_sg_renewable: %s", str(e))
@@ -54,7 +53,7 @@ class DcSgRenewableRepository(BaseRepository):
     # Write helpers
     # ------------------------------------------------------------------
 
-    def bulk_upsert(self, entities: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def bulk_upsert(self, entities: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Bulk upsert records into dc_sg_renewable.
         Unique key: scheduled_at, plant_id, time_block, type
@@ -71,7 +70,7 @@ class DcSgRenewableRepository(BaseRepository):
         for i in range(0, len(entities), BATCH_SIZE):
             batch = entities[i:i + BATCH_SIZE]
             try:
-                result = self.bulk_upsert_optimized(batch, unique_key_fields)
+                result = await self.bulk_upsert_optimized(batch, unique_key_fields)
                 if not result.get("success"):
                     logger.warning("dc_sg_renewable batch %d failed: %s", i // BATCH_SIZE + 1, result.get("error"))
                     totals["success"] = False
@@ -206,7 +205,7 @@ class DcSgRenewableRepository(BaseRepository):
                 )
                 return {"carried_count": 0, "skipped_count": skipped}
 
-            result = self.bulk_upsert(carry_docs)
+            result = await self.bulk_upsert(carry_docs)
             carried = result.get("upserted_count", 0) + result.get("inserted_count", 0)
             logger.info(
                 "dc_sg_renewable carry_forward: carried %d records to %s (skipped %d)",

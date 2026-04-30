@@ -175,7 +175,6 @@ class RawDataProcessingStatusRepository(BaseRepository):
             for record in records:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
-                records.append(record)
             
             logger.info("Found %d pending processing records (type: %s, provider: %s)", 
                        len(records), data_type or "all", provider_type or "all")
@@ -251,7 +250,6 @@ class RawDataProcessingStatusRepository(BaseRepository):
             for record in records:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
-                records.append(record)
             
             logger.info("Found %d failed records eligible for retry", len(records))
             return records
@@ -327,7 +325,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 "processing_completed_at": {"$lt": cutoff_date}
             }
             
-            result = self.collection.delete_many(query)
+            result = await self.collection.delete_many(query)
             
             logger.info("Cleaned up %d old completed processing status records (older than %d days)", 
                        result.deleted_count, older_than_days)

@@ -366,7 +366,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Unexpected error processing provider %s: %s", provider.code, str(e))
             return {'success': False, 'error': str(e)}
 
-    async def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
+    def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
         """
         Get full provider entity by code
         
@@ -378,7 +378,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         try:
             # Use provider service to get full provider entity
-            provider_entity = await self.provider_service.get_provider_by_code(provider_code)
+            provider_entity = self.provider_service.get_provider_by_code(provider_code)
             if provider_entity:
                 return provider_entity
             else:
