@@ -308,7 +308,7 @@ class RTMBiddingServices:
             ]
 
             # Fetch plants data from supply_serve collection
-            getplantsData = await self.supply_repo.aggregate(pipeline)
+            getplantsData = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
 
             if not getplantsData:
                 return {}
@@ -322,7 +322,7 @@ class RTMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "rtm_tm": 1}}
             ]
-            posted_jobs = await self.supply_repo.aggregate(pipeline)
+            posted_jobs = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
             # Build lookup: {(plant_id, time_block): rtm_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("rtm_tm", 0) for d in dc_data}
             
@@ -461,7 +461,6 @@ class RTMBiddingServices:
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
             forecastedPrice = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -486,7 +485,6 @@ class RTMBiddingServices:
             limit_schedule_date = target_date
             
             bufferPrice = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -510,7 +508,6 @@ class RTMBiddingServices:
             )
             
             ceilingPrice = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -536,7 +533,6 @@ class RTMBiddingServices:
             
 
             n_1Limits = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                     {
                         "$match": {
@@ -561,7 +557,6 @@ class RTMBiddingServices:
             )
 
             noc_buyLimits = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -586,7 +581,6 @@ class RTMBiddingServices:
             )
 
             noc_sellLimits = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -611,7 +605,6 @@ class RTMBiddingServices:
             )
 
             typeofExchangeIEX = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -636,7 +629,6 @@ class RTMBiddingServices:
             )
 
             typeofExchangePXIL = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {

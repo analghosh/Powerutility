@@ -634,7 +634,7 @@ class DAMBiddingServices:
             ]
 
             # Fetch plants data from supply_serve collection
-            getplantsData = await self.supply_repo.aggregate(pipeline)
+            getplantsData = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
 
             if not getplantsData:
                 return {}
@@ -648,7 +648,7 @@ class DAMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "dam_tm": 1}}
             ]
-            dc_data = await self.supply_repo.aggregate(dc_pipeline)
+            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
             # Build lookup: {(plant_id, time_block): dam_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("dam_tm", 0) for d in dc_data}
             
@@ -782,7 +782,6 @@ class DAMBiddingServices:
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
             forecastedPrice = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -810,7 +809,6 @@ class DAMBiddingServices:
             print("=============================================================== forecastedPrice =============================================================== ")
             
             bufferPrice = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -834,7 +832,6 @@ class DAMBiddingServices:
             )
             
             ceilingPrice = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -860,7 +857,6 @@ class DAMBiddingServices:
             
 
             n_1Limits = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -885,7 +881,6 @@ class DAMBiddingServices:
             )
 
             noc_buyLimits = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -910,7 +905,6 @@ class DAMBiddingServices:
             )
 
             noc_sellLimits = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -935,7 +929,6 @@ class DAMBiddingServices:
             )
 
             typeofExchangeIEX = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {
@@ -960,7 +953,6 @@ class DAMBiddingServices:
             )
 
             typeofExchangePXIL = await self.limit_values_repo.aggregate(
-                "limit_values",
                 [
                         {
                             "$match": {

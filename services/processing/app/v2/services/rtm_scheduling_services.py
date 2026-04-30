@@ -1231,7 +1231,7 @@ class RTMSchedulingServices:
 
         # Add timeout to prevent hanging (180 seconds = 3 minutes)
         try:
-            posted_jobs = await self.supply_repo.aggregate(pipeline)
+            posted_jobs = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
         except Exception as e:
             if "MaxTimeMSExpired" in str(e) or "time limit" in str(e).lower():
                 logger.error(f"[RTMSchedulingServices] get_all_plant_data_for_scheduling: Aggregation timed out for date {schedule_date_used}, dc_sg={dc_sg}. "
