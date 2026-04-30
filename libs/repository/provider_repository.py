@@ -129,7 +129,7 @@ class ProviderRepository(BaseRepository):
             Optional[ProviderEntity]: Provider entity or None
         """
         try:
-            provider_doc = self.collection.find_one({
+            provider_doc = await self.collection.find_one({
                 "code": code,
                 "data_type": data_type
             })

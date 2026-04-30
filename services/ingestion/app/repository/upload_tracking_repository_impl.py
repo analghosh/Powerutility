@@ -30,7 +30,6 @@ class UploadTrackingRepositoryImpl(BaseRepository, IUploadTrackingRepository):
         """
         self.collection_name = "upload_tracking"
         super().__init__(self.collection_name, mongodb_uri, database_name)
-        self._create_collection_if_not_exists()
         self._create_indexes()
     
     def _create_indexes(self):
