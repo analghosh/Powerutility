@@ -362,7 +362,7 @@ class RTMBiddingService:
                         # 'end_tme': availability_data_array_b_wise['end_time'],
                         # 'full_time': availability_data_array_b_wise['full_time'],
                         'time_block': TotalblkwiseData['BlockNo'],
-                        'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or item.get("Session_Id"),
+                        'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("Session_Id"),
                         'forecast': round(TotalblkwiseData['forecast_value']),
                         'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                         'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
@@ -395,7 +395,7 @@ class RTMBiddingService:
                         # 'end_tme': availability_data_array_b_wise['end_time'],
                         # 'full_time': availability_data_array_b_wise['full_time'],
                         'time_block': TotalblkwiseData['BlockNo'],
-                        'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or item.get("Session_Id"),
+                        'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("Session_Id"),
                         'forecast': round(TotalblkwiseData['forecast_value']),
                         'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                         'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
@@ -466,7 +466,7 @@ class RTMBiddingService:
                                     # 'end_tme': availability_data_array_b_wise['end_time'],
                                     # 'full_time': availability_data_array_b_wise['full_time'],
                                     'time_block': TotalblkwiseData['BlockNo'],
-                                    'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or item.get("Session_Id"),
+                                    'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("Session_Id"),
                                     'forecast': round(TotalblkwiseData['forecast_value']),
                                     'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                                     'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
@@ -500,7 +500,7 @@ class RTMBiddingService:
                             # 'end_tme': availability_data_array_b_wise['end_time'],
                             # 'full_time': availability_data_array_b_wise['full_time'],
                             'time_block': TotalblkwiseData['BlockNo'],
-                            'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or item.get("Session_Id"),
+                            'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("session_number") or getsessionNo[int(TotalblkwiseData['BlockNo'])-1].get("Session_Id"),
                             'forecast': round(TotalblkwiseData['forecast_value']),
                             'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                             'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
@@ -1523,7 +1523,7 @@ class RTMBiddingService:
                                             "full_time": availability_data_array_b_wise["full_time"],
                                             "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                             "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                             "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                             "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                             "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -1578,7 +1578,7 @@ class RTMBiddingService:
                                             "full_time": availability_data_array_b_wise["full_time"],
                                             "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                             "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                             "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                             "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                             "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -1632,7 +1632,7 @@ class RTMBiddingService:
                                         "full_time": availability_data_array_b_wise["full_time"],
                                         "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                         "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                        "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                        "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                         "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                         "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                         "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -1690,7 +1690,7 @@ class RTMBiddingService:
                                     "full_time": availability_data_array_b_wise["full_time"],
                                     "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                     "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                    "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                    "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                     "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                     "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                     "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -1839,7 +1839,7 @@ class RTMBiddingService:
                                             "full_time": availability_data_array_b_wise["full_time"],
                                             "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                             "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                             "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                             "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                             "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -1952,7 +1952,7 @@ class RTMBiddingService:
                                     "full_time": availability_data_array_b_wise["full_time"],
                                     "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                     "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                    "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                    "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                     "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                     "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                     "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -2077,7 +2077,7 @@ class RTMBiddingService:
                                             "full_time": availability_data_array_b_wise["full_time"],
                                             "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                             "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                            "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                             "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                             "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                             "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -2138,7 +2138,7 @@ class RTMBiddingService:
                                     "full_time": availability_data_array_b_wise["full_time"],
                                     "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                     "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                    "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                    "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                     "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                     "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                     "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),
@@ -2242,7 +2242,7 @@ class RTMBiddingService:
                                         "full_time": availability_data_array_b_wise["full_time"],
                                         "time_block": availability_data_array_b_wise["time_block"],  # Using time_block instead of block
                                         "dc_sg_type": availability_data_array_b_wise["dc_sg_type"],
-                                        "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or item.get("Session_Id"),  # Using time_block
+                                        "session_number": get_session_no[availability_data_array_b_wise["time_block"]].get("session_number") or get_session_no[availability_data_array_b_wise["time_block"]].get("Session_Id"),  # Using time_block
                                         "demand_forecast": round(TotalblkwiseData["forecast_value"]),
                                         "total_supply_availablity": round(TotalblkwiseData["totalAvailability"]),
                                         "surplus_deficit": round(TotalblkwiseData["surplus_deficit"]),

@@ -2,8 +2,9 @@ import logging
 from functools import partial
 from services.processing.app.core.config import settings
 from services.processing.app.v2.repository.base_repository import GenericRepository
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import asyncio
+import re
 from datetime import datetime, date, timedelta
 import time
 from math import isnan, isfinite
@@ -322,7 +323,7 @@ class RTMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "rtm_tm": 1}}
             ]
-            posted_jobs = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
             # Build lookup: {(plant_id, time_block): rtm_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("rtm_tm", 0) for d in dc_data}
             

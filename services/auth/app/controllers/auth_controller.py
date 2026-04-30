@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import HTTPException, status, Request
 from services.auth.app.services.auth_service import auth_service
-from services.auth.app.schemas.auth import LoginRequest, RefreshTokenRequest, ChangePasswordRequest
+from services.auth.app.schemas.auth import LoginRequest, RefreshTokenRequest, ChangePasswordRequest, VerifyLoginRequest
 from services.auth.app.core.dto import AuthUserDTO
 from datetime import datetime
 import sys

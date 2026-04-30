@@ -783,7 +783,10 @@ class DAMTransactionService:
                 "exchange_response": cancel_result
             }
 
-    async def update_single_bid_dam_in_system(self, delivery_date: int, asset_id: str, bid_area_id: str) -> Dict[str, Any]:
+    async def update_single_bid_dam_in_system(self, delivery_date: int, asset_id: str, bid_area_id: str, correlation_id: Optional[str] = None) -> Dict[str, Any]:
+        if not correlation_id:
+            import uuid
+            correlation_id = str(uuid.uuid4())
         """
         Fetch DAM Single Bid Book.
         API: /dam/api/v2/singlebid/...

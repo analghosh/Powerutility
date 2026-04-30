@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 from pymongo import MongoClient, ASCENDING, DESCENDING
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
+from motor.motor_asyncio import AsyncIOMotorCollection
 
 from libs.audit_queue.audit_models import AuditLogDoc, LogType, Priority
 

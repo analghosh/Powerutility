@@ -80,24 +80,6 @@ class DAMBiddingService:
         except (ValueError, TypeError):
             logger.warning(f"Cannot convert '{value}' to int, using default {default}")
             return default
-        
-        # For DAM, we show all 96 blocks, but keep the complex calculation logic
-        # Calculate today's current block (but use all blocks for DAM)
-        today_current_block = (2 * passed_sessions_count) - 1 + 95
-        print(f"session_times {current_time}")
-        
-        # Set class attributes (keeping RTM complexity but adapting for DAM)
-        self.currentBlk = 96  # Show all blocks for DAM (instead of today_current_block)
-        self.actualCurrentBlk = today_current_block  # Keep the actual calculation for reference
-
-        self.shiftingBlockNo = 2
-        self.shiftingBlockNoRuningTo = 5
-        self.shiftingBlockNoREQFrom = 5
-        self.shiftingBlockNoREQTo = 18
-
-        # For DAM, these calculations are kept but we use all blocks
-        self.BlkNoForRunSchedule = self.currentBlk + self.shiftingBlockNo
-        self.BlkNoToRunSchedule = self.currentBlk + self.shiftingBlockNoRuningTo
 
         self.BlkNoFromRunReq = self.currentBlk + self.shiftingBlockNoREQFrom
         self.BlkNoToRunReq = self.currentBlk + self.shiftingBlockNoREQTo

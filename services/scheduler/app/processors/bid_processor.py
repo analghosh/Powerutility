@@ -146,6 +146,7 @@ class BidProcessor(BaseProcessor):
 
             bid_entities = []
             historical_buffer: List[Dict[str, Any]] = []
+            processed_items: List[Dict[str, Any]] = []
 
             # --- FIX: Define a clear 4-day window for the serve collection ---
             today = datetime.now().date()

@@ -133,7 +133,7 @@ class RTMSchedulingServices:
             logger.exception(f"[RTMSchedulingServices] Error in getAllPlantDataForScheduling: {str(e)}")
             return []
             
-    async def rtm_scheduling_table(self, schedule_date):
+    async def rtm_scheduling_table(self, schedule_date, dc_sg="DC_SG"):
         """
         Fetch DSM (Deviation Settlement Mechanism) data for a given schedule date.
         """

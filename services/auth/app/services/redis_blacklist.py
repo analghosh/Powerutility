@@ -231,8 +231,6 @@ class RedisBlacklistService:
             logger.info("Redis TTL handles token expiration automatically")
             return 0
             
-            return expired_count
-            
         except Exception as e:
             logger.error(f"Failed to clear expired tokens: {e}")
             return 0

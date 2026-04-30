@@ -3,7 +3,7 @@ import asyncio
 from functools import partial
 from pydoc import text
 import re
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 from datetime import date, datetime, timedelta
 import time
 from math import isnan, isfinite

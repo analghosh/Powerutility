@@ -1277,10 +1277,10 @@ class JobDetailRepository(BaseRepository):
                     {"job_id": job_id}
                 ).sort("execution_id", -1).limit(50).to_list(length=10000)  # Limit to last 50 executions
 
-                logger.info("Found %d execution records for job_id: %s", len(executions_list), job_id)
+                logger.info("Found %d execution records for job_id: %s", len(executions), job_id)
                 
                 
-                for execution in executions_list:
+                for execution in executions:
                     execution_record = {
                         "execution_id": execution.get("execution_id"),
                         "status": execution.get("status"),

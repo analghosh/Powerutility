@@ -245,7 +245,6 @@ require_any_data_permission = get_current_user_with_any_permission(["read", "wri
 # Export public functions
 __all__ = [
     "get_db",
-    "get_mongo_client", 
     "get_current_user",
     "get_current_user_with_details",
     "get_current_user_with_roles",

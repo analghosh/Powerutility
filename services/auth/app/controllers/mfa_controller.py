@@ -2,7 +2,10 @@
 MFA controller for handling multi-factor authentication
 """
 
+import logging
 import secrets
+
+logger = logging.getLogger(__name__)
 from typing import List, Dict
 from datetime import datetime
 from fastapi import HTTPException, status

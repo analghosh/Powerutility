@@ -8,7 +8,7 @@ import json
 import sys
 import os
 from typing import Callable, Optional, List
-from fastapi import Request, Response
+from fastapi import Request, Response, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.types import ASGIApp
 from .correlation import get_correlation_id
