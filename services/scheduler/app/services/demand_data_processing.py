@@ -333,7 +333,7 @@ class DemandDataProcessing:
                     self._move_old_data_to_historical(day_before_yesterday)
                 
                 # Store/update the entity
-                self._store_demand_entity(entity)
+                await self._store_demand_entity(entity)
             
         except (ValueError, TypeError, KeyError, AttributeError) as e:
             logger.error("Error handling 4-day rolling window: %s", e)

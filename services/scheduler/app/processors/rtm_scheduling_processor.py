@@ -317,13 +317,13 @@ class RTMSchedulingProcessor(BaseProcessor):
         """
         if not product_rows:
             return None
-        t_local = self._ensure_tz_run_start(run_started_at)
+        t_local = await self._ensure_tz_run_start(run_started_at)
         T = t_local.hour * 60 + t_local.minute
         for row in product_rows:
             start_s = row.get("from_period_time") or row.get("From_Period_Id")
             end_s = row.get("to_period_time") or row.get("To_Period_Id")
-            start_m = self._parse_hhmm_to_minutes(start_s)
-            end_m = self._parse_hhmm_to_minutes(end_s)
+            start_m = await self._parse_hhmm_to_minutes(start_s)
+            end_m = await self._parse_hhmm_to_minutes(end_s)
             if end_s is not None and str(end_s).strip() == "23:59":
                 end_m = 1440
             if start_m is None or end_m is None:
@@ -426,7 +426,7 @@ class RTMSchedulingProcessor(BaseProcessor):
         schedule_date: str,
         session_id: Optional[int] = None,
     ) -> int:
-        docs = self._build_snapshot_documents(
+        docs = await self._build_snapshot_documents(
             records=records,
             source_name=source_name,
             run_id=run_id,
@@ -578,7 +578,7 @@ class RTMSchedulingProcessor(BaseProcessor):
 
     async def calSchedulingTableData(self, schedule_date, audit_logger=None, user_context: Optional[Dict[str, Any]] = None, run_with_exchange: bool = False, run_started_at: Optional[datetime] = None):
         try:
-            run_started_aware = self._ensure_tz_run_start(run_started_at)
+            run_started_aware = await self._ensure_tz_run_start(run_started_at)
             execution_id = self.get_correlation_id() or f"adhoc_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
             run_id = f"rtm_snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}_{uuid4().hex[:8]}"
             self.last_snapshot_run_id = run_id
@@ -592,14 +592,14 @@ class RTMSchedulingProcessor(BaseProcessor):
                 )
                 getsessionNoRaw = []
             logger.info(f"[RTMSchedulingServices] Retrieved {len(getsessionNoRaw)} RTM session records")
-            snapshot_session_id = self._session_id_for_run_start(run_started_aware, getsessionNoRaw)
+            snapshot_session_id = await self._session_id_for_run_start(run_started_aware, getsessionNoRaw)
             self.last_snapshot_session_id = snapshot_session_id
             logger.info(
                 "[RTMSchedulingServices] Snapshot session_id=%s for run_start=%s",
                 snapshot_session_id,
                 run_started_aware.isoformat(),
             )
-            snapshot_storage_date = self._ensure_tz_run_start(run_started_aware).strftime("%Y-%m-%d")
+            snapshot_storage_date = (await self._ensure_tz_run_start(run_started_aware)).strftime("%Y-%m-%d")
             self._pending_optimized_snapshot_task = None
             if snapshot_session_id is not None:
                 snapshot_coll = self.scheduling_repo.db[self.snapshot_collection_name]
@@ -687,9 +687,9 @@ class RTMSchedulingProcessor(BaseProcessor):
             
             
             # Build dictionaries with composite keys
-            allTMValues = self.__build_limit_value_dict(allTMValuesRaw, include_time_block=True)
-            allSEZValues = self.__build_limit_value_dict(allSEZValuesRaw, include_time_block=True)
-            allMLTPValues = self.__build_limit_value_dict(allMLTPValuesRaw, include_time_block=False)  # MLTP doesn't have time_block
+            allTMValues = await self.__build_limit_value_dict(allTMValuesRaw, include_time_block=True)
+            allSEZValues = await self.__build_limit_value_dict(allSEZValuesRaw, include_time_block=True)
+            allMLTPValues = await self.__build_limit_value_dict(allMLTPValuesRaw, include_time_block=False)  # MLTP doesn't have time_block
             logger.info(f"[RTMSchedulingServices] Converted limit values to dictionaries - TM: {len(allTMValues)}, SEZ: {len(allSEZValues)}, MLTP: {len(allMLTPValues)}")
             
             
@@ -760,7 +760,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             blended_demand = [d for d in blended_demand if d is not None]
 
             logger.info(f"[RTMSchedulingServices] Retrieved demand records, proceeding to calculate total availability.")
-            totalAvailability = self.total_availability(getplantsData, blended_demand)
+            totalAvailability = await self.total_availability(getplantsData, blended_demand)
             logger.info(f"[RTMSchedulingServices] Calculated total availability for {len(totalAvailability)} time blocks")
             # --- OLD: RTM forecasted price from exchange_serve (yesterday's IEX MCP) — kept for reference ---
             # rtm_forecasted_price_list = await self.limit_values_repo.get_data_byID_with_latest_date(
@@ -841,7 +841,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             blk_no_to_run_schedule = 96
             
             logger.info(f"[RTMSchedulingServices] Starting SchedulingCalculator - Block range: {blk_no_for_run_schedule} to {blk_no_to_run_schedule}")
-            reviseDataTotalsupply = self.SchedulingCalculator(
+            reviseDataTotalsupply = await self.SchedulingCalculator(
                 total_availability=totalAvailability,
                 rtm_forecasted_price=rtm_forecasted_price,
                 get_plants_data=getplantsData,
@@ -1093,7 +1093,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             for key, value in data.items():
                 if key not in field_mapping and key not in unchanged_fields:
                     if isinstance(value, (dict, list)):
-                        transformed[key] = self.__transform_to_legacy_format(value)
+                        transformed[key] = await self.__transform_to_legacy_format(value)
                     elif isinstance(value, datetime):
                         # Handle datetime objects in remaining fields
                         transformed[key] = value.strftime("%Y-%m-%d") if key.endswith("_at") else value.isoformat()
@@ -1102,7 +1102,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             
             return transformed
         elif isinstance(data, list):
-            return [self.__transform_to_legacy_format(item) for item in data]
+            return [await self.__transform_to_legacy_format(item) for item in data]
         else:
             return data
     
@@ -1261,7 +1261,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             # Fallback: use dc_afterloss * 10%
                             ramping_limit = dc_afterloss * 0.10
                         if ramping_limit == 0:
-                             ramping_limit = self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
+                             ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
                         # Compare from previous block: prev_vol - ramping
                         # A plant cannot go below TM
@@ -1310,7 +1310,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "scheduling_requisition_type": scheduling_type,
                             "area": "PUDUCHERRY",
                         }
-                        insertData = self.__create_standardized_record(base_insert_data, is_after_cutoff)
+                        insertData = await self.__create_standardized_record(base_insert_data, is_after_cutoff)
                         current_block_records.append(insertData)
 
                     # Update total_diff to remaining surplus after central plant back-down
@@ -1356,7 +1356,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             # Fallback: use dc_afterloss * 10%
                             ramping_limit = dc_afterloss * 0.10
                         if ramping_limit == 0:
-                             ramping_limit = self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
+                             ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
                         # Cannot exceed dc_afterloss (max capacity)
                         max_vol_to_schedule = min(prev_vol + ramping_limit, dc_afterloss)
@@ -1403,7 +1403,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "scheduling_requisition_type": scheduling_type,
                             "area": "PUDUCHERRY",
                         }
-                        insertData = self.__create_standardized_record(base_insert_data, is_after_cutoff)
+                        insertData = await self.__create_standardized_record(base_insert_data, is_after_cutoff)
                         current_block_records.append(insertData)
 
                 # Queue exchange_serve bid update for this block
@@ -1457,7 +1457,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         "scheduling_requisition_type": "NA",
                         "area": "PUDUCHERRY",
                     }
-                    insertData = self.__create_standardized_record(base_insert_data, is_after_cutoff)
+                    insertData = await self.__create_standardized_record(base_insert_data, is_after_cutoff)
                     current_block_records.append(insertData)
 
                 # Store block results for next block
@@ -1521,7 +1521,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         if ramping_limit == 0:
                             ramping_limit = dc_afterloss * 0.10
                         if ramping_limit == 0:
-                            ramping_limit = self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
+                            ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
                         min_vol_to_schedule = max(prev_vol - ramping_limit, planttmvalue)
                         max_back_down_possible = max(prev_vol - min_vol_to_schedule, 0.0)
@@ -1566,7 +1566,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "scheduling_requisition_type": scheduling_type,
                             "area": "PUDUCHERRY",
                         }
-                        insertData = self.__create_standardized_record(base_insert_data, is_after_cutoff)
+                        insertData = await self.__create_standardized_record(base_insert_data, is_after_cutoff)
                         current_block_records.append(insertData)
 
                     total_diff = remaining_surplus
@@ -1603,7 +1603,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         if ramping_limit == 0:
                             ramping_limit = dc_afterloss * 0.10
                         if ramping_limit == 0:
-                            ramping_limit = self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
+                            ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
                         max_vol_to_schedule = min(prev_vol + ramping_limit, dc_afterloss)
                         max_ramp_up = max(max_vol_to_schedule - prev_vol, 0.0)
@@ -1647,7 +1647,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "scheduling_requisition_type": scheduling_type,
                             "area": "PUDUCHERRY",
                         }
-                        insertData = self.__create_standardized_record(base_insert_data, is_after_cutoff)
+                        insertData = await self.__create_standardized_record(base_insert_data, is_after_cutoff)
                         current_block_records.append(insertData)
 
                 # Non-central plants: pass through with original volumes
@@ -1690,7 +1690,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         "scheduling_requisition_type": "NA",
                         "area": "PUDUCHERRY",
                     }
-                    insertData = self.__create_standardized_record(base_insert_data, is_after_cutoff)
+                    insertData = await self.__create_standardized_record(base_insert_data, is_after_cutoff)
                     current_block_records.append(insertData)
 
                 reviseDataTotalsupply[blk + 1] = {
@@ -1743,7 +1743,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         "scheduling_requisition_type": "NA",
                         "area": "PUDUCHERRY",
                     }
-                    insertData = self.__create_standardized_record(base_insert_data, is_after_cutoff)
+                    insertData = await self.__create_standardized_record(base_insert_data, is_after_cutoff)
                     current_block_records.append(insertData)
 
                 reviseDataTotalsupply[blk + 1] = {

@@ -634,7 +634,7 @@ class DAMBiddingServices:
             ]
 
             # Fetch plants data from supply_serve collection
-            getplantsData = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
+            getplantsData = await self.supply_repo.aggregate(pipeline)
 
             if not getplantsData:
                 return {}
@@ -648,7 +648,7 @@ class DAMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "dam_tm": 1}}
             ]
-            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
+            dc_data = await self.supply_repo.aggregate(dc_pipeline)
             # Build lookup: {(plant_id, time_block): dam_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("dam_tm", 0) for d in dc_data}
             
@@ -2310,7 +2310,7 @@ class DAMBiddingServices:
                     }
                 }
             ]
-            data_cursor  = await self.single_bid_data_for_approval_repo.aggregate(self.single_bid_data_for_approval_repo.collection_name, pipeline)
+            data_cursor  = await self.single_bid_data_for_approval_repo.aggregate(pipeline)
             # data_list = list(data_cursor)
             data_list = []
             for doc in data_cursor:

@@ -1995,7 +1995,7 @@ class RealtimemarketService:
             blk_no_to_run_schedule = 96 
             
             
-            data = self.SchedulingCalculator(
+            data = await self.SchedulingCalculator(
             total_availability=totalAvailability,
             rtm_forecasted_price=rtm_forecasted_price,
             get_plants_data=getplantsData,
@@ -2009,7 +2009,7 @@ class RealtimemarketService:
         except Exception as e:
             return {"status": "error", "message": f"Internal Server Error: {str(e)}"}
     
-    def SchedulingCalculator(self,
+    async def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,

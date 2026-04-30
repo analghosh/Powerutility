@@ -511,7 +511,7 @@ class SupplyProcessor(BaseProcessor):
                 # Reuse the raw parsing logic from dc_sg but mapped to supply directly?
                 # A better approach: Create DCSgEntity to validate, then map to SupplyServeEntity immediately.
                 
-                dc_sg_entity = self._create_dc_sg_entity_from_raw(raw_record, metadata, provider_config, check_updates=False)
+                dc_sg_entity = await self._create_dc_sg_entity_from_raw(raw_record, metadata, provider_config, check_updates=False)
                 if not dc_sg_entity:
                     continue
                 
