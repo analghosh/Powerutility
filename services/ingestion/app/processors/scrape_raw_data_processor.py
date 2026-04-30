@@ -400,7 +400,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         provider.code, str(e), type(e).__name__)
             return {'success': False, 'error': str(e)}
 
-    def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
+    async def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
         """
         Get full provider entity by code
         
@@ -412,7 +412,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
         """
         try:
             # Use provider service to get full provider entity
-            provider_entity = self.provider_service.get_provider_by_code(provider_code)
+            provider_entity = await self.provider_service.get_provider_by_code(provider_code)
             if provider_entity:
                 return provider_entity
             else:
@@ -1033,12 +1033,12 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
         try:
             # Get provider details - if data_type is None, get all enabled FTP providers
             if data_type:
-                providerResponse = self.provider_service.get_all_providers(
+                providerResponse = await self.provider_service.get_all_providers(
                     ingestion_type=ingestion_type, data_type=data_type, enabled=True
                 )
             else:
                 # Get all enabled FTP providers regardless of data type
-                providerResponse = self.provider_service.get_all_providers(
+                providerResponse = await self.provider_service.get_all_providers(
                     ingestion_type=ingestion_type, enabled=True
                 )
 
