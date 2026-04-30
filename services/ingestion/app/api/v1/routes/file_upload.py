@@ -195,7 +195,7 @@ async def upload_csv_data(
         logger.info("Upload request [%s] completed successfully", request_id)
         
         # Log successful file upload activity
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="upload",
@@ -229,7 +229,7 @@ async def upload_csv_data(
         
     except HTTPException as http_exc:
         # Log failed file upload activity for HTTP exceptions
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="file_upload_failed",
@@ -248,7 +248,7 @@ async def upload_csv_data(
         logger.error("Unexpected error in upload_csv_data endpoint: %s", e)
         
         # Log failed file upload activity for unexpected errors
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="file_upload_error",
@@ -428,7 +428,7 @@ async def get_upload_status(
         logger.error("Unexpected error in get_upload_status endpoint: %s", e)
         
         # Log failed upload status check for unexpected errors
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="upload_status_check_error",
@@ -707,7 +707,7 @@ async def get_uploads_paginated(
         
     except HTTPException as http_exc:
         # Log failed pagination request for HTTP exceptions
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="uploads_paginated_failed",
@@ -726,7 +726,7 @@ async def get_uploads_paginated(
         logger.error("Unexpected error in get_uploads_paginated endpoint: %s", e)
         
         # Log failed pagination request for unexpected errors
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="uploads_paginated_error",
@@ -927,7 +927,7 @@ async def get_csv_format(
         
     except HTTPException as http_exc:
         # Log failed CSV format request for HTTP exceptions
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="csv_format_request_failed",
@@ -945,7 +945,7 @@ async def get_csv_format(
         logger.error("Unexpected error in get_csv_format endpoint: %s", e)
         
         # Log failed CSV format request for unexpected errors
-        await audit_logger.log_user_action(
+        audit_logger.log_user_action(
             service="ingestion",
             user_id=user_id,
             action="csv_format_request_error",

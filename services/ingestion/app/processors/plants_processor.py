@@ -189,9 +189,8 @@ class PlantsRepository(BaseRepository):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
-        self.create_indexes()
 
-    def create_indexes(self):
+    async def create_indexes(self):
         """Create indexes for plants collection"""
         try:
             # Drop existing indexes first to ensure cleaner state if schema changes
@@ -203,7 +202,7 @@ class PlantsRepository(BaseRepository):
             ]
             for index_name in to_drop:
                 try:
-                    self.collection.drop_index(index_name)
+                    await self.collection.drop_index(index_name)
                 except Exception:
                     pass
 
@@ -211,9 +210,9 @@ class PlantsRepository(BaseRepository):
             # This handles both cases:
             # 1. Base Plant (no approval_no): (plant_id, null) must be unique.
             # 2. Variant Plant (with approval_no): (plant_id, approval_no) must be unique.
-            self.collection.create_index(
+            await self.collection.create_index(
                 [("plant_id", 1), ("approval_no", 1)],
-                unique=True, 
+                unique=True,
                 background=True,
                 name="unique_plant_id_approval"
             )
@@ -222,7 +221,7 @@ class PlantsRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to create indexes for plant_master: {str(e)}")
     
-    def bulk_upsert_plants(self, plants: List[Dict[str, Any]], filter_criteria: callable) -> Dict[str, Any]:
+    async def bulk_upsert_plants(self, plants: List[Dict[str, Any]], filter_criteria: callable) -> Dict[str, Any]:
         """
         Bulk upsert plants data with custom filter criteria
         
@@ -247,7 +246,7 @@ class PlantsRepository(BaseRepository):
                     plant_data["created_at"] = datetime.now()
                 
                 # Perform upsert
-                result = self.collection.update_one(
+                result = await self.collection.update_one(
                     filter_query,
                     {"$set": plant_data},
                     upsert=True
@@ -578,7 +577,7 @@ class PlantsProcessor:
                 }
             
             # Store directly in plants collection
-            result = self.plants_repository.bulk_upsert_plants(
+            result = await self.plants_repository.bulk_upsert_plants(
                 plants=mapped_data,
                 filter_criteria=self.create_plant_upsert_filter
             )

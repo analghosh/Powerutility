@@ -221,7 +221,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         """
         return await self.getRTMAllPlantDataForScheduling()
 
-    def create(self, record_data: Dict[str, Any]) -> str:
+    async def create(self, record_data: Dict[str, Any]) -> str:
         """
         Create a new scheduling requisition calculation record (backward compatibility alias).
         Handles both standard and legacy field names.
@@ -232,7 +232,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         Returns:
             Inserted document ID
         """
-        return self.create_scheduling_record(record_data)
+        return await self.create_scheduling_record(record_data)
 
     async def create_scheduling_record(self, record_data: Dict[str, Any]) -> str:
         """

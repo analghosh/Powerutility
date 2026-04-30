@@ -234,7 +234,7 @@ class BidProcessor(BaseProcessor):
                         time_block_int = int(time_block)
                         bid_type_str = str(bid_type).upper()
                         traded = float(item.get("traded") or 0)
-                        calculated_value = self._calculate_value_from_exchange(scheduled_at, time_block_int, bid_type_str, traded)
+                        calculated_value = await self._calculate_value_from_exchange(scheduled_at, time_block_int, bid_type_str, traded)
                         
                         source_revision = item.get("revision_number") or item.get("version") or item.get("rev_no")
                         
@@ -299,7 +299,7 @@ class BidProcessor(BaseProcessor):
                             existing_source_revision = existing_record.get("source_revision_number")
                             source_revision = existing_source_revision if existing_source_revision is not None else system_revision
                         
-                        if self._has_bid_data_changed(existing_record, item, calculated_value):
+                        if await self._has_bid_data_changed(existing_record, item, calculated_value):
                             # Changed: Need update (Delete + Insert)
                             bid_entity = BidTradeServeEntity.from_raw_data(item, metadata, provider_config, calculated_value)
                             bid_entity.updated_flag = UpdatedFlag.UPDATED
@@ -397,7 +397,7 @@ class BidProcessor(BaseProcessor):
                                     time_range = f"{str(ts).strip()}-{str(te).strip()}"
                                     timeblock_num = self._get_timeblock_number(time_range)
                                     rec_dict["time_block"] = timeblock_num if timeblock_num > 0 else 0
-                        calc_val = self._calculate_value_from_exchange(rec_dict["scheduled_at"], rec_dict["time_block"], rec_dict["type"], rec_dict.get("traded", 0))
+                        calc_val = await self._calculate_value_from_exchange(rec_dict["scheduled_at"], rec_dict["time_block"], rec_dict["type"], rec_dict.get("traded", 0))
                         serve_ent = BidTradeServeEntity.from_raw_data(rec_dict, metadata, provider_config, calc_val)
                         
                         # Add revision tracking for historical records

@@ -398,7 +398,7 @@ async def assign_roles_to_user(
         
         # Update user roles (now async)
         success = await user_repo.update_user(user_id, {"roles": role_data.roles})
-        await audit_logger.log_user_action( # audit_logger methods are async
+        audit_logger.log_user_action( # audit_logger methods are sync (do not await)
             service="auth",
             user_id=current_user.user_id,
             action="assign_roles",

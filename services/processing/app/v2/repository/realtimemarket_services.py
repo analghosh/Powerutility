@@ -3070,7 +3070,7 @@ class RealtimemarketService:
                             "scheduling_requisition_type": "NA",
                         }
                         # return insertData
-                        self.scheduling_requisition_repo.create(insertData)
+                        await self.scheduling_requisition_repo.create(insertData)
                         # Replace this with actual DB insert
                         # db.session.add(SchedulingRequisitionCalculation(**insertData))
                         # db.session.commit()
@@ -3138,7 +3138,7 @@ class RealtimemarketService:
                         }
                        
                         # return insertData
-                        self.scheduling_requisition_repo.create(insertData)
+                        await self.scheduling_requisition_repo.create(insertData)
                         
                         plkey += 1
                         
@@ -3862,7 +3862,7 @@ class RealtimemarketService:
                     "action_by": reference.action_by,
                     "block_no": reference.block_no
                 }
-                self.updatePlantDataForApproval(ref_dict)
+                await self.updatePlantDataForApproval(ref_dict)
                 data_array.append(ref_dict)  # add to the list
 
             return {"result": True, "data": data_array}

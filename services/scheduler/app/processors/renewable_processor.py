@@ -530,15 +530,11 @@ class RenewableProcessor(BaseProcessor):
             tomorrow = today + timedelta(days=1)
 
             # Carry forward for today
-            today_result = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.carry_forward_for_date, today
-            )
+            today_result = await self.dc_sg_renewable_repository.carry_forward_for_date(today)
             logger.info("Carry-forward today (%s): %s", today, today_result)
 
             # Carry forward for tomorrow
-            tomorrow_result = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.carry_forward_for_date, tomorrow
-            )
+            tomorrow_result = await self.dc_sg_renewable_repository.carry_forward_for_date(tomorrow)
             logger.info("Carry-forward tomorrow (%s): %s", tomorrow, tomorrow_result)
 
             # Promote carried records to renewable_serve

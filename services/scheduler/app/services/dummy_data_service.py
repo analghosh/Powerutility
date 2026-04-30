@@ -1320,12 +1320,12 @@ class DummyDataService:
                 "error": str(e),
             }
 
-    def reconcile_and_rerun_crons(self, job_id: Optional[str] = None) -> Dict[str, Any]:
+    async def reconcile_and_rerun_crons(self, job_id: Optional[str] = None) -> Dict[str, Any]:
         """Simple reconciliation - just run startup if needed then execute cron"""
         try:
             logger.info("Starting system reconciliation...")
 
-            startup_result = self._process_startup_data_flow(job_id)
+            startup_result = await self._process_startup_data_flow(job_id)
 
             if startup_result["status"] == "success":
                 logger.info("Startup reconciliation completed - cron jobs will run on schedule")

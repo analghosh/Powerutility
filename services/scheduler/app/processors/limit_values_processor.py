@@ -353,10 +353,11 @@ class LimitValuesProcessor(BaseProcessor):
             logger.info("[LimitValuesProcessor] Starting 'ID' to 'id' field rename process")
             
             from libs.database.mongo_client_factory import get_scheduler_client
+            from services.scheduler.app.core.config import settings
             
             # Use centralized MongoDB client (singleton pattern)
-            client = get_scheduler_client(self.mongodb_uri)
-            db = client[self.database_name]
+            client = get_scheduler_client(settings.MONGODB_URI)
+            db = client[settings.MONGODB_DATABASE]
             
             collections_to_migrate = [self.final_collection_name, self.approval_collection_name]
             
