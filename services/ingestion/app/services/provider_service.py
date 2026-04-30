@@ -425,7 +425,7 @@ class ProviderManagementService:
             )
             
             # Save to database
-            provider_id = self.provider_service.repository.create_provider(provider)
+            provider_id = await self.provider_service.repository.create_provider(provider)
             
             logger.info("Created provider: %s (%s) by user: %s", 
                        provider_id, request.code, created_by)
@@ -438,9 +438,9 @@ class ProviderManagementService:
     
     def get_provider_by_id(self, provider_id: str) -> Optional[ProviderResponse]:
         """Get provider by ID"""
-        return self.provider_service.get_provider_by_id(provider_id)
+        return await self.provider_service.get_provider_by_id(provider_id)
     
-    def get_all_providers(
+    async def get_all_providers(
         self,
         ingestion_type: Optional[IngestionType] = None,
         data_type: Optional[DataType] = None,
@@ -571,7 +571,7 @@ class ProviderManagementService:
                 updates["metadata"] = request.metadata
             
             # Update provider
-            success = self.provider_service.repository.update_provider(provider_id, updates)
+            success = await self.provider_service.repository.update_provider(provider_id, updates)
             
             if success:
                 logger.info("Updated provider: %s", provider_id)
@@ -602,7 +602,7 @@ class ProviderManagementService:
                 raise ValueError(f"Provider with ID '{provider_id}' not found")
             
             # Delete provider
-            success = self.provider_service.repository.delete_provider(provider_id)
+            success = await self.provider_service.repository.delete_provider(provider_id)
             
             if success:
                 logger.info("Deleted provider: %s (%s)", provider_id, existing_provider.code)
@@ -634,7 +634,7 @@ class ProviderManagementService:
                 raise ValueError(f"Provider with ID '{provider_id}' not found")
             
             # Update enabled status
-            success = self.provider_service.repository.enable_disable_provider(provider_id, enabled)
+            success = await self.provider_service.repository.enable_disable_provider(provider_id, enabled)
             
             if success:
                 action = "enabled" if enabled else "disabled"
@@ -674,7 +674,7 @@ class ProviderManagementService:
                 }
             
             # Find provider by code and data type
-            provider = self.provider_service.repository.get_provider_by_code_and_data_type(provider_type, data_type_lower)
+            provider = await self.provider_service.repository.get_provider_by_code_and_data_type(provider_type, data_type_lower)
             
             if not provider:
                 return {
