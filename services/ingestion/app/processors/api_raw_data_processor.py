@@ -332,7 +332,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 mapped_data = self.map_data_to_schema(validation_result["validated_data"], full_provider)
             
             # Store data using raw data service
-            storage_result = self._store_api_data(mapped_data, full_provider, [log_id] if log_id else None)
+            storage_result = await self._store_api_data(mapped_data, full_provider, [log_id] if log_id else None)
             
             # Handle optimization parser limit_values_data (direct insertion)
             limit_values_stored = 0
@@ -388,7 +388,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error retrieving provider entity for code %s: %s", provider_code, str(e))
             return None
 
-    def _store_api_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def _store_api_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Store API data using the raw data service
         
@@ -412,7 +412,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids
             
             # Use raw data service to store the data
-            result = self.raw_data_service.store_raw_data(
+            result = await self.raw_data_service.store_raw_data(
                 raw_data=data,
                 provider=provider,
                 additional_metadata=additional_metadata

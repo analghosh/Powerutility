@@ -406,7 +406,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             validated_data = validation_result["validated_data"]
             
             # Store data using raw data service
-            storage_result = self._store_ftp_data(validated_data, full_provider, log_ids)
+            storage_result = await self._store_ftp_data(validated_data, full_provider, log_ids)
             
             if storage_result["success"]:
                 logger.info("Successfully processed provider %s: %d records stored", 
@@ -451,7 +451,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error retrieving provider entity for code %s: %s", provider_code, str(e))
             return None
 
-    def _store_ftp_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def _store_ftp_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Store FTP data using the raw data service
         
@@ -475,7 +475,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids
 
             # Use raw data service to store the data
-            result = self.raw_data_service.store_raw_data(
+            result = await self.raw_data_service.store_raw_data(
                 raw_data=data,
                 provider=provider,
                 additional_metadata=additional_metadata

@@ -375,7 +375,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
             unique_log_ids = list(set(all_log_ids))
             
             # Store data using raw data service
-            storage_result = self._store_scraped_data(mapped_data, full_provider, unique_log_ids)
+            storage_result = await self._store_scraped_data(mapped_data, full_provider, unique_log_ids)
             
             if storage_result["success"]:
                 stored_records = storage_result.get("stored_records", 0)
@@ -423,7 +423,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         provider_code, str(e), type(e).__name__)
             return None
 
-    def _store_scraped_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    async def _store_scraped_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Store scraped data using the raw data service
         
@@ -447,7 +447,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids
 
             # Use raw data service to store the data
-            result = self.raw_data_service.store_raw_data(
+            result = await self.raw_data_service.store_raw_data(
                 raw_data=data,
                 provider=provider,
                 additional_metadata=additional_metadata

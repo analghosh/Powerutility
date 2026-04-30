@@ -245,7 +245,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                 "upload_created_at": upload_created_at,
                 "integration_apilog_id": log_id
             }
-            result = self.raw_data_service.store_raw_data(
+            result = await self.raw_data_service.store_raw_data(
                 raw_data=csv_data,
                 provider=provider,
                 additional_metadata=additional_metadata
