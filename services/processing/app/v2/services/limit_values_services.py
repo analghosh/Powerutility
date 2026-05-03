@@ -1022,7 +1022,7 @@ class LimitService:
             logger.exception(f"[LimitService] approve failed for {approval_id}: {str(e)}")
             # Optionally, mark the item as FAILED
             try:
-                self.flow_repo.update_approval(
+                await self.flow_repo.update_approval(
                     self.approval_collection,
                     approval_id,
                     {"status": "FAILED", "error_message": str(e)}
