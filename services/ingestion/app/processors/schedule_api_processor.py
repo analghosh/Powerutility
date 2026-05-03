@@ -268,7 +268,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                             try:
                                 log_entity = IntegrationApiLogEntity(
                                     provider_id="schedule_api_provider",
-                                    raw_data=response,
+                                    raw_data=response_data,
                                     timestamp=datetime.now(),
                                     metadata={
                                         "url": url,

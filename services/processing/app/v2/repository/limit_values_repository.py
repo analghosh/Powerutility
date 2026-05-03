@@ -7,6 +7,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
 from .base_repository import GenericRepository
+from ...core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +15,7 @@ logger = logging.getLogger(__name__)
 class LimitValuesRepository:
     def __init__(self):
         self.repository = GenericRepository()
+        self.collection_name = getattr(settings, 'MONGODB_LIMIT_VALUES_COLLECTION', 'limit_values')
 
     async def ensure_collection_exists(self, collection_name: str):
         """
@@ -368,6 +370,121 @@ class LimitValuesRepository:
             logger.exception(f"[LimitValuesRepository] Failed get_all_data_with_filters: {str(e)}")
             raise
         
+    async def get_data(
+        self,
+        start_date,
+        end_date,
+        market: str,
+        id: str,
+        area: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values data asynchronously.
+        Accepts dates as either strings (YYYY-MM-DD) or date objects.
+        """
+        from datetime import date as _date
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        if isinstance(start_date, _date) and not isinstance(start_date, datetime):
+            start_date = datetime.combine(start_date, datetime.min.time())
+        if isinstance(end_date, _date) and not isinstance(end_date, datetime):
+            end_date = datetime.combine(end_date, datetime.min.time())
+
+        filter_query = {"scheduled_at": {"$gte": start_date, "$lt": end_date}}
+        if market and market != "":
+            filter_query["market"] = market
+        if id and id != "":
+            filter_query["category"] = id
+        if area and area != "" and area != "NA":
+            filter_query["area"] = area
+
+        return await self.repository.get_all(
+            self.collection_name,
+            filter=filter_query,
+            sort=[("scheduled_at", 1)],
+        )
+
+    async def get_data_byID_with_latest_date(
+        self,
+        ID: str,
+        market: str,
+        category: str,
+        area: str,
+        scheduled_at: datetime = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values by ID with latest date asynchronously.
+        If scheduled_at is not provided, defaults to today at midnight.
+        """
+        tomorrow_date = datetime.now() + timedelta(days=1)
+        if scheduled_at is None:
+            scheduled_at = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            match_filter = {
+                "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date},
+                "id": ID,
+                "market": market
+            }
+
+            if category and category != "":
+                match_filter["category"] = category
+            if area and area != "" and area != "NA":
+                match_filter["area"] = area
+
+            result = await self.repository.get_all(
+                self.collection_name,
+                filter=match_filter,
+                sort=[("scheduled_at", 1), ("block", 1)],
+            )
+
+            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to retrieve limit values by ID: {str(e)}")
+            return []
+
+    async def get_data_byID(
+        self,
+        schedule_date: str,
+        ID: str,
+        category: str,
+        market: str,
+        area: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values for a specific schedule date, ID, category, market and area.
+        """
+        try:
+            if isinstance(schedule_date, str):
+                target_date = datetime.strptime(schedule_date, "%Y-%m-%d")
+            elif isinstance(schedule_date, datetime):
+                target_date = schedule_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            else:
+                target_date = schedule_date
+
+            filter_query = {
+                "scheduled_at": target_date,
+                "id": ID,
+                "market": market,
+            }
+            if category and category != "":
+                filter_query["category"] = category
+            if area and area != "" and area != "NA":
+                filter_query["area"] = area
+
+            result = await self.repository.get_all(
+                self.collection_name,
+                filter=filter_query,
+                sort=[("block", 1)],
+            )
+            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, date={schedule_date}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to retrieve limit values by ID and date: {str(e)}")
+            return []
+
     async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Run an aggregation pipeline and return the list of documents.

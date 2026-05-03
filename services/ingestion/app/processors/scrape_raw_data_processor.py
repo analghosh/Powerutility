@@ -309,7 +309,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
             logger.debug("🔍 Processing provider: %s, data type: %s", provider_code, data_type)
             
             # Get full provider entity for processing
-            full_provider = self._get_full_provider_entity(provider_code)
+            full_provider = await self._get_full_provider_entity(provider_code)
             if not full_provider:
                 logger.error("❌ Could not retrieve full provider entity for: %s", provider_code)
                 return {'success': False, 'error': 'Provider entity not found'}
@@ -400,7 +400,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         provider.code, str(e), type(e).__name__)
             return {'success': False, 'error': str(e)}
 
-    def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
+    async def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
         """
         Get full provider entity by code
         
@@ -412,7 +412,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
         """
         try:
             # Use provider service to get full provider entity
-            provider_entity = self.provider_service.get_provider_by_code(provider_code)
+            provider_entity = await self.provider_service.get_provider_by_code(provider_code)
             if provider_entity:
                 return provider_entity
             else:
@@ -589,7 +589,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         provider_id = config.get('provider_id', 'unknown')
                         log_entity = IntegrationApiLogEntity(
                             provider_id=str(provider_id),
-                            raw_data=response,  # Store full text
+                            raw_data=response.text,  # Store full text
                             timestamp=datetime.now(),
                             metadata={
                                 "url": url,
