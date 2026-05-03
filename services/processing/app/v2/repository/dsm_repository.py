@@ -313,7 +313,7 @@ class DsmRepository:
         """
         try:
             logger.info(f"[DsmRepository] Testing collection access: {collection_name}")
-            result = self.repository.get_all(collection_name, limit=limit)
+            result = await self.repository.get_all(collection_name, limit=limit)
             logger.info(f"[DsmRepository] Collection test - found {len(result)} documents")
             if result:
                 logger.info(f"[DsmRepository] Sample document: {result[0]}")

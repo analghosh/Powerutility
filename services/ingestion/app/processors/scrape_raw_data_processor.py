@@ -589,7 +589,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         provider_id = config.get('provider_id', 'unknown')
                         log_entity = IntegrationApiLogEntity(
                             provider_id=str(provider_id),
-                            raw_data=response,  # Store full text
+                            raw_data=response.text,  # Store full text
                             timestamp=datetime.now(),
                             metadata={
                                 "url": url,

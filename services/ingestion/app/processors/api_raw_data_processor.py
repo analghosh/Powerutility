@@ -782,7 +782,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                                         "attempt": attempt + 1
                                     }
                                 )
-                                log_id = await self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
+                                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
                             except Exception as e:
                                 logger.error("Failed to integration log API response: %s", e)
                             
