@@ -273,19 +273,19 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             client = get_mongo_client(self.mongo_uri, "rtm_forecast_api_config")
             db = client[self.database_name]
             providers_collection = db["providers"]
-            provider = await providers_collection.find_one({
+            provider = providers_collection.find_one({
                 "code": "rtm_forecast_api_provider",
                 "enabled": True
             })
 
             if not provider:
-                provider = await providers_collection.find_one({
+                provider = providers_collection.find_one({
                     "provider_type": "rtm_forecast_api",
                     "enabled": True
                 })
 
             if not provider:
-                provider = await providers_collection.find_one({
+                provider = providers_collection.find_one({
                     "code": "rtm_api_provider",
                     "enabled": True
                 })
@@ -382,7 +382,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                                     timestamp=datetime.now(),
                                     metadata={"url": url, "method": "GET", "status_code": response.status, "params": params, "attempt": attempt + 1}
                                 )
-                                await self.integration_apilog_repository.save_log("rtm_forecast", log_entity)
+                                self.integration_apilog_repository.save_log("rtm_forecast", log_entity)
                             except Exception as log_error:
                                 logger.warning("Failed to log RTM Forecast API response: %s", log_error)
                             logger.info("Successfully fetched RTM forecast data from API")

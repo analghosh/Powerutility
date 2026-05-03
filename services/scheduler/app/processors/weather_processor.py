@@ -216,7 +216,7 @@ class WeatherProcessor(BaseProcessor):
                     
                     # CRITICAL FIX: Delete ALL existing records for this timestamp and source
                     # This prevents any possibility of duplicates.
-                    delete_count = self.repository.delete_by_time_and_source(valid_time_local, source,city)
+                    delete_count = await self.repository.delete_by_time_and_source(valid_time_local, source,city)
                     if delete_count > 0:
                         logger.debug(f"Deleted {delete_count} old record(s) for {valid_time_local}")
 
@@ -239,7 +239,7 @@ class WeatherProcessor(BaseProcessor):
             serve_success = True
             if weather_entities_to_save:
                 try:
-                    inserted_count = self.repository.bulk_insert(weather_entities_to_save)
+                    inserted_count = await self.repository.bulk_insert(weather_entities_to_save)
                     logger.info("Successfully inserted/updated %d records in the serve collection.", inserted_count)
                 except Exception as e:
                     logger.error("Error during bulk insert to serve collection: %s", str(e))
@@ -248,7 +248,7 @@ class WeatherProcessor(BaseProcessor):
             historical_success = True
             if historical_entities_to_save:
                 try:
-                    inserted_count = self.repository.bulk_insert_historical(historical_entities_to_save)
+                    inserted_count = await self.repository.bulk_insert_historical(historical_entities_to_save)
                     logger.info("Successfully inserted %d records in the historical collection.", inserted_count)
                 except Exception as e:
                     logger.error("Error inserting historical weather entities: %s", str(e))
@@ -289,7 +289,7 @@ class WeatherProcessor(BaseProcessor):
         
         try:
             # Archive old weather data (older than 4 days)
-            archive_result = self.repository.archive_old_weather_data()
+            archive_result = await self.repository.archive_old_weather_data()
             
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
