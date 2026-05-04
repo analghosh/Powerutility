@@ -94,9 +94,14 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         Returns {"data": True} if successful.
         """
         # return documents[0]
-        try: 
-            documents = list(documents.values())
+        try:
+            if isinstance(documents, dict):
+                documents = list(documents.values())
+            else:
+                documents = list(documents) if documents is not None else []
             documents = [doc for doc in documents if isinstance(doc, dict)]
+            if not documents:
+                return []
             result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             return inserted_ids

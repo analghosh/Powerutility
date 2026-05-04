@@ -135,7 +135,7 @@ class SupplyServeRepository(GenericRepository):
                 {"$limit": 1},
                 {"$project": {"_id": 0, "source_revision_number": 1}},
             ]
-            rows = await self.aggregate_async(pipeline)
+            rows = await self.aggregate_async(self.collection_name, pipeline)
             if not rows:
                 return None
             raw = rows[0].get("source_revision_number")
