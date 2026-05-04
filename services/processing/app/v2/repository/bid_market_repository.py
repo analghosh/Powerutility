@@ -156,7 +156,7 @@ class BidMarketRepository:
                 filter_query["type"] = type_filter
             
             # Get total count
-            total = self.repo.get_count(self.collection_name, filter_query)
+            total = await self.repo.get_count(self.collection_name, filter_query)
             
             # Get bid markets with pagination
             bid_markets = await self.repo.get_all_async(
