@@ -333,7 +333,7 @@ class SupplyProcessor(BaseProcessor):
             
             # Query raw data collection with the pending IDs
             raw_data_query = {"_id": {"$in": object_ids}}
-            pending_raw_data = self.raw_data_repository.find_many(raw_data_query)
+            pending_raw_data = await self.raw_data_repository.find_many(raw_data_query)
             
             logger.info(f"Successfully fetched {len(pending_raw_data)} raw data records for provider {provider_id}")
             
@@ -559,8 +559,8 @@ class SupplyProcessor(BaseProcessor):
                      if diff >= 1:
                          historical_entities.append(SupplyServeHistoricalEntity(**supply_entity.model_dump(by_alias=True)))
 
-            serve_success = self._bulk_process_supply_entities(supply_entities, len(raw_data), len(supply_entities), 0)
-            hist_success = self._bulk_process_historical_entities(historical_entities)
+            serve_success = await self._bulk_process_supply_entities(supply_entities, len(raw_data), len(supply_entities), 0)
+            hist_success = await self._bulk_process_historical_entities(historical_entities)
             
             return serve_success and hist_success
 
@@ -1200,12 +1200,12 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error in stage 2 bulk processing: {str(e)}")
             return False
 
-    def _bulk_process_supply_entities(self, entities: List[SupplyServeEntity], total_raw: int, processed: int, skipped: int) -> bool:
+    async def _bulk_process_supply_entities(self, entities: List[SupplyServeEntity], total_raw: int, processed: int, skipped: int) -> bool:
         if not entities:
             logger.info("No new or updated supply serve records to process.")
             return True
         
-        result = self.supply_repository.bulk_insert_supply_serve_with_deduplication(entities)
+        result = await self.supply_repository.bulk_insert_supply_serve_with_deduplication(entities)
         logger.info(
             "Processed supply entities - Total: %d, Processed: %d, Skipped: %d, Inserted: %d, Duplicates Removed: %d, Errors: %d",
             total_raw, processed, skipped, result.get("inserted_count", 0),
@@ -1213,13 +1213,13 @@ class SupplyProcessor(BaseProcessor):
         )
         return result.get("error_count", 0) == 0
 
-    def _bulk_process_historical_entities(self, entities: List[SupplyServeHistoricalEntity]) -> bool:
+    async def _bulk_process_historical_entities(self, entities: List[SupplyServeHistoricalEntity]) -> bool:
         if not entities:
             logger.info("No historical supply records to process.")
             return True
         
         try:
-            result = self.supply_repository.bulk_insert_supply_historical_with_deduplication(entities)
+            result = await self.supply_repository.bulk_insert_supply_historical_with_deduplication(entities)
             logger.info("Processed supply historical entities - Total: %d, Inserted: %d, Duplicates Removed: %d, Errors: %d",
                        len(entities), result["inserted_count"], result.get("duplicates_removed", 0), result["error_count"])
             if result["errors"]:
@@ -1702,8 +1702,8 @@ class SupplyProcessor(BaseProcessor):
             historical_entities = [SupplyServeHistoricalEntity(**record, archived_at=datetime.now()) for record in old_records]
             
             if historical_entities:
-                self.supply_repository.bulk_insert_supply_historical_with_deduplication(historical_entities)
-                self.supply_repository.delete_supply_serve_by_date(cutoff_datetime)
+                await self.supply_repository.bulk_insert_supply_historical_with_deduplication(historical_entities)
+                await self.supply_repository.delete_supply_serve_by_date(cutoff_datetime)
             
         except Exception as e:
             logger.error("Error moving old supply data to historical: %s", str(e))
