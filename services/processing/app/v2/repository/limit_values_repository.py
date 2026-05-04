@@ -490,10 +490,6 @@ class LimitValuesRepository:
         Run an aggregation pipeline and return the list of documents.
         """
         logger.debug("LimitValuesRepository.aggregate | pipeline=%s", pipeline)
-        cursor = self.collection.aggregate(pipeline)
-        try:
-            return await cursor.to_list(length=10000)
-        finally:
-            cursor.close()
+        return await self.repository.aggregate(self.collection_name, pipeline)
 
 limit_values_repository = LimitValuesRepository()
