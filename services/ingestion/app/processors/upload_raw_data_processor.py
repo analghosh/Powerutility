@@ -215,7 +215,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                         "provider_found": bool(provider)
                     }
                 )
-                log_id = self.integration_apilog_repository.save_log(data_type.lower(), log_entity)
+                log_id = await self.integration_apilog_repository.save_log(data_type.lower(), log_entity)
                 logger.info("Logged raw upload content to integration log (id: %s)", log_id)
             except Exception as log_error:
                 logger.error("Failed to write integration log for upload %s: %s", upload_id, log_error, exc_info=True)

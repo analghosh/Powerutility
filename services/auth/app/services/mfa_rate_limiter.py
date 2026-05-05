@@ -58,7 +58,7 @@ class MFARateLimiter:
         # Last cleanup time (using IST)
         self.last_cleanup = now_ist()
     
-    def _cleanup_old_data(self):
+    async def _cleanup_old_data(self):
         """Clean up old attempts and expired lockouts"""
         now = now_ist()
         
@@ -86,18 +86,18 @@ class MFARateLimiter:
         
         self.last_cleanup = now
     
-    def is_locked_out(self, user_id: str) -> bool:
+    async def is_locked_out(self, user_id: str) -> bool:
         """Check if user is currently locked out"""
-        self._cleanup_old_data()
+        await self._cleanup_old_data()
         
         if user_id not in self.lockouts:
             return False
         
         return now_ist() < self.lockouts[user_id]['locked_until']
     
-    def get_lockout_info(self, user_id: str) -> Optional[Dict]:
+    async def get_lockout_info(self, user_id: str) -> Optional[Dict]:
         """Get lockout information for user"""
-        if not self.is_locked_out(user_id):
+        if not await self.is_locked_out(user_id):
             return None
         
         lockout_info = self.lockouts[user_id]
@@ -109,12 +109,12 @@ class MFARateLimiter:
             'failure_count': lockout_info['failure_count']
         }
     
-    def can_attempt(self, user_id: str) -> bool:
+    async def can_attempt(self, user_id: str) -> bool:
         """Check if user can make an MFA attempt"""
-        self._cleanup_old_data()
+        await self._cleanup_old_data()
         
         # Check if locked out
-        if self.is_locked_out(user_id):
+        if await self.is_locked_out(user_id):
             return False
         
         # Check attempt count in current window
@@ -127,7 +127,7 @@ class MFARateLimiter:
         
         return recent_attempts < self.max_attempts
     
-    def record_attempt(self, user_id: str, success: bool) -> Dict:
+    async def record_attempt(self, user_id: str, success: bool) -> Dict:
         """
         Record an MFA attempt and return rate limit status.
         
@@ -138,7 +138,7 @@ class MFARateLimiter:
         Returns:
             Dict with rate limit status and lockout info
         """
-        self._cleanup_old_data()
+        await self._cleanup_old_data()
         now = now_ist()
         
         # Record the attempt
@@ -199,9 +199,9 @@ class MFARateLimiter:
             'message': f'{remaining_attempts} attempts remaining before lockout'
         }
     
-    def get_attempt_count(self, user_id: str) -> int:
+    async def get_attempt_count(self, user_id: str) -> int:
         """Get current attempt count for user in window"""
-        self._cleanup_old_data()
+        await self._cleanup_old_data()
         
         now = now_ist()
         cutoff_time = now - timedelta(minutes=self.window_minutes)
@@ -209,7 +209,7 @@ class MFARateLimiter:
         
         return sum(1 for attempt_time in attempts if attempt_time >= cutoff_time)
     
-    def reset_user(self, user_id: str):
+    async def reset_user(self, user_id: str):
         """Reset rate limiting for a user (admin function)"""
         if user_id in self.attempts:
             del self.attempts[user_id]

@@ -13,7 +13,7 @@ from datetime import date, datetime, timedelta
 from typing import Dict, Any, List, Optional
 from zoneinfo import ZoneInfo
 
-from libs.database.mongo_client_factory import get_mongo_client
+from libs.database.mongo_client_factory import get_motor_client
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
 from services.ingestion.app.core.config import settings
 from services.ingestion.app.core.logger import get_ingestion_logger
@@ -270,7 +270,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
     async def _get_api_config_from_db(self) -> Optional[Dict[str, Any]]:
         """Get RTM Forecast API configuration from database (providers collection)."""
         try:
-            client = get_mongo_client(self.mongo_uri, "rtm_forecast_api_config")
+            client = get_motor_client(self.mongo_uri, "rtm_forecast_api_config")
             db = client[self.database_name]
             providers_collection = db["providers"]
             provider = providers_collection.find_one({
@@ -419,7 +419,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             if not data:
                 return 0
 
-            client = get_mongo_client(self.mongo_uri, "rtm_forecast_demand_serve")
+            client = get_motor_client(self.mongo_uri, "rtm_forecast_demand_serve")
             db = client[self.database_name]
             collection = db["demand_serve"]
 
@@ -532,7 +532,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             if not data:
                 return 0
 
-            client = get_mongo_client(self.mongo_uri, "rtm_forecast_limit_values")
+            client = get_motor_client(self.mongo_uri, "rtm_forecast_limit_values")
             db = client[self.database_name]
             collection = db["limit_values"]
 

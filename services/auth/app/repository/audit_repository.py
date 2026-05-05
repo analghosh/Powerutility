@@ -60,7 +60,7 @@ class AuditRepository(BaseRepository):
             # Remove None values
             audit_entry = {k: v for k, v in audit_entry.items() if v is not None}
             
-            return self.create(audit_entry)
+            return await self.create(audit_entry)
             
         except Exception as e:
             logger.error(f"Error logging audit event: {e}")
@@ -69,7 +69,7 @@ class AuditRepository(BaseRepository):
     async def get_user_audit_logs(self, user_id: str, limit: int = 100) -> List[Dict[str, Any]]:
         """Get audit logs for a specific user"""
         try:
-            return self.find_many({"user_id": user_id}, limit=limit)
+            return await self.find_many({"user_id": user_id}, limit=limit)
         except Exception as e:
             logger.error(f"Error getting audit logs for user {user_id}: {e}")
             return []
@@ -94,7 +94,7 @@ class AuditRepository(BaseRepository):
                     date_filter["$lte"] = end_date
                 query["timestamp"] = date_filter
             
-            return self.find_many(query, limit=limit)
+            return await self.find_many(query, limit=limit)
         except Exception as e:
             logger.error(f"Error getting audit logs: {e}")
             return []
@@ -103,7 +103,7 @@ class AuditRepository(BaseRepository):
         """Get failed login attempts for a user in the last N hours"""
         try:
             cutoff_time = datetime.now() - timedelta(hours=hours)
-            return self.find_many({
+            return await self.find_many({
                 "user_id": user_id,
                 "event_type": "login",
                 "success": False,
@@ -119,16 +119,16 @@ class AuditRepository(BaseRepository):
             cutoff_time = datetime.now() - timedelta(days=days)
             
             # Total events
-            total_events = self.count({"timestamp": {"$gte": cutoff_time}})
+            total_events = await self.count({"timestamp": {"$gte": cutoff_time}})
             
             # Successful events
-            successful_events = self.count({
+            successful_events = await self.count({
                 "timestamp": {"$gte": cutoff_time},
                 "success": True
             })
             
             # Failed events
-            failed_events = self.count({
+            failed_events = await self.count({
                 "timestamp": {"$gte": cutoff_time},
                 "success": False
             })
@@ -154,11 +154,11 @@ class AuditRepository(BaseRepository):
             logger.error(f"Error getting audit stats: {e}")
             return {}
     
-    def cleanup_old_audit_logs(self, days: int = 365) -> int:
+    async def cleanup_old_audit_logs(self, days: int = 365) -> int:
         """Clean up audit logs older than N days"""
         try:
             cutoff_time = datetime.now() - timedelta(days=days)
-            result = self.collection.delete_many({
+            result = await self.collection.delete_many({
                 "timestamp": {"$lt": cutoff_time}
             })
             return result.deleted_count

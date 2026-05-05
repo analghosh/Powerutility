@@ -171,7 +171,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             logger.info(f"TESTING LOGS: [{market.upper()}] No bid details found in API response - DONE.")
             return {"processed": 0}
 
-        timeblocks = self.fetch_timeblock_data()
+        timeblocks = await self.fetch_timeblock_data()
         
         def normalize_time(t):
             if not t: return t
@@ -318,7 +318,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                  "record_data": e.model_dump(by_alias=True)} 
                 for e in entities_to_save
             ]
-            result = self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
+            result = await self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
             logger.info(f"TESTING LOGS: [{market.upper()}] Bulk upsert complete. Records: {result.get('total_count')}")
         
         logger.info(f"TESTING LOGS: [{market.upper()}] Process complete. Skipped: ID={skipped_order_id}, Date={skipped_date}, TB={skipped_timeblock}")
@@ -350,7 +350,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                 tradeQtyDecimal   = float(asset_details_response.get("TradeQtyDecimal")   or 1.0)
                 tradePriceDecimal = float(asset_details_response.get("TradePriceDecimal") or 1.0)
 
-            timeblocks = self.fetch_timeblock_data()
+            timeblocks = await self.fetch_timeblock_data()
 
             def normalize_time(t):
                 if not t:
@@ -478,7 +478,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                              "record_data": e.model_dump(by_alias=True)}
                             for e in entities_to_save
                         ]
-                        result = self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
+                        result = await self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
                         logger.info(f"TESTING LOGS: [{job_name}] date={delivery_date_int} serve upsert={result.get('total_count')}")
 
                     total_processed += processed

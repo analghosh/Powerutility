@@ -102,12 +102,12 @@ class MenuRepository(BaseRepository):
         """Get complete menu tree with nested children"""
         try:
             all_menus = await self.get_all_active_menus()
-            return self.build_menu_tree(all_menus)
+            return await self.build_menu_tree(all_menus)
         except Exception as e:
             logger.error(f"Error getting menu tree: {e}")
             return []
 
-    def build_menu_tree(self, menus: List[MenuInDB]) -> List[MenuWithChildren]:
+    async def build_menu_tree(self, menus: List[MenuInDB]) -> List[MenuWithChildren]:
         """Build menu tree from a list of menus"""
         try:
             if not menus:

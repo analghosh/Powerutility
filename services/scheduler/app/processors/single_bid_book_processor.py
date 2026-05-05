@@ -298,8 +298,7 @@ class SingleBidBookProcessor(BaseProcessor):
             docs_map = {doc["OrderId"]: doc for doc in docs_to_upsert}
         
             # Find docs in approval collection that match the OrderIds
-            # find_many is synchronous in BaseRepository
-            get_docs_to_update_in_approval = self.approval_repo.find_many({"OrderId": {"$in": orderIds}}, limit=10000)
+            get_docs_to_update_in_approval = await self.approval_repo.find_many({"OrderId": {"$in": orderIds}}, limit=10000)
             if get_docs_to_update_in_approval:
                 update_count = 0
                 for doc in get_docs_to_update_in_approval:

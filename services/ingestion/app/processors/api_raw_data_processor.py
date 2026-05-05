@@ -447,7 +447,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             if not limit_values_data:
                 return 0
             
-            from libs.database.mongo_client_factory import get_mongo_client
+            from libs.database.mongo_client_factory import get_motor_client
             from datetime import datetime
             
             # Use ingestion database or scheduler database? 
@@ -458,7 +458,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             database_name = settings.MONGODB_DATABASE
             limit_values_collection_name = getattr(settings, 'MONGODB_LIMIT_VALUES_COLLECTION', 'limit_values')
             
-            client = get_mongo_client(mongo_uri, "ingestion_limit_values_direct")
+            client = get_motor_client(mongo_uri, "ingestion_limit_values_direct")
             db = client[database_name]
             collection = db[limit_values_collection_name]
             

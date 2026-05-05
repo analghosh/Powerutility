@@ -121,7 +121,7 @@ async def validate_token(
     
     try:
         # Validate token directly - no caching for security
-        payload = jwt_service.verify_access_token(token)
+        payload = await jwt_service.verify_access_token(token)
         
         if not payload:
             get_audit_logger().log_security_event(
@@ -241,7 +241,7 @@ async def get_user_info(
     
     try:
         # Validate the requesting token first
-        payload = jwt_service.verify_access_token(token)
+        payload = await jwt_service.verify_access_token(token)
         if not payload:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,

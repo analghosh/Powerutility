@@ -1215,7 +1215,7 @@ class JobDetailRepository(BaseRepository):
             hours = seconds / 3600
             return f"{hours:.1f}h"
     
-    def get_all_jobs_from_job_data(self) -> List[Dict[str, Any]]:
+    async def get_all_jobs_from_job_data(self) -> List[Dict[str, Any]]:
         """
         Get all jobs from job_data collection
         
@@ -1391,7 +1391,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting job execution details for %s: %s", job_id, str(e))
             return {}
     
-    def migrate_execution(self, job_detail) -> str:
+    async def migrate_execution(self, job_detail) -> str:
         """
         Migrate an execution log to historical collection
         
@@ -1411,7 +1411,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to migrate job execution: %s", str(e))
             raise
     
-    def migrate_batch_executions(self, executions: List[Dict[str, Any]]) -> int:
+    async def migrate_batch_executions(self, executions: List[Dict[str, Any]]) -> int:
         """
         Migrate a batch of execution logs to historical collection
         
@@ -1431,7 +1431,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Failed to migrate batch executions: %s", str(e))
             return 0
     
-    def get_historical_executions(self, job_id: str, start_date: datetime, 
+    async def get_historical_executions(self, job_id: str, start_date: datetime, 
                                 end_date: datetime) -> List[Dict[str, Any]]:
         """
         Get historical executions for a job within a date range
@@ -1454,7 +1454,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting historical executions: %s", str(e))
             return []
     
-    def get_job_historical_statistics(self, job_id: str, start_date: datetime, 
+    async def get_job_historical_statistics(self, job_id: str, start_date: datetime, 
                                     end_date: datetime) -> Dict[str, Any]:
         """
         Get historical statistics for a job within a date range
@@ -1477,7 +1477,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting job historical statistics: %s", str(e))
             return {}
     
-    def get_old_historical_data_for_cleanup(self, days_old: int) -> List[Dict[str, Any]]:
+    async def get_old_historical_data_for_cleanup(self, days_old: int) -> List[Dict[str, Any]]:
         """
         Get old historical data that can be cleaned up
         
@@ -1497,7 +1497,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting old historical data: %s", str(e))
             return []
     
-    def cleanup_old_historical_data(self, days_old: int) -> int:
+    async def cleanup_old_historical_data(self, days_old: int) -> int:
         """
         Clean up old historical data
         
@@ -1517,7 +1517,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error cleaning up old historical data: %s", str(e))
             return 0
     
-    def get_historical_data_count(self, job_id: Optional[str] = None, 
+    async def get_historical_data_count(self, job_id: Optional[str] = None, 
                                 days: Optional[int] = None) -> int:
         """
         Get count of historical data
@@ -1539,7 +1539,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error getting historical data count: %s", str(e))
             return 0
     
-    def cleanup_old_logs(self, retention_days: int) -> int:
+    async def cleanup_old_logs(self, retention_days: int) -> int:
         """
         Clean up old logs from historical collection
         
@@ -1577,7 +1577,7 @@ class JobDetailRepository(BaseRepository):
             logger.error("Error finding job by unique key: %s", str(e))
             return None
     
-    def migrate_to_historical(self, migration_threshold_days: int) -> Dict[str, Any]:
+    async def migrate_to_historical(self, migration_threshold_days: int) -> Dict[str, Any]:
         """
         Migrate old data to historical collection
         

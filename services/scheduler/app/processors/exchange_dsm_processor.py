@@ -168,7 +168,7 @@ class ExchangeDsmProcessor(BaseProcessor):
             success = True
             if serve_entities:
                 records = [e.model_dump() for e in serve_entities]
-                upsert_result = self.repository.bulk_upsert_optimized(
+                upsert_result = await self.repository.bulk_upsert_optimized(
                     records=records,
                     unique_key_fields=["scheduled_at", "time_block", "market_type", "px_name"]
                 )
@@ -178,7 +178,7 @@ class ExchangeDsmProcessor(BaseProcessor):
             # Bulk Insert into Historical Collection
             if historical_entities:
                 try:
-                    self.repository.bulk_insert_historical(historical_entities)
+                    await self.repository.bulk_insert_historical(historical_entities)
                     logger.info(f"Inserted {len(historical_entities)} historical records")
                 except Exception as hist_error:
                     logger.error(f"Error inserting historical records: {hist_error}")
