@@ -181,7 +181,7 @@ class User:
 
     async def invalidate_refresh_token(self, user_id: str, refresh_token: str) -> bool:
         try:
-            redis_success = redis_blacklist_service.invalidate_refresh_token(refresh_token, user_id)
+            redis_success = await redis_blacklist_service.invalidate_refresh_token(refresh_token, user_id)
             blacklist_collection = self.db["refresh_token_blacklist"]
             await blacklist_collection.insert_one({
                 "refresh_token": refresh_token,
@@ -197,7 +197,7 @@ class User:
 
     async def is_refresh_token_blacklisted(self, refresh_token: str) -> bool:
         try:
-            if redis_blacklist_service.is_refresh_token_blacklisted(refresh_token):
+            if await redis_blacklist_service.is_refresh_token_blacklisted(refresh_token):
                 return True
             blacklist_collection = self.db["refresh_token_blacklist"]
             return await blacklist_collection.find_one({"refresh_token": refresh_token}) is not None
