@@ -8,9 +8,7 @@ import json
 import os
 from datetime import datetime
 from typing import Dict, Any, Optional
-from pymongo import MongoClient
-from pymongo.database import Database
-from pymongo.collection import Collection
+from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase, AsyncIOMotorCollection
 
 
 class LoggerService:
@@ -29,11 +27,11 @@ class LoggerService:
         os.makedirs(os.path.dirname(self.log_file_path), exist_ok=True)
         
         # MongoDB client (lazy initialization)
-        self._mongo_client: Optional[MongoClient] = None
-        self._db: Optional[Database] = None
-        self._collection: Optional[Collection] = None
+        self._mongo_client: Optional[AsyncIOMotorClient] = None
+        self._db: Optional[AsyncIOMotorDatabase] = None
+        self._collection: Optional[AsyncIOMotorCollection] = None
     
-    def _get_mongo_collection(self) -> Collection:
+    def _get_mongo_collection(self) -> AsyncIOMotorCollection:
         """Get MongoDB collection (lazy initialization)"""
         if self._collection is None:
             from .database import get_database_client
@@ -42,7 +40,7 @@ class LoggerService:
             self._collection = self._db[self.audit_collection_name]
         return self._collection
     
-    def log_to_mongo(self, log_data: Dict[str, Any], timestamp: Optional[datetime] = None) -> bool:
+    async def log_to_mongo(self, log_data: Dict[str, Any], timestamp: Optional[datetime] = None) -> bool:
         """Log data to MongoDB"""
         try:
             # Use provided timestamp or current time
@@ -52,7 +50,7 @@ class LoggerService:
                 log_data["timestamp"] = datetime.now()
             
             collection = self._get_mongo_collection()
-            result = collection.insert_one(log_data)
+            result = await collection.insert_one(log_data)
             return result.inserted_id is not None
             
         except Exception as e:
@@ -81,7 +79,7 @@ class LoggerService:
             print(f"Error logging to file: {e}")
             return False
     
-    def log(self, log_data: Dict[str, Any], destination: str = "mongo", timestamp: Optional[datetime] = None) -> bool:
+    async def log(self, log_data: Dict[str, Any], destination: str = "mongo", timestamp: Optional[datetime] = None) -> bool:
         """
         Log data to specified destination
         
@@ -93,7 +91,7 @@ class LoggerService:
             bool: True if successful, False otherwise
         """
         if destination.lower() == "mongo":
-            return self.log_to_mongo(log_data, timestamp)
+            return await self.log_to_mongo(log_data, timestamp)
         elif destination.lower() == "file":
             return self.log_to_file(log_data, timestamp)
         else:
@@ -110,7 +108,7 @@ class LoggerService:
 logger_service = LoggerService()
 
 
-def log_audit_data(log_data: Dict[str, Any], destination: str = "mongo", timestamp: Optional[datetime] = None) -> bool:
+async def log_audit_data(log_data: Dict[str, Any], destination: str = "mongo", timestamp: Optional[datetime] = None) -> bool:
     """
     Simple function to log audit data
     
@@ -121,7 +119,7 @@ def log_audit_data(log_data: Dict[str, Any], destination: str = "mongo", timesta
     Returns:
         bool: True if successful, False otherwise
     """
-    return logger_service.log(log_data, destination, timestamp)
+    return await logger_service.log(log_data, destination, timestamp)
 
 
 # Export the logging function

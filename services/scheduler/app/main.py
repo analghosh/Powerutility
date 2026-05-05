@@ -327,7 +327,7 @@ async def health_check():
 async def scheduler_diagnostics():
     """Get detailed scheduler diagnostics to identify missed jobs"""
     from datetime import datetime, timedelta
-    from libs.database.mongo_client_factory import get_mongo_client
+    from libs.database.mongo_client_factory import get_motor_client
     import pytz
     
     try:
@@ -338,7 +338,7 @@ async def scheduler_diagnostics():
         registered_jobs = cron_manager.get_registered_jobs()
         
         # Use centralized MongoDB client (singleton pattern)
-        client = get_mongo_client(settings.AUDIT_DB_URI, "scheduler_diagnostics")
+        client = get_motor_client(settings.AUDIT_DB_URI, "scheduler_diagnostics")
         db = client[settings.AUDIT_DB_NAME]
         job_detail_collection = db[settings.JOB_DETAIL_COLLECTION]
         

@@ -42,11 +42,11 @@ class TimeblockSeeder:
         time_str = time(hour, minute).strftime("%H:%M")
         return "24:00" if time_str == "00:00" else time_str
     
-    def seed(self) -> Dict[str, Any]:
+    async def seed(self) -> Dict[str, Any]:
         """Seed the database with timeblock data"""
         try:
             # Check if data already exists
-            existing_count = self.repository.count({})
+            existing_count = await self.repository.count({})
             if existing_count == 96:
                 return {
                     "status": "skipped",
@@ -56,7 +56,7 @@ class TimeblockSeeder:
             
             if existing_count < 96:
                 # Clear existing incomplete data
-                clear_result = self.clear()
+                clear_result = await self.clear()
                 if clear_result['status'] != 'success':
                     return clear_result
                 # Continue with seeding (don't return here)
@@ -68,7 +68,7 @@ class TimeblockSeeder:
             try:
                 inserted_count = 0
                 for timeblock in timeblocks:
-                    inserted_id = self.repository.create(timeblock, add_timestamps=False)
+                    inserted_id = await self.repository.create(timeblock, add_timestamps=False)
                     if inserted_id:
                         inserted_count += 1
                 
@@ -97,11 +97,11 @@ class TimeblockSeeder:
                 "count": 0
             }
 
-    def clear(self) -> Dict[str, Any]:
+    async def clear(self) -> Dict[str, Any]:
         """Clear the database of timeblock data"""
         try:
             # Delete all documents in the collection
-            result = self.repository.collection.delete_many({})
+            result = await self.repository.collection.delete_many({})
             deleted_count = result.deleted_count
             
             logger.info("Cleared %d timeblocks", deleted_count)

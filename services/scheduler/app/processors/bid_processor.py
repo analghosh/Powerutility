@@ -183,14 +183,12 @@ class BidProcessor(BaseProcessor):
                         ts = item.get("Time_Start") or item.get("time_start")
                         te = item.get("Time_End") or item.get("time_end")
                         if ts and te:
-                            # Use base processor's timeblock lookup method
-                            timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                            timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                             if timeblock_data:
                                 item["time_block"] = timeblock_data.get("timeblock")
                             else:
-                                # Fallback to time range string format for _get_timeblock_number
                                 time_range = f"{str(ts).strip()}-{str(te).strip()}"
-                                timeblock_num = self._get_timeblock_number(time_range)
+                                timeblock_num = await self._get_timeblock_number(time_range)
                                 if timeblock_num > 0:
                                     item["time_block"] = timeblock_num
 
@@ -389,14 +387,12 @@ class BidProcessor(BaseProcessor):
                             ts = rec_dict.get("Time_Start") or rec_dict.get("time_start")
                             te = rec_dict.get("Time_End") or rec_dict.get("time_end")
                             if ts and te:
-                                # Use base processor's timeblock lookup method
-                                timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                                timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                                 if timeblock_data:
                                     rec_dict["time_block"] = timeblock_data.get("timeblock")
                                 else:
-                                    # Fallback to time range string format for _get_timeblock_number
                                     time_range = f"{str(ts).strip()}-{str(te).strip()}"
-                                    timeblock_num = self._get_timeblock_number(time_range)
+                                    timeblock_num = await self._get_timeblock_number(time_range)
                                     rec_dict["time_block"] = timeblock_num if timeblock_num > 0 else 0
                         calc_val = await self._calculate_value_from_exchange(rec_dict["scheduled_at"], rec_dict["time_block"], rec_dict["type"], rec_dict.get("traded", 0))
                         serve_ent = BidTradeServeEntity.from_raw_data(rec_dict, metadata, provider_config, calc_val)
@@ -619,7 +615,7 @@ class BidProcessor(BaseProcessor):
     
 
 
-    def _get_or_lookup_timeblock(self, record: Dict[str, Any]) -> Optional[int]:
+    async def _get_or_lookup_timeblock(self, record: Dict[str, Any]) -> Optional[int]:
         """
         Get timeblock from record or lookup based on time range using base processor methods
 
@@ -643,14 +639,12 @@ class BidProcessor(BaseProcessor):
         time_end = record.get('Time_End')
 
         if time_start and time_end:
-            # Use base processor's timeblock lookup method
-            timeblock_data = self.get_timeblock_by_time_range(str(time_start).strip(), str(time_end).strip())
+            timeblock_data = await self.get_timeblock_by_time_range(str(time_start).strip(), str(time_end).strip())
             if timeblock_data:
                 return timeblock_data.get("timeblock")
             
-            # Fallback to time range string format for _get_timeblock_number
             time_range = f"{str(time_start).strip()}-{str(time_end).strip()}"
-            timeblock_num = self._get_timeblock_number(time_range)
+            timeblock_num = await self._get_timeblock_number(time_range)
             if timeblock_num > 0:
                 return timeblock_num
 

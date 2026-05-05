@@ -102,7 +102,7 @@ async def get_assigned_menus(
         accessible_menus = [menu for menu in all_menus if menu.id in accessible_menu_ids]
         
         # Build hierarchical menu tree for accessible menus
-        menu_tree = menu_repository.build_menu_tree(accessible_menus)
+        menu_tree = await menu_repository.build_menu_tree(accessible_menus)
         
         logger.info(f"Successfully retrieved {len(menu_tree)} accessible root menus")
         result = [menu.model_dump() for menu in menu_tree]
@@ -313,7 +313,7 @@ async def delete_menu(
             )
         
         # Soft delete the menu
-        success = menu_repository.delete_menu(menu_id)
+        success = await menu_repository.delete_menu(menu_id)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete menu")
         

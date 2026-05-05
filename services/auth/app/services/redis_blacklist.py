@@ -41,7 +41,7 @@ class RedisBlacklistService:
             logger.info("Redis blacklist service disabled")
             self.redis_client = None
     
-    def invalidate_refresh_token(self, refresh_token: str, user_id: str) -> bool:
+    async def invalidate_refresh_token(self, refresh_token: str, user_id: str) -> bool:
         """
         Add refresh token to Redis blacklist with TTL
         
@@ -68,7 +68,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to blacklist refresh token: {e}")
             return False
     
-    def invalidate_access_token(self, access_token: str, user_id: str) -> bool:
+    async def invalidate_access_token(self, access_token: str, user_id: str) -> bool:
         """
         Add access token to Redis blacklist with TTL
         
@@ -95,7 +95,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to blacklist access token: {e}")
             return False
     
-    def invalidate_temporary_token(self, temporary_token: str, user_id: str) -> bool:
+    async def invalidate_temporary_token(self, temporary_token: str, user_id: str) -> bool:
         """
         Add temporary token to Redis blacklist with TTL
         
@@ -122,7 +122,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to blacklist temporary token: {e}")
             return False
     
-    def is_temporary_token_blacklisted(self, temporary_token: str) -> bool:
+    async def is_temporary_token_blacklisted(self, temporary_token: str) -> bool:
         """
         Check if temporary token is blacklisted in Redis
         
@@ -144,7 +144,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to check temporary token blacklist: {e}")
             return False
     
-    def is_refresh_token_blacklisted(self, refresh_token: str) -> bool:
+    async def is_refresh_token_blacklisted(self, refresh_token: str) -> bool:
         """
         Check if refresh token is blacklisted in Redis
         
@@ -166,7 +166,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to check refresh token blacklist: {e}")
             return False
     
-    def is_access_token_blacklisted(self, access_token: str) -> bool:
+    async def is_access_token_blacklisted(self, access_token: str) -> bool:
         """
         Check if access token is blacklisted in Redis
         
@@ -188,7 +188,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to check access token blacklist: {e}")
             return False
     
-    def get_blacklist_stats(self) -> Dict[str, Any]:
+    async def get_blacklist_stats(self) -> Dict[str, Any]:
         """
         Get blacklist statistics (optimized to avoid expensive KEYS operations)
         
@@ -214,7 +214,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to get blacklist stats: {e}")
             return {"enabled": True, "error": str(e)}
     
-    def clear_expired_tokens(self) -> int:
+    async def clear_expired_tokens(self) -> int:
         """
         Clear expired tokens (Redis handles this automatically with TTL)
         Optimized to avoid expensive KEYS operations
@@ -235,7 +235,7 @@ class RedisBlacklistService:
             logger.error(f"Failed to clear expired tokens: {e}")
             return 0
     
-    def health_check(self) -> Dict[str, Any]:
+    async def health_check(self) -> Dict[str, Any]:
         """
         Check Redis blacklist service health
         
@@ -261,7 +261,7 @@ class RedisBlacklistService:
             self.redis_client.ping()
             
             # Get basic stats
-            stats = self.get_blacklist_stats()
+            stats = await self.get_blacklist_stats()
             
             return {
                 "status": "healthy",
