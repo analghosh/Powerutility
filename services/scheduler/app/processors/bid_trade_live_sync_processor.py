@@ -171,7 +171,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             logger.info(f"TESTING LOGS: [{market.upper()}] No bid details found in API response - DONE.")
             return {"processed": 0}
 
-        timeblocks = self.fetch_timeblock_data()
+        timeblocks = await self.fetch_timeblock_data()
         
         def normalize_time(t):
             if not t: return t
@@ -350,7 +350,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                 tradeQtyDecimal   = float(asset_details_response.get("TradeQtyDecimal")   or 1.0)
                 tradePriceDecimal = float(asset_details_response.get("TradePriceDecimal") or 1.0)
 
-            timeblocks = self.fetch_timeblock_data()
+            timeblocks = await self.fetch_timeblock_data()
 
             def normalize_time(t):
                 if not t:
