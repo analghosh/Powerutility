@@ -25,7 +25,7 @@ class JWTService:
     def refresh_token_expire_days(self):
         return settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS
     
-    def create_access_token(self, data: Dict[str, Any], session_id: Optional[str] = None) -> str:
+    async def create_access_token(self, data: Dict[str, Any], session_id: Optional[str] = None) -> str:
         """Create access token with session ID"""
         to_encode = data.copy()
         expire = datetime.now() + timedelta(minutes=self.access_token_expire_minutes)
@@ -42,7 +42,7 @@ class JWTService:
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
     
-    def create_refresh_token(self, data: Dict[str, Any], session_id: Optional[str] = None) -> str:
+    async def create_refresh_token(self, data: Dict[str, Any], session_id: Optional[str] = None) -> str:
         """Create refresh token with session ID"""
         to_encode = data.copy()
         expire = datetime.now() + timedelta(days=self.refresh_token_expire_days)
@@ -59,7 +59,7 @@ class JWTService:
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
     
-    def create_temporary_token(self, data: Dict[str, Any], expire_minutes: int = 5) -> str:
+    async def create_temporary_token(self, data: Dict[str, Any], expire_minutes: int = 5) -> str:
         """Create temporary token for MFA verification"""
         to_encode = data.copy()
         expire = datetime.now() + timedelta(minutes=expire_minutes)
@@ -67,7 +67,7 @@ class JWTService:
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
     
-    def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
+    async def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify and decode token"""
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
@@ -80,9 +80,9 @@ class JWTService:
             print(f"DEBUG: verify_token - Exception: {e}")
             return None
     
-    def verify_access_token(self, token: str) -> Optional[Dict[str, Any]]:
+    async def verify_access_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify access token specifically"""
-        payload = self.verify_token(token)
+        payload = await self.verify_token(token)
         if payload and payload.get("type") == "access":
             # Check if token is blacklisted
             from .redis_blacklist import redis_blacklist_service
@@ -93,9 +93,9 @@ class JWTService:
             return payload
         return None
     
-    def verify_refresh_token(self, token: str) -> Optional[Dict[str, Any]]:
+    async def verify_refresh_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify refresh token specifically"""
-        payload = self.verify_token(token)
+        payload = await self.verify_token(token)
         print(f"DEBUG: verify_refresh_token - payload: {payload}")
         print(f"DEBUG: verify_refresh_token - payload type: {payload.get('type') if payload else None}")
         
@@ -110,9 +110,9 @@ class JWTService:
             return payload
         return None
     
-    def refresh_access_token(self, refresh_token: str) -> Optional[str]:
+    async def refresh_access_token(self, refresh_token: str) -> Optional[str]:
         """Create new access token from refresh token"""
-        payload = self.verify_refresh_token(refresh_token)
+        payload = await self.verify_refresh_token(refresh_token)
         if not payload:
             return None
         
@@ -126,11 +126,11 @@ class JWTService:
                 elif isinstance(v, datetime):
                     serializable_data[k] = v.isoformat()
         
-        return self.create_access_token(serializable_data)
+        return await self.create_access_token(serializable_data)
     
-    def verify_temporary_token(self, token: str) -> Optional[Dict[str, Any]]:
+    async def verify_temporary_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify temporary token specifically"""
-        payload = self.verify_token(token)
+        payload = await self.verify_token(token)
         if payload and payload.get("type") == "temporary":
             # Check if token is blacklisted
             from .redis_blacklist import redis_blacklist_service
@@ -141,23 +141,23 @@ class JWTService:
             return payload
         return None
     
-    def get_token_expiry(self, token: str) -> Optional[datetime]:
+    async def get_token_expiry(self, token: str) -> Optional[datetime]:
         """Get token expiry time"""
-        payload = self.verify_token(token)
+        payload = await self.verify_token(token)
         if payload and "exp" in payload:
             return datetime.fromtimestamp(payload["exp"])
         return None
     
-    def get_session_id(self, token: str) -> Optional[str]:
+    async def get_session_id(self, token: str) -> Optional[str]:
         """Get session ID from token"""
-        payload = self.verify_token(token)
+        payload = await self.verify_token(token)
         if payload and "session_id" in payload:
             return payload["session_id"]
         return None
     
-    def get_user_session_info(self, token: str) -> Optional[Dict[str, Any]]:
+    async def get_user_session_info(self, token: str) -> Optional[Dict[str, Any]]:
         """Get user and session information from token"""
-        payload = self.verify_access_token(token)
+        payload = await self.verify_access_token(token)
         if payload:
             return {
                 "user_id": payload.get("user_id"),

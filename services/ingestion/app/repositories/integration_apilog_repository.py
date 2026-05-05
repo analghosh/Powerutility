@@ -3,7 +3,7 @@ from typing import Optional
 from datetime import datetime
 from pymongo import IndexModel, ASCENDING
 from pymongo.errors import OperationFailure
-from libs.database.mongo_client_factory import get_mongo_client
+from libs.database.mongo_client_factory import get_motor_client
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
 
 logger = logging.getLogger(__name__)
@@ -16,11 +16,11 @@ class IntegrationApiLogRepository:
     """
     
     def __init__(self, mongodb_uri: str, database_name: str):
-        self.mongo_client = get_mongo_client(mongodb_uri)
+        self.mongo_client = get_motor_client(mongodb_uri)
         self.database = self.mongo_client[database_name]
         self._initialized_collections = set()
 
-    def _ensure_collection(self, collection_name: str):
+    async def _ensure_collection(self, collection_name: str):
         """
         Ensure the collection exists with timeseries options and indexes.
         """
@@ -28,9 +28,9 @@ class IntegrationApiLogRepository:
             return
 
         try:
-            if collection_name not in self.database.list_collection_names():
+            if collection_name not in await self.database.list_collection_names():
                 # Create timeseries collection
-                self.database.create_collection(
+                await self.database.create_collection(
                     collection_name,
                     timeseries={
                         "timeField": "timestamp",
@@ -43,7 +43,7 @@ class IntegrationApiLogRepository:
             # Create index on provider_id
             collection = self.database[collection_name]
             try:
-                collection.create_index([("provider_id", ASCENDING)])
+                await collection.create_index([("provider_id", ASCENDING)])
             except OperationFailure as e:
                 if e.code == 85:
                     # IndexOptionsConflict: equivalent index already exists (time series originalSpec ordering), safe to ignore
@@ -57,17 +57,17 @@ class IntegrationApiLogRepository:
             logger.error(f"Error initializing collection {collection_name}: {e}")
             # Don't raise, try to proceed with insert which might auto-create (though without timeseries opts if logic fails completely)
 
-    def save_log(self, data_type: str, entity: IntegrationApiLogEntity) -> str:
+    async def save_log(self, data_type: str, entity: IntegrationApiLogEntity) -> str:
         """
         Save the integration log to the appropriate collection.
         Returns the inserted ID as a string.
         """
         collection_name = f"{data_type}_integration_apilog"
-        self._ensure_collection(collection_name)
+        await self._ensure_collection(collection_name)
         
         try:
             document = entity.model_dump(by_alias=True, exclude={"id"})
-            result = self.database[collection_name].insert_one(document)
+            result = await self.database[collection_name].insert_one(document)
             log_id = str(result.inserted_id)
             logger.info(f"Saved {data_type} log with ID: {log_id}")
             return log_id
