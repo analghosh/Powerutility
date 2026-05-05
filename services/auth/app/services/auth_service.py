@@ -77,7 +77,7 @@ class AuthService:
             }
             
             # Generate temporary token (expires in 5 minutes)
-            temporary_token = self.jwt_service.create_temporary_token(temp_token_data, expire_minutes=5)
+            temporary_token = await self.jwt_service.create_temporary_token(temp_token_data, expire_minutes=5)
             
             # Check if MFA is enabled for this user
             mfa_required = user.mfa_enabled and user.mfa_setup_complete
@@ -99,8 +99,8 @@ class AuthService:
                 
                 # Generate final tokens immediately
                 user_dict = user_with_perms.to_dict()
-                access_token = self.jwt_service.create_access_token(user_dict)
-                refresh_token = self.jwt_service.create_refresh_token(user_dict)
+                access_token = await self.jwt_service.create_access_token(user_dict)
+                refresh_token = await self.jwt_service.create_refresh_token(user_dict)
                 
                 # Calculate expiry times
                 access_expires_in = int(settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60)
@@ -153,7 +153,7 @@ class AuthService:
         """
         try:
             # Verify temporary token
-            temp_payload = self.jwt_service.verify_temporary_token(temporary_token)
+            temp_payload = await self.jwt_service.verify_temporary_token(temporary_token)
             if not temp_payload:
                 return None
             
@@ -282,8 +282,8 @@ class AuthService:
             
             # Generate final tokens
             user_dict = user_with_perms.to_dict()
-            access_token = self.jwt_service.create_access_token(user_dict)
-            refresh_token = self.jwt_service.create_refresh_token(user_dict)
+            access_token = await self.jwt_service.create_access_token(user_dict)
+            refresh_token = await self.jwt_service.create_refresh_token(user_dict)
             
             # Calculate expiry times
             access_expires_in = int(settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60)
@@ -336,7 +336,7 @@ class AuthService:
         """
         try:
             # Validate refresh token (this includes blacklist check)
-            payload = self.jwt_service.verify_refresh_token(refresh_token)
+            payload = await self.jwt_service.verify_refresh_token(refresh_token)
             if not payload:
                 print(f"DEBUG: refresh_token - validation failed")
                 return None
@@ -351,7 +351,7 @@ class AuthService:
             
             # Generate new access token
             user_dict = user.to_dict()
-            access_token = self.jwt_service.create_access_token(user_dict)
+            access_token = await self.jwt_service.create_access_token(user_dict)
             
             # Log token refresh with PII protection
             self.audit_logger.log_security_event(
@@ -389,7 +389,7 @@ class AuthService:
         """
         try:
             # Validate access token to get user info
-            payload = self.jwt_service.verify_access_token(access_token)
+            payload = await self.jwt_service.verify_access_token(access_token)
             if not payload:
                 return False
             
@@ -401,7 +401,7 @@ class AuthService:
             
             # If refresh token is provided, validate and blacklist it
             if refresh_token:
-                refresh_payload = self.jwt_service.verify_refresh_token(refresh_token)
+                refresh_payload = await self.jwt_service.verify_refresh_token(refresh_token)
                 if refresh_payload:
                     refresh_user_id = refresh_payload.get("sub") or refresh_payload.get("id")
                     
@@ -447,7 +447,7 @@ class AuthService:
                 return None
                 
             # Validate token
-            payload = self.jwt_service.verify_access_token(token)
+            payload = await self.jwt_service.verify_access_token(token)
             if not payload:
                 # Return None for invalid tokens to trigger unauthorized response
                 return None

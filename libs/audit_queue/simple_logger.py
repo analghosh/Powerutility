@@ -66,6 +66,28 @@ class PIISanitizer:
     """
     
     @staticmethod
+    def _extract_bearer_token(request: Request) -> str:
+        """Extract and validate bearer token with security checks"""
+        auth = request.headers.get("Authorization", "")
+
+        if not auth:
+            raise HTTPException(status_code=401, detail="Authorization header required")
+
+        if not auth.startswith("Bearer "):
+            raise HTTPException(status_code=401, detail="Invalid authorization format")
+
+        token = auth.split(" ", 1)[1]
+
+        # Basic token format validation
+        if len(token) < 10:  # Minimum reasonable token length
+            raise HTTPException(status_code=401, detail="Invalid token format")
+
+        return token
+
+    # Alias for backward compatibility
+    _bearer = _extract_bearer_token
+    
+    @staticmethod
     def sanitize_string(text: str, mask_char: str = "*") -> str:
         """
         Sanitize a string by masking PII patterns.
