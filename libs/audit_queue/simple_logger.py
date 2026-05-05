@@ -14,6 +14,7 @@ from typing import Dict, Any, Optional, Union
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
+from fastapi import Request, HTTPException
 
 # Import timezone utilities
 from .timezone_utils import now_ist, format_ist_timestamp
