@@ -245,7 +245,7 @@ class MenuRoleRepository(BaseRepository):
                 menu = await menu_repo.get_menu_by_id(menu_role.menu_id)
                 if menu:
                     # Use consistent resource naming that matches route mapping
-                    resource_name = self._get_resource_name_from_menu(menu)
+                    resource_name = await self._get_resource_name_from_menu(menu)
                     
                     # Create permission strings in standard format "resource:action"
                     for permission in menu_role.permissions:
@@ -262,7 +262,7 @@ class MenuRoleRepository(BaseRepository):
             logger.error(f"Error syncing role permissions for role {role_id}: {e}")
             return False
     
-    def _get_resource_name_from_menu(self, menu) -> str:
+    async def _get_resource_name_from_menu(self, menu) -> str:
         """
         Get consistent resource name from menu that matches centralized RBAC route mapping.
         This ensures menu permissions align with automatic route-to-permission mapping.

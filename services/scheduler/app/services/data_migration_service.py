@@ -69,12 +69,12 @@ class DataMigrationService:
                 
                 try:
                     # Migrate batch to historical collection
-                    migrated_count = job_detail_repository.migrate_batch_executions(batch)
+                    migrated_count = await job_detail_repository.migrate_batch_executions(batch)
                     total_migrated += migrated_count
                     
                     # Delete migrated records from active collection
                     execution_ids = [execution["execution_id"] for execution in batch]
-                    deleted_count = self._delete_migrated_executions(execution_ids)
+                    deleted_count = await self._delete_migrated_executions(execution_ids)
                     total_deleted += deleted_count
                     
                     logger.info("Migrated batch %s: %s records migrated, %s records deleted", 
@@ -113,7 +113,7 @@ class DataMigrationService:
                 "duration_seconds": time.time() - start_time
             }
     
-    def _delete_migrated_executions(self, execution_ids: List[str]) -> int:
+    async def _delete_migrated_executions(self, execution_ids: List[str]) -> int:
         """
         Delete migrated executions from active collection
         
@@ -124,7 +124,7 @@ class DataMigrationService:
             int: Number of deleted records
         """
         try:
-            result = job_detail_repository.collection.delete_many({
+            result = await job_detail_repository.collection.delete_many({
                 "execution_id": {"$in": execution_ids}
             })
             return result.deleted_count
@@ -145,7 +145,7 @@ class DataMigrationService:
             logger.info("Starting cleanup of old historical data")
             
             # Get count of old data
-            old_data = job_detail_repository.get_old_historical_data_for_cleanup(
+            old_data = await job_detail_repository.get_old_historical_data_for_cleanup(
                 self.historical_retention_days
             )
             
@@ -160,7 +160,7 @@ class DataMigrationService:
             logger.info("Found %s old historical records for cleanup", len(old_data))
             
             # Clean up old data
-            deleted_count = job_detail_repository.cleanup_old_historical_data(
+            deleted_count = await job_detail_repository.cleanup_old_historical_data(
                 self.historical_retention_days
             )
             
@@ -194,14 +194,14 @@ class DataMigrationService:
         try:
             # Get counts from both collections
             active_count = await job_detail_repository.get_execution_count()
-            historical_count = job_detail_repository.get_historical_data_count()
+            historical_count = await job_detail_repository.get_historical_data_count()
             
             # Get old data counts
             old_active_count = len(await job_detail_repository.get_old_executions_for_migration(
                 self.migration_threshold_days
             ))
             
-            old_historical_count = len(job_detail_repository.get_old_historical_data_for_cleanup(
+            old_historical_count = len(await job_detail_repository.get_old_historical_data_for_cleanup(
                 self.historical_retention_days
             ))
             

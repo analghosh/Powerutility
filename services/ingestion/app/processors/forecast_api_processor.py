@@ -10,7 +10,7 @@ import aiohttp
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
-from libs.database.mongo_client_factory import get_mongo_client
+from libs.database.mongo_client_factory import get_motor_client
 from libs.models.demand_serve_entity import DemandServeEntity
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
 from services.ingestion.app.core.config import settings
@@ -190,18 +190,18 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             Optional[Dict[str, Any]]: API configuration or None
         """
         try:
-            client = get_mongo_client(self.mongo_uri, "forecast_api_config")
+            client = get_motor_client(self.mongo_uri, "forecast_api_config")
             db = client[self.database_name]
             
             # Look for a provider with code "forecast_api_provider" or similar
-            provider = db["providers"].find_one({
+            provider = await db["providers"].find_one({
                 "code": "forecast_api_provider",
                 "enabled": True
             })
             
             if not provider:
                 # Also try looking for provider type
-                provider = db["providers"].find_one({
+                provider = await db["providers"].find_one({
                     "provider_type": "forecast_api",
                     "enabled": True
                 })
@@ -309,7 +309,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                                         "attempt": attempt + 1
                                     }
                                 )
-                                log_id = self.integration_apilog_repository.save_log("forecast", log_entity)
+                                log_id = await self.integration_apilog_repository.save_log("forecast", log_entity)
                                 logger.info("Logged API response to integration_apilog with id: %s", log_id)
                             except Exception as log_error:
                                 logger.warning("Failed to log API response: %s", log_error)
@@ -353,7 +353,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             if not data:
                 return 0
             
-            client = get_mongo_client(self.mongo_uri, "forecast_limit_values")
+            client = get_motor_client(self.mongo_uri, "forecast_limit_values")
             db = client[self.database_name]
             collection = db["limit_values"]
             
@@ -440,7 +440,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             if not data:
                 return 0
             
-            client = get_mongo_client(self.mongo_uri, "forecast_demand_serve")
+            client = get_motor_client(self.mongo_uri, "forecast_demand_serve")
             db = client[self.database_name]
             collection = db["demand_serve"]
             

@@ -30,7 +30,7 @@ router = APIRouter(prefix="/auth", tags=["Authentication"])
 security = HTTPBearer()
 
 # Local dependency injection to avoid circular imports
-def get_password_policy_service() -> PasswordPolicyService:
+async def get_password_policy_service() -> PasswordPolicyService:
     """Local dependency injection for password policy service"""
     return PasswordPolicyService()
 
@@ -376,7 +376,7 @@ async def logout(
     try:
         # Get user info before logout for logging
         from ....services.jwt_service import jwt_service
-        user_info = jwt_service.get_user_session_info(credentials.credentials)
+        user_info = await jwt_service.get_user_session_info(credentials.credentials)
         
         result = await auth_controller.logout(
             access_token=credentials.credentials,
@@ -740,7 +740,7 @@ async def validate_password(
     This endpoint is publicly accessible to support registration flows.
     """
     try:
-        result = password_service.validate_password_strength(validation_request.password)
+        result = await password_service.validate_password_strength(validation_request.password)
         
         # Log password validation with secure audit logging (public endpoint)
         client_ip = request.client.host if request.client else None

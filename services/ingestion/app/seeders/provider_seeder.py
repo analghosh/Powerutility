@@ -6,7 +6,7 @@ Seeds default provider configurations including forecast API provider
 import logging
 from typing import List, Dict, Any
 from datetime import datetime
-from libs.database.mongo_client_factory import get_mongo_client
+from libs.database.mongo_client_factory import get_motor_client
 from services.ingestion.app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -735,7 +735,7 @@ class ProviderSeeder:
     """Seeder for provider configurations"""
     
     def __init__(self):
-        self.client = get_mongo_client(settings.MONGODB_URI)
+        self.client = get_motor_client(settings.MONGODB_URI, "provider_seeder_client")
         self.db = self.client[settings.MONGODB_DATABASE]
         self.collection = self.db.providers
 
@@ -788,11 +788,12 @@ class ProviderSeeder:
             )
             logger.info(f"Provider {code} seeded/updated successfully")
 
-def seed_providers():
+async def seed_providers():
     """Function to run seeder"""
     seeder = ProviderSeeder()
-    seeder.seed()
+    await seeder.seed()
 
 if __name__ == "__main__":
+    import asyncio
     logging.basicConfig(level=logging.INFO)
-    seed_providers()
+    asyncio.run(seed_providers())

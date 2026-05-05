@@ -4,7 +4,7 @@ import logging
 import traceback
 from typing import List, Dict, Any
 from services.scheduler.app.core.config import settings
-from libs.database.mongo_client_factory import get_mongo_database, get_mongo_client
+from libs.database.mongo_client_factory import get_motor_database, get_motor_client
 
 logger = logging.getLogger(__name__)
 
@@ -83,7 +83,7 @@ async def run_historical_deduplication():
 
     try:
         # High-performance client configuration
-        client = get_mongo_client(settings.MONGODB_URI, "deduplicator_streaming_client",
+        client = get_motor_client(settings.MONGODB_URI, "deduplicator_streaming_client",
                                  socketTimeoutMS=3600000,
                                  maxPoolSize=100)
         db = client[settings.MONGODB_DATABASE]

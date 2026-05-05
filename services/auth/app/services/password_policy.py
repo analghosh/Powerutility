@@ -30,7 +30,7 @@ class PasswordPolicyService(IPasswordPolicyService):
         self.lockout_window_hours = settings.LOCKOUT_WINDOW_HOURS
         self.first_login_password_expiry_hours = settings.FIRST_LOGIN_PASSWORD_EXPIRY_HOURS
     
-    def validate_password_strength(self, password: str) -> Dict[str, Any]:
+    async def validate_password_strength(self, password: str) -> Dict[str, Any]:
         """Validate password strength according to policy"""
         violations = []
         suggestions = []
@@ -86,12 +86,12 @@ class PasswordPolicyService(IPasswordPolicyService):
             "suggestions": suggestions
         }
     
-    def generate_temporary_password(self) -> str:
+    async def generate_temporary_password(self) -> str:
         """Generate a secure temporary password for admin resets"""
         alphabet = string.ascii_letters + string.digits + "!@#$%^&*"
         return ''.join(secrets.choice(alphabet) for _ in range(12))
     
-    def check_password_expiry(self, user_id: str, password_changed_date: datetime, user_role: str = "user") -> Dict[str, Any]:
+    async def check_password_expiry(self, user_id: str, password_changed_date: datetime, user_role: str = "user") -> Dict[str, Any]:
         """Check if password has expired for a user"""
         now = datetime.now()
         
@@ -119,7 +119,7 @@ class PasswordPolicyService(IPasswordPolicyService):
             "requires_change": requires_change
         }
     
-    def check_account_lockout(self, user_id: str, failed_attempts: int, last_failed_attempt: datetime) -> Dict[str, Any]:
+    async def check_account_lockout(self, user_id: str, failed_attempts: int, last_failed_attempt: datetime) -> Dict[str, Any]:
         """Check if account should be locked out"""
         now = datetime.now()
         time_window = timedelta(hours=self.lockout_window_hours)

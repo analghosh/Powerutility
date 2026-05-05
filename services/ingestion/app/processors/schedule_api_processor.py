@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
-from libs.database.mongo_client_factory import get_mongo_client
+from libs.database.mongo_client_factory import get_motor_client
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
 from services.ingestion.app.core.config import settings
 from services.ingestion.app.core.logger import get_ingestion_logger
@@ -166,18 +166,18 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
             Optional[Dict[str, Any]]: API configuration or None
         """
         try:
-            client = get_mongo_client(self.mongo_uri, "schedule_api_config")
+            client = get_motor_client(self.mongo_uri, "schedule_api_config")
             db = client[self.database_name]
             
             # Look for a provider with code "schedule_api_provider"
-            provider = db["providers"].find_one({
+            provider = await db["providers"].find_one({
                 "code": "schedule_api_provider",
                 "enabled": True
             })
             
             if not provider:
                 # Also try looking for provider type
-                provider = db["providers"].find_one({
+                provider = await db["providers"].find_one({
                     "provider_type": "schedule_api",
                     "enabled": True
                 })
@@ -278,7 +278,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                                         "attempt": attempt + 1
                                     }
                                 )
-                                log_id = self.integration_apilog_repository.save_log("schedule", log_entity)
+                                log_id = await self.integration_apilog_repository.save_log("schedule", log_entity)
                                 logger.info("Logged API response to integration_apilog with id: %s", log_id)
                             except Exception as log_error:
                                 logger.warning("Failed to log API response: %s", log_error)
@@ -322,7 +322,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
             if not schedule_data:
                 return 0
             
-            client = get_mongo_client(self.mongo_uri, "schedule_supply_serve")
+            client = get_motor_client(self.mongo_uri, "schedule_supply_serve")
             db = client[self.database_name]
             collection = db["serve_dam_scheduling"]
             

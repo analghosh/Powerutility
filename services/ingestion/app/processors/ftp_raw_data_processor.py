@@ -597,8 +597,21 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
              Dict[str, Any]: Result with 'data' and 'log_id'
         """
         try:
-            # Use asyncio.to_thread to run FTP operations in a separate thread
-            return await asyncio.to_thread(self._download_ftp_data_sync, ftp_config, provider)
+            result = await asyncio.to_thread(self._download_ftp_data_sync, ftp_config, provider)
+            
+            log_entity = result.get("log_entity")
+            if log_entity:
+                try:
+                    log_id = await self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
+                    result["log_id"] = log_id
+                except Exception as e:
+                    logger.error("Failed to integration log FTP/SFTP file: %s", e)
+                    result["log_id"] = None
+                    
+            if "log_entity" in result:
+                del result["log_entity"]
+                
+            return result
         except Exception as e:
             logger.error("Error in async FTP download for provider %s: %s", provider.code, str(e))
             return {"data": [], "log_id": None}
@@ -679,9 +692,9 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                 download_result = self._download_and_parse_file_ftp(ftp, filename, ftp_config, provider)
                 
                 file_data = download_result.get("data", [])
-                log_id = download_result.get("log_id")
+                log_entity = download_result.get("log_entity")
                 
-                result["log_id"] = log_id
+                result["log_entity"] = log_entity
                 
                 if file_data:
                     result["data"] = file_data
@@ -808,9 +821,9 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                 download_result = self._download_and_parse_file_sftp(sftp_client, filename, ftp_config, provider)
                 
                 file_data = download_result.get("data", [])
-                log_id = download_result.get("log_id")
+                log_entity = download_result.get("log_entity")
                 
-                result["log_id"] = log_id
+                result["log_entity"] = log_entity
                 
                 if file_data:
                     result["data"] = file_data
@@ -887,7 +900,6 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             except:
                 content_str = file_data.getvalue().decode('utf-8', errors='replace')
 
-            log_id = None
             try:
                 log_entity = IntegrationApiLogEntity(
                     provider_id=str(provider.id) if provider.id else provider.code,
@@ -899,9 +911,9 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                         "source": "ftp"
                     }
                 )
-                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
             except Exception as e:
-                logger.error("Failed to integration log FTP file: %s", e)
+                logger.error("Failed to create integration log entity for FTP file: %s", e)
+                log_entity = None
             
             # Check file format - only CSV is supported
             file_format = ftp_config.get('file_format', 'csv').lower()
@@ -916,7 +928,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             
             # Parse CSV content (we already decoded)
             parsed_data = self._parse_file_content(content_str, ftp_config, filename, provider)
-            return {"data": parsed_data, "log_id": log_id}
+            return {"data": parsed_data, "log_entity": log_entity}
                 
         except Exception as e:
             logger.error("Error downloading and parsing FTP file %s: %s", filename, str(e))
@@ -943,7 +955,6 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
             except:
                 content_str = file_data.getvalue().decode('utf-8', errors='replace')
                 
-            log_id = None
             try:
                 log_entity = IntegrationApiLogEntity(
                     provider_id=str(provider.id) if provider.id else provider.code,
@@ -955,9 +966,9 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                         "source": "sftp"
                     }
                 )
-                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
             except Exception as e:
-                logger.error("Failed to integration log SFTP file: %s", e)
+                logger.error("Failed to create integration log entity for SFTP file: %s", e)
+                log_entity = None
                 
             
             # Check file format - only CSV is supported
@@ -972,7 +983,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                 raise ValueError(f"File format '{file_format}' is not supported. Only CSV format is allowed")
             
             # Parse CSV content (we already decoded)
-            return {"data": self._parse_file_content(content_str, ftp_config, filename, provider), "log_id": log_id}
+            return {"data": self._parse_file_content(content_str, ftp_config, filename, provider), "log_entity": log_entity}
                 
         except Exception as e:
             logger.error("Error downloading and parsing SFTP file %s: %s", filename, str(e))

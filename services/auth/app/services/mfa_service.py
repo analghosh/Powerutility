@@ -25,11 +25,11 @@ class MFAService:
         self.period = settings.MFA_PERIOD
         self.window = settings.MFA_WINDOW
     
-    def generate_secret(self) -> str:
+    async def generate_secret(self) -> str:
         """Generate a new TOTP secret"""
         return pyotp.random_base32()
     
-    def generate_totp(self, secret: str) -> str:
+    async def generate_totp(self, secret: str) -> str:
         """Generate current TOTP code"""
         totp = pyotp.TOTP(
             secret,
@@ -39,7 +39,7 @@ class MFAService:
         )
         return totp.now()
     
-    def verify_totp(self, secret: str, code: str) -> bool:
+    async def verify_totp(self, secret: str, code: str) -> bool:
         """Verify TOTP code against current time window only"""
         if not secret or not code:
             logger.warning("TOTP verification failed: empty secret or code")
@@ -60,7 +60,7 @@ class MFAService:
             logger.error(f"TOTP verification error: {e}")
             return False
     
-    def verify_totp_with_rate_limit(self, user_id: str, secret: str, code: str) -> Dict:
+    async def verify_totp_with_rate_limit(self, user_id: str, secret: str, code: str) -> Dict:
         """
         Verify TOTP code with rate limiting protection.
         
@@ -87,7 +87,7 @@ class MFAService:
             }
         
         # Verify TOTP code
-        is_valid = self.verify_totp(secret, code)
+        is_valid = await self.verify_totp(secret, code)
         
         # Record attempt with rate limiter
         rate_limit_result = mfa_rate_limiter.record_attempt(user_id, is_valid)
@@ -100,7 +100,7 @@ class MFAService:
             'message': rate_limit_result['message']
         }
     
-    def generate_qr_code(self, secret: str, username: str) -> str:
+    async def generate_qr_code(self, secret: str, username: str) -> str:
         """Generate QR code for authenticator app"""
         # Create TOTP URI
         totp_uri = pyotp.totp.TOTP(
@@ -133,7 +133,7 @@ class MFAService:
         
         return f"data:image/png;base64,{img_str}"
     
-    def get_remaining_time(self) -> int:
+    async def get_remaining_time(self) -> int:
         """Get remaining seconds in current TOTP period"""
         # Import timezone utilities
         import sys

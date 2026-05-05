@@ -227,7 +227,7 @@ class ExchangeTradeProcessor(BaseProcessor):
             success = True
             if exchange_entities:
                 entity_records = [e.model_dump_for_db() for e in exchange_entities]
-                upsert_result = self.repository.bulk_upsert_exchange_trade_records(entity_records)
+                upsert_result = await self.repository.bulk_upsert_exchange_trade_records(entity_records)
                 success = success and upsert_result.get("success", False)
                 if not success:
                     logger.error(f"Bulk upsert exchange trade serve failed: {upsert_result.get('error')}")
@@ -236,7 +236,7 @@ class ExchangeTradeProcessor(BaseProcessor):
 
             if historical_entities:
                 try:
-                    self.repository.bulk_insert_historical(historical_entities)
+                    await self.repository.bulk_insert_historical(historical_entities)
                     logger.info(f"Successfully inserted {len(historical_entities)} exchange trade historical records")
                 except Exception as e:
                     logger.error(f"Bulk insert exchange trade historical failed: {e}")
