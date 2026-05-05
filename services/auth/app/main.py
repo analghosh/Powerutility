@@ -72,7 +72,7 @@ async def lifespan(app_instance: FastAPI):
     from libs.core.dependencies import get_db
     
     try:
-        db = get_db()
+        db = await get_db()
         await ensure_permissions_catalog(db)
         logger.info("✅ Centralized RBAC permissions catalog initialized")
     except Exception as e:
