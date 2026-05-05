@@ -75,8 +75,8 @@ class MFAService:
         from .mfa_rate_limiter import mfa_rate_limiter
         
         # Check if user can attempt
-        if not mfa_rate_limiter.can_attempt(user_id):
-            lockout_info = mfa_rate_limiter.get_lockout_info(user_id)
+        if not await mfa_rate_limiter.can_attempt(user_id):
+            lockout_info = await mfa_rate_limiter.get_lockout_info(user_id)
             logger.warning(f"MFA attempt blocked for user {user_id} - rate limited")
             
             return {
@@ -90,7 +90,7 @@ class MFAService:
         is_valid = await self.verify_totp(secret, code)
         
         # Record attempt with rate limiter
-        rate_limit_result = mfa_rate_limiter.record_attempt(user_id, is_valid)
+        rate_limit_result = await mfa_rate_limiter.record_attempt(user_id, is_valid)
         
         return {
             'verified': is_valid,

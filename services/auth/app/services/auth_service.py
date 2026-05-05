@@ -194,7 +194,7 @@ class AuthService:
                     from ..controllers.mfa_controller import mfa_controller
 
                     rate_limit_key = f"{user_id}_backup"
-                    if not mfa_rate_limiter.can_attempt(rate_limit_key):
+                    if not await mfa_rate_limiter.can_attempt(rate_limit_key):
                         self.audit_logger.log_security_event(
                             service="auth",
                             event_type="mfa_rate_limited",
@@ -217,7 +217,7 @@ class AuthService:
                             break
 
                     if not valid_code:
-                        mfa_rate_limiter.record_attempt(rate_limit_key, success=False)
+                        await mfa_rate_limiter.record_attempt(rate_limit_key, success=False)
                         self.audit_logger.log_security_event(
                             service="auth",
                             event_type="mfa_backup_code_failed",
@@ -233,7 +233,7 @@ class AuthService:
                         return None
 
                     # Consume the used backup code
-                    mfa_rate_limiter.record_attempt(rate_limit_key, success=True)
+                    await mfa_rate_limiter.record_attempt(rate_limit_key, success=True)
                     hashed_backup_codes.remove(valid_code)
                     await self.user_repo.update_user(user_id, {"mfa_backup_codes": hashed_backup_codes})
                     logger.warning(f"User {user.username} logged in via backup code — {len(hashed_backup_codes)} codes remaining")
@@ -295,7 +295,7 @@ class AuthService:
             refresh_expires_at = now + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
 
             # Invalidate temporary token after successful login
-            redis_blacklist_service.invalidate_temporary_token(temporary_token, user_id)
+            await redis_blacklist_service.invalidate_temporary_token(temporary_token, user_id)
             
             # MFA login success logging handled at route layer to avoid duplication
             
@@ -397,7 +397,7 @@ class AuthService:
             
             # Blacklist access token
             if access_user_id:
-                redis_blacklist_service.invalidate_access_token(access_token, access_user_id)
+                await redis_blacklist_service.invalidate_access_token(access_token, access_user_id)
             
             # If refresh token is provided, validate and blacklist it
             if refresh_token:
@@ -411,7 +411,7 @@ class AuthService:
                         return False
                     # Blacklist refresh token
                     if access_user_id:
-                        redis_blacklist_service.invalidate_refresh_token(refresh_token, access_user_id)
+                        await redis_blacklist_service.invalidate_refresh_token(refresh_token, access_user_id)
             
             # Log logout with PII protection
             self.audit_logger.log_security_event(
@@ -452,7 +452,7 @@ class AuthService:
                 # Return None for invalid tokens to trigger unauthorized response
                 return None
             # Check if token is blacklisted
-            if redis_blacklist_service.is_access_token_blacklisted(token):
+            if await redis_blacklist_service.is_access_token_blacklisted(token):
                 return None
             
             # Get user from database
