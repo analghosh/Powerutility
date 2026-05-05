@@ -505,7 +505,7 @@ class CronManager(BaseCronManager):
                 
                 # Log job start
                 if self.audit_logger:
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="scheduler",
                         operation="cron_job_started",
                         message=f"Cron job started: {cron_job.name}",
@@ -530,7 +530,7 @@ class CronManager(BaseCronManager):
 
                 # Log successful completion
                 if self.audit_logger:
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="scheduler",
                         operation="cron_job_completed",
                     message=f"Cron job completed: {cron_job.name}",
@@ -551,7 +551,7 @@ class CronManager(BaseCronManager):
                 
                 # Log job failure
                 if self.audit_logger:
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="scheduler",
                         operation="cron_job_failed",
                     message=f"Cron job failed: {cron_job.name} - {str(job_error)}",
@@ -793,7 +793,7 @@ class CronManager(BaseCronManager):
             
             # Log job start
             if self.audit_logger:
-                self.audit_logger.log_scheduled_job(
+                self.await audit_logger.log_scheduled_job(
                     service=self.service_name,
                     job_id=execution_id or job_type,
                 status="started",
@@ -820,8 +820,8 @@ class CronManager(BaseCronManager):
             duration_ms = int((time.time() - execution_start_timestamp) * 1000)
             
             # Log successful completion
-            if self.audit_logger: # audit_logger methods are sync (do not await)
-                self.audit_logger.log_scheduled_job(
+            if self.audit_logger: # audit_logger methods are async (must await)
+                self.await audit_logger.log_scheduled_job(
                     service=self.service_name,
                     job_id=execution_id or job_type,
                 status="completed",
@@ -853,7 +853,7 @@ class CronManager(BaseCronManager):
             # Log job failure
             try:
                 if self.audit_logger:
-                    self.audit_logger.log_scheduled_job(
+                    self.await audit_logger.log_scheduled_job(
                         service=self.service_name,
                         job_id=execution_id or job_type,
                     status="failed",
@@ -906,8 +906,8 @@ class CronManager(BaseCronManager):
         
         # Log job start with audit logging
         if execution_id and self.audit_logger:
-            self.audit_logger.log_system_operation(
-                service="scheduler", # audit_logger methods are sync (do not await)
+            self.await audit_logger.log_system_operation(
+                service="scheduler", # audit_logger methods are async (must await)
                 operation="cron_job_started",
                 message=f"Cron job started: {job_name}",
                 job_detail_id=execution_id,
@@ -931,7 +931,7 @@ class CronManager(BaseCronManager):
             
             # Log job completion
             if execution_id and self.audit_logger:
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_completed",
                     message=f"Cron job completed: {job_name}",
@@ -958,7 +958,7 @@ class CronManager(BaseCronManager):
             
             # Log job failure
             if execution_id and self.audit_logger:
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_failed",
                     message=f"Cron job failed: {job_name} - {str(e)}",
@@ -984,7 +984,7 @@ class CronManager(BaseCronManager):
         """Execute demand data management job"""
         # Log job execution
         if self.audit_logger:
-            self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
+            self.await audit_logger.log_system_operation( # audit_logger methods are async (must await)
                 service="scheduler", # type: ignore
                 operation="cron_job_started",
             message=f"Cron job started: _execute_demand_data_management_job",
@@ -1010,7 +1010,7 @@ class CronManager(BaseCronManager):
             
             # Log successful completion
             if self.audit_logger:
-                self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
+                self.await audit_logger.log_system_operation( # audit_logger methods are async (must await)
                     service="scheduler",
                     operation="cron_job_completed",
                 message=f"Cron job completed: {method_name}",
@@ -1024,7 +1024,7 @@ class CronManager(BaseCronManager):
         except Exception as e:
             # Log job failure
             if self.audit_logger:
-                self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
+                self.await audit_logger.log_system_operation( # audit_logger methods are async (must await)
                     service="scheduler",
                     operation="cron_job_failed",
                     message=f"Cron job failed: {method_name} - {str(e)}",
@@ -1048,7 +1048,7 @@ class CronManager(BaseCronManager):
             
             # Log successful completion
             if self.audit_logger:
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_completed",
                     message=f"Cron job completed: {method_name}",
@@ -1062,7 +1062,7 @@ class CronManager(BaseCronManager):
         except Exception as e:
             # Log job failure
             if self.audit_logger:
-                self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
+                self.await audit_logger.log_system_operation( # audit_logger methods are async (must await)
                     service="scheduler",
                     operation="cron_job_failed",
                 message=f"Cron job failed: {method_name} - {str(e)}",

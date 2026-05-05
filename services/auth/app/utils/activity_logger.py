@@ -17,7 +17,7 @@ from libs.audit_queue.timezone_utils import format_ist_timestamp
 logger = logging.getLogger(__name__)
 
 
-def _extract_request_info(request: Request) -> Dict[str, Any]:
+async def _extract_request_info(request: Request) -> Dict[str, Any]:
     """Extract request information for logging"""
     try:
         # Get client IP address
@@ -33,7 +33,7 @@ def _extract_request_info(request: Request) -> Dict[str, Any]:
             token = auth_header[7:]  # Remove "Bearer " prefix
             try:
                 from ..services.jwt_service import jwt_service
-                session_id = jwt_service.get_session_id(token)
+                session_id = await jwt_service.get_session_id(token)
             except Exception:
                 pass  # Ignore token parsing errors for logging
         
@@ -81,7 +81,7 @@ async def log_auth_activity(
         priority: Log priority (Critical, High, Medium, Low)
     """
     try:
-        request_info = _extract_request_info(request)
+        request_info = await _extract_request_info(request)
         
         # Merge request info with provided details
         activity_details = {
@@ -109,7 +109,7 @@ async def log_auth_activity(
         log_level = log_level_map.get(priority, AuditLogLevel.MEDIUM)
         
         # Log the activity
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="auth",
             user_id=user_id or "anonymous",
             action=activity_type,

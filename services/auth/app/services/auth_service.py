@@ -195,7 +195,7 @@ class AuthService:
 
                     rate_limit_key = f"{user_id}_backup"
                     if not await mfa_rate_limiter.can_attempt(rate_limit_key):
-                        self.audit_logger.log_security_event(
+                        self.await audit_logger.log_security_event(
                             service="auth",
                             event_type="mfa_rate_limited",
                             message=f"Backup code login rate limited: {user.username}",
@@ -218,7 +218,7 @@ class AuthService:
 
                     if not valid_code:
                         await mfa_rate_limiter.record_attempt(rate_limit_key, success=False)
-                        self.audit_logger.log_security_event(
+                        self.await audit_logger.log_security_event(
                             service="auth",
                             event_type="mfa_backup_code_failed",
                             message=f"Invalid backup code login attempt: {user.username}",
@@ -249,7 +249,7 @@ class AuthService:
                     )
 
                     if verification_result['rate_limited']:
-                        self.audit_logger.log_security_event(
+                        self.await audit_logger.log_security_event(
                             service="auth",
                             event_type="mfa_rate_limited",
                             message=f"MFA verification rate limited: {user.username}",
@@ -265,7 +265,7 @@ class AuthService:
                         return None
 
                     if not verification_result['verified']:
-                        self.audit_logger.log_security_event(
+                        self.await audit_logger.log_security_event(
                             service="auth",
                             event_type="mfa_failed",
                             message=f"MFA verification failed: {user.username}",
@@ -354,7 +354,7 @@ class AuthService:
             access_token = await self.jwt_service.create_access_token(user_dict)
             
             # Log token refresh with PII protection
-            self.audit_logger.log_security_event(
+            self.await audit_logger.log_security_event(
                 service="auth",
                 event_type="token_refresh",
                 message=f"Access token refreshed: {user.username}",
@@ -414,7 +414,7 @@ class AuthService:
                         await redis_blacklist_service.invalidate_refresh_token(refresh_token, access_user_id)
             
             # Log logout with PII protection
-            self.audit_logger.log_security_event(
+            self.await audit_logger.log_security_event(
                 service="auth",
                 event_type="logout",
                 message=f"User logout successful: {payload['username']}",
@@ -502,7 +502,7 @@ class AuthService:
             
             if success:
                 # Log password change with PII protection
-                self.audit_logger.log_security_event(
+                self.await audit_logger.log_security_event(
                     service="auth",
                     event_type="password_change",
                     message=f"Password changed successfully: {user.username}",
@@ -540,7 +540,7 @@ class AuthService:
             
             if success:
                 # Log admin unlock action
-                self.audit_logger.log_security_event(
+                self.await audit_logger.log_security_event(
                     service="auth",
                     event_type="admin_unlock_user",
                     message=f"User account unlocked by admin: {user.username}",
@@ -582,7 +582,7 @@ class AuthService:
             
             if success:
                 # Log admin password reset action
-                self.audit_logger.log_security_event(
+                self.await audit_logger.log_security_event(
                     service="auth",
                     event_type="admin_password_reset",
                     message=f"Password reset by admin for user: {user.username}",

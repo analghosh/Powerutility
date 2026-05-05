@@ -64,7 +64,7 @@ class AuthController:
             
             if not result:
                 # Log failed login attempt with PII protection
-                self.audit_logger.log_security_event(
+                self.await audit_logger.log_security_event(
                     service="auth",
                     event_type="login_failed",
                     message=f"Failed login attempt for user",
@@ -88,9 +88,10 @@ class AuthController:
                 return result
             else:
                 # Log successful login without MFA
-                session_id = result.get("tokens", {}).get("access_token") and self._extract_session_id(result["tokens"]["access_token"])
+                access_token = result.get("tokens", {}).get("access_token")
+                session_id = await self._extract_session_id(access_token) if access_token else None
                 
-                self.audit_logger.log_security_event(
+                self.await audit_logger.log_security_event(
                     service="auth",
                     event_type="login_success",
                     message="User authentication successful",
@@ -117,11 +118,11 @@ class AuthController:
                 detail="Internal server error"
             )
     
-    def _extract_session_id(self, token: str) -> Optional[str]:
+    async def _extract_session_id(self, token: str) -> Optional[str]:
         """Extract session ID from JWT token"""
         try:
             from services.auth.app.services.jwt_service import jwt_service
-            return jwt_service.get_session_id(token)
+            return await jwt_service.get_session_id(token)
         except Exception:
             return None
     
@@ -150,7 +151,7 @@ class AuthController:
             
             if not result:
                 # Log failed MFA verification
-                self.audit_logger.log_security_event(
+                self.await audit_logger.log_security_event(
                     service="auth",
                     event_type="mfa_verification_failed",
                     message="MFA verification failed",
@@ -176,7 +177,7 @@ class AuthController:
             logger.error("Verify login controller error: %s", e)
             
             # Log system error
-            self.audit_logger.log_error_event(
+            self.await audit_logger.log_error_event(
                 service="auth",
                 error_name="VerifyLoginError",
                 error_message="System error during MFA verification",
@@ -213,7 +214,7 @@ class AuthController:
             
             if not result:
                 # Log failed token refresh
-                self.audit_logger.log_security_event(
+                self.await audit_logger.log_security_event(
                     service="auth",
                     event_type="token_refresh_failed",
                     message="Token refresh failed",
@@ -236,7 +237,7 @@ class AuthController:
             logger.error(f"Token refresh controller error: {e}")
             
             # Log system error
-            self.audit_logger.log_error_event(
+            self.await audit_logger.log_error_event(
                 service="auth",
                 error_name="TokenRefreshError",
                 error_message="System error during token refresh",
@@ -267,9 +268,9 @@ class AuthController:
             request_info = self._extract_request_info(request)
             
             # Attempt logout
-            self.audit_logger.log_user_action(
+            self.await audit_logger.log_user_action(
                 service="auth",
-                user_id=self._extract_session_id(access_token),
+                user_id=await self._extract_session_id(access_token),
                 action="Log Out",
                 message="User logged out",
                 client_ip=request_info.get("ip_address"),
@@ -310,9 +311,9 @@ class AuthController:
             Current user information
         """
         try:
-            self.audit_logger.log_user_action(
+            self.await audit_logger.log_user_action(
                 service="auth",
-                user_id=self._extract_session_id(token),
+                user_id=await self._extract_session_id(token),
                 action="Get Current User",
                 message="Getting Current user",
                 success=True

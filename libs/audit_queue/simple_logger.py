@@ -8,13 +8,13 @@ This module provides a unified interface for all audit logging needs with
 built-in PII protection and standardized logging patterns.
 """
 
+from fastapi import Request, HTTPException
 import logging
 import re
 from typing import Dict, Any, Optional, Union
 from datetime import datetime
 from enum import Enum
 from dataclasses import dataclass
-from fastapi import Request, HTTPException
 
 # Import timezone utilities
 from .timezone_utils import now_ist, format_ist_timestamp
@@ -169,26 +169,11 @@ class PIISanitizer:
 class AuditLogger:
     """
     Enterprise-grade audit logger with PII protection and clean architecture.
-    
-    This class provides a simplified interface for audit logging while maintaining
-    security, compliance, and industry best practices. All logged data is automatically
-    sanitized to protect PII and sensitive information.
-    
-    Features:
-        - Automatic PII sanitization
-        - Structured logging with consistent schema
-        - Correlation ID support for tracing
-        - Industry-standard log levels
-        - Clean architecture separation of concerns
     """
     
     def __init__(self, unified_queue_service: UnifiedQueueService, enable_pii_protection: bool = True):
         """
         Initialize the audit logger.
-        
-        Args:
-            unified_queue_service: An instance of the UnifiedQueueService
-            enable_pii_protection: Whether to enable automatic PII sanitization
         """
         self.unified_queue_service = unified_queue_service
         self._pii_protection_enabled = enable_pii_protection
@@ -197,13 +182,6 @@ class AuditLogger:
     def _sanitize_if_enabled(self, message: str, data: Dict[str, Any]) -> tuple[str, Dict[str, Any]]:
         """
         Sanitize message and data if PII protection is enabled.
-        
-        Args:
-            message: Log message to sanitize
-            data: Data dictionary to sanitize
-            
-        Returns:
-            Tuple of (sanitized_message, sanitized_data)
         """
         if not self._pii_protection_enabled:
             return message, data
@@ -216,12 +194,6 @@ class AuditLogger:
     def _create_base_metadata(self, **additional_data) -> Dict[str, Any]:
         """
         Create base metadata for all log entries.
-        
-        Args:
-            **additional_data: Additional metadata to include
-            
-        Returns:
-            Dictionary containing base metadata
         """
         base_metadata = {
             "timestamp": format_ist_timestamp(),
@@ -233,7 +205,7 @@ class AuditLogger:
         
         return base_metadata
     
-    def log_user_action(
+    async def log_user_action(
         self,
         service: str,
         user_id: str,
@@ -245,26 +217,9 @@ class AuditLogger:
         **additional_data
     ) -> str:
         """
-        Log user-initiated actions such as API calls and UI interactions.
-        
-        This method captures user activities with automatic PII protection
-        and structured data formatting for compliance and auditing.
-        
-        Args:
-            service: Service name (e.g., "ingestion", "auth")
-            user_id: User identifier (will be sanitized if PII protection enabled)
-            action: Action performed (e.g., "provider_create", "file_upload")
-            message: Human-readable description of the action
-            session_id: User session identifier for correlation (optional)
-            success: Whether the action completed successfully
-            level: Log severity level
-            **additional_data: Additional structured data (will be sanitized)
-            
-        Returns:
-            str: Unique log entry identifier for correlation
+        Log user-initiated actions.
         """
         try:
-            # Prepare data for sanitization
             log_data = self._create_base_metadata(
                 action_type=action,
                 user_id=user_id,
@@ -272,18 +227,11 @@ class AuditLogger:
                 **additional_data
             )
             
-            # Sanitize message and data
             sanitized_message, sanitized_data = self._sanitize_if_enabled(message, log_data)
-            
-            # Create actor object (user_id will be sanitized in data)
             actor = Actor(id=user_id, type="user")
+            trace = Trace(sessionId=session_id, userId=user_id) if session_id else None
             
-            # Create trace object for session correlation
-            trace = None
-            if session_id:
-                trace = Trace(sessionId=session_id, userId=user_id)
-            
-            return self.unified_queue_service.create_and_log_audit(
+            return await self.unified_queue_service.create_and_log_audit(
                 service=service,
                 log_type="api",
                 message=sanitized_message,
@@ -298,7 +246,7 @@ class AuditLogger:
             _logger.error(f"Failed to log user action: {e}", exc_info=True)
             return ""
     
-    def log_system_operation(
+    async def log_system_operation(
         self,
         service: str,
         operation: str,
@@ -309,49 +257,26 @@ class AuditLogger:
         **additional_data
     ) -> str:
         """
-        Log internal system operations and processes.
-        
-        This method captures system-level activities such as data processing,
-        validation, and internal business logic execution.
-        
-        Args:
-            service: Service name where operation occurred
-            operation: Operation type (e.g., "data_processing", "validation")
-            message: Human-readable description of the operation
-            correlation_id: Unique identifier for operation correlation (optional)
-            success: Whether the operation completed successfully
-            level: Log severity level
-            **additional_data: Additional structured data (will be sanitized)
-            
-        Returns:
-            str: Unique log entry identifier for correlation
+        Log internal system operations.
         """
         try:
-            # Prepare data for sanitization
             log_data = self._create_base_metadata(
                 operation_type=operation,
                 correlation_id=correlation_id,
                 **additional_data
             )
             
-            # Sanitize message and data
             sanitized_message, sanitized_data = self._sanitize_if_enabled(message, log_data)
+            trace = Trace(jobId=correlation_id, requestId=correlation_id) if correlation_id else None
             
-            # Create trace object for correlation
-            trace = None
-            meta_kwargs = {}
-            if correlation_id:
-                trace = Trace(jobId=correlation_id, requestId=correlation_id)
-                meta_kwargs["correlationId"] = correlation_id
-            
-            return self.unified_queue_service.create_and_log_audit(
+            return await self.unified_queue_service.create_and_log_audit(
                 service=service,
                 log_type="app",
                 message=sanitized_message,
                 priority=level.value,
                 status="success" if success else "failed",
                 trace=trace,
-                meta_kwargs=meta_kwargs,
+                meta_kwargs={"correlationId": correlation_id} if correlation_id else {},
                 data=sanitized_data
             )
             
@@ -359,7 +284,7 @@ class AuditLogger:
             _logger.error(f"Failed to log system operation: {e}", exc_info=True)
             return ""
     
-    def log_scheduled_job(
+    async def log_scheduled_job(
         self,
         service: str,
         job_id: str,
@@ -371,27 +296,9 @@ class AuditLogger:
         **additional_data
     ) -> str:
         """
-        Log scheduled job events such as cron jobs and background tasks.
-        
-        This method captures the lifecycle of scheduled jobs including
-        start, completion, and failure events with performance metrics.
-        
-        Args:
-            service: Service name where job executed
-            job_id: Unique job execution identifier
-            status: Job status (started, completed, failed, etc.)
-            message: Human-readable description of job event
-            job_name: Descriptive job name (optional)
-            duration_ms: Job execution duration in milliseconds (optional)
-            level: Log severity level
-            **additional_data: Additional structured data (will be sanitized)
-            
-        Returns:
-            str: Unique log entry identifier for correlation
+        Log scheduled job events.
         """
         try:
-            # Prepare data for sanitization
-            # Remove job_type from additional_data to avoid conflict
             additional_data_clean = {k: v for k, v in additional_data.items() if k != 'job_type'}
             log_data = self._create_base_metadata(
                 job_type="scheduled",
@@ -402,13 +309,10 @@ class AuditLogger:
                 **additional_data_clean
             )
             
-            # Sanitize message and data
             sanitized_message, sanitized_data = self._sanitize_if_enabled(message, log_data)
-            
-            # Create trace object for job correlation
             trace = Trace(jobId=job_id, requestId=job_id)
             
-            return self.unified_queue_service.create_and_log_audit(
+            return await self.unified_queue_service.create_and_log_audit(
                 service=service,
                 log_type="job",
                 message=sanitized_message,
@@ -424,7 +328,7 @@ class AuditLogger:
             _logger.error(f"Failed to log scheduled job: {e}", exc_info=True)
             return ""
     
-    def log_error_event(
+    async def log_error_event(
         self,
         service: str,
         error_name: str,
@@ -436,29 +340,10 @@ class AuditLogger:
         **error_context
     ) -> str:
         """
-        Log error events and exceptions with context preservation.
-        
-        This method captures application errors, exceptions, and failures
-        with appropriate context for debugging and monitoring.
-        
-        Args:
-            service: Service name where error occurred
-            error_name: Error type or exception class name
-            error_message: Detailed error description
-            user_id: User identifier if error relates to user action (optional)
-            session_id: Session identifier for user correlation (optional)
-            correlation_id: Unique identifier for operation correlation (optional)
-            level: Error severity level
-            **error_context: Additional error context (will be sanitized)
-            
-        Returns:
-            str: Unique log entry identifier for correlation
+        Log error events.
         """
         try:
-            # Prepare data for sanitization
-            # Remove error_type from error_context to avoid conflict
             safe_error_context = {k: v for k, v in error_context.items() if k != 'error_type'}
-            
             log_data = self._create_base_metadata(
                 error_category="application_error",
                 error_type=error_name,
@@ -468,22 +353,15 @@ class AuditLogger:
                 **safe_error_context
             )
             
-            # Sanitize message and data (especially important for error messages)
             sanitized_message, sanitized_data = self._sanitize_if_enabled(error_message, log_data)
             
-            # Create trace object for correlation
             trace_data = {}
-            if correlation_id:
-                trace_data["jobId"] = correlation_id
-                trace_data["requestId"] = correlation_id
-            if session_id:
-                trace_data["sessionId"] = session_id
-            if user_id:
-                trace_data["userId"] = user_id
-            
+            if correlation_id: trace_data["jobId"] = correlation_id; trace_data["requestId"] = correlation_id
+            if session_id: trace_data["sessionId"] = session_id
+            if user_id: trace_data["userId"] = user_id
             trace = Trace(**trace_data) if trace_data else None
             
-            return self.unified_queue_service.create_and_log_error(
+            return await self.unified_queue_service.create_and_log_error(
                 service=service,
                 error_name=error_name,
                 error_message=sanitized_message,
@@ -496,7 +374,7 @@ class AuditLogger:
             _logger.error(f"Failed to log error event: {e}", exc_info=True)
             return ""
     
-    def log_security_event(
+    async def log_security_event(
         self,
         service: str,
         event_type: str,
@@ -508,27 +386,9 @@ class AuditLogger:
         **additional_data
     ) -> str:
         """
-        Log security-related events with enhanced protection and monitoring.
-        
-        This method captures critical security events such as authentication,
-        authorization, and access control activities. IP addresses are
-        automatically masked for privacy compliance.
-        
-        Args:
-            service: Service name where security event occurred
-            event_type: Security event type (login, logout, access_denied, etc.)
-            message: Human-readable description of security event
-            user_id: User identifier (optional, will be sanitized)
-            client_ip: Client IP address (optional, will be masked)
-            success: Whether the security event was successful
-            level: Security event severity level
-            **additional_data: Additional security context (will be sanitized)
-            
-        Returns:
-            str: Unique log entry identifier for correlation
+        Log security-related events.
         """
         try:
-            # Prepare data for sanitization (IP will be masked)
             log_data = self._create_base_metadata(
                 event_category="security",
                 event_type=event_type,
@@ -537,16 +397,10 @@ class AuditLogger:
                 **additional_data
             )
             
-            # Sanitize message and data
             sanitized_message, sanitized_data = self._sanitize_if_enabled(message, log_data)
+            actor = Actor(id=user_id, type="user", ip_address=client_ip) if user_id else None
             
-            # Create actor object (IP will be masked in sanitized_data)
-            actor = None
-            if user_id:
-                # Use original IP for actor, sanitized version is in data
-                actor = Actor(id=user_id, type="user", ip_address=client_ip)
-            
-            return self.unified_queue_service.create_and_log_audit(
+            return await self.unified_queue_service.create_and_log_audit(
                 service=service,
                 log_type="security",
                 message=sanitized_message,
@@ -559,3 +413,49 @@ class AuditLogger:
         except Exception as e:
             _logger.error(f"Failed to log security event: {e}", exc_info=True)
             return ""
+
+    async def log_api_request(
+        self,
+        service: str,
+        request: Request,
+        action: str,
+        message: str,
+        success: bool = True,
+        level: AuditLogLevel = AuditLogLevel.MEDIUM,
+        **additional_data
+    ) -> str:
+        """
+        Simplified helper to log an API request.
+        """
+        try:
+            request_info = await self._extract_request_info(request)
+            return await self.log_user_action(
+                service=service,
+                user_id=request_info.get("user_id") or "anonymous",
+                action=action,
+                message=message,
+                session_id=request_info.get("session_id"),
+                success=success,
+                level=level,
+                client_ip=request_info.get("ip_address"),
+                user_agent=request_info.get("user_agent"),
+                **additional_data
+            )
+        except Exception as e:
+            _logger.error(f"Failed to log API request: {e}")
+            return ""
+
+    async def _extract_request_info(self, request: Request) -> Dict[str, Any]:
+        """Helper to extract common info from FastAPI request object"""
+        client_ip = request.client.host if request.client else "unknown"
+        user_agent = request.headers.get("user-agent", "unknown")
+        
+        user_id = getattr(request.state, "user_id", None)
+        username = getattr(request.state, "username", None)
+        
+        return {
+            "ip_address": client_ip,
+            "user_agent": user_agent,
+            "user_id": user_id,
+            "username": username
+        }

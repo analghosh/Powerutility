@@ -26,7 +26,7 @@ async def queue_health_check(unified_queue_service: UnifiedQueueService = Depend
     """
     try:
         # Log user action for queue_health_check
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="queue_health_check",
@@ -74,7 +74,7 @@ async def queue_stats(unified_queue_service: UnifiedQueueService = Depends(get_u
     """
     try:
         # Log user action for queue_stats
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="queue_stats",
@@ -108,7 +108,7 @@ async def cleanup_old_jobs(days: int = 7, unified_queue_service: UnifiedQueueSer
     """Clean up old job records"""
     try:
         # Log user action for queue_cleanup
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="queue_cleanup",
@@ -150,7 +150,7 @@ async def get_pending_jobs(limit: int = 100, unified_queue_service: UnifiedQueue
     """
     try:
         # Log user action for queue_pending_jobs
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="queue_pending_jobs",

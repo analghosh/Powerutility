@@ -68,7 +68,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
         logger.info("🚀 Starting scrape raw data processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
         
         if execution_id:
-            self.audit_logger.log_system_operation(
+            self.await audit_logger.log_system_operation(
                 service="ingestion",
                 operation="cron_job_started",
                 message=f"Cron job started: {job_name}",
@@ -97,7 +97,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
 
                 # Log job completion
                 if execution_id:
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="ingestion",
                         operation="cron_job_completed",
                         message=f"Cron job completed: {job_name} - No providers found",
@@ -133,7 +133,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
 
                     # Log provider processing start
                     if execution_id:
-                        self.audit_logger.log_system_operation(
+                        self.await audit_logger.log_system_operation(
                             service="ingestion",
                             operation="provider_scrape_started",
                             message=f"Starting scrape processing for provider: {provider_code}",
@@ -154,7 +154,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         
                         # Log successful provider processing
                         if execution_id:
-                            self.audit_logger.log_system_operation(
+                            self.await audit_logger.log_system_operation(
                                 service="ingestion",
                                 operation="provider_scrape_completed",
                                 message=f"Successfully processed provider: {provider_code}",
@@ -185,7 +185,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                         
                         # Log failed provider processing
                         if execution_id:
-                            self.audit_logger.log_system_operation(
+                            self.await audit_logger.log_system_operation(
                                 service="ingestion",
                                 operation="provider_scrape_failed",
                                 message=f"Provider scrape failed: {error_msg}",
@@ -205,7 +205,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
                     
                     # Log provider processing exception
                     if execution_id:
-                        self.audit_logger.log_system_operation(
+                        self.await audit_logger.log_system_operation(
                             service="ingestion",
                             operation="provider_scrape_error",
                             message=f"Provider scrape error: {str(provider_error)}",
@@ -235,7 +235,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
             if execution_id:
                 error_message = None if overall_success else f"Processed {processed_providers}, failed {failed_providers}"
                 
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     service="ingestion",
                     operation="cron_job_completed",
                     message=f"Cron job completed: {job_name} - {processed_providers} processed, {failed_providers} failed",
@@ -271,7 +271,7 @@ class ScrapeRawDataProcessor(BaseRawDataProcessor):
 
             # Log job error
             if execution_id:
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     service="ingestion",
                     operation="cron_job_failed",
                     message=f"Cron job failed: {job_name} - {str(e)}",

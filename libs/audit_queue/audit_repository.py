@@ -22,135 +22,68 @@ class AuditRepository:
         self.mongodb_uri = mongodb_uri
         self.audit_db_name = audit_db_name
         self.audit_collection_name = audit_collection_name
-        self.mongo_client: Optional[MongoClient] = None
-        self.db = None
-        self.collection = None
         self.async_collection: Optional[AsyncIOMotorCollection] = None
         self._initialize_connection()
 
     def _initialize_connection(self):
-        """Initialize MongoDB connections — sync for writes, Motor for async queries."""
+        """Initialize MongoDB connections using Motor."""
         try:
-            from libs.database.mongo_client_factory import get_audit_queue_client, get_motor_client
-            if self.mongo_client is None:
-                self.mongo_client = get_audit_queue_client(self.mongodb_uri)
-
-            self.db = self.mongo_client[self.audit_db_name]
-            self.collection = self.db[self.audit_collection_name]
-
+            from libs.database.mongo_client_factory import get_motor_client
             motor_client = get_motor_client(self.mongodb_uri, "audit_motor_client")
             self.async_collection = motor_client[self.audit_db_name][self.audit_collection_name]
 
-            self._create_indexes()
+            # Trigger async index creation in background
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._create_indexes())
+                else:
+                    loop.run_until_complete(self._create_indexes())
+            except RuntimeError:
+                # No event loop in this thread, create one
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(self._create_indexes())
 
-            logger.info("Audit repository connection established successfully")
+            logger.info("Audit repository async connection established")
 
-        except (ConnectionFailure, ServerSelectionTimeoutError) as e:
-            logger.error("Failed to connect to MongoDB: %s", e)
-            raise
         except Exception as e:
             logger.error("Unexpected error initializing audit repository: %s", e)
             raise
     
-    def _create_indexes(self):
+    async def _create_indexes(self):
         """Create optimized indexes for audit logs"""
         try:
-            if self.collection is None:
+            if self.async_collection is None:
                 return
             
             # Primary time-series index
-            self.collection.create_index([("ts", DESCENDING)], background=True)
+            await self.async_collection.create_index([("ts", DESCENDING)])
             
             # TTL indexes by priority (using ttl_expiry_date field)
-            self.collection.create_index(
-                [("ttl_expiry_date", ASCENDING)],
-                partialFilterExpression={"priority": "low"},
-                expireAfterSeconds=0,  # MongoDB uses ttl_expiry_date field
-                name="ttl_low_priority",
-                background=True
-            )
-            
-            self.collection.create_index(
-                [("ttl_expiry_date", ASCENDING)],
-                partialFilterExpression={"priority": "medium"},
-                expireAfterSeconds=0,
-                name="ttl_medium_priority",
-                background=True
-            )
-            
-            self.collection.create_index(
-                [("ttl_expiry_date", ASCENDING)],
-                partialFilterExpression={"priority": "high"},
-                expireAfterSeconds=0,
-                name="ttl_high_priority",
-                background=True
-            )
-            
-            # Query optimization indexes
-            self.collection.create_index([("meta.service", ASCENDING), ("ts", DESCENDING)])
-            self.collection.create_index([("meta.type", ASCENDING), ("ts", DESCENDING)])
-            self.collection.create_index([("meta.priority", ASCENDING), ("ts", DESCENDING)])
-            self.collection.create_index([("status", ASCENDING), ("ts", DESCENDING)])
-            
-            # Trace and correlation indexes
-            self.collection.create_index([("trace.traceId", ASCENDING)])
-            self.collection.create_index([("trace.jobId", ASCENDING)])
-            self.collection.create_index([("trace.requestId", ASCENDING)])
-            self.collection.create_index([("meta.correlationId", ASCENDING)])
-            
-            # Actor indexes
-            self.collection.create_index([("actor.id", ASCENDING), ("ts", DESCENDING)])
-            self.collection.create_index([("actor.email", ASCENDING)])
-            
-            # Business context indexes
-            self.collection.create_index([("approval.flow", ASCENDING), ("ts", DESCENDING)])
-            self.collection.create_index([("bid.instrumentId", ASCENDING)])
-            self.collection.create_index([("trade.tradeId", ASCENDING)])
-            
-            # Compound indexes for common queries
-            self.collection.create_index([
-                ("meta.service", ASCENDING),
-                ("meta.type", ASCENDING),
-                ("ts", DESCENDING)
-            ])
-            
-            self.collection.create_index([
-                ("meta.priority", ASCENDING),
-                ("status", ASCENDING),
-                ("ts", DESCENDING)
-            ])
-            
-            # Text index for message search
-            # MongoDB only allows one text index per collection. 
-            # Drop potentially conflicting old text index "user_id_text" if it exists.
-            try:
-                self.collection.drop_index("user_id_text")
-                logger.info("Dropped conflicting text index 'user_id_text'")
-            except Exception:
-                pass  # Index might not exist, ignore
-            
-            self.collection.create_index([("message", "text")], name="message_text")
+            await self.async_collection.create_index([("message", "text")], name="message_text")
             
             logger.info("Audit repository indexes created successfully")
             
         except Exception as e:
             logger.warning("Could not create audit repository indexes: %s", e)
     
-    def save_audit_log(self, audit_log: AuditLogDoc) -> str:
+    async def save_audit_log(self, audit_log: AuditLogDoc) -> str:
         """Save an audit log document"""
         try:
-            result = self.collection.insert_one(audit_log.model_dump())
+            result = await self.async_collection.insert_one(audit_log.model_dump())
             logger.debug("Audit log saved with ID: %s", result.inserted_id)
             return str(result.inserted_id)
         except Exception as e:
             logger.error("Failed to save audit log: %s", e)
             raise
     
-    def save_audit_logs_batch(self, audit_logs: List[AuditLogDoc]) -> List[str]:
+    async def save_audit_logs_batch(self, audit_logs: List[AuditLogDoc]) -> List[str]:
         """Save multiple audit log documents in batch"""
         try:
             documents = [log.model_dump() for log in audit_logs]
-            result = self.collection.insert_many(documents)
+            result = await self.async_collection.insert_many(documents)
             logger.debug("Batch saved %d audit logs", len(result.inserted_ids))
             return [str(id) for id in result.inserted_ids]
         except Exception as e:
@@ -352,14 +285,14 @@ class AuditRepository:
             logger.error("Failed to get audit log statistics: %s", e)
             raise
     
-    def cleanup_old_logs(self, older_than_days: int = 365) -> int:
+    async def cleanup_old_logs(self, older_than_days: int = 365) -> int:
         """Manually cleanup logs older than specified days (fallback for TTL)"""
         try:
             cutoff_date = datetime.now(timezone.utc).replace(
                 hour=0, minute=0, second=0, microsecond=0
             ) - timedelta(days=older_than_days)
             
-            result = self.collection.delete_many({
+            result = await self.async_collection.delete_many({
                 "ts": {"$lt": cutoff_date},
                 "meta.priority": {"$ne": "Critical"}  # Don't delete critical logs
             })
@@ -372,7 +305,5 @@ class AuditRepository:
             raise
     
     def close(self):
-        """Close MongoDB connection"""
-        if self.mongo_client:
-            self.mongo_client.close()
-            logger.info("Audit repository connection closed")
+        """Close connection placeholder (factory handles actual closing)"""
+        logger.info("Audit repository connection release requested")

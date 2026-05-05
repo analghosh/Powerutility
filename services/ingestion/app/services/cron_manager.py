@@ -294,7 +294,7 @@ class CronManager(BaseCronManager):
             logger.info("Starting ingestion job: %s", job_name)
 
             # Log job start
-            self.audit_logger.log_user_action(
+            self.await audit_logger.log_user_action(
                 user_id="system",
                 action="cron_job_started",
                 service="ingestion",
@@ -311,7 +311,7 @@ class CronManager(BaseCronManager):
             # Calculate duration
             duration_ms = int((time.time() - start_time) * 1000)
             # Log successful completion
-            self.audit_logger.log_user_action(
+            self.await audit_logger.log_user_action(
                 user_id="system",
                 action="cron_job_completed",
                 service="ingestion",
@@ -332,7 +332,7 @@ class CronManager(BaseCronManager):
             duration_ms = int((time.time() - start_time) * 1000)
 
             # Log job failure
-            self.audit_logger.log_user_action(
+            self.await audit_logger.log_user_action(
                 user_id="system",
                 action="cron_job_failed",
                 service="ingestion",

@@ -413,7 +413,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
         # Log job start
         if execution_id:
-            self.audit_logger.log_system_operation(
+            self.await audit_logger.log_system_operation(
                 operation="cron_job_started",
                 service="ingestion",
                 message=f"Cron job started: {job_name}",
@@ -444,7 +444,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
                 # Log job completion
                 if execution_id:
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         operation="cron_job_completed",
                         service="ingestion",
                         message=f"Cron job completed: {job_name} - No pending uploads",
@@ -498,7 +498,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
                     # Log upload processing start
                     if execution_id:
-                        self.audit_logger.log_system_operation(
+                        self.await audit_logger.log_system_operation(
                             operation="upload_processing_started",
                             service="ingestion",
                             message=f"Starting upload processing for file: {upload_id}",
@@ -522,7 +522,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                         
                         # Log successful upload processing
                         if execution_id:
-                            self.audit_logger.log_system_operation(
+                            self.await audit_logger.log_system_operation(
                                 operation="upload_processing_completed",
                                 service="ingestion",
                                 message=f"Successfully processed upload: {upload_id}",
@@ -545,7 +545,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
                         
                         # Log failed upload processing
                         if execution_id:
-                            self.audit_logger.log_system_operation(
+                            self.await audit_logger.log_system_operation(
                                 operation="upload_processing_failed",
                                 service="ingestion",
                                 message=f"Upload processing failed: {error_message}",
@@ -563,7 +563,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
                     # Log upload processing exception
                     if execution_id:
-                        self.audit_logger.log_system_operation(
+                        self.await audit_logger.log_system_operation(
                             operation="upload_processing_error",
                             service="ingestion",
                             message=f"Upload processing error: {str(file_error)}",
@@ -600,7 +600,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
             if execution_id:
                 error_message = None if overall_success else f"Processed {processed_files}, failed {failed_files}"
                 
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     operation="cron_job_completed",
                     service="ingestion",
                     message=f"Cron job completed: {job_name} - {processed_files} processed, {failed_files} failed",
@@ -638,7 +638,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
 
             # Log job error
             if execution_id:
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     operation="cron_job_failed",
                     service="ingestion",
                     message=f"Cron job failed: {job_name} - {str(e)}",

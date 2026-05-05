@@ -76,7 +76,7 @@ async def list_users(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
             action="list_users",
@@ -111,7 +111,7 @@ async def list_users(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="UserListAccessError",
             error_message=f"Failed to access user list: {str(e)}",
@@ -169,7 +169,7 @@ async def create_user(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
             action="create_user",
@@ -204,7 +204,7 @@ async def create_user(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="UserCreationError",
             error_message=f"Failed to create user {user_data.username}: {str(e)}",
@@ -301,7 +301,7 @@ async def update_user(
             
             # Log role changes if any
             if added_roles or removed_roles:
-                audit_logger.log_user_action(
+                await audit_logger.log_user_action(
                     service="auth",
                     user_id=current_user_id,
                     action="update",
@@ -361,7 +361,7 @@ async def delete_user(
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete user")
         
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
             action="delete",
@@ -398,7 +398,7 @@ async def assign_roles_to_user(
         
         # Update user roles (now async)
         success = await user_repo.update_user(user_id, {"roles": role_data.roles})
-        audit_logger.log_user_action( # audit_logger methods are sync (do not await)
+        await audit_logger.log_user_action( # audit_logger methods are sync (do not await)
             service="auth",
             user_id=current_user.user_id,
             action="assign_roles",

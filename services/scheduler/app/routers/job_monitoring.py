@@ -50,7 +50,7 @@ async def get_running_jobs(audit_logger: AuditLogger = Depends(get_audit_logger)
     """
     try:
         # Log user action for job_monitoring_running
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_running",
@@ -86,7 +86,7 @@ async def get_job_trace(job_id: str, audit_logger: AuditLogger = Depends(get_aud
     """Get detailed trace information for a specific job"""
     try:
         # Log user action for job_monitoring_trace
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_trace",
@@ -129,7 +129,7 @@ async def get_jobs_by_service(service_name: str, limit: int = 100, audit_logger:
     """Get all jobs for a specific service"""
     try:
         # Log user action for job_monitoring_by_service
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_by_service",
@@ -177,7 +177,7 @@ async def get_job_statistics(hours: int = 24, audit_logger: AuditLogger = Depend
     """Get job statistics for the specified time period"""
     try:
         # Log user action for job_monitoring_statistics
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_statistics",
@@ -212,7 +212,7 @@ async def update_job_progress(job_id: str, progress: int = 0, current_step: str 
     """Update job progress"""
     try:
         # Log user action for job_monitoring_update_progress
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_update_progress",
@@ -277,7 +277,7 @@ async def get_job_dashboard(audit_logger: AuditLogger = Depends(get_audit_logger
     """
     try:
         # Log user action for job_monitoring_dashboard
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_dashboard",
@@ -317,7 +317,7 @@ async def get_job_system_health(audit_logger: AuditLogger = Depends(get_audit_lo
     """
     try:
         # Log user action for job_monitoring_health
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_health",
@@ -400,7 +400,7 @@ async def get_all_jobs_from_job_data(audit_logger: AuditLogger = Depends(get_aud
     """
     try:
         # Log user action for job_monitoring_all_jobs
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_all_jobs",
@@ -437,7 +437,7 @@ async def get_job_execution_details(job_id: str, audit_logger: AuditLogger = Dep
     """Get detailed execution information for a job"""
     try:
         # Log user action for job_monitoring_execution_details
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_execution_details",
@@ -480,7 +480,7 @@ async def get_service_jobs_from_job_data(service: str, enabled_only: bool = True
     """Get jobs for a specific service from job data"""
     try:
         # Log user action for job_monitoring_service_jobs
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_service_jobs",
@@ -535,7 +535,7 @@ async def get_audit_logs_by_job_id(job_id: str, limit: int = 100, priority: str 
     """Get audit logs for a specific job ID"""
     try:
         # Log user action for job_monitoring_audit_logs
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_audit_logs",
@@ -591,7 +591,7 @@ async def search_job_audit_logs(search_text: str, job_id: str = "", service: str
     """Search job audit logs by text"""
     try:
         # Log user action for job_monitoring_search_logs
-        audit_logger.log_user_action(
+        await audit_logger.log_user_action(
             service="scheduler",
             user_id="system",  # TODO: Replace with actual user_id from authentication
             action="job_monitoring_search_logs",

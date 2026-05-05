@@ -37,7 +37,7 @@ class UnifiedQueueService:
         )
         logger.info("UnifiedQueueService initialized")
     
-    def log_audit_event(self, 
+    async def log_audit_event(self, 
                        event_type: str,
                        service_name: str,
                        user_id: Optional[str] = None,
@@ -87,7 +87,7 @@ class UnifiedQueueService:
             audit_data = {k: v for k, v in audit_data.items() if v is not None}
             
             # Add to queue for asynchronous processing
-            job_id = self.queue.add_to_queue(
+            job_id = await self.queue.add_to_queue(
                 log_data=audit_data,
                 source_service=service_name,
                 destination=destination,
@@ -104,7 +104,7 @@ class UnifiedQueueService:
             logger.warning("Audit event fallback log - %s: %s", event_type, audit_data)
             return ""
     
-    def log_message(self,
+    async def log_message(self,
                    message_type: str,
                    service_name: str,
                    content: str,
@@ -150,7 +150,7 @@ class UnifiedQueueService:
             message_data = {k: v for k, v in message_data.items() if v is not None}
             
             # Add to queue for asynchronous processing
-            job_id = self.queue.add_to_queue(
+            job_id = await self.queue.add_to_queue(
                 log_data=message_data,
                 source_service=service_name,
                 destination=destination,
@@ -167,7 +167,7 @@ class UnifiedQueueService:
             logger.warning("Message fallback log - %s: %s", message_type, message_data)
             return ""
     
-    def log_structured_audit(self, audit_log: AuditLogDoc, destination: str = "mongo") -> str:
+    async def log_structured_audit(self, audit_log: AuditLogDoc, destination: str = "mongo") -> str:
         """
         Log a structured audit document using the audit queue
         
@@ -193,7 +193,7 @@ class UnifiedQueueService:
             priority = priority_map.get(audit_log.meta.priority.lower(), LogPriority.MEDIUM)
             
             # Add to queue for asynchronous processing
-            job_id = self.queue.add_to_queue(
+            job_id = await self.queue.add_to_queue(
                 log_data=audit_data,
                 source_service=audit_log.meta.service,
                 destination=destination,
@@ -213,7 +213,7 @@ class UnifiedQueueService:
                           audit_log.meta.type, audit_log.message)
             return ""
     
-    def log_structured_audit_direct(self, audit_log: AuditLogDoc) -> str:
+    async def log_structured_audit_direct(self, audit_log: AuditLogDoc) -> str:
         """
         Log a structured audit document directly to MongoDB (bypass queue)
         
@@ -224,12 +224,12 @@ class UnifiedQueueService:
             str: Document ID of the saved audit log
         """
         try:
-            return self.audit_repository.save_audit_log(audit_log)
+            return await self.audit_repository.save_audit_log(audit_log)
         except Exception as e:
             logger.error("Error saving structured audit log directly: %s", e)
             raise
     
-    def create_and_log_audit(
+    async def create_and_log_audit(
         self,
         service: str,
         log_type: str,
@@ -265,7 +265,7 @@ class UnifiedQueueService:
             logger.error("Error creating and logging audit: %s", e)
             return ""
     
-    def create_and_log_error(
+    async def create_and_log_error(
         self,
         service: str,
         error_name: str,
@@ -315,7 +315,7 @@ class UnifiedQueueService:
             logger.error("Error creating and logging error audit: %s", e)
             return ""
     
-    def get_audit_logs_by_service(
+    async def get_audit_logs_by_service(
         self,
         service: str,
         start_time: Optional[datetime] = None,
@@ -324,7 +324,7 @@ class UnifiedQueueService:
     ) -> List[Dict[str, Any]]:
         """Get audit logs for a specific service"""
         try:
-            return self.audit_repository.find_by_service(
+            return await self.audit_repository.find_by_service(
                 service=service,
                 start_time=start_time,
                 end_time=end_time,
@@ -334,23 +334,23 @@ class UnifiedQueueService:
             logger.error("Error getting audit logs by service: %s", e)
             return []
     
-    def get_audit_logs_by_trace(self, trace_id: str) -> List[Dict[str, Any]]:
+    async def get_audit_logs_by_trace(self, trace_id: str) -> List[Dict[str, Any]]:
         """Get all audit logs for a trace ID"""
         try:
-            return self.audit_repository.find_by_trace_id(trace_id)
+            return await self.audit_repository.find_by_trace_id(trace_id)
         except Exception as e:
             logger.error("Error getting audit logs by trace: %s", e)
             return []
     
-    def get_audit_logs_by_job(self, job_id: str) -> List[Dict[str, Any]]:
+    async def get_audit_logs_by_job(self, job_id: str) -> List[Dict[str, Any]]:
         """Get all audit logs for a job ID"""
         try:
-            return self.audit_repository.find_by_job_id(job_id)
+            return await self.audit_repository.find_by_job_id(job_id)
         except Exception as e:
             logger.error("Error getting audit logs by job: %s", e)
             return []
     
-    def search_audit_logs(
+    async def search_audit_logs(
         self,
         search_text: str,
         service: Optional[str] = None,
@@ -360,7 +360,7 @@ class UnifiedQueueService:
     ) -> List[Dict[str, Any]]:
         """Search audit logs using full-text search"""
         try:
-            return self.audit_repository.search_logs(
+            return await self.audit_repository.search_logs(
                 search_text=search_text,
                 service=service,
                 log_type=log_type if log_type else None,  # type: ignore
@@ -371,7 +371,7 @@ class UnifiedQueueService:
             logger.error("Error searching audit logs: %s", e)
             return []
     
-    def get_audit_statistics(
+    async def get_audit_statistics(
         self,
         service: Optional[str] = None,
         start_time: Optional[datetime] = None,
@@ -379,7 +379,7 @@ class UnifiedQueueService:
     ) -> Dict[str, Any]:
         """Get audit log statistics"""
         try:
-            return self.audit_repository.get_log_statistics(
+            return await self.audit_repository.get_log_statistics(
                 service=service,
                 start_time=start_time,
                 end_time=end_time
@@ -388,7 +388,7 @@ class UnifiedQueueService:
             logger.error("Error getting audit statistics: %s", e)
             return {}
     
-    def log_data_operation(self,
+    async def log_data_operation(self,
                           operation_type: str,
                           service_name: str,
                           data_type: str,
@@ -426,7 +426,7 @@ class UnifiedQueueService:
         if details:
             operation_details.update(details)
         
-        return self.log_audit_event(
+        return await self.log_audit_event(
             event_type=f"data_{operation_type}",
             service_name=service_name,
             details=operation_details,
@@ -434,7 +434,7 @@ class UnifiedQueueService:
             error_message=error_message
         )
     
-    def log_system_event(self,
+    async def log_system_event(self,
                         event_type: str,
                         service_name: str,
                         details: Optional[Dict[str, Any]] = None,
@@ -453,7 +453,7 @@ class UnifiedQueueService:
         Returns:
             str: Job ID of the queued audit log entry
         """
-        return self.log_audit_event(
+        return await self.log_audit_event(
             event_type=f"system_{event_type}",
             service_name=service_name,
             details=details,

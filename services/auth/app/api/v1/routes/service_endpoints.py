@@ -108,7 +108,7 @@ async def get_user_info(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_system_operation(
+        await audit_logger.log_system_operation(
             service="auth",
             operation="user_info_retrieval",
             message=f"User info retrieved for service communication: {user.username}",
@@ -135,7 +135,7 @@ async def get_user_info(
     except HTTPException:
         raise
     except Exception as e:
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="UserInfoRetrievalError",
             error_message=f"Failed to retrieve user info: {str(e)}",
@@ -188,7 +188,7 @@ async def validate_token_and_get_user(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_security_event(
+        await audit_logger.log_security_event(
             service="auth",
             event_type="token_validation_success",
             message=f"Token validated successfully for service communication: {current_user.username}",
@@ -210,7 +210,7 @@ async def validate_token_and_get_user(
         }
         
     except Exception as e:
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="TokenValidationError",
             error_message=f"Token validation failed: {str(e)}",
@@ -264,7 +264,7 @@ async def get_available_roles(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_system_operation(
+        await audit_logger.log_system_operation(
             service="auth",
             operation="roles_retrieval",
             message=f"Available roles retrieved for service communication",
@@ -287,7 +287,7 @@ async def get_available_roles(
         ]
         
     except Exception as e:
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="RolesRetrievalError",
             error_message=f"Failed to retrieve roles: {str(e)}",
@@ -342,7 +342,7 @@ async def get_available_permissions(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_system_operation(
+        await audit_logger.log_system_operation(
             service="auth",
             operation="permissions_retrieval",
             message=f"Available permissions retrieved for service communication",
@@ -364,7 +364,7 @@ async def get_available_permissions(
         ]
         
     except Exception as e:
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="PermissionsRetrievalError",
             error_message=f"Failed to retrieve permissions: {str(e)}",
@@ -438,7 +438,7 @@ async def validate_user_permissions(
         client_ip = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
         
-        audit_logger.log_system_operation(
+        await audit_logger.log_system_operation(
             service="auth",
             operation="permission_validation",
             message=f"Permission validation performed for user: {user.username}",
@@ -461,7 +461,7 @@ async def validate_user_permissions(
     except HTTPException:
         raise
     except Exception as e:
-        audit_logger.log_error_event(
+        await audit_logger.log_error_event(
             service="auth",
             error_name="PermissionValidationError",
             error_message=f"Failed to validate permissions: {str(e)}",

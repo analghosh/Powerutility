@@ -213,7 +213,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 user_id = user_context.get("user_id", "unknown") if user_context else "unknown"
                 username = user_context.get("username", "system") if user_context else "system"
 
-                audit_logger.log_system_operation(
+                await audit_logger.log_system_operation(
                     service="processing",
                     operation="rtm_scheduling_table_truncate",
                     message=f"Collection {self.collection_name} truncated - deleted {deleted_count} records",

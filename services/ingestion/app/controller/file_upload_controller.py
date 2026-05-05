@@ -57,7 +57,7 @@ class FileUploadController:
                        file.filename, data_type, provider_type, user_id)
             
             # Log upload attempt
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_upload_started",
@@ -92,7 +92,7 @@ class FileUploadController:
             logger.info("Upload successful: upload_id=%s", result.upload_id)
             
             # Log successful upload
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_upload_completed",
@@ -113,7 +113,7 @@ class FileUploadController:
             logger.warning("Upload validation failed: %s", str(e))
             
             # Log validation failure
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_upload_validation_failed",
@@ -134,7 +134,7 @@ class FileUploadController:
             logger.error("Upload processing failed: %s", str(e))
             
             # Log processing failure
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_upload_processing_failed",
@@ -155,7 +155,7 @@ class FileUploadController:
             logger.error("Unexpected upload error: %s", str(e), exc_info=True)
             
             # Log unexpected error
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_upload_error",
@@ -194,7 +194,7 @@ class FileUploadController:
         try:
             logger.info(f"Controller: Getting status for upload_id: {upload_id}")
             # Log status check attempt
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="upload_status_check",
@@ -207,7 +207,7 @@ class FileUploadController:
             result = await self._file_upload_service.get_upload_status(upload_id)
             
             # Log successful status check
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="upload_status_retrieved",
@@ -225,7 +225,7 @@ class FileUploadController:
             logger.warning("Upload status request failed: %s", str(e))
             
             # Log status check failure
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="upload_status_not_found",
@@ -244,7 +244,7 @@ class FileUploadController:
             logger.error("Error getting upload status for %s: %s", upload_id, e, exc_info=True)
             
             # Log status check error
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="upload_status_error",
@@ -329,7 +329,7 @@ class FileUploadController:
         """
         try:
             # Log pagination request
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="uploads_paginated_request",
@@ -350,7 +350,7 @@ class FileUploadController:
             )
             
             # Log successful pagination request
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="uploads_paginated_success",
@@ -368,7 +368,7 @@ class FileUploadController:
             logger.error("Error getting paginated uploads: %s", str(e), exc_info=True)
             
             # Log pagination error
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="uploads_paginated_error",
@@ -408,7 +408,7 @@ class FileUploadController:
         """
         try:
             # Log CSV format request attempt
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="csv_format_request",
@@ -425,7 +425,7 @@ class FileUploadController:
             )
             
             # Log successful CSV format request
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="csv_format_retrieved",
@@ -443,7 +443,7 @@ class FileUploadController:
             logger.warning("CSV format request failed: %s", str(e))
             
             # Log CSV format request failure
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="csv_format_not_found",
@@ -463,7 +463,7 @@ class FileUploadController:
             logger.error("Error getting CSV format for %s/%s: %s", data_type, provider_code, e, exc_info=True)
             
             # Log CSV format request error
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="csv_format_error",
@@ -503,7 +503,7 @@ class FileUploadController:
         """
         try:
             # Log download request attempt
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_download_request",
@@ -516,7 +516,7 @@ class FileUploadController:
             result = await self._file_upload_service.download_file(upload_id)
             
             # Log successful download request
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_download_success",
@@ -534,7 +534,7 @@ class FileUploadController:
             logger.warning("File download failed: %s", str(e))
             
             # Log download failure
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_download_not_found",
@@ -553,7 +553,7 @@ class FileUploadController:
             logger.error("Error downloading file for %s: %s", upload_id, e, exc_info=True)
             
             # Log download error
-            audit_logger.log_user_action(
+            await audit_logger.log_user_action(
                 service="ingestion",
                 user_id=user_id,
                 action="file_download_error",

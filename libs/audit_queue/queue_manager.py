@@ -12,6 +12,7 @@ from pymongo import MongoClient
 from pymongo.collection import Collection
 from pymongo.errors import ConnectionFailure, ServerSelectionTimeoutError
 import queue
+import asyncio
 
 from libs.audit_queue.config import config
 from libs.audit_queue.models import AuditJob, JobStatus, LogPriority
@@ -63,21 +64,27 @@ class MongoAuditQueue:
         logger.info("MongoAuditQueue initialized for service-specific sequential processing")
     
     def _initialize_connection(self):
-        """Initialize MongoDB connection using centralized factory"""
+        """Initialize MongoDB connection using Motor"""
         try:
             from libs.database.mongo_client_factory import get_audit_queue_client
             self.mongo_client = get_audit_queue_client(self.mongodb_uri)
-            
-            # Test connection
-            self.mongo_client.admin.command('ping')
-            
             self.db = self.mongo_client[self.audit_db_name]
             self.jobs_collection = self.db[self.queue_collection_name]
             
-            # Create indexes for better performance
-            self._create_indexes()
+            # Trigger async index creation in background
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    loop.create_task(self._create_indexes())
+                else:
+                    loop.run_until_complete(self._create_indexes())
+            except RuntimeError:
+                new_loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(new_loop)
+                new_loop.run_until_complete(self._create_indexes())
             
-            logger.info("MongoDB connection established successfully")
+            logger.info("MongoDB async connection established for Audit Queue")
             
         except (ConnectionFailure, ServerSelectionTimeoutError) as e:
             logger.error("Failed to connect to MongoDB: %s", e)
@@ -86,7 +93,7 @@ class MongoAuditQueue:
             logger.error("Unexpected error initializing MongoDB connection: %s", e)
             raise
     
-    def _create_indexes(self):
+    async def _create_indexes(self):
         """Create indexes for the jobs collection and audit_logs collection"""
         try:
             if self.jobs_collection is None:
@@ -116,13 +123,13 @@ class MongoAuditQueue:
         except Exception as e:
             logger.warning("Could not create indexes: %s", e)
     
-    def _create_audit_logs_ttl_indexes(self):
+    async def _create_audit_logs_ttl_indexes(self):
         """Create TTL indexes for audit_logs collection based on priority levels"""
         try:
             audit_collection = self.db[self.audit_collection_name]
             
             # TTL index for HIGH priority logs (1 year)
-            audit_collection.create_index(
+            await audit_collection.create_index(
                 [("ttl_expiry_date", 1)],
                 partialFilterExpression={"priority": "high"},
                 expireAfterSeconds=0,  # MongoDB will use the ttl_expiry_date field
@@ -130,7 +137,7 @@ class MongoAuditQueue:
             )
             
             # TTL index for MEDIUM priority logs (6 months)
-            audit_collection.create_index(
+            await audit_collection.create_index(
                 [("ttl_expiry_date", 1)],
                 partialFilterExpression={"priority": "medium"},
                 expireAfterSeconds=0,
@@ -138,7 +145,7 @@ class MongoAuditQueue:
             )
             
             # TTL index for LOW priority logs (3 months)
-            audit_collection.create_index(
+            await audit_collection.create_index(
                 [("ttl_expiry_date", 1)],
                 partialFilterExpression={"priority": "low"},
                 expireAfterSeconds=0,
@@ -148,10 +155,10 @@ class MongoAuditQueue:
             # No TTL index for CRITICAL priority logs (no expiry)
             
             # Regular indexes for audit_logs
-            audit_collection.create_index([("timestamp", -1)])
-            audit_collection.create_index([("service", 1)])
-            audit_collection.create_index([("record_type", 1)])
-            audit_collection.create_index([("priority", 1)])
+            await audit_collection.create_index([("timestamp", -1)])
+            await audit_collection.create_index([("service", 1)])
+            await audit_collection.create_index([("record_type", 1)])
+            await audit_collection.create_index([("priority", 1)])
             
             logger.info("TTL indexes created for audit_logs collection")
             
@@ -159,7 +166,7 @@ class MongoAuditQueue:
             logger.warning("Could not create audit_logs TTL indexes: %s", e)
     
     
-    def add_to_queue(self, log_data: Dict[str, Any], source_service: str, 
+    async def add_to_queue(self, log_data: Dict[str, Any], source_service: str, 
                      destination: str = "mongo", job_type: str = "audit", 
                      priority: LogPriority = LogPriority.MEDIUM) -> str:
         """
@@ -196,7 +203,7 @@ class MongoAuditQueue:
             )
             
             # Save job to MongoDB
-            self.jobs_collection.insert_one(audit_job.model_dump())
+            await self.jobs_collection.insert_one(audit_job.model_dump())
             
             # Ensure service queue exists and start workers if needed
             self._ensure_service_queue(source_service)
@@ -220,7 +227,7 @@ class MongoAuditQueue:
             
             # Start one worker for this service (sequential processing)
             worker_thread = threading.Thread(
-                target=self._service_worker_loop,
+                target=self._run_async_worker,
                 args=(service_name,),
                 daemon=True,
                 name=f"ServiceWorker-{service_name}"
@@ -229,8 +236,15 @@ class MongoAuditQueue:
             self.service_workers[service_name].append(worker_thread)
             
             logger.info("Created sequential worker for service: %s", service_name)
+
+    def _run_async_worker(self, service_name: str):
+        """Entry point for worker thread - runs the async loop"""
+        import asyncio
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(self._service_worker_loop(service_name))
     
-    def _service_worker_loop(self, service_name: str):
+    async def _service_worker_loop(self, service_name: str):
         """Worker loop for specific service - ensures sequential processing"""
         worker_name = threading.current_thread().name
         service_queue = self.service_queues[service_name]
@@ -245,7 +259,7 @@ class MongoAuditQueue:
                     break
                 
                 # Process the job sequentially for this service
-                self._process_job_directly(job_id)
+                await self._process_job_directly(job_id)
                 service_queue.task_done()
                 
             except queue.Empty:
@@ -259,11 +273,11 @@ class MongoAuditQueue:
         logger.info("Service worker %s stopped", worker_name)
     
     
-    def _process_job_directly(self, job_id: str):
+    async def _process_job_directly(self, job_id: str):
         """Process job directly in background thread"""
         try:
             # Get job data from MongoDB
-            job_doc = self.get_job_status(job_id)
+            job_doc = await self.get_job_status(job_id)
             if not job_doc:
                 logger.error("Job %s not found", job_id)
                 return
@@ -271,42 +285,42 @@ class MongoAuditQueue:
             audit_job = AuditJob(**job_doc)
             
             # Update status to processing
-            self.update_job_status(job_id, JobStatus.PROCESSING)
+            await self.update_job_status(job_id, JobStatus.PROCESSING)
             
             # Log the data using the logger service
-            success = self._log_audit_data(audit_job.log_data, audit_job.destination, audit_job.created_at, audit_job.job_type, audit_job.priority)
+            success = await self._log_audit_data(audit_job.log_data, audit_job.destination, audit_job.created_at, audit_job.job_type, audit_job.priority)
             
             if success:
                 # Mark as completed
-                self.update_job_status(job_id, JobStatus.COMPLETED)
+                await self.update_job_status(job_id, JobStatus.COMPLETED)
                 self.metrics["jobs_processed"] += 1
                 self.metrics["last_processed"] = datetime.now(timezone.utc)
                 logger.debug("Audit job %s completed successfully", job_id)
             else:
                 # Mark as failed
-                self.update_job_status(job_id, JobStatus.FAILED, "Failed to log data")
+                await self.update_job_status(job_id, JobStatus.FAILED, "Failed to log data")
                 self.metrics["jobs_failed"] += 1
                 logger.error("Audit job %s failed: Failed to log data", job_id)
                 
         except Exception as e:
             # Handle retries
-            self._handle_job_retry(job_id, str(e))
+            await self._handle_job_retry(job_id, str(e))
     
-    def _log_audit_data(self, log_data: Dict[str, Any], destination: str, timestamp: datetime, job_type: str = "audit", priority: LogPriority = LogPriority.MEDIUM) -> bool:
+    async def _log_audit_data(self, log_data: Dict[str, Any], destination: str, timestamp: datetime, job_type: str = "audit", priority: LogPriority = LogPriority.MEDIUM) -> bool:
         """Log audit data or messages using the logger service"""
         try:
             if job_type == "message":
                 # Handle message logging
-                return self._log_message_data(log_data, destination, timestamp, priority)
+                return await self._log_message_data(log_data, destination, timestamp, priority)
             else:
                 # Handle audit logging (default behavior)
-                return self._log_audit_data_direct(log_data, destination, timestamp, priority)
+                return await self._log_audit_data_direct(log_data, destination, timestamp, priority)
             
         except Exception as e:
             logger.error("Failed to log data: %s", e)
             return False
     
-    def _log_message_data(self, message_data: Dict[str, Any], destination: str, timestamp: datetime, priority: LogPriority = LogPriority.MEDIUM) -> bool:
+    async def _log_message_data(self, message_data: Dict[str, Any], destination: str, timestamp: datetime, priority: LogPriority = LogPriority.MEDIUM) -> bool:
         """Log message data to audit_logs collection"""
         try:
             # Only support MongoDB destination
@@ -335,7 +349,7 @@ class MongoAuditQueue:
             message_data["priority"] = priority.value
             message_data["ttl_expiry_date"] = self._calculate_ttl_expiry_date(timestamp, priority)
             
-            result = audit_collection.insert_one(message_data)
+            result = await audit_collection.insert_one(message_data)
             logger.debug("Message logged to audit_logs with ID: %s", result.inserted_id)
             return True
                 
@@ -343,7 +357,7 @@ class MongoAuditQueue:
             logger.error("Failed to log message data: %s", e)
             return False
     
-    def _log_audit_data_direct(self, audit_data: Dict[str, Any], destination: str, timestamp: datetime, priority: LogPriority = LogPriority.MEDIUM) -> bool:
+    async def _log_audit_data_direct(self, audit_data: Dict[str, Any], destination: str, timestamp: datetime, priority: LogPriority = LogPriority.MEDIUM) -> bool:
         """Log audit data directly to audit_logs collection"""
         try:
             # Only support MongoDB destination
@@ -365,7 +379,7 @@ class MongoAuditQueue:
             audit_data["priority"] = priority.value
             audit_data["ttl_expiry_date"] = self._calculate_ttl_expiry_date(timestamp, priority)
             
-            result = audit_collection.insert_one(audit_data)
+            result = await audit_collection.insert_one(audit_data)
             logger.debug("Audit data logged to audit_logs with ID: %s", result.inserted_id)
             return True
                 
@@ -381,17 +395,17 @@ class MongoAuditQueue:
         
         return timestamp + timedelta(days=ttl_days)
     
-    def _handle_job_retry(self, job_id: str, error_message: str):
+    async def _handle_job_retry(self, job_id: str, error_message: str):
         """Handle job retry logic"""
         try:
             # Get current retry count
-            current_job = self.get_job_status(job_id)
+            current_job = await self.get_job_status(job_id)
             current_retry_count = current_job.get("retry_count", 0) if current_job else 0
             new_retry_count = current_retry_count + 1
             
             if new_retry_count >= config.MAX_RETRY_COUNT:
                 # Mark as failed
-                self.update_job_status(
+                await self.update_job_status(
                     job_id, 
                     JobStatus.FAILED, 
                     error_message=error_message,
@@ -401,7 +415,7 @@ class MongoAuditQueue:
                 logger.error("Job %s failed after %s retries: %s", job_id, config.MAX_RETRY_COUNT, error_message)
             else:
                 # Update retry count and requeue for retry
-                self.update_job_status(
+                await self.update_job_status(
                     job_id, 
                     JobStatus.SAVED,  # Reset to SAVED for retry
                     error_message=error_message,
@@ -409,30 +423,34 @@ class MongoAuditQueue:
                 )
                 
                 # Add back to queue for retry (with delay) - need to get service from job
-                job_doc = self.jobs_collection.find_one({"job_id": job_id})
+                job_doc = await self.jobs_collection.find_one({"job_id": job_id})
                 if job_doc:
                     service_name = job_doc.get("source_service")
                     if service_name and service_name in self.service_queues:
-                        threading.Timer(config.RETRY_DELAY_SECONDS, 
-                                      lambda: self.service_queues[service_name].put(job_id)).start()
+                        # Schedule retry using asyncio delay instead of threading.Timer
+                        async def delayed_requeue():
+                            await asyncio.sleep(config.RETRY_DELAY_SECONDS)
+                            self.service_queues[service_name].put(job_id)
+                        
+                        asyncio.create_task(delayed_requeue())
                 self.metrics["jobs_retried"] += 1
                 logger.warning("Job %s retry %s/%s scheduled", job_id, new_retry_count, config.MAX_RETRY_COUNT)
                 
         except Exception as e:
             logger.error("Error handling retry for job %s: %s", job_id, e)
     
-    def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
+    async def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get job status from MongoDB"""
         if self.jobs_collection is None:
             return None
         try:
-            job_doc = self.jobs_collection.find_one({"job_id": job_id})
+            job_doc = await self.jobs_collection.find_one({"job_id": job_id})
             return job_doc if job_doc else None
         except Exception as e:
             logger.error("Failed to get job status for %s: %s", job_id, e)
             return None
     
-    def update_job_status(self, job_id: str, status: JobStatus, 
+    async def update_job_status(self, job_id: str, status: JobStatus, 
                          error_message: Optional[str] = None,
                          retry_count: Optional[int] = None) -> bool:
         """Update job status in MongoDB"""
@@ -451,7 +469,7 @@ class MongoAuditQueue:
             if retry_count is not None:
                 update_data["retry_count"] = retry_count
             
-            result = self.jobs_collection.update_one(
+            result = await self.jobs_collection.update_one(
                 {"job_id": job_id},
                 {"$set": update_data}
             )

@@ -231,7 +231,7 @@ class BaseCronManager(ABC):
             
             # Log to audit if available
             if self.audit_logger:
-                self.audit_logger.log_system_operation(
+                self.await audit_logger.log_system_operation(
                     service=self.service_name,
                     operation="cron_job_missed",
                     message=f"Cron job missed: {event.job_id}",
@@ -346,7 +346,7 @@ class BaseCronManager(ABC):
             
             # Log job start if audit logger is available
             if self.audit_logger:
-                self.audit_logger.log_scheduled_job(
+                self.await audit_logger.log_scheduled_job(
                     service=self.service_name,
                     job_id=execution_id,
                     status="started",
@@ -371,7 +371,7 @@ class BaseCronManager(ABC):
             
             # Log successful completion if audit logger is available
             if self.audit_logger:
-                self.audit_logger.log_scheduled_job(
+                self.await audit_logger.log_scheduled_job(
                     service=self.service_name,
                     job_id=execution_id,
                     status="completed",
@@ -392,7 +392,7 @@ class BaseCronManager(ABC):
             # Log job failure if audit logger is available
             try:
                 if self.audit_logger:
-                    self.audit_logger.log_scheduled_job(
+                    self.await audit_logger.log_scheduled_job(
                         service=self.service_name,
                         job_id=execution_id,
                         status="failed",

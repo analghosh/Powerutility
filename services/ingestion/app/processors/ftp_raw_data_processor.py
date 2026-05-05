@@ -668,7 +668,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                 except Exception as e:
                     logger.warning("Could not change to directory %s: %s", remote_path, str(e))
                     # Log directory not found in audit system
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="ingestion",
                         operation="ftp_directory_not_found",
                         message=f"FTP directory not found: {remote_path}",
@@ -715,7 +715,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                 if ftp_config.get('is_date_based', False):
                     logger.warning("Date-based file %s not found for provider %s", filename, provider.code)
                     # Log to audit system
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="ingestion",
                         operation="ftp_file_not_found",
                         message=f"Date-based file not found: {filename}",
@@ -728,7 +728,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                 else:
                     logger.error("Error processing file %s: %s", filename, str(file_error))
                     # Log to audit system
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="ingestion",
                         operation="ftp_file_error",
                         message=f"Error processing file: {filename}",
@@ -797,7 +797,7 @@ class FTPRawDataProcessor(BaseRawDataProcessor):
                 except Exception as e:
                     logger.warning("Could not change to directory %s: %s", remote_path, str(e))
                     # Log directory not found in audit system
-                    self.audit_logger.log_system_operation(
+                    self.await audit_logger.log_system_operation(
                         service="ingestion",
                         operation="ftp_directory_not_found",
                         message=f"FTP directory not found: {remote_path}",
