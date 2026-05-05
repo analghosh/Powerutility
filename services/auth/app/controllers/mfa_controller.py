@@ -358,8 +358,8 @@ class MFAController:
         })
         
         # Reset rate limiting for user
-        from .mfa_rate_limiter import mfa_rate_limiter
-        mfa_rate_limiter.reset_user(user_id)
+        from ..services.mfa_rate_limiter import mfa_rate_limiter
+        await mfa_rate_limiter.reset_user(user_id)
         
         logger.warning(f"Emergency MFA disable for user {user_id} by admin {admin_user_id}: {reason}")
         

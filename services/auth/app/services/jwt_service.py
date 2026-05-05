@@ -86,7 +86,7 @@ class JWTService:
         if payload and payload.get("type") == "access":
             # Check if token is blacklisted
             from .redis_blacklist import redis_blacklist_service
-            is_blacklisted = redis_blacklist_service.is_access_token_blacklisted(token)
+            is_blacklisted = await redis_blacklist_service.is_access_token_blacklisted(token)
             
             if is_blacklisted:
                 return None
@@ -102,7 +102,7 @@ class JWTService:
         if payload and payload.get("type") == "refresh":
             # Check if token is blacklisted
             from .redis_blacklist import redis_blacklist_service
-            is_blacklisted = redis_blacklist_service.is_refresh_token_blacklisted(token)
+            is_blacklisted = await redis_blacklist_service.is_refresh_token_blacklisted(token)
             print(f"DEBUG: verify_refresh_token - is_blacklisted: {is_blacklisted}")
             
             if is_blacklisted:
@@ -134,7 +134,7 @@ class JWTService:
         if payload and payload.get("type") == "temporary":
             # Check if token is blacklisted
             from .redis_blacklist import redis_blacklist_service
-            is_blacklisted = redis_blacklist_service.is_temporary_token_blacklisted(token)
+            is_blacklisted = await redis_blacklist_service.is_temporary_token_blacklisted(token)
             
             if is_blacklisted:
                 return None
