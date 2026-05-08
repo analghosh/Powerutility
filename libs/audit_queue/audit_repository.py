@@ -61,30 +61,10 @@ class AuditRepository:
             # Primary time-series index
             self.collection.create_index([("ts", DESCENDING)], background=True)
             
-            # TTL indexes by priority (using ttl_expiry_date field)
-            self.collection.create_index(
-                [("ttl_expiry_date", ASCENDING)],
-                partialFilterExpression={"priority": "low"},
-                expireAfterSeconds=0,  # MongoDB uses ttl_expiry_date field
-                name="ttl_low_priority",
-                background=True
-            )
-            
-            self.collection.create_index(
-                [("ttl_expiry_date", ASCENDING)],
-                partialFilterExpression={"priority": "medium"},
-                expireAfterSeconds=0,
-                name="ttl_medium_priority",
-                background=True
-            )
-            
-            self.collection.create_index(
-                [("ttl_expiry_date", ASCENDING)],
-                partialFilterExpression={"priority": "high"},
-                expireAfterSeconds=0,
-                name="ttl_high_priority",
-                background=True
-            )
+            # NOTE: TTL indexes removed because auth service inserts into the same
+            # collection without ttl_expiry_date/priority, causing unbounded growth
+            # and confusion. Manual cleanup via cleanup_old_logs() should be used
+            # if retention is needed. Keeping query optimization indexes only.
             
             # Query optimization indexes
             self.collection.create_index([("meta.service", ASCENDING), ("ts", DESCENDING)])
