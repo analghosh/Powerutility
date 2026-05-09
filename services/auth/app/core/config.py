@@ -138,6 +138,31 @@ class Settings(BaseSettings):
         
         return self
     
+    @model_validator(mode='after')
+    def validate_security_secrets(self):
+        """Ensure critical security secrets are configured"""
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        if not self.JWT_SECRET_KEY or len(self.JWT_SECRET_KEY) < 32:
+            raise ValueError(
+                "JWT_SECRET_KEY must be set via environment variable and be at least 32 characters long. "
+                "Set it in your .env file or environment before starting the service."
+            )
+        
+        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
+            raise ValueError(
+                "SECRET_KEY must be set via environment variable and be at least 32 characters long. "
+                "Set it in your .env file or environment before starting the service."
+            )
+        
+        if not self.ADMIN_INITIAL_PASSWORD or len(self.ADMIN_INITIAL_PASSWORD) < 8:
+            raise ValueError(
+                "ADMIN_INITIAL_PASSWORD must be set via environment variable and be at least 8 characters long."
+            )
+        
+        return self
+    
     @property
     def BASE_PATH(self) -> str:
         """Get base path for current environment (computed dynamically)"""
