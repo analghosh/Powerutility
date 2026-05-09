@@ -8,11 +8,11 @@ except ImportError:
 class RabbitMQConfig(BaseSettings):
     """Configuration settings for RabbitMQ connection and features"""
     
-    # Connection details
+    # Connection details - MUST be set via environment variables
     RABBITMQ_HOST: str = os.getenv("RABBITMQ_HOST", "127.0.0.1")
     RABBITMQ_PORT: int = int(os.getenv("RABBITMQ_PORT", "5672"))
-    RABBITMQ_USER: str = os.getenv("RABBITMQ_USER", "guest")
-    RABBITMQ_PASSWORD: str = os.getenv("RABBITMQ_PASSWORD", "guest")
+    RABBITMQ_USER: str = os.getenv("RABBITMQ_USER", "")
+    RABBITMQ_PASSWORD: str = os.getenv("RABBITMQ_PASSWORD", "")
     RABBITMQ_VHOST: str = os.getenv("RABBITMQ_VHOST", "/")
     
     # Feature flags

@@ -15,6 +15,7 @@ import time
 from datetime import datetime, timedelta
 import hashlib
 import json
+import os
 
 from libs.core.dependencies import get_db, jwt_validator
 from libs.core.authz.config import required_permissions_for
@@ -24,15 +25,128 @@ from libs.core.authz.context import request_context, RequestContext
 # Security logging
 logger = logging.getLogger("rbac.security")
 
-# Rate limiting storage (in production, use Redis)
-_rate_limit_store: Dict[str, Dict] = {}
-_failed_attempts: Dict[str, Dict] = {}
-
 # Security constants
 MAX_FAILED_ATTEMPTS = 5
 LOCKOUT_DURATION = timedelta(minutes=15)
 RATE_LIMIT_WINDOW = timedelta(minutes=1)
 MAX_REQUESTS_PER_MINUTE = 60
+
+# Redis-based security storage
+class _RedisSecurityStore:
+    """Redis-backed store for rate limiting and failed attempts"""
+    
+    def __init__(self):
+        self._redis: Any = None
+        self._enabled = False
+        self._init_redis()
+    
+    def _init_redis(self):
+        try:
+            import redis
+            # Try to connect using common Redis configuration patterns
+            # First try auth service settings, then fall back to env vars
+            redis_host = os.getenv("REDIS_HOST", "localhost")
+            redis_port = int(os.getenv("REDIS_PORT", "6379"))
+            redis_db = int(os.getenv("REDIS_SECURITY_DB", "4"))
+            redis_password = os.getenv("REDIS_PASSWORD") or None
+            
+            self._redis = redis.Redis(
+                host=redis_host,
+                port=redis_port,
+                db=redis_db,
+                password=redis_password,
+                decode_responses=True,
+                socket_connect_timeout=3,
+                socket_timeout=3,
+                retry_on_timeout=True,
+            )
+            self._redis.ping()
+            self._enabled = True
+            logger.info("Redis security store initialized")
+        except Exception as e:
+            logger.warning(f"Redis security store unavailable, falling back to in-memory: {e}")
+            self._redis = None
+            self._enabled = False
+    
+    def _rl_key(self, fingerprint: str) -> str:
+        return f"guard:ratelimit:{fingerprint}"
+    
+    def _fa_key(self, user_id: str) -> str:
+        return f"guard:failed:{user_id}"
+    
+    def get_rate_limit_data(self, fingerprint: str) -> Optional[Dict]:
+        if not self._enabled or not self._redis:
+            return None
+        try:
+            data = self._redis.get(self._rl_key(fingerprint))
+            if data:
+                import json
+                return json.loads(data)
+            return None
+        except Exception as e:
+            logger.error(f"Redis rate limit read error: {e}")
+            return None
+    
+    def set_rate_limit_data(self, fingerprint: str, data: Dict, ttl: int = 120):
+        if not self._enabled or not self._redis:
+            return
+        try:
+            import json
+            self._redis.setex(self._rl_key(fingerprint), ttl, json.dumps(data, default=str))
+        except Exception as e:
+            logger.error(f"Redis rate limit write error: {e}")
+    
+    def get_failed_attempts(self, user_id: str) -> Optional[Dict]:
+        if not self._enabled or not self._redis:
+            return None
+        try:
+            data = self._redis.get(self._fa_key(user_id))
+            if data:
+                import json
+                parsed = json.loads(data)
+                # Convert lockout_until back to datetime if present
+                if parsed.get("lockout_until"):
+                    parsed["lockout_until"] = datetime.fromisoformat(parsed["lockout_until"])
+                return parsed
+            return None
+        except Exception as e:
+            logger.error(f"Redis failed attempts read error: {e}")
+            return None
+    
+    def set_failed_attempts(self, user_id: str, data: Dict, ttl: int = 900):
+        if not self._enabled or not self._redis:
+            return
+        try:
+            import json
+            # Convert datetime to isoformat for serialization
+            serializable = dict(data)
+            if serializable.get("lockout_until"):
+                serializable["lockout_until"] = serializable["lockout_until"].isoformat()
+            self._redis.setex(self._fa_key(user_id), ttl, json.dumps(serializable))
+        except Exception as e:
+            logger.error(f"Redis failed attempts write error: {e}")
+    
+    def delete_failed_attempts(self, user_id: str):
+        if not self._enabled or not self._redis:
+            return
+        try:
+            self._redis.delete(self._fa_key(user_id))
+        except Exception as e:
+            logger.error(f"Redis failed attempts delete error: {e}")
+    
+    def clear_all(self):
+        if not self._enabled or not self._redis:
+            return
+        try:
+            for key in self._redis.scan_iter(match="guard:*"):
+                self._redis.delete(key)
+        except Exception as e:
+            logger.error(f"Redis clear all error: {e}")
+
+# Backward-compatible in-memory fallback
+_rate_limit_store: Dict[str, Dict] = {}
+_failed_attempts: Dict[str, Dict] = {}
+_redis_store = _RedisSecurityStore()
 
 class SecurityViolation(Exception):
     """Custom exception for security violations"""
@@ -57,6 +171,25 @@ def _check_rate_limit(client_fingerprint: str) -> bool:
     """Check if client is within rate limits"""
     now = datetime.now()
     
+    # Try Redis first
+    redis_data = _redis_store.get_rate_limit_data(client_fingerprint)
+    if redis_data is not None:
+        requests = redis_data.get("requests", [])
+        window_start = now - RATE_LIMIT_WINDOW
+        # Filter out old requests
+        requests = [
+            datetime.fromisoformat(r) if isinstance(r, str) else r
+            for r in requests
+            if (datetime.fromisoformat(r) if isinstance(r, str) else r) > window_start
+        ]
+        if len(requests) >= MAX_REQUESTS_PER_MINUTE:
+            _redis_store.set_rate_limit_data(client_fingerprint, {"requests": requests}, ttl=120)
+            return False
+        requests.append(now.isoformat())
+        _redis_store.set_rate_limit_data(client_fingerprint, {"requests": requests}, ttl=120)
+        return True
+    
+    # Fallback to in-memory
     if client_fingerprint not in _rate_limit_store:
         _rate_limit_store[client_fingerprint] = {
             "requests": [],
@@ -82,6 +215,15 @@ def _check_rate_limit(client_fingerprint: str) -> bool:
 
 def _check_account_lockout(user_id: str) -> bool:
     """Check if account is locked due to failed attempts"""
+    # Try Redis first
+    redis_data = _redis_store.get_failed_attempts(user_id)
+    if redis_data is not None:
+        lockout_until = redis_data.get("lockout_until")
+        if lockout_until and datetime.now() < lockout_until:
+            return True
+        return False
+    
+    # Fallback to in-memory
     if user_id not in _failed_attempts:
         return False
     
@@ -97,6 +239,18 @@ def _record_failed_attempt(user_id: str):
     """Record failed authentication attempt"""
     now = datetime.now()
     
+    # Try Redis first
+    redis_data = _redis_store.get_failed_attempts(user_id)
+    if redis_data is not None:
+        redis_data["count"] = redis_data.get("count", 0) + 1
+        redis_data["last_attempt"] = now.isoformat()
+        if redis_data["count"] >= MAX_FAILED_ATTEMPTS:
+            redis_data["lockout_until"] = (now + LOCKOUT_DURATION).isoformat()
+            logger.warning(f"Account locked due to failed attempts: {user_id}")
+        _redis_store.set_failed_attempts(user_id, redis_data, ttl=900)
+        return
+    
+    # Fallback to in-memory
     if user_id not in _failed_attempts:
         _failed_attempts[user_id] = {
             "count": 0,
@@ -115,6 +269,7 @@ def _record_failed_attempt(user_id: str):
 
 def _clear_failed_attempts(user_id: str):
     """Clear failed attempts on successful auth"""
+    _redis_store.delete_failed_attempts(user_id)
     if user_id in _failed_attempts:
         del _failed_attempts[user_id]
 
@@ -388,21 +543,25 @@ def reset_rate_limits():
     """Reset all rate limits (admin function)"""
     global _rate_limit_store
     _rate_limit_store.clear()
+    _redis_store.clear_all()
     logger.info("Rate limits reset")
 
 def reset_failed_attempts():
     """Reset all failed attempts (admin function)"""
     global _failed_attempts
     _failed_attempts.clear()
+    _redis_store.clear_all()
     logger.info("Failed attempts reset")
 
 def get_security_stats() -> dict:
     """Get current security statistics"""
+    locked_in_memory = len([
+        user_id for user_id, data in _failed_attempts.items()
+        if data.get("lockout_until") and datetime.now() < data["lockout_until"]
+    ])
     return {
         "active_rate_limits": len(_rate_limit_store),
-        "locked_accounts": len([
-            user_id for user_id, data in _failed_attempts.items()
-            if data.get("lockout_until") and datetime.now() < data["lockout_until"]
-        ]),
-        "failed_attempt_records": len(_failed_attempts)
+        "locked_accounts": locked_in_memory,
+        "failed_attempt_records": len(_failed_attempts),
+        "redis_enabled": _redis_store._enabled
     }
