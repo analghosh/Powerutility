@@ -2,20 +2,6 @@
 EPMS Auth Service - Main Application
 """
 
-# Auto-install libs package if not available
-try:
-    import libs.core.cron_manager
-except ImportError:
-    import sys
-    import subprocess
-    from pathlib import Path
-    print("📦 Installing dependencies...")
-    project_root = Path(__file__).parent.parent.parent.parent
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install", "-e", str(project_root)
-    ])
-    print("✅ Dependencies installed")
-
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

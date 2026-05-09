@@ -154,9 +154,29 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "System Cleanup",
                 "type": "maintenance",
                 "schedule": getattr(self.settings, 'SYSTEM_CLEANUP_SCHEDULE', '0 2 * * *'),
-                "enabled": getattr(self.settings, 'SYSTEM_CLEANUP_ENABLED', False),
+                "enabled": getattr(self.settings, 'SYSTEM_CLEANUP_ENABLED', True),
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
-                "description": "Cleans up old system data and logs",
+                "description": "Cleans up old integration apilog data dynamically across all *_integration_apilog collections",
+                "priority": 8
+            },
+            {
+                "job_type": "integration_apilog_cleanup",
+                "name": "Integration API Log Cleanup",
+                "type": "maintenance",
+                "schedule": getattr(self.settings, 'INTEGRATION_API_LOG_CLEANUP_SCHEDULE', '0 2 * * *'),
+                "enabled": getattr(self.settings, 'INTEGRATION_API_LOG_CLEANUP_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
+                "description": "Deletes integration API logs older than 7 days from all *_integration_apilog collections",
+                "priority": 8
+            },
+            {
+                "job_type": "scheduling_history_cleanup",
+                "name": "Scheduling History Cleanup",
+                "type": "maintenance",
+                "schedule": getattr(self.settings, 'SCHEDULING_HISTORY_CLEANUP_SCHEDULE', '0 1 * * *'),
+                "enabled": getattr(self.settings, 'SCHEDULING_HISTORY_CLEANUP_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
+                "description": "Deletes scheduling requisition calculation history older than 90 days",
                 "priority": 8
             },
             {
@@ -236,9 +256,9 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "Job Logs Cleanup",
                 "type": "maintenance",
                 "schedule": getattr(self.settings, 'JOB_LOGS_CLEANUP_SCHEDULE', '0 4 * * *'),
-                "enabled": False,
+                "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
-                "description": "Cleans up old job execution logs",
+                "description": "Cleans up old job execution logs from job_detail older than 60 days",
                 "priority": 11
             }
             ,

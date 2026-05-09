@@ -7,6 +7,7 @@ Updated: Added missing methods to libs JobDetailRepository
 import logging
 import asyncio
 import time
+import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
@@ -247,6 +248,8 @@ class CronManager(BaseCronManager):
             "peak_demand_compute": self.peak_demand_service.compute_and_store_peak,
             # System Maintenance Jobs
             "system_cleanup": self._execute_system_cleanup_job,
+            "integration_apilog_cleanup": self._execute_integration_apilog_cleanup_job,
+            "scheduling_history_cleanup": self._execute_scheduling_history_cleanup_job,
             "retry_failed_jobs": self._execute_retry_failed_jobs,
             "data_migration": self._execute_data_migration_job,
             "job_logs_cleanup": self._execute_job_logs_cleanup_job,
@@ -1301,19 +1304,92 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_system_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute system cleanup job"""
+        """Execute system cleanup job — dynamically cleans all *_integration_apilog collections."""
         logger.info("Executing system cleanup job")
         try:
-            # Placeholder for system cleanup logic
-            result = {
-                'status': 'success',
-                'message': 'System cleanup job placeholder - implementation pending',
-                'cleaned_files': 0
-            }
-            return result
+            return self._safe_run_async(self._run_integration_apilog_cleanup())
         except Exception as e:
             logger.error("Error in system cleanup job: %s", str(e))
             return {'status': 'error', 'error': str(e)}
+
+    async def _run_integration_apilog_cleanup(self):
+        """Async helper to delete old integration apilog docs across all DBs."""
+        from libs.database.mongo_client_factory import get_mongo_client, get_scheduler_client
+        cutoff = datetime.now() - timedelta(days=7)
+        total_deleted = 0
+        cleaned_collections = []
+
+        # Databases to scan
+        dbs = []
+        try:
+            dbs.append(("ingestion", get_mongo_client(settings.MONGODB_URI)[settings.MONGODB_DATABASE]))
+        except Exception as e:
+            logger.warning("Could not get ingestion DB for cleanup: %s", e)
+        try:
+            dbs.append(("scheduler", get_scheduler_client(settings.MONGODB_URI)[settings.MONGODB_DATABASE]))
+        except Exception as e:
+            logger.warning("Could not get scheduler DB for cleanup: %s", e)
+
+        apilog_pattern = re.compile(r".*_integration_apilog$", re.IGNORECASE)
+
+        for db_name, db in dbs:
+            try:
+                collection_names = await db.list_collection_names()
+                for coll_name in collection_names:
+                    if apilog_pattern.match(coll_name):
+                        collection = db[coll_name]
+                        # Try both lowercase and capitalized timestamp fields
+                        delete_result = await collection.delete_many({
+                            "$or": [
+                                {"timestamp": {"$lt": cutoff}},
+                                {"Timestamp": {"$lt": cutoff}}
+                            ]
+                        })
+                        if delete_result.deleted_count > 0:
+                            total_deleted += delete_result.deleted_count
+                            cleaned_collections.append(f"{db_name}.{coll_name}:{delete_result.deleted_count}")
+                            logger.info("Cleaned %d docs from %s.%s", delete_result.deleted_count, db_name, coll_name)
+            except Exception as e:
+                logger.error("Error cleaning integration apilog in %s: %s", db_name, e)
+
+        return {
+            'status': 'success',
+            'message': f'Cleaned {total_deleted} integration apilog docs',
+            'total_deleted': total_deleted,
+            'collections': cleaned_collections
+        }
+
+    def _execute_integration_apilog_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
+        """Dedicated integration apilog cleanup cron job."""
+        return self._execute_system_cleanup_job(payload)
+
+    def _execute_scheduling_history_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
+        """Execute scheduling requisition calculation history cleanup"""
+        logger.info("Executing scheduling history cleanup job")
+        try:
+            return self._safe_run_async(self._run_scheduling_history_cleanup())
+        except Exception as e:
+            logger.error("Error in scheduling history cleanup job: %s", str(e))
+            return {'status': 'error', 'error': str(e)}
+
+    async def _run_scheduling_history_cleanup(self):
+        """Async helper to delete old scheduling history records."""
+        from libs.database.mongo_client_factory import get_scheduler_client
+        cutoff = datetime.now() - timedelta(days=90)
+        total_deleted = 0
+        try:
+            db = get_scheduler_client(settings.MONGODB_URI)[settings.MONGODB_DATABASE]
+            collection = db["scheduling_requisition_calculation_history"]
+            result = await collection.delete_many({"archived_at": {"$lt": cutoff}})
+            total_deleted = result.deleted_count
+            logger.info("Deleted %d old scheduling history records", total_deleted)
+        except Exception as e:
+            logger.error("Error deleting old scheduling history: %s", e)
+        return {
+            'status': 'success',
+            'message': f'Deleted {total_deleted} old scheduling history records',
+            'total_deleted': total_deleted
+        }
     
     def _execute_retry_failed_jobs(self, payload: Optional[Dict[str, Any]] = None):
         """Execute retry failed jobs"""
@@ -1346,16 +1422,36 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
     
     def _execute_job_logs_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute job logs cleanup"""
+        """Execute job logs cleanup — deletes old job_detail and job_execution_logs records."""
         logger.info("Executing job logs cleanup")
         try:
-            # Placeholder for logs cleanup logic
-            result = {
+            if not self.job_detail_repository:
+                return {'status': 'error', 'error': 'job_detail_repository not available'}
+
+            deleted_job_detail = self._safe_run_async(
+                self.job_detail_repository.delete_old_executions(days_old=60)
+            )
+
+            # Also clean up execution logs if repository available
+            from libs.core.job_repositories import JobExecutionLogRepository
+            deleted_exec_logs = 0
+            try:
+                exec_log_repo = JobExecutionLogRepository(
+                    settings.AUDIT_DB_URI,
+                    settings.AUDIT_DB_NAME
+                )
+                deleted_exec_logs = self._safe_run_async(
+                    exec_log_repo.delete_old_logs(days_old=60)
+                )
+            except Exception as exec_err:
+                logger.warning("Could not clean job_execution_logs: %s", exec_err)
+
+            return {
                 'status': 'success',
-                'message': 'Job logs cleanup placeholder - implementation pending',
-                'cleaned_logs': 0
+                'message': f'Deleted {deleted_job_detail} job_detail and {deleted_exec_logs} job_execution_logs records',
+                'deleted_job_detail': deleted_job_detail,
+                'deleted_exec_logs': deleted_exec_logs
             }
-            return result
         except Exception as e:
             logger.error("Error in job logs cleanup: %s", str(e))
             return {'status': 'error', 'error': str(e)}

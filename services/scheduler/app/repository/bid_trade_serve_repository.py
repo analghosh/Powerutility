@@ -151,7 +151,7 @@ class BidTradeServeRepository(BaseServeRepository):
             # Unique Key: scheduled_at, time_block, type, group, bid_type
             unique_key = ["scheduled_at", "time_block", "type", "group", "bid_type"]
             
-            result = self.bulk_upsert_optimized(records, unique_key)
+            result = await self.bulk_upsert_optimized(records, unique_key)
             
             return {
                 "inserted_count": result.get("inserted_count", 0),

@@ -8,6 +8,8 @@ import logging
 import httpx
 from datetime import datetime
 from typing import Dict, Any, Optional, List
+from pymongo import ASCENDING
+from pymongo.errors import OperationFailure
 from services.scheduler.app.core.config import settings
 from libs.database.base_repository import BaseRepository
 from libs.database.mongo_client_factory import get_scheduler_client
@@ -25,6 +27,7 @@ class SchedulerExchangeAPIClient:
         self.db_name = settings.MONGODB_DATABASE
         self.timeout = 30.0
         self.asset_details_cache = BaseRepository('asset_master', self.db_uri, self.db_name)
+        self._apilog_index_ensured = False
 
     def _get_db(self):
         return get_scheduler_client(self.db_uri)[self.db_name]
@@ -70,12 +73,35 @@ class SchedulerExchangeAPIClient:
             logger.error(f"Error fetching exchange config: {e}")
             return None
 
+    async def _ensure_apilog_ttl_index(self, db):
+        if self._apilog_index_ensured:
+            return
+        try:
+            log_collection = db["iex_integration_apiLog"]
+            await log_collection.create_index(
+                [("Timestamp", ASCENDING)],
+                expireAfterSeconds=604800,
+                name="ttl_timestamp_7d",
+                background=True
+            )
+            self._apilog_index_ensured = True
+            logger.info("Created TTL index on iex_integration_apiLog")
+        except OperationFailure as e:
+            if e.code == 86:
+                logger.debug("TTL index already exists on iex_integration_apiLog")
+                self._apilog_index_ensured = True
+            else:
+                logger.error("Error creating TTL index on iex_integration_apiLog: %s", e)
+        except Exception as e:
+            logger.error("Error ensuring TTL index on iex_integration_apiLog: %s", e)
+
     async def _log_to_db(self, url: str, method: str, headers: Dict, request_body: Any, response_body: Any, market_type: str, api_method: str):
         """
         Log API interaction to iex_integration_apilog.
         """
         try:
             db = self._get_db()
+            await self._ensure_apilog_ttl_index(db)
             log_collection = db["iex_integration_apiLog"]
             
             log_entry = {
