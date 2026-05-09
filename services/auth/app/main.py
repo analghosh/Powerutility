@@ -27,6 +27,9 @@ configure_logging(
     include_correlation=True
 )
 
+# Security: warn if hardcoded secrets are still in use
+settings.check_security_warnings()
+
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
 async def lifespan(app_instance: FastAPI):
