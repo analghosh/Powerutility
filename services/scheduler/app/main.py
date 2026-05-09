@@ -3,23 +3,8 @@ EPMS Scheduler Service
 Handles cron jobs and scheduling
 """
 
-# Auto-install libs package if not available
-try:
-    import libs.core.cron_manager
-except ImportError:
-    import sys
-    import subprocess
-    from pathlib import Path
-    print("📦 Installing dependencies...")
-    project_root = Path(__file__).parent.parent.parent.parent
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install", "-e", str(project_root)
-    ])
-    print("✅ Dependencies installed")
-
-import sys
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -484,11 +469,52 @@ async def cache_stats():
     return get_cache_metrics()
 
 
+import re
+from fastapi import Header, HTTPException, status
+
+# Security: restricted cache pattern characters
+_CACHE_PATTERN_RE = re.compile(r"^[a-zA-Z0-9_:\-\.\*]+$")
+_MAX_PATTERN_LEN = 128
+
+async def _require_admin_auth(authorization: str = Header(None)):
+    """Dependency to require valid admin JWT for cache clear"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
+    
+    token = authorization.split(" ", 1)[1]
+    from libs.auth_client import AuthClient
+    auth_client = AuthClient(settings.AUTH_SERVICE_URL)
+    
+    async with auth_client:
+        result = await auth_client.validate_token(token)
+    
+    if not result.valid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    
+    # Require admin or cache:clear permission
+    if not (result.has_role("admin") or result.has_permission("cache:clear") or result.has_permission("*")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    
+    return result
+
+
 @app.post("/cache/clear/{pattern}")
-async def clear_cache_pattern(pattern: str):
-    """Clear cache keys matching a pattern"""
+async def clear_cache_pattern(pattern: str, user=Depends(_require_admin_auth)):
+    """Clear cache keys matching a pattern (admin only)"""
+    # Input validation
+    if len(pattern) > _MAX_PATTERN_LEN:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pattern too long")
+    
+    if not _CACHE_PATTERN_RE.match(pattern):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pattern characters")
+    
+    # Security: block overly broad patterns that would clear all keys
+    if pattern == "*" or pattern == "**":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pattern too broad")
+    
     from libs.middleware import clear_cache_pattern
     cleared_count = clear_cache_pattern(pattern)
+    logger.info(f"Cache clear by user {user.username}: pattern='{pattern}', cleared={cleared_count}")
     return {
         "message": f"Cleared {cleared_count} cache keys matching pattern '{pattern}'",
         "cleared_count": cleared_count

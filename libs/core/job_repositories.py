@@ -4,6 +4,7 @@ Database repositories for job-related operations that can be used across all ser
 """
 
 import asyncio
+import json
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -13,6 +14,24 @@ from libs.database.base_repository import BaseRepository
 from .job_entities import JobData, JobDataUpdate, JobDetail, JobDetailQuery
 
 logger = logging.getLogger(__name__)
+
+
+def _log_document_size(doc: Dict[str, Any], context: str) -> None:
+    """Log document size and warn if any field is disproportionately large."""
+    try:
+        total_size = len(json.dumps(doc, default=str))
+        if total_size > 8192:
+            field_sizes = {}
+            for key, value in doc.items():
+                field_sizes[key] = len(json.dumps(value, default=str))
+            sorted_fields = sorted(field_sizes.items(), key=lambda x: x[1], reverse=True)[:5]
+            size_breakdown = ", ".join([f"{k}={v}B" for k, v in sorted_fields])
+            logger.warning(
+                "Large %s document detected: %d bytes. Top fields: %s",
+                context, total_size, size_breakdown
+            )
+    except Exception:
+        pass
 
 
 class JobDataRepository(BaseRepository):
@@ -481,6 +500,8 @@ class JobDetailRepository(BaseRepository):
             # Ensure service field is included in the document
             job_dict["service"] = job_detail.service
             
+            _log_document_size(job_dict, "job_detail insert")
+            
             result = await self.collection.insert_one(job_dict)
             execution_id = str(result.inserted_id)
             
@@ -643,6 +664,8 @@ class JobDetailRepository(BaseRepository):
         """
         try:
             update_data["updated_at"] = datetime.now()
+            
+            _log_document_size(update_data, "job_detail update")
             
             result = await self.collection.update_one(
                 {"execution_id": execution_id},
@@ -1606,3 +1629,69 @@ class JobDetailRepository(BaseRepository):
                 "status": "error",
                 "error": str(e)
             }
+
+
+class JobExecutionLogRepository(BaseRepository):
+    """Repository for storing execution logs separately from job_detail to reduce bloat."""
+
+    def __init__(self, audit_db_uri: str, audit_db_name: str, collection_name: str = "job_execution_logs"):
+        super().__init__(
+            collection_name=collection_name,
+            mongodb_uri=audit_db_uri,
+            database_name=audit_db_name
+        )
+        self._create_indexes()
+
+    def _create_indexes(self):
+        """Create indexes for job execution logs."""
+        async def _do_create():
+            try:
+                await self.collection.create_index([("execution_id", 1)], background=True)
+                await self.collection.create_index([("created_at", -1)], background=True)
+                logger.info("Created indexes for %s collection", self.collection_name)
+            except Exception as e:
+                logger.error("Failed to create indexes for %s: %s", self.collection_name, str(e))
+        try:
+            loop = asyncio.get_running_loop()
+            loop.create_task(_do_create())
+        except RuntimeError:
+            pass
+
+    async def save_logs(self, execution_id: str, logs: List[str]) -> str:
+        """Save execution logs for a given execution_id."""
+        try:
+            if not logs:
+                return ""
+            doc = {
+                "execution_id": execution_id,
+                "logs": logs,
+                "created_at": datetime.utcnow()
+            }
+            result = await self.collection.insert_one(doc)
+            logger.debug("Saved %d logs for execution_id %s", len(logs), execution_id)
+            return str(result.inserted_id)
+        except Exception as e:
+            logger.error("Failed to save logs for execution %s: %s", execution_id, str(e))
+            return ""
+
+    async def get_logs(self, execution_id: str) -> List[str]:
+        """Retrieve execution logs for a given execution_id."""
+        try:
+            doc = await self.collection.find_one({"execution_id": execution_id})
+            if doc:
+                return doc.get("logs", [])
+            return []
+        except Exception as e:
+            logger.error("Failed to get logs for execution %s: %s", execution_id, str(e))
+            return []
+
+    async def delete_old_logs(self, days_old: int) -> int:
+        """Delete execution logs older than N days."""
+        try:
+            cutoff = datetime.now() - timedelta(days=days_old)
+            result = await self.collection.delete_many({"created_at": {"$lt": cutoff}})
+            logger.info("Deleted %d old execution logs", result.deleted_count)
+            return result.deleted_count
+        except Exception as e:
+            logger.error("Failed to delete old execution logs: %s", str(e))
+            return 0

@@ -3,51 +3,6 @@ EPMS Processing Service - Clean Structure
 Maintains essential functionality with clean router organization
 """
 
-# Auto-install libs package if not available
-import sys
-import os
-from pathlib import Path
-
-# Add project root to Python path for development
-project_root = Path(__file__).parent.parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-# Check if libs package is available and install if needed
-try:
-    import libs.core.cron_manager
-except ImportError as e:
-    # Only auto-install if we're not in a container and haven't already tried recently
-    is_development = not os.environ.get('DOCKER_CONTAINER', False)
-    install_marker = project_root / '.libs_installed'
-    
-    if is_development and not install_marker.exists():
-        print(f"📦 Installing dependencies due to import error: {e}")
-        try:
-            import subprocess
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "-e", str(project_root)
-            ], timeout=60)
-            print("✅ Dependencies installed successfully")
-            
-            # Create marker file to avoid repeated installations
-            install_marker.touch()
-            
-            # Try importing again to verify
-            import libs.core.cron_manager
-        except subprocess.TimeoutExpired:
-            print("⚠️ Installation timed out, continuing without auto-install")
-        except Exception as install_error:
-            print(f"⚠️ Failed to install dependencies: {install_error}")
-            print("Continuing with manual path setup...")
-    else:
-        if install_marker.exists():
-            print("⚠️ Dependencies were recently installed but import still failing")
-            print("This might be a path issue - continuing with manual path setup...")
-        else:
-            print(f"⚠️ Import error: {e}")
-            print("Continuing with manual path setup...")
-
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -68,6 +23,7 @@ from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMid
 
 # Import V2 authentication middleware
 from .v2.middleware.auth import V2AuthMiddleware
+from .v2.middleware.https_enforcement import HTTPSEnforcementMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -273,6 +229,9 @@ app.add_middleware(
     auth_service_url=settings.AUTH_SERVICE_URL,
     exclude_paths=exclude_paths,
 )
+
+# Add HTTPS enforcement middleware for HMAC endpoints
+app.add_middleware(HTTPSEnforcementMiddleware)
 
 # Add CORS middleware last to ensure it runs first
 app.add_middleware(

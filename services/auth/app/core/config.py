@@ -50,15 +50,15 @@ class Settings(BaseSettings):
     REDIS_BLACKLIST_DB: int = 1
     REDIS_BLACKLIST_TTL: int = 7  # Days (same as refresh token expiry)
     
-    # JWT Configuration
-    JWT_SECRET_KEY: str = "your-super-secret-jwt-key-change-in-production"
+    # JWT Configuration - MUST be set via environment variable
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ACCESS_TOKEN_EXPIRE_MINUTES: str = "30"  # Alias for JWT_ACCESS_TOKEN_EXPIRE_MINUTES
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: float = 7
     
-    # Security Configuration
-    SECRET_KEY: str = "your-super-secret-key-change-in-production"
+    # Security Configuration - MUST be set via environment variable
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
     BCRYPT_ROUNDS: int = 12
     PASSWORD_MIN_LENGTH: int = 8
     PASSWORD_MAX_LENGTH: int = 128
@@ -99,8 +99,7 @@ class Settings(BaseSettings):
     
     # CORS Configuration
     CORS_ORIGINS: List[str] = [
-        "*",  # Allow all origins for development
-        "http://localhost:3000", 
+        "http://localhost:3000",
         "http://localhost:8080",
         "http://localhost:8002",  # Scheduler service (dashboard)
         "http://localhost:8003",  # Processing service
@@ -116,10 +115,10 @@ class Settings(BaseSettings):
     HEALTH_CHECK_ENABLED: bool = True
     HEALTH_CHECK_INTERVAL_SECONDS: int = 30
     
-    # Default Admin Configuration
-    ADMIN_USERNAME: str = "admin"
-    ADMIN_EMAIL: str = "admin@epms.com"
-    ADMIN_INITIAL_PASSWORD: str = "Infi@7983"
+    # Default Admin Configuration - password MUST be set via environment variable
+    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
+    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@epms.com")
+    ADMIN_INITIAL_PASSWORD: str = os.getenv("ADMIN_INITIAL_PASSWORD", "")
     
     @model_validator(mode='after')
     def set_environment_config(self):
@@ -153,11 +152,11 @@ class Settings(BaseSettings):
             "example": {
                 "SERVICE_NAME": "auth-service",
                 "SERVICE_PORT": 8001,
-                "JWT_SECRET_KEY": "your-super-secret-jwt-key-change-in-production",
+                "JWT_SECRET_KEY": "<set-via-env-var>",
                 "MONGODB_URI": "mongodb://localhost:27017",
                 "ADMIN_USERNAME": "admin",
                 "ADMIN_EMAIL": "admin@epms.com",
-                "ADMIN_INITIAL_PASSWORD": "Admin@123"
+                "ADMIN_INITIAL_PASSWORD": "<set-via-env-var>"
             }
         }
 

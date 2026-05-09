@@ -14,6 +14,7 @@ from libs.repository.provider_repository import ProviderRepository
 from libs.repository.raw_data_repository import RawDataRepository
 from libs.middleware.correlation import set_correlation_id, get_correlation_id
 from libs.core.job_entities import JobDetail
+from libs.core.job_factory import create_job_execution_log_repository
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +53,10 @@ class BaseProcessor(ABC):
             settings.AUDIT_DB_URI,
             settings.AUDIT_DB_NAME,
             settings.JOB_DETAIL_COLLECTION
+        )
+        self.job_execution_log_repository = create_job_execution_log_repository(
+            settings.AUDIT_DB_URI,
+            settings.AUDIT_DB_NAME
         )
         
         # Cache service is now available via middleware
