@@ -29,6 +29,7 @@ import logging
 
 from .api.v1.routes import ingestion, file_upload, providers
 from .core.logger import get_ingestion_logger
+from libs.middleware import SecurityHeadersMiddleware
 
 # Initialize logger (uses global config from configure_logging above)
 logger = get_ingestion_logger("ingestion_service")
@@ -125,6 +126,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
     lifespan=lifespan,
     openapi_tags=[
         {
@@ -229,7 +231,6 @@ if settings.BASE_PATH:
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
-# Security headers added to every response
 app.add_middleware(SecurityHeadersMiddleware)
 # Add cache middleware third (executes third to last)
 app.add_middleware(
