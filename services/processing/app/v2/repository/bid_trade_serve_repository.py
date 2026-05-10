@@ -47,19 +47,19 @@ class BidTradeServeRepository(GenericRepository):
             collection = self.collection
 
             # Index on scheduled_at for date-based queries
-            collection.create_index([("scheduled_at", 1)])
+            await collection.create_index([("scheduled_at", 1)])
 
             # Index on type for filtering by market type
-            collection.create_index([("type", 1)])
+            await collection.create_index([("type", 1)])
 
             # Index on time_block for time block queries
-            collection.create_index([("time_block", 1)])
+            await collection.create_index([("time_block", 1)])
 
             # Index on bid_type (single / block)
-            collection.create_index([("bid_type", 1)])
+            await collection.create_index([("bid_type", 1)])
 
             # Compound index for date, type, time_block, and bid_type queries
-            collection.create_index([("scheduled_at", 1), ("type", 1), ("time_block", 1), ("bid_type", 1)])
+            await collection.create_index([("scheduled_at", 1), ("type", 1), ("time_block", 1), ("bid_type", 1)])
 
             logger.info(f"Created indexes for collection '{self.collection_name}'")
         except Exception as e:

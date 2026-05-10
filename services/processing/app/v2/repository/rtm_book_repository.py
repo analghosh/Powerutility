@@ -19,8 +19,6 @@ class RtmBookRepository(GenericRepository):
         # Explicitly using the collection name from Scheduler config
         self.collection_name = "rtm_book_collection" 
         logger.info(f"RtmBookRepository initialized with collection: {self.collection_name}")
-        self._create_collection_if_not_exists()
-        
     def _create_collection_if_not_exists(self):
         try:
             db = self.db

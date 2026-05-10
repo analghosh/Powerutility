@@ -21,10 +21,6 @@ class DecisionDamBlockBidIexResponseRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "dicision_dam_block_bid_iex_response"
         logger.info(f"DecisionDamBlockBidIexResponseRepository initialized with collection: {self.collection_name}")
-        self._create_collection_if_not_exists()
-        self._create_related_collections_if_not_exists()
-        self._create_indexes()
-    
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.
