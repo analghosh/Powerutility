@@ -307,19 +307,19 @@ async def get_all_role_menu_assignments(
     try:
         # Get all roles or filter by name
         if role_name:
-            role = role_repo.get_role_by_name(role_name)
+            role = await role_repo.get_role_by_name(role_name)
             roles = [role] if role else []
         else:
-            roles = role_repo.get_all_active_roles()
+            roles = await role_repo.get_all_active_roles()
         
         role_menu_summary = []
         for role in roles:
             # Get menu permissions for this role
-            menu_roles = menu_role_repo.get_menu_roles_by_role_id(role.id)
+            menu_roles = await menu_role_repo.get_menu_roles_by_role_id(role.id)
             
             menu_permissions = []
             for menu_role in menu_roles:
-                menu = menu_repo.get_menu_by_id(menu_role.menu_id)
+                menu = await menu_repo.get_menu_by_id(menu_role.menu_id)
                 if menu:
                     menu_permissions.append(MenuPermissionResponse(
                         menu_id=menu_role.menu_id,

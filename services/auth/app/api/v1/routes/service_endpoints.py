@@ -258,7 +258,7 @@ async def get_available_roles(
         from ....repository.role_repository import RoleRepository
         role_repo = RoleRepository()
         
-        roles = role_repo.get_all_roles()
+        roles = await role_repo.get_all_active_roles()
         
         # Log successful roles retrieval
         client_ip = request.client.host if request.client else None
