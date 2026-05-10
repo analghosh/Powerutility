@@ -29,12 +29,9 @@ import logging
 
 from .api.v1.routes import ingestion, file_upload, providers
 from .core.logger import get_ingestion_logger
-from libs.middleware import SecurityHeadersMiddleware
 
 # Initialize logger (uses global config from configure_logging above)
 logger = get_ingestion_logger("ingestion_service")
-
-settings.check_security_warnings()
 
 
 class HealthResponse(BaseModel):
