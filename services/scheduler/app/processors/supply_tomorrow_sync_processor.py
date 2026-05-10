@@ -137,9 +137,9 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
 
             # ── 1. Fetch dc_sg records for all three dates (no plant filter) ──────
             yesterday_records, today_records, tomorrow_records = await asyncio.gather(
-                asyncio.to_thread(self.dc_sg_repository.get_records_by_date, yesterday),
-                asyncio.to_thread(self.dc_sg_repository.get_records_by_date, today),
-                asyncio.to_thread(self.dc_sg_repository.get_records_by_date, tomorrow),
+                self.dc_sg_repository.get_records_by_date(yesterday),
+                self.dc_sg_repository.get_records_by_date(today),
+                self.dc_sg_repository.get_records_by_date(tomorrow),
             )
 
             # ── 2. Distinct plant sets per date ───────────────────────────────────
@@ -185,16 +185,11 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                 entities_to_fill = self._records_to_dc_sg_entities(missing_records, target_date, source_label)
 
                 if entities_to_fill:
-                    fill_result = await asyncio.to_thread(
-                        self.dc_sg_repository.bulk_upsert_dc_sg,
-                        entities_to_fill
-                    )
+                    fill_result = await self.dc_sg_repository.bulk_upsert_dc_sg(entities_to_fill)
                     logger.info(f"Filled missing plants into dc_sg for {label}: {fill_result}")
 
             # Re-fetch tomorrow after fills
-            tomorrow_records = await asyncio.to_thread(
-                self.dc_sg_repository.get_records_by_date, tomorrow
-            )
+            tomorrow_records = await self.dc_sg_repository.get_records_by_date(tomorrow)
 
             if not tomorrow_records:
                 logger.warning("No records found for tomorrow even after fallback. Nothing to sync.")
@@ -267,11 +262,8 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
 
             # 3. Bulk Upsert into Supply Serve
             logger.info(f"Upserting {len(entities_to_upsert)} entities into supply_serve...")
-            
-            res = await asyncio.to_thread(
-                self.supply_repository.bulk_insert_supply_serve_with_deduplication,
-                entities_to_upsert
-            )
+
+            res = await self.supply_repository.bulk_insert_supply_serve_with_deduplication(entities_to_upsert)
             
             logger.info(f"Sync complete. Result: {res}")
             return True
