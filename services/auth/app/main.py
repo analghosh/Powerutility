@@ -18,7 +18,7 @@ from .core.seeder import DatabaseSeeder
 from .services import PasswordPolicyService
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware, SecurityHeadersMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -170,9 +170,9 @@ app = FastAPI(
     The Auth Service provides endpoints for other services to validate tokens and retrieve user information.
     """,
     version="1.1.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/auth_api.json",
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/auth_api.json" if settings.DEBUG else None,
     lifespan=lifespan,
     tags=[
         {
@@ -327,6 +327,8 @@ if settings.BASE_PATH:
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
+# Security headers added to every response
+app.add_middleware(SecurityHeadersMiddleware)
 # Add cache middleware third (executes third to last)
 # in main.py
 app.add_middleware(

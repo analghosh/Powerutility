@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 import bcrypt
 import logging
+from pymongo.collation import Collation
 
 from fastapi import HTTPException, status
 from .base_repository import BaseRepository
@@ -14,6 +15,7 @@ from ..core.dto import UserDTO, AuthUserDTO
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
+CASE_INSENSITIVE_COLLATION = Collation(locale="en", strength=2)
 
 
 class UserRepository(BaseRepository):
@@ -68,33 +70,34 @@ class UserRepository(BaseRepository):
                 "is_deleted": {"$ne": True},
             })
             return UserDTO.from_db_document(user_doc) if user_doc else None
-        except Exception:
+        except Exception as e:
+            logger.debug("get_user_by_id failed for id %s: %s", user_id, type(e).__name__)
             return None
 
     async def get_user_by_username(self, username: str) -> Optional[UserDTO]:
         user_doc = await self.find_one({
-            "username": {"$regex": f"^{username}$", "$options": "i"},
+            "username": username,
             "is_deleted": {"$ne": True},
-        })
+        }, collation=CASE_INSENSITIVE_COLLATION)
         return UserDTO.from_db_document(user_doc) if user_doc else None
 
     async def get_user_by_email(self, email: str) -> Optional[UserDTO]:
         if not email:
             return None
         user_doc = await self.find_one({
-            "email": {"$regex": f"^{email}$", "$options": "i"},
+            "email": email,
             "is_deleted": {"$ne": True},
-        })
+        }, collation=CASE_INSENSITIVE_COLLATION)
         return UserDTO.from_db_document(user_doc) if user_doc else None
 
     async def authenticate_user(self, username: str, password: str) -> Optional[AuthUserDTO]:
         user_doc = await self.find_one({
             "$or": [
-                {"username": {"$regex": f"^{username}$", "$options": "i"}},
-                {"email": {"$regex": f"^{username}$", "$options": "i"}},
+                {"username": username},
+                {"email": username},
             ],
             "is_deleted": {"$ne": True},
-        })
+        }, collation=CASE_INSENSITIVE_COLLATION)
 
         if not user_doc:
             return None
@@ -132,7 +135,7 @@ class UserRepository(BaseRepository):
         current_attempts = user_doc.get("login_attempts", 0) + 1
         update_data = {"login_attempts": current_attempts}
         if current_attempts >= settings.MAX_LOGIN_ATTEMPTS:
-            update_data["locked_until"] = datetime.now() + timedelta(days=365)
+            update_data["locked_until"] = datetime.now() + timedelta(minutes=settings.LOCKOUT_DURATION_MINUTES)
             update_data["requires_admin_unlock"] = True
             logger.warning(f"Account locked for user ID: {user_id} due to {current_attempts} failed attempts")
         await self.update(str(user_id), update_data)
@@ -144,9 +147,15 @@ class UserRepository(BaseRepository):
             "requires_admin_unlock": False,
         })
 
+    # Fields that must NEVER be set through any user-facing update path regardless of caller
+    _PRIVILEGED_FIELDS = frozenset([
+        "password_hash", "login_attempts", "locked_until",
+        "is_super_admin", "is_deleted", "requires_admin_unlock",
+    ])
+
     async def update_user(self, user_id: str, update_data: dict, modified_by: Optional[str] = None) -> bool:
         try:
-            for field in ["password_hash", "login_attempts", "locked_until"]:
+            for field in self._PRIVILEGED_FIELDS:
                 update_data.pop(field, None)
             update_data["updated_at"] = datetime.now()
             return await self.update(user_id, update_data)

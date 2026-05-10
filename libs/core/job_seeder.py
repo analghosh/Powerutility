@@ -96,8 +96,25 @@ class BaseJobSeeder(ABC):
             existing_job = await self.job_data_repository.get_job(job_config["job_type"])
             
             if existing_job:
-                logger.info("Job %s already exists for service %s, skipping", 
-                           job_config["job_type"], self.service_name)
+                # If the job exists but is disabled while the seed config has it enabled,
+                # re-enable it so it resumes running on the next scheduler start.
+                if job_config.get("enabled") and not existing_job.get("enabled", True):
+                    try:
+                        await self.job_data_repository.update_job_enabled_status(
+                            job_config["job_type"], True
+                        )
+                        logger.warning(
+                            "Job %s was disabled in DB — re-enabled per seed config (service: %s)",
+                            job_config["job_type"], self.service_name
+                        )
+                    except Exception as re_enable_err:
+                        logger.error(
+                            "Failed to re-enable job %s: %s",
+                            job_config["job_type"], re_enable_err
+                        )
+                else:
+                    logger.info("Job %s already exists for service %s, skipping",
+                               job_config["job_type"], self.service_name)
                 return "skipped"
             
             # Create new job

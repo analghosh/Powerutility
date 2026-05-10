@@ -19,7 +19,7 @@ API_V2_VERSION = "2.0.0"
 from .v2.services.health_service import processing_health_service
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware, SecurityHeadersMiddleware
 
 # Import V2 authentication middleware
 from .v2.middleware.auth import V2AuthMiddleware
@@ -128,24 +128,17 @@ app = FastAPI(
     **Environment**: {environment}
     """,
     version=APP_VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
     lifespan=lifespan,
     root_path=settings.BASE_PATH
 )
 
 # V2 Sub-application with proper swagger configuration for server environments
-v2_docs_url = "/docs"
-v2_redoc_url = "/redoc"
-v2_openapi_url = "/openapi.json"
-
-# For server environments, we need to adjust the swagger URLs to include the base path
-if settings.ENVIRONMENT in ["server", "docker"]:
-    # The swagger URLs will be accessible at /processing/api/v2/docs, etc.
-    v2_docs_url = "/docs"  # Keep relative to the mounted path
-    v2_redoc_url = "/redoc"  # Keep relative to the mounted path
-    v2_openapi_url = "/openapi.json"  # Keep relative to the mounted path
+v2_docs_url = "/docs" if settings.DEBUG else None
+v2_redoc_url = "/redoc" if settings.DEBUG else None
+v2_openapi_url = "/openapi.json" if settings.DEBUG else None
 
 v2_app = FastAPI(
     title="EPMS Processing Service - V2",
@@ -185,6 +178,8 @@ app.add_middleware(
 
 # Add correlation middleware second
 app.add_middleware(CorrelationMiddleware)
+# Security headers added to every response
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Define paths to exclude from authentication
 exclude_paths = [

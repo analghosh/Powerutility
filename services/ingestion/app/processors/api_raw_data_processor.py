@@ -59,11 +59,13 @@ API Configuration Options:
 """
 
 import asyncio
+import ipaddress
 import json
 import logging
-import xml.etree.ElementTree as ET
+import defusedxml.ElementTree as ET
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse
 import csv
 import io
 import base64
@@ -685,6 +687,36 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error extracting API configuration from provider %s metadata: %s", provider.code, str(e))
             return None
 
+    def _validate_provider_url(self, url: str) -> None:
+        """Reject URLs that could be used for SSRF attacks."""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            raise ValueError(f"Malformed URL: {url}")
+
+        if parsed.scheme not in ("http", "https"):
+            raise ValueError(f"Disallowed URL scheme '{parsed.scheme}': only http/https are permitted")
+
+        hostname = parsed.hostname
+        if not hostname:
+            raise ValueError("URL has no hostname")
+
+        # Reject bare IP literals that resolve to private/loopback/link-local ranges
+        try:
+            addr = ipaddress.ip_address(hostname)
+            if addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_reserved:
+                raise ValueError(f"Disallowed IP address '{hostname}': private/loopback/link-local ranges are not permitted")
+        except ValueError as exc:
+            # Re-raise if it came from our own check above
+            if "Disallowed" in str(exc):
+                raise
+            # Otherwise hostname is a domain name — check for obvious localhost aliases
+            pass
+
+        lower = hostname.lower()
+        if lower in ("localhost", "ip6-localhost", "ip6-loopback") or lower.endswith(".localhost"):
+            raise ValueError(f"Disallowed hostname '{hostname}': localhost is not permitted")
+
     async def _fetch_api_data(self, api_config: Dict[str, Any], provider: ProviderEntity) -> Dict[str, Any]:
         """
         Fetch data from API endpoint
@@ -699,6 +731,14 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         try:
             # Prepare request parameters
             url = api_config['url']
+
+            # SSRF protection: reject private/loopback/link-local targets
+            try:
+                self._validate_provider_url(url)
+            except ValueError as e:
+                logger.error("SSRF protection blocked request for provider %s: %s", provider.code, str(e))
+                return {"data": [], "log_id": None}
+
             method = api_config['method']
             timeout = api_config['timeout']
             params = api_config.get('params', {})
@@ -962,18 +1002,24 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Invalid JSON response for provider %s: %s", provider.code, str(e))
             return []
 
+    # 50 MB cap for API response bodies — prevents DoS via huge payloads
+    _MAX_RESPONSE_BYTES = 50 * 1024 * 1024
+
     def _parse_xml_response(self, response_text: str, provider: ProviderEntity) -> List[Dict[str, Any]]:
         """
         Parse XML response
-        
+
         Args:
             response_text: XML response text
             provider: Provider entity for context
-            
+
         Returns:
             List[Dict[str, Any]]: Parsed data records
         """
         try:
+            if len(response_text.encode()) > self._MAX_RESPONSE_BYTES:
+                logger.error("XML response too large for provider %s (> %d MB)", provider.code, self._MAX_RESPONSE_BYTES // (1024 * 1024))
+                return []
             root = ET.fromstring(response_text)
             records = []
             
@@ -989,6 +1035,10 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         except ET.ParseError as e:
             logger.error("Invalid XML response for provider %s: %s", provider.code, str(e))
             return []
+        except Exception as e:
+            # Catches defusedxml.DefusedXmlException and related security violations
+            logger.error("Unsafe or malformed XML response for provider %s: %s", provider.code, type(e).__name__)
+            return []
 
     def _parse_csv_response(self, response_text: str, provider: ProviderEntity) -> List[Dict[str, Any]]:
         """
@@ -1002,6 +1052,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             List[Dict[str, Any]]: Parsed data records
         """
         try:
+            if len(response_text.encode()) > self._MAX_RESPONSE_BYTES:
+                logger.error("CSV response too large for provider %s (> %d MB)", provider.code, self._MAX_RESPONSE_BYTES // (1024 * 1024))
+                return []
             # Use pandas to parse CSV
             df = pd.read_csv(io.StringIO(response_text))
             return df.to_dict('records')
