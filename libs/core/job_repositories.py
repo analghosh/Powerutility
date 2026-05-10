@@ -36,21 +36,25 @@ def _log_document_size(doc: Dict[str, Any], context: str) -> None:
 
 class JobDataRepository(BaseRepository):
     """Repository for job configuration data"""
-    
+    _indexes_created = set()
+
     def __init__(self, audit_db_uri: str, audit_db_name: str, job_data_collection: str):
         """Initialize the repository with MongoDB connection"""
-        
+
         super().__init__(
             collection_name=job_data_collection,
             mongodb_uri=audit_db_uri,
             database_name=audit_db_name
         )
-        
+
         # Create indexes for better performance
         self._create_indexes()
-    
+
     def _create_indexes(self):
         """Create database indexes for optimal performance"""
+        if self.collection_name in JobDataRepository._indexes_created:
+            return
+
         async def _do_create():
             try:
                 # Primary indexes
@@ -59,17 +63,18 @@ class JobDataRepository(BaseRepository):
                 await self.collection.create_index([("type", 1)])
                 await self.collection.create_index([("priority", 1)])
                 await self.collection.create_index([("service", 1)])
-                
+
                 # Compound indexes
                 await self.collection.create_index([("enabled", 1), ("type", 1)])
                 await self.collection.create_index([("enabled", 1), ("service", 1)])
                 await self.collection.create_index([("created_at", -1)])
                 await self.collection.create_index([("updated_at", -1)])
-                
+
                 logger.info("Created indexes for job_data collection")
+                JobDataRepository._indexes_created.add(self.collection_name)
             except (ValueError, TypeError, OSError) as e:
                 logger.error("Failed to create indexes: %s", str(e))
-        
+
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(_do_create())
@@ -430,21 +435,26 @@ class JobDataRepository(BaseRepository):
 
 class JobDetailRepository(BaseRepository):
     """Repository for job execution logs (time series data)"""
-    
+
+    _indexes_created = set()
+
     def __init__(self, audit_db_uri: str, audit_db_name: str, job_detail_collection: str):
         """Initialize the repository with MongoDB connection"""
-        
+
         super().__init__(
             collection_name=job_detail_collection,
             mongodb_uri=audit_db_uri,
             database_name=audit_db_name
         )
-        
+
         # Create indexes for better performance
         self._create_indexes()
-    
+
     def _create_indexes(self):
         """Create database indexes for optimal performance"""
+        if self.collection_name in JobDetailRepository._indexes_created:
+            return
+
         async def _do_create():
             try:
                 # Primary indexes for time series data
@@ -453,11 +463,11 @@ class JobDetailRepository(BaseRepository):
                 await self.collection.create_index([("status", 1)])
                 await self.collection.create_index([("success", 1)])
                 await self.collection.create_index([("service", 1)])
-                
+
                 # Time-based indexes (most important for time series)
                 await self.collection.create_index([("execution_start", -1)])
                 await self.collection.create_index([("created_at", -1)])
-                
+
                 # Compound indexes for common query patterns
                 await self.collection.create_index([("job_id", 1), ("execution_start", -1)])
                 await self.collection.create_index([("job_id", 1), ("status", 1)])
@@ -465,11 +475,12 @@ class JobDetailRepository(BaseRepository):
                 await self.collection.create_index([("service", 1), ("execution_start", -1)])
                 await self.collection.create_index([("status", 1), ("execution_start", -1)])
                 await self.collection.create_index([("success", 1), ("execution_start", -1)])
-                
+
                 logger.info("Created indexes for job_detail collection")
+                JobDetailRepository._indexes_created.add(self.collection_name)
             except (ValueError, TypeError, OSError) as e:
                 logger.error("Failed to create indexes: %s", str(e))
-        
+
         try:
             loop = asyncio.get_running_loop()
             loop.create_task(_do_create())
@@ -1634,6 +1645,8 @@ class JobDetailRepository(BaseRepository):
 class JobExecutionLogRepository(BaseRepository):
     """Repository for storing execution logs separately from job_detail to reduce bloat."""
 
+    _indexes_created = set()
+
     def __init__(self, audit_db_uri: str, audit_db_name: str, collection_name: str = "job_execution_logs"):
         super().__init__(
             collection_name=collection_name,
@@ -1644,11 +1657,15 @@ class JobExecutionLogRepository(BaseRepository):
 
     def _create_indexes(self):
         """Create indexes for job execution logs."""
+        if self.collection_name in JobExecutionLogRepository._indexes_created:
+            return
+
         async def _do_create():
             try:
                 await self.collection.create_index([("execution_id", 1)], background=True)
                 await self.collection.create_index([("created_at", -1)], background=True)
                 logger.info("Created indexes for %s collection", self.collection_name)
+                JobExecutionLogRepository._indexes_created.add(self.collection_name)
             except Exception as e:
                 logger.error("Failed to create indexes for %s: %s", self.collection_name, str(e))
         try:
