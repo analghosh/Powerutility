@@ -48,9 +48,9 @@ class BaseRepository:
             logger.error(f"Error finding document by ID in {self.collection_name}: {e}")
             return None
 
-    async def find_one(self, filter: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def find_one(self, filter: Dict[str, Any], **kwargs) -> Optional[Dict[str, Any]]:
         try:
-            return await self.collection.find_one(filter)
+            return await self.collection.find_one(filter, **kwargs)
         except Exception as e:
             logger.error(f"Error finding document in {self.collection_name}: {e}")
             return None

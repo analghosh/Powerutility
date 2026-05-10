@@ -20,7 +20,7 @@ from .seeder.timeblock_seeder import TimeblockSeeder
 from .shared.middleware.error_handler import ErrorHandlerMiddleware
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware, SecurityHeadersMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -175,7 +175,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.SERVICE_NAME,
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
 )
 
 # Add error handling middleware
@@ -202,6 +205,8 @@ logging_config = {
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
+# Security headers added to every response
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Add Auth Middleware
 # AuthMiddleware removed to allow internal trigger without authentication

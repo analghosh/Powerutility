@@ -23,47 +23,6 @@ audit_logger = get_audit_logger()
 # Initialize provider service
 provider_service = ProviderManagementService()
 
-@router.get("/debug/auth", tags=["Debug"])
-async def debug_auth(
-    _current_user: Dict[str, Any] = Depends(require_page_access("Provider Management"))
-):
-    """
-    Debug endpoint to check authentication and audit logging
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    user_id = _current_user.get("user_id", "unknown")
-    session_id = _current_user.get("session_id", "unknown")
-    
-    logger.info(f"Debug auth endpoint called")
-    logger.info(f"Full _current_user: {_current_user}")
-    logger.info(f"Extracted user_id: {user_id}")
-    logger.info(f"Extracted session_id: {session_id}")
-    
-    # Test audit logging
-    try:
-        audit_result = audit_logger.log_user_action(
-            service="ingestion",
-            user_id=user_id,
-            action="debug_test",
-            message="Debug test of audit logging",
-            session_id=session_id,
-            endpoint="/providers/debug/auth",
-            test=True
-        )
-        logger.info(f"Audit logging test result: {audit_result}")
-        
-        return {
-            "current_user": _current_user,
-            "extracted_session_id": session_id,
-        }
-    except Exception as e:
-        logger.error(f"Audit logging test failed: {e}")
-        return {
-            "current_user": _current_user,
-            "extracted_session_id": session_id,
-        }
 
 @router.get("", response_model=ProviderListResponse)
 async def get_providers(
@@ -147,7 +106,7 @@ async def get_providers(
         
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get providers: {str(e)}"
+            detail="Failed to get providers"
         ) from e
 
 @router.get("/{provider_id}", response_model=ProviderResponse)
@@ -222,7 +181,7 @@ async def get_provider_by_id(
         
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to get provider: {str(e)}"
+            detail="Failed to get provider"
         ) from e
 
 @router.post("", response_model=CreateProviderResponse)
@@ -383,7 +342,7 @@ async def create_provider(
         
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to create provider: {str(e)}"
+            detail="Failed to create provider"
         ) from e
 
 @router.put("/{provider_id}", response_model=UpdateProviderResponse)
@@ -449,7 +408,7 @@ async def update_provider(
         
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to update provider: {str(e)}"
+            detail="Failed to update provider"
         ) from e
 
 @router.patch("/{provider_id}/enable-disable", response_model=EnableDisableProviderResponse)
@@ -518,7 +477,7 @@ async def enable_disable_provider(
         
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to update provider status: {str(e)}"
+            detail="Failed to update provider status"
         ) from e
 
 @router.delete("/{provider_id}", response_model=DeleteProviderResponse)
@@ -582,6 +541,6 @@ async def delete_provider(
         
         raise HTTPException(
             status_code=500,
-            detail=f"Failed to delete provider: {str(e)}"
+            detail="Failed to delete provider"
         ) from e
 

@@ -8,10 +8,20 @@ import uuid
 import shutil
 import zipfile
 import logging
+import magic
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime
-from fastapi import UploadFile
+from fastapi import UploadFile, HTTPException
+
+# Allowed MIME types and their expected file extensions
+_ALLOWED_MIME_TYPES = {
+    "text/csv",
+    "text/plain",
+    "application/csv",
+    "application/vnd.ms-excel",
+}
+_MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +50,14 @@ class FileStorageService:
         try:
             upload_path = self.upload_dir / upload_id
             upload_path.mkdir(exist_ok=True)
-            # Preserve original extension/name
-            stored_filename = file_name or f"{upload_id}.bin"
-            file_path = (upload_path / stored_filename).resolve()
+            # Strip any directory components from the caller-supplied name to prevent path traversal
+            safe_name = Path(file_name).name if file_name else f"{upload_id}.bin"
+            if not safe_name:
+                safe_name = f"{upload_id}.bin"
+            file_path = (upload_path / safe_name).resolve()
+            # Verify the resolved path stays inside the intended directory
+            if not file_path.is_relative_to(upload_path.resolve()):
+                raise ValueError(f"Path traversal detected for upload_id={upload_id}")
             with open(file_path, "wb") as f:
                 f.write(file_content)
             logger.info("Saved file for upload_id=%s at %s", upload_id, file_path)
@@ -67,16 +82,34 @@ class FileStorageService:
             upload_path = self.upload_dir / upload_id
             upload_path.mkdir(exist_ok=True)
             
-            # Generate unique filename
+            # Generate unique filename — use only the suffix to avoid injecting directory separators
             file_extension = Path(file.filename or "unknown").suffix
             stored_filename = f"{upload_id}{file_extension}"
             file_path = (upload_path / stored_filename).resolve()
-            
-            # Save file to disk
+            if not file_path.is_relative_to(upload_path.resolve()):
+                raise ValueError(f"Path traversal detected for upload_id={upload_id}")
+
+            # Read content and validate before writing
+            content = await file.read()
+
+            # Size guard
+            if len(content) > _MAX_FILE_SIZE_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds maximum allowed size of {_MAX_FILE_SIZE_BYTES // (1024 * 1024)} MB"
+                )
+
+            # MIME magic-byte validation
+            detected_mime = magic.from_buffer(content, mime=True)
+            if detected_mime not in _ALLOWED_MIME_TYPES:
+                raise HTTPException(
+                    status_code=415,
+                    detail=f"Unsupported file type. Allowed types: CSV"
+                )
+
             with open(file_path, "wb") as buffer:
-                content = await file.read()
                 buffer.write(content)
-            
+
             file_info = {
                 "upload_id": upload_id,
                 "original_filename": file.filename,

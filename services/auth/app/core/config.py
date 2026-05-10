@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     SERVICE_HOST: str = "0.0.0.0"
     HOST: str = "0.0.0.0"  # Alias for SERVICE_HOST
     PORT: str = "8001"  # Alias for SERVICE_PORT
-    DEBUG: bool = True
+    DEBUG: bool = False  # Default to False for security; set to True explicitly for development
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     
@@ -50,15 +50,15 @@ class Settings(BaseSettings):
     REDIS_BLACKLIST_DB: int = 1
     REDIS_BLACKLIST_TTL: int = 7  # Days (same as refresh token expiry)
     
-    # JWT Configuration - set via env var; falls back to old value for backward compatibility
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY") or "your-super-secret-jwt-key-change-in-production"
+    # JWT Configuration - must be set via env var; no insecure fallback
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ACCESS_TOKEN_EXPIRE_MINUTES: str = "30"  # Alias for JWT_ACCESS_TOKEN_EXPIRE_MINUTES
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: float = 7
     
-    # Security Configuration - set via env var; falls back to old value for backward compatibility
-    SECRET_KEY: str = os.getenv("SECRET_KEY") or "your-super-secret-key-change-in-production"
+    # Security Configuration - must be set via env var; no insecure fallback
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
     BCRYPT_ROUNDS: int = 12
     PASSWORD_MIN_LENGTH: int = 8
     PASSWORD_MAX_LENGTH: int = 128
@@ -97,6 +97,12 @@ class Settings(BaseSettings):
     SESSION_TIMEOUT_HOURS: int = 24
     MAX_SESSIONS_PER_USER: int = 5
     
+    # Proxy Configuration
+    # Comma-separated list of trusted reverse-proxy IPs (e.g. "127.0.0.1,10.0.0.1").
+    # When set, X-Forwarded-For / X-Real-IP are only honoured for requests whose
+    # direct socket peer matches one of these IPs.  Leave empty in local dev.
+    TRUSTED_PROXIES: str = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
+
     # CORS Configuration
     CORS_ORIGINS: List[str] = [
         "http://localhost:3000",
@@ -115,10 +121,10 @@ class Settings(BaseSettings):
     HEALTH_CHECK_ENABLED: bool = True
     HEALTH_CHECK_INTERVAL_SECONDS: int = 30
     
-    # Default Admin Configuration - set via env var; falls back to old value for backward compatibility
+    # Default Admin Configuration - must be set via env var; no insecure fallback
     ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@epms.com")
-    ADMIN_INITIAL_PASSWORD: str = os.getenv("ADMIN_INITIAL_PASSWORD") or "Infi@7983"
+    ADMIN_INITIAL_PASSWORD: str = os.getenv("ADMIN_INITIAL_PASSWORD", "")
     
     @model_validator(mode='after')
     def set_environment_config(self):
@@ -139,29 +145,70 @@ class Settings(BaseSettings):
         return self
     
     def check_security_warnings(self):
-        """Log critical warnings if hardcoded/insecure secrets are in use.
+        """Validate security configuration and fail startup if insecure.
         Call this at application startup (auth service only).
         """
         import logging
         logger = logging.getLogger(__name__)
         
-        if not self.JWT_SECRET_KEY or len(self.JWT_SECRET_KEY) < 32:
-            logger.critical(
-                "SECURITY WARNING: JWT_SECRET_KEY is not set or too short. "
-                "Set JWT_SECRET_KEY environment variable to a secure random string (>=32 chars)."
+        # Check JWT_SECRET_KEY
+        if not self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY must be set via environment variable. "
+                "Set JWT_SECRET_KEY to a secure random string (>=32 chars)."
             )
         
-        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32:
-            logger.critical(
-                "SECURITY WARNING: SECRET_KEY is not set or too short. "
-                "Set SECRET_KEY environment variable to a secure random string (>=32 chars)."
+        if len(self.JWT_SECRET_KEY) < 32:
+            raise ValueError(
+                f"SECURITY ERROR: JWT_SECRET_KEY must be at least 32 characters long. "
+                f"Current length: {len(self.JWT_SECRET_KEY)}"
             )
         
-        if not self.ADMIN_INITIAL_PASSWORD or len(self.ADMIN_INITIAL_PASSWORD) < 8:
-            logger.critical(
-                "SECURITY WARNING: ADMIN_INITIAL_PASSWORD is not set or too short. "
-                "Set ADMIN_INITIAL_PASSWORD environment variable before first startup."
+        if "your-super-secret-jwt-key-change-in-production" in self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY contains insecure default value. "
+                "Set a secure random string via JWT_SECRET_KEY environment variable."
             )
+        
+        # Check SECRET_KEY
+        if not self.SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: SECRET_KEY must be set via environment variable. "
+                "Set SECRET_KEY to a secure random string (>=32 chars)."
+            )
+        
+        if len(self.SECRET_KEY) < 32:
+            raise ValueError(
+                f"SECURITY ERROR: SECRET_KEY must be at least 32 characters long. "
+                f"Current length: {len(self.SECRET_KEY)}"
+            )
+        
+        if "your-super-secret-key-change-in-production" in self.SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: SECRET_KEY contains insecure default value. "
+                "Set a secure random string via SECRET_KEY environment variable."
+            )
+        
+        # Check ADMIN_INITIAL_PASSWORD
+        if not self.ADMIN_INITIAL_PASSWORD:
+            raise ValueError(
+                "SECURITY ERROR: ADMIN_INITIAL_PASSWORD must be set via environment variable. "
+                "Set ADMIN_INITIAL_PASSWORD before first startup."
+            )
+        
+        if len(self.ADMIN_INITIAL_PASSWORD) < 8:
+            raise ValueError(
+                f"SECURITY ERROR: ADMIN_INITIAL_PASSWORD must be at least 8 characters long. "
+                f"Current length: {len(self.ADMIN_INITIAL_PASSWORD)}"
+            )
+        
+        if "Infi@7983" in self.ADMIN_INITIAL_PASSWORD:
+            raise ValueError(
+                "SECURITY ERROR: ADMIN_INITIAL_PASSWORD contains insecure default value. "
+                "Set a secure password via ADMIN_INITIAL_PASSWORD environment variable."
+            )
+        
+        logger.info("Security configuration validation passed")
     
     @property
     def BASE_PATH(self) -> str:

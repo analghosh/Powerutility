@@ -409,7 +409,184 @@ class CronManager(BaseCronManager):
                 "schedule": "0 2 * * *",  # Every day at 2 AM
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
-            }
+            },
+            # Demand/Supply Sync Jobs
+            {
+                "job_type": "demand_temp_sync",
+                "name": "Demand Temp Sync",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "supply_tomorrow_sync",
+                "name": "Supply Tomorrow Sync",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # Live Sync Jobs
+            {
+                "job_type": "bid_trade_live_sync",
+                "name": "Bid Trade Live Sync",
+                "schedule": "*/30 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "rtm_single_bid_book_sync",
+                "name": "RTM Single Bid Book Sync",
+                "schedule": "*/30 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "dam_single_bid_book_sync",
+                "name": "DAM Single Bid Book Sync",
+                "schedule": "0,30 14-16 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # DSM and RTM Calculation Jobs
+            {
+                "job_type": "dsm_rate_calculation",
+                "name": "DSM Rate and Net DSM Amount Calculation",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "new_dsm_rate_calculation",
+                "name": "New DSM Rate and Net DSM Amount Calculation",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "rtm_scheduling_calculation",
+                "name": "RTM Scheduling Calculation",
+                "schedule": "*/30 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # Bid Lapse Processing Jobs
+            {
+                "job_type": "rtm_bid_lapse_processing",
+                "name": "RTM Bid Lapse Processing",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "rtm_block_bid_lapse_processing",
+                "name": "RTM Block Bid Lapse Processing",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "rtm_block_bid_book_sync",
+                "name": "RTM Block Bid Book Sync",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # Bid Capture Jobs
+            {
+                "job_type": "dam_bid_capture_snapshot",
+                "name": "DAM Bid Capture Snapshot",
+                "schedule": "59 10 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # Limit Values Job
+            {
+                "job_type": "limit_values_approval_processing",
+                "name": "Limit Values Approval Processing",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # Data Archival Jobs (missing from original fallback)
+            {
+                "job_type": "demand_serve_archival",
+                "name": "Demand Serve Data Archival",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "supply_serve_archival",
+                "name": "Supply Serve Data Archival",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "weather_serve_archival",
+                "name": "Weather Serve Data Archival",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "bid_serve_archival",
+                "name": "Bid Serve Data Archival",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "renewable_serve_archival",
+                "name": "Renewable Serve Data Archival",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # Additional Maintenance Jobs (missing from original fallback)
+            {
+                "job_type": "scheduling_history_cleanup",
+                "name": "Scheduling History Cleanup",
+                "schedule": "0 1 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "integration_apilog_cleanup",
+                "name": "Integration API Log Cleanup",
+                "schedule": "0 2 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "job_logs_cleanup",
+                "name": "Job Logs Cleanup",
+                "schedule": "0 4 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            # Disabled by default
+            {
+                "job_type": "dam_bid_status_sync",
+                "name": "DAM Bid Status Sync",
+                "schedule": "0,30 14-15 * * *",
+                "enabled": False,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "rtm_bid_status_sync",
+                "name": "RTM Bid Status Sync",
+                "schedule": "*/30 * * * *",
+                "enabled": False,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "data_migration",
+                "name": "Data Migration to Historical",
+                "schedule": "0 3 * * *",
+                "enabled": False,
+                "timezone": settings.CRON_TIMEZONE
+            },
         ]
         
         registered_count = 0
