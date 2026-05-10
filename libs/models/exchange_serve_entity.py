@@ -100,7 +100,7 @@ class ExchangeServeEntity(BaseModel):
         time_block = raw_data.get("time_block", 0)  # Expect processed time_block number
         
         # Get scheduled date and convert to date object
-        scheduled_at_raw = raw_data.get("scheduled_at")
+        scheduled_at_raw = raw_data.get("scheduled_at") or raw_data.get("Date") or raw_data.get("date")
         if isinstance(scheduled_at_raw, datetime):
             scheduled_at = scheduled_at_raw.date()
         elif isinstance(scheduled_at_raw, date):

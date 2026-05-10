@@ -346,6 +346,69 @@ class CronManager(BaseCronManager):
                 "schedule": "0 0 * * *", # Every day at midnight
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_data_processing",
+                "name": "Exchange Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_trade_processing",
+                "name": "Exchange Trade Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_dsm_processing",
+                "name": "Exchange DSM Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "weather_data_processing",
+                "name": "Weather Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "bid_data_processing",
+                "name": "Bid Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "renewable_data_processing",
+                "name": "Renewable Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "supply_data_midnight_fill",
+                "name": "Supply Data Midnight Fill",
+                "schedule": "0 0 * * *",  # Every day at midnight
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "peak_demand_compute",
+                "name": "Peak Demand Compute",
+                "schedule": "0 */6 * * *",  # Every 6 hours
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_serve_archival",
+                "name": "Exchange Serve Archival",
+                "schedule": "0 2 * * *",  # Every day at 2 AM
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
             }
         ]
         
