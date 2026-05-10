@@ -346,6 +346,69 @@ class CronManager(BaseCronManager):
                 "schedule": "0 0 * * *", # Every day at midnight
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_data_processing",
+                "name": "Exchange Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_trade_processing",
+                "name": "Exchange Trade Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_dsm_processing",
+                "name": "Exchange DSM Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "weather_data_processing",
+                "name": "Weather Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "bid_data_processing",
+                "name": "Bid Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "renewable_data_processing",
+                "name": "Renewable Data Processing",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "supply_data_midnight_fill",
+                "name": "Supply Data Midnight Fill",
+                "schedule": "0 0 * * *",  # Every day at midnight
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "peak_demand_compute",
+                "name": "Peak Demand Compute",
+                "schedule": "0 */6 * * *",  # Every 6 hours
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "exchange_serve_archival",
+                "name": "Exchange Serve Archival",
+                "schedule": "0 2 * * *",  # Every day at 2 AM
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
             }
         ]
         
@@ -382,7 +445,7 @@ class CronManager(BaseCronManager):
                 if settings.RUN_ALL_JOBS_ON_STARTUP:
                     try:
                         # Try to get the current event loop
-                        loop = asyncio.get_event_loop()
+                        loop = asyncio.get_running_loop()
                         if loop.is_running():
                             # If loop is running, create a task
                             asyncio.create_task(self._run_all_jobs_on_startup())
@@ -404,8 +467,8 @@ class CronManager(BaseCronManager):
             logger.info("Running all enabled jobs on startup...")
             logger.info("   Startup delay: %s seconds", settings.STARTUP_JOB_DELAY_SECONDS)
             
-            # Wait for the configured delay
-            time.sleep(settings.STARTUP_JOB_DELAY_SECONDS)
+            # Wait for the configured delay without blocking the FastAPI event loop
+            await asyncio.sleep(settings.STARTUP_JOB_DELAY_SECONDS)
             
             # Get all enabled jobs with their priorities from database
             enabled_jobs_with_priority = []
@@ -454,7 +517,7 @@ class CronManager(BaseCronManager):
                 # Add delay between priority groups (except for the last priority group)
                 if priority != max(jobs_by_priority.keys()):
                     logger.info("   Waiting %s seconds before next priority group...", settings.STARTUP_JOB_INTERVAL_SECONDS)
-                    time.sleep(settings.STARTUP_JOB_INTERVAL_SECONDS)
+                    await asyncio.sleep(settings.STARTUP_JOB_INTERVAL_SECONDS)
             
             logger.info("Completed startup job execution")
             
@@ -1185,16 +1248,16 @@ class CronManager(BaseCronManager):
         """Safely run an async coroutine, handling existing event loops"""
         import asyncio
         try:
-            # Check if we're already in an event loop
-            loop = asyncio.get_running_loop()
-            # If we are, create a task and run it in a thread
-            import concurrent.futures
-            with concurrent.futures.ThreadPoolExecutor() as executor:
-                future = executor.submit(asyncio.run, coro)
-                return future.result()
+            asyncio.get_running_loop()
         except RuntimeError:
             # No event loop running, safe to use asyncio.run
             return asyncio.run(coro)
+
+        coro.close()
+        raise RuntimeError(
+            "_safe_run_async cannot synchronously wait while an event loop is running; "
+            "await the coroutine or schedule it with asyncio.create_task instead"
+        )
 
     def _cleanup_job_connections(self):
         """
@@ -1314,15 +1377,15 @@ class CronManager(BaseCronManager):
 
     async def _run_integration_apilog_cleanup(self):
         """Async helper to delete old integration apilog docs across all DBs."""
-        from libs.database.mongo_client_factory import get_mongo_client, get_scheduler_client
+        from libs.database.mongo_client_factory import get_motor_client, get_scheduler_client
         cutoff = datetime.now() - timedelta(days=7)
         total_deleted = 0
         cleaned_collections = []
 
-        # Databases to scan
+        # Databases to scan — use Motor async clients, not sync pymongo
         dbs = []
         try:
-            dbs.append(("ingestion", get_mongo_client(settings.MONGODB_URI)[settings.MONGODB_DATABASE]))
+            dbs.append(("ingestion", get_motor_client(settings.MONGODB_URI, "ingestion_service")[settings.MONGODB_DATABASE]))
         except Exception as e:
             logger.warning("Could not get ingestion DB for cleanup: %s", e)
         try:

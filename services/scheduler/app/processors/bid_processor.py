@@ -25,8 +25,8 @@ class BidProcessor(BaseProcessor):
         super().__init__()
         self.repository = BidTradeServeRepository()
 
-        # Preload timeblock mappings for better performance using base processor's caching
-        self.preload_timeblock_mappings()
+        # Note: preload_timeblock_mappings is async and must be called from an async context.
+        # It will be invoked lazily on first use via get_timeblock_by_time_range.
 
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
@@ -184,7 +184,7 @@ class BidProcessor(BaseProcessor):
                         te = item.get("Time_End") or item.get("time_end")
                         if ts and te:
                             # Use base processor's timeblock lookup method
-                            timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                            timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                             if timeblock_data:
                                 item["time_block"] = timeblock_data.get("timeblock")
                             else:
@@ -390,7 +390,7 @@ class BidProcessor(BaseProcessor):
                             te = rec_dict.get("Time_End") or rec_dict.get("time_end")
                             if ts and te:
                                 # Use base processor's timeblock lookup method
-                                timeblock_data = self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
+                                timeblock_data = await self.get_timeblock_by_time_range(str(ts).strip(), str(te).strip())
                                 if timeblock_data:
                                     rec_dict["time_block"] = timeblock_data.get("timeblock")
                                 else:
@@ -619,7 +619,7 @@ class BidProcessor(BaseProcessor):
     
 
 
-    def _get_or_lookup_timeblock(self, record: Dict[str, Any]) -> Optional[int]:
+    async def _get_or_lookup_timeblock(self, record: Dict[str, Any]) -> Optional[int]:
         """
         Get timeblock from record or lookup based on time range using base processor methods
 
@@ -644,7 +644,7 @@ class BidProcessor(BaseProcessor):
 
         if time_start and time_end:
             # Use base processor's timeblock lookup method
-            timeblock_data = self.get_timeblock_by_time_range(str(time_start).strip(), str(time_end).strip())
+            timeblock_data = await self.get_timeblock_by_time_range(str(time_start).strip(), str(time_end).strip())
             if timeblock_data:
                 return timeblock_data.get("timeblock")
             

@@ -20,9 +20,6 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
             collection_name = settings.MONGODB_RTM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION
         self.collection_name = collection_name
         logger.info(f"RTMSingleBidDataForApprovalRepository initialized with collection: {collection_name}")
-        self._create_collection_if_not_exists()
-        self._create_indexes()
-
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.

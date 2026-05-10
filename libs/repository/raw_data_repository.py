@@ -21,11 +21,13 @@ class RawDataRepository(BaseRepository):
     Repository for managing all raw data in single collection
     Uses metadata to differentiate between data types and providers
     """
-    
+
+    _collection_initialized = set()
+
     def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
         """
         Initialize raw data repository
-        
+
         Args:
             mongodb_uri: MongoDB connection URI
             database_name: Database name
@@ -36,7 +38,7 @@ class RawDataRepository(BaseRepository):
             self.collection_name = f"{data_type.lower()}_raw_data"
         else:
             self.collection_name = "raw_data"
-            
+
         super().__init__(self.collection_name, mongodb_uri, database_name)
         self._create_timeseries_collection_if_not_exists()
         self._create_indexes()
@@ -47,30 +49,36 @@ class RawDataRepository(BaseRepository):
         Configures MongoDB time series collection for optimal performance
         """
         import asyncio
+
+        if self.collection_name in RawDataRepository._collection_initialized:
+            return
+
         async def _do_create():
             try:
                 # Check if collection already exists
                 existing_collections = await self.db.list_collection_names()
                 if self.collection_name in existing_collections:
                     logger.info("Time series collection '%s' already exists", self.collection_name)
+                    RawDataRepository._collection_initialized.add(self.collection_name)
                     return
-                
+
                 # Create time series collection with proper configuration
                 timeseries_options = {
                     "timeField": "created_at",           # Time field for time series
                     "metaField": "metadata",             # Metadata field for grouping
                     "granularity": "minutes"             # Time series granularity
                 }
-                
+
                 # Create the time series collection
                 await self.db.create_collection(
                     self.collection_name,
                     timeseries=timeseries_options
                 )
-                
-                logger.info("Created time series collection '%s' with timeField='created_at', metaField='metadata'", 
+
+                logger.info("Created time series collection '%s' with timeField='created_at', metaField='metadata'",
                            self.collection_name)
-                
+                RawDataRepository._collection_initialized.add(self.collection_name)
+
             except Exception as e:
                 logger.error("Error creating time series collection '%s': %s", self.collection_name, e, exc_info=True)
                 # If time series creation fails, fall back to regular collection
@@ -78,6 +86,7 @@ class RawDataRepository(BaseRepository):
                     if self.collection_name not in await self.db.list_collection_names():
                         await self.db.create_collection(self.collection_name)
                         logger.warning("Created regular collection '%s' as fallback", self.collection_name)
+                        RawDataRepository._collection_initialized.add(self.collection_name)
                 except Exception as fallback_error:
                     logger.error("Error creating fallback collection: %s", fallback_error, exc_info=True)
                     raise
@@ -89,6 +98,10 @@ class RawDataRepository(BaseRepository):
     def _create_indexes(self):
         """Create necessary indexes for time series collection"""
         import asyncio
+
+        if self.collection_name in RawDataRepository._collection_initialized:
+            return
+
         async def _do_create():
             indexes = [
                 ([("data_type", 1), ("created_at", -1)], {}),
@@ -108,6 +121,7 @@ class RawDataRepository(BaseRepository):
                     logger.error("Error creating raw data index: %s", e, exc_info=True)
 
             logger.info("Time series collection indexes created successfully")
+            RawDataRepository._collection_initialized.add(self.collection_name)
         try:
             asyncio.get_running_loop().create_task(_do_create())
         except RuntimeError:

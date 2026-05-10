@@ -248,7 +248,8 @@ class WeatherProcessor(BaseProcessor):
             historical_success = True
             if historical_entities_to_save:
                 try:
-                    inserted_count = await self.repository.bulk_insert_historical(historical_entities_to_save)
+                    inserted_ids = await self.repository.bulk_insert_historical(historical_entities_to_save)
+                    inserted_count = len(inserted_ids) if isinstance(inserted_ids, list) else (inserted_ids if isinstance(inserted_ids, int) else 0)
                     logger.info("Successfully inserted %d records in the historical collection.", inserted_count)
                 except Exception as e:
                     logger.error("Error inserting historical weather entities: %s", str(e))

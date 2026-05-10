@@ -21,9 +21,6 @@ class DAMSingleBidResponseRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "iex_dam_single_bid_response"
         logger.info(f"DAMSingleBidResponseRepository initialized with collection: {self.collection_name}")
-        self._create_collection_if_not_exists()
-        self._create_indexes()
-    
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.

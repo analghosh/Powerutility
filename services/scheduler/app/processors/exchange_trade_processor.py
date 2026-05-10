@@ -22,8 +22,8 @@ class ExchangeTradeProcessor(BaseProcessor):
         super().__init__()
         self.repository = ExchangeTradeRepository()
         
-        # Preload timeblock mappings for better performance using base processor's caching
-        self.preload_timeblock_mappings()
+        # Note: preload_timeblock_mappings is async and must be called from an async context.
+        # It will be invoked lazily on first use via get_timeblock_by_time_range.
         
         # Initialize job repositories for execution tracking
         from libs.core.job_factory import create_job_data_repository, create_job_detail_repository

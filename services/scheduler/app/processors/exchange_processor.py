@@ -220,7 +220,7 @@ class ExchangeProcessor(BaseProcessor):
                         try:
                             found = await cursor.to_list(length=10000)
                         finally:
-                            cursor.close()
+                            await cursor.close()
                         total_found += len(found)
                         for rec in found:
                              s_at = rec.get("scheduled_at")
@@ -699,7 +699,7 @@ class ExchangeProcessor(BaseProcessor):
             new_value = self._convert_value_by_type(new_raw_value, field_type)
             
             # Compare values with appropriate tolerance
-            if not self._compare_values_with_tolerance(existing_value, new_value, field_type):
+            if not self._compare_values_with_tolerance(existing_value, new_value, field_type, serve_field):
                 logger.debug("Field '%s' changed: %s -> %s (provider_field: %s)", 
                            serve_field, existing_value, new_value, provider_field)
                 return True
@@ -725,14 +725,14 @@ class ExchangeProcessor(BaseProcessor):
         else:
             return value
     
-    def _compare_values_with_tolerance(self, existing_value: Any, new_value: Any, field_type: str) -> bool:
+    def _compare_values_with_tolerance(self, existing_value: Any, new_value: Any, field_type: str, serve_field: str = "") -> bool:
         """Compare values with appropriate tolerance based on field type"""
         try:
             if field_type == "float":
                 existing_float = float(existing_value or 0)
                 new_float = float(new_value or 0)
                 # Use different tolerances for price vs volume fields
-                if "price" in str(existing_value).lower() or "mcp" in str(existing_value).lower() or "acp" in str(existing_value).lower():
+                if "price" in serve_field.lower() or "mcp" in serve_field.lower() or "acp" in serve_field.lower():
                     tolerance = PRICE_COMPARISON_TOLERANCE
                 else:
                     tolerance = FLOAT_COMPARISON_TOLERANCE
@@ -1019,7 +1019,15 @@ class ExchangeProcessor(BaseProcessor):
             mapped_raw_data["updated_at"] = current_time
             mapped_raw_data["created_at"] = current_time
             mapped_raw_data["timestamp"] = current_time
-            
+
+            # Ensure scheduled_at is present (raw data uses "Date" or "date")
+            if "scheduled_at" not in mapped_raw_data:
+                date_val = raw_data.get("Date") or raw_data.get("date") or raw_data.get("scheduled_at")
+                if isinstance(date_val, datetime):
+                    mapped_raw_data["scheduled_at"] = date_val.date()
+                elif isinstance(date_val, date):
+                    mapped_raw_data["scheduled_at"] = date_val
+
             # Create historical entity from mapped data
             historical_entity = ExchangeHistoricalEntity(**mapped_raw_data)
             
