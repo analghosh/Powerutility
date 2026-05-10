@@ -46,10 +46,10 @@ class ExchangeTradeRepository(BaseServeRepository):
         ensure_exchange_trade_serve_indexes(self.serve_collection)
         ensure_exchange_trade_serve_historical_indexes(self.historical_collection)
 
-    def bulk_upsert_exchange_trade_records(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def bulk_upsert_exchange_trade_records(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Upsert multiple exchange trade records using optimized bulk write.
         Matches on scheduled_at, time_block, px_name, market_type.
         """
         unique_key_fields = ["scheduled_at", "time_block", "px_name", "market_type"]
-        return self.bulk_upsert_optimized(records, unique_key_fields)
+        return await self.bulk_upsert_optimized(records, unique_key_fields)

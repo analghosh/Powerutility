@@ -289,7 +289,7 @@ class SingleBidBookProcessor(BaseProcessor):
             
             # Use repository driven upsert
             # This handles int validation on OrderId internally
-            result_stats = repo.upsert_bids(docs_to_upsert)
+            result_stats = await repo.upsert_bids(docs_to_upsert)
             
             logger.info(f"[{market_type.upper()} Book Sync] Bulk Upsert Result: {result_stats}")
             # Do not return here, continue to update approval status

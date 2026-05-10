@@ -308,7 +308,7 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "demand_data_processing",
                 "name": "Demand Data Processing",
-                "schedule": "* */15 * * *",  # Every 15 minutes
+                "schedule": "*/15 * * * *",  # Every 15 minutes
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
@@ -322,7 +322,7 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "supply_data_processing",
                 "name": "Supply Data Processing",
-                "schedule": "* */15 * * *",  # Every 15 minutes
+                "schedule": "*/15 * * * *",  # Every 15 minutes
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },

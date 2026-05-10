@@ -105,12 +105,12 @@ class Settings(BaseSettings):
     
     # Demand Data Processing Management Cron Job
     DEMAND_DATA_PROCESSING_CRON_ENABLED: bool = True
-    DEMAND_DATA_PROCESSING_CRON_SCHEDULE: str = "0 1 * * *"  # Daily at 1 AM
+    DEMAND_DATA_PROCESSING_CRON_SCHEDULE: str = "*/15 * * * *"  # Every 15 minutes
     DEMAND_DATA_PROCESSING_CRON_TIMEZONE: str = "Asia/Kolkata"
     
     # Supply Data Processing Management Cron Job
     SUPPLY_DATA_PROCESSING_CRON_ENABLED: bool = True
-    SUPPLY_DATA_PROCESSING_CRON_SCHEDULE: str = "0 1 * * *"  # Daily at 1 AM
+    SUPPLY_DATA_PROCESSING_CRON_SCHEDULE: str = "*/15 * * * *"  # Every 15 minutes
     SUPPLY_DATA_PROCESSING_CRON_TIMEZONE: str = "Asia/Kolkata"
     
     # MongoDB Collections (Time Series)
@@ -230,6 +230,8 @@ class Settings(BaseSettings):
     TIMESERIES_GRANULARITY: str = "seconds" 
 
     # Processing crons
+    DEMAND_DATA_PROCESSING_CRON: str = "*/15 * * * *"
+
     WEATHER_DATA_PROCESSING_CRON: str = "*/15 * * * *"
     WEATHER_DATA_PROCESSING_ENABLED: bool = True
 

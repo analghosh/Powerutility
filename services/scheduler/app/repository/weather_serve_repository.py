@@ -138,8 +138,6 @@ class WeatherServeRepository(BaseServeRepository):
         Bulk upsert weather data using Optimized Bulk Upsert.
         """
         try:
-            logger.info('wweather_datae', weather_data)
-            import json
             logger.info("weather_data: ----------------------------------------- %s", weather_data)
             if not weather_data:
                 return {"inserted_count": 0}
@@ -153,7 +151,7 @@ class WeatherServeRepository(BaseServeRepository):
             # Unique Key: valid_time_utc, type, expiration_time_utc, valid_time_local
             unique_key = ["valid_time_utc", "city"]
             logger.info("records: ----------------------------------------- %s", records)
-            result = self.bulk_upsert_optimized(records, unique_key)
+            result = await self.bulk_upsert_optimized(records, unique_key)
             
             return {
                 "inserted_count": result.get("inserted_count", 0),

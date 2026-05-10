@@ -40,9 +40,13 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "job_type": "demand_data_processing",
                 "name": "Demand Data Processing",
                 "type": "data_processing",
-                "schedule": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_SCHEDULE', '0 1 * * *'),
-                "enabled": getattr(self.settings, 'DEMAND_DATA__PROCESSING_CRON_ENABLED', True),
-                "timezone": getattr(self.settings, 'DEMAND_DATA__PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
+                "schedule": getattr(
+                    self.settings,
+                    'DEMAND_DATA_PROCESSING_CRON',
+                    getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_SCHEDULE', '*/15 * * * *')
+                ),
+                "enabled": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_ENABLED', True),
+                "timezone": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Processes demand data from raw data to serve collections",
                 "priority": 4
             },
@@ -70,9 +74,13 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "job_type": "supply_data_processing",
                 "name": "Supply Data Processing",
                 "type": "data_processing",
-                "schedule": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_SCHEDULE', '0 1 * * *'),
-                "enabled": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_ENABLED', True),
-                "timezone": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
+                "schedule": getattr(
+                    self.settings,
+                    'SUPPLY_DATA_PROCESSING_CRON',
+                    getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_SCHEDULE', '*/15 * * * *')
+                ),
+                "enabled": getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_ENABLED', True),
+                "timezone": getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Processes supply data from raw data to serve collections",
                 "priority": 4
             },
