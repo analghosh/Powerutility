@@ -345,13 +345,6 @@ async def get_current_user(
     client_fingerprint = _get_client_fingerprint(request)
     
     try:
-        # Rate limiting check
-        if not _check_rate_limit(client_fingerprint):
-            _log_security_event("RATE_LIMIT_EXCEEDED", {
-                "client_fingerprint": client_fingerprint
-            }, request)
-            raise HTTPException(status_code=429, detail="Rate limit exceeded")
-        
         # Extract and validate token
         token = _extract_bearer_token(request)
         
