@@ -4,6 +4,7 @@ This class provides the main processing workflow for different data types.
 """
 
 import asyncio
+import inspect
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -379,6 +380,8 @@ class BaseProcessor(ABC):
                     enhanced_metadata, 
                     provider_config
                 )
+                if inspect.isawaitable(processing_success):
+                    processing_success = await processing_success
             
             if processing_success:
                 records_processed = len(raw_data)
