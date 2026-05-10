@@ -1249,35 +1249,27 @@ class CronManager(BaseCronManager):
         import asyncio
         import threading
         try:
-            # Check if we're already in an event loop
-            asyncio.get_running_loop()
+            loop = asyncio.get_running_loop()
         except RuntimeError:
             # No event loop running, safe to use asyncio.run
             return asyncio.run(coro)
 
         # We are inside a running event loop (e.g., FastAPI startup).
-        # ThreadPoolExecutor can reuse threads with stale asyncio state,
-        # causing "asyncio.run() cannot be called from a running event loop".
-        # Use a fresh threading.Thread with an explicit new event loop instead.
+        # Creating a new loop in another thread breaks Motor clients bound to
+        # the original loop. Instead, schedule on the SAME loop and wait from a
+        # helper thread to avoid deadlock.
+        future = asyncio.run_coroutine_threadsafe(coro, loop)
+
         result = []
         exc = []
 
-        def _run_in_fresh_thread():
+        def _wait():
             try:
-                new_loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(new_loop)
-                result.append(new_loop.run_until_complete(coro))
+                result.append(future.result())
             except Exception as e:
                 exc.append(e)
-            finally:
-                try:
-                    new_loop.run_until_complete(new_loop.shutdown_asyncgens())
-                    new_loop.close()
-                except Exception:
-                    pass
-                asyncio.set_event_loop(None)
 
-        t = threading.Thread(target=_run_in_fresh_thread)
+        t = threading.Thread(target=_wait)
         t.start()
         t.join()
         if exc:
@@ -1402,15 +1394,15 @@ class CronManager(BaseCronManager):
 
     async def _run_integration_apilog_cleanup(self):
         """Async helper to delete old integration apilog docs across all DBs."""
-        from libs.database.mongo_client_factory import get_mongo_client, get_scheduler_client
+        from libs.database.mongo_client_factory import get_motor_client, get_scheduler_client
         cutoff = datetime.now() - timedelta(days=7)
         total_deleted = 0
         cleaned_collections = []
 
-        # Databases to scan
+        # Databases to scan — use Motor async clients, not sync pymongo
         dbs = []
         try:
-            dbs.append(("ingestion", get_mongo_client(settings.MONGODB_URI)[settings.MONGODB_DATABASE]))
+            dbs.append(("ingestion", get_motor_client(settings.MONGODB_URI, "ingestion_service")[settings.MONGODB_DATABASE]))
         except Exception as e:
             logger.warning("Could not get ingestion DB for cleanup: %s", e)
         try:
