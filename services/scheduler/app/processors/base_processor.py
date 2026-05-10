@@ -489,7 +489,7 @@ class BaseProcessor(ABC):
                 },
                 # Stage 2: Oldest first, limit batch size
                 {"$sort": {"created_at": 1}},
-                {"$limit": 300},
+                {"$limit": 1000},
                 # Stage 3: Convert string raw_data_id to ObjectId before lookup
                 {
                     "$addFields": {
