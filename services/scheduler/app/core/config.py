@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "scheduler-service"
     SERVICE_PORT: int = 8004
     SERVICE_HOST: str = "0.0.0.0"
-    DEBUG: bool = True
+    DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     DEDUPLICATION_ONLY: bool = True

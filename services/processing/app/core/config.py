@@ -17,7 +17,7 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "processing-service"
     SERVICE_PORT: int = 8003
     SERVICE_HOST: str = "0.0.0.0"
-    DEBUG: bool = True
+    DEBUG: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "text"  # "json", "text", or "colored"
     LOG_USE_COLORS: bool = True  # Enable colored console output

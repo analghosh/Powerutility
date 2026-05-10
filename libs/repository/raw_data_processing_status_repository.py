@@ -11,6 +11,7 @@ from bson import ObjectId
 from libs.database.base_repository import BaseRepository
 from libs.enum.raw_data_status import RawDataStatus
 from libs.models.raw_data_processing_status_entity import RawDataProcessingStatusEntity
+from libs.repository.raw_data_repository import _safe_match_str
 
 logger = logging.getLogger(__name__)
 
@@ -270,12 +271,15 @@ class RawDataProcessingStatusRepository(BaseRepository):
             Dict[str, Any]: Statistics
         """
         try:
+            safe_data_type = _safe_match_str(data_type, "data_type")
+            safe_provider_type = _safe_match_str(provider_type, "provider_type")
+
             match_filter = {}
-            if data_type:
-                match_filter["data_type"] = data_type
-            if provider_type:
-                match_filter["provider_type"] = provider_type
-            
+            if safe_data_type:
+                match_filter["data_type"] = safe_data_type
+            if safe_provider_type:
+                match_filter["provider_type"] = safe_provider_type
+
             pipeline = [
                 {"$match": match_filter},
                 {"$group": {

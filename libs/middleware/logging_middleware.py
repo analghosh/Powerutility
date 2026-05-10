@@ -369,21 +369,9 @@ class LoggingMiddleware(BaseHTTPMiddleware):
         logger.error(message, extra=log_data, exc_info=True)
     
     def _get_client_ip(self, request: Request) -> str:
-        """Extract client IP address"""
-        # Check for forwarded headers first
-        forwarded_for = request.headers.get("X-Forwarded-For")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-        
-        real_ip = request.headers.get("X-Real-IP")
-        if real_ip:
-            return real_ip
-        
-        # Fallback to client host
-        if hasattr(request, "client") and request.client:
-            return request.client.host
-        
-        return "unknown"
+        """Extract client IP address, honouring XFF only from trusted proxies."""
+        from .utils import get_client_ip
+        return get_client_ip(request)
     
     def _get_user_info(self, request: Request) -> dict:
         """Extract user information from request state"""

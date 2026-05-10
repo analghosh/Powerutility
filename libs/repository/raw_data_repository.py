@@ -9,6 +9,28 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 from pymongo.errors import OperationFailure
 
+
+def _safe_match_str(value: Optional[str], field: str) -> Optional[str]:
+    """
+    Validate that a value intended for a MongoDB $match filter is a plain string.
+    Rejects dicts/lists (which would be treated as operator expressions) and
+    strings that start with '$' (MongoDB operator prefix).
+    Raises ValueError on invalid input so callers fail loudly.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Invalid type for aggregation field '{field}': "
+            f"expected str, got {type(value).__name__}"
+        )
+    if value.startswith("$"):
+        raise ValueError(
+            f"Invalid value for aggregation field '{field}': "
+            f"operator-prefixed strings are not permitted"
+        )
+    return value
+
 from libs.database.base_repository import BaseRepository
 from libs.enum.raw_data_status import RawDataStatus
 from libs.models.raw_data_entity import RawDataEntity
@@ -241,12 +263,15 @@ class RawDataRepository(BaseRepository):
             Dict[str, Any]: Statistics
         """
         try:
+            safe_data_type = _safe_match_str(data_type, "data_type")
+            safe_provider_type = _safe_match_str(provider_type, "provider_type")
+
             match_filter = {}
-            if data_type:
-                match_filter["data_type"] = data_type
-            if provider_type:
-                match_filter["metadata.provider_type"] = provider_type
-            
+            if safe_data_type:
+                match_filter["data_type"] = safe_data_type
+            if safe_provider_type:
+                match_filter["metadata.provider_type"] = safe_provider_type
+
             pipeline = [
                 {"$match": match_filter},
                 {"$group": {

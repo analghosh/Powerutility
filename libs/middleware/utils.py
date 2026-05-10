@@ -2,9 +2,10 @@
 Common middleware utilities
 """
 
+import os
 import uuid
 import logging
-from typing import Optional
+from typing import Optional, FrozenSet
 from fastapi import Request
 from ..auth.exceptions import InvalidAuthHeaderError, MissingTokenError
 
@@ -53,31 +54,38 @@ def extract_bearer_token(request: Request) -> str:
     return token
 
 
+def _get_trusted_proxies() -> FrozenSet[str]:
+    """
+    Read trusted proxy IPs from TRUSTED_PROXIES env var (comma-separated).
+    Returns an empty frozenset when not configured — XFF headers are then ignored.
+    Example: TRUSTED_PROXIES=127.0.0.1,10.0.0.1
+    """
+    raw = os.getenv("TRUSTED_PROXIES", "")
+    return frozenset(ip.strip() for ip in raw.split(",") if ip.strip())
+
+
 def get_client_ip(request: Request) -> str:
     """
-    Get client IP address from request
-    
-    Args:
-        request: FastAPI request object
-        
-    Returns:
-        Client IP address
+    Get client IP address from request.
+
+    X-Forwarded-For / X-Real-IP are only trusted when the direct socket peer
+    is listed in the TRUSTED_PROXIES environment variable.  This prevents
+    attackers from spoofing their IP to evade rate limiting or forge audit logs.
     """
-    # Check for forwarded headers first (for proxy/load balancer scenarios)
-    forwarded_for = request.headers.get("X-Forwarded-For")
-    if forwarded_for:
-        # X-Forwarded-For can contain multiple IPs, take the first one
-        return forwarded_for.split(",")[0].strip()
-    
-    real_ip = request.headers.get("X-Real-IP")
-    if real_ip:
-        return real_ip.strip()
-    
-    # Fallback to direct client IP
-    if hasattr(request, "client") and request.client:
-        return request.client.host
-    
-    return "unknown"
+    peer = request.client.host if (hasattr(request, "client") and request.client) else None
+
+    if peer and peer in _get_trusted_proxies():
+        # Proxy is trusted — honour forwarded headers
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+
+        real_ip = request.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip.strip()
+
+    # Untrusted or unknown peer — use the socket address directly
+    return peer or "unknown"
 
 
 def get_user_agent(request: Request) -> str:

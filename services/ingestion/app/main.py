@@ -11,7 +11,7 @@ from .services.cron_manager import CronManager
 from .core.dependencies import get_audit_logger, cleanup_audit_resources
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware, SecurityHeadersMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -32,6 +32,8 @@ from .core.logger import get_ingestion_logger
 
 # Initialize logger (uses global config from configure_logging above)
 logger = get_ingestion_logger("ingestion_service")
+
+settings.check_security_warnings()
 
 
 class HealthResponse(BaseModel):
@@ -121,8 +123,8 @@ app = FastAPI(
     title="EPMS Ingestion Service",
     description="Data ingestion service for EPMS",
     version="1.0.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
+    docs_url="/docs" if settings.DEBUG else None,
+    redoc_url="/redoc" if settings.DEBUG else None,
     lifespan=lifespan,
     openapi_tags=[
         {
@@ -227,6 +229,8 @@ if settings.BASE_PATH:
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
+# Security headers added to every response
+app.add_middleware(SecurityHeadersMiddleware)
 # Add cache middleware third (executes third to last)
 app.add_middleware(
     CacheMiddleware,

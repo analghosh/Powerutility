@@ -115,24 +115,26 @@ async def get_assigned_menus(
 
 
 @router.get("/test", response_model=List[Dict[str, Any]])
-async def test_menu_tree():
+async def test_menu_tree(
+    current_user: UserPrincipal = Depends(get_current_user)
+):
     """Test endpoint to check if menu tree building works"""
     try:
         logger.info("Testing menu tree building...")
         menu_tree = await menu_repository.get_menu_tree()
-        
+
         if not menu_tree:
             logger.warning("No menu tree returned from repository")
             return []
-        
+
         logger.info(f"Successfully retrieved menu tree with {len(menu_tree)} root menus")
         result = [menu.model_dump() for menu in menu_tree]
         logger.info(f"Returning {len(result)} menu items")
         return result
-        
+
     except Exception as e:
         logger.error(f"Error in test menu tree: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Test failed: {str(e)}")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.get("/list", response_model=List[Dict[str, Any]])
 async def get_all_menus_for_admin(

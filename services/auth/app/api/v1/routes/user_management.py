@@ -272,22 +272,28 @@ async def update_user(
         if not user: # Should not happen if previous check passed, but for type safety
             raise HTTPException(status_code=404, detail="User not found")
         
+        # Determine whether this is a self-update
+        is_self_update = (user_id == current_user_id)
+
         # Update user
         update_data = {}
         if user_data.username is not None:
             update_data['username'] = user_data.username
         if user_data.email is not None:
             update_data['email'] = user_data.email
-        if user_data.roles is not None:
-            update_data['roles'] = user_data.roles
-        if user_data.permissions is not None:
-            update_data['permissions'] = user_data.permissions
         if user_data.profile is not None:
             update_data['profile'] = user_data.profile
-        if user_data.is_active is not None:
-            update_data['is_active'] = user_data.is_active
-        if user_data.is_verified is not None:
-            update_data['is_verified'] = user_data.is_verified
+
+        # Privileged fields: only allow if caller is NOT updating their own account
+        if not is_self_update:
+            if user_data.roles is not None:
+                update_data['roles'] = user_data.roles
+            if user_data.permissions is not None:
+                update_data['permissions'] = user_data.permissions
+            if user_data.is_active is not None:
+                update_data['is_active'] = user_data.is_active
+            if user_data.is_verified is not None:
+                update_data['is_verified'] = user_data.is_verified
 
         # Track role changes for logging
         user_roles = set(user.roles)
