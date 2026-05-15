@@ -117,6 +117,7 @@ class Settings(BaseSettings):
     MONGODB_DUMMY_COLLECTION: str = "dummy"
     MONGODB_DEMAND_SERVE_COLLECTION: str = "demand_serve"
     MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "demand_serve_historical"
+    MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
     MONGODB_SUPPLY_SERVE_COLLECTION: str = "supply_serve"
     MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION: str = "supply_serve_historical"
     MONGODB_DC_SG_COLLECTION: str = "dc_sg"  # 1-day temporary storage for supply data
