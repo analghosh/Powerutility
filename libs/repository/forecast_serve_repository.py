@@ -62,12 +62,16 @@ class ForecastServeRepository(BaseRepository):
         source: str,
         now: datetime,
         market_type: str = IDF_TYPE,
+        forecasted_frequency: Optional[float] = None,
     ) -> Dict[str, Any]:
+        set_fields: Dict[str, Any] = {
+            "forecast": forecast,
+            "updated_at": now,
+        }
+        if forecasted_frequency is not None:
+            set_fields["forecasted_frequency"] = forecasted_frequency
         return {
-            "$set": {
-                "forecast": forecast,
-                "updated_at": now,
-            },
+            "$set": set_fields,
             "$setOnInsert": {
                 "scheduled_at": scheduled_at,
                 "time_block": int(time_block),
@@ -125,9 +129,16 @@ class ForecastServeRepository(BaseRepository):
             if scheduled_at is None or time_block is None:
                 continue
             forecast = rec.get("forecast")
+            freq = rec.get("forecasted_frequency")
             filter_doc = self._build_filter(scheduled_at, int(time_block), source, market_type)
             update_doc = self._build_update(
-                scheduled_at, int(time_block), forecast, source, now, market_type
+                scheduled_at,
+                int(time_block),
+                forecast,
+                source,
+                now,
+                market_type,
+                forecasted_frequency=freq if "forecasted_frequency" in rec else None,
             )
             operations.append(UpdateOne(filter_doc, update_doc, upsert=True))
 
@@ -144,6 +155,26 @@ class ForecastServeRepository(BaseRepository):
         except Exception as e:
             logger.error("Error bulk upserting forecast_serve source=%s: %s", source, e)
             raise
+
+    async def find_by_scheduled_at_and_source(
+        self,
+        scheduled_at: datetime,
+        source: str,
+        market_type: str = IDF_TYPE,
+    ) -> List[Dict[str, Any]]:
+        """All forecast_serve docs for a date and source."""
+        try:
+            cursor = self.collection.find(
+                {
+                    "scheduled_at": scheduled_at,
+                    "type": market_type,
+                    "source": source,
+                }
+            )
+            return await cursor.to_list(length=200)
+        except Exception as e:
+            logger.error("Error finding forecast_serve by date/source: %s", e)
+            return []
 
     async def find_by_block(
         self,

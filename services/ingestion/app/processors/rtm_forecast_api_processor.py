@@ -11,9 +11,14 @@ import asyncio
 import aiohttp
 from datetime import date, datetime, timedelta
 from typing import Dict, Any, List, Optional
-from zoneinfo import ZoneInfo
 
 from libs.database.mongo_client_factory import get_mongo_client
+from libs.helpers.rtm_forecast_block_filter import (
+    current_time_block_1_to_96,
+    get_rtm_timezone,
+    is_after_evening_cutover,
+    should_write_forecast_block,
+)
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_RTM_API
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
 from libs.repository.forecast_serve_repository import forecast_serve_repository
@@ -27,60 +32,7 @@ logger = get_ingestion_logger("rtm_forecast_api_processor")
 RTM_MARKET = "RTM"
 RTM_FORECASTED_PRICE_ID = "RTM_forecasted_price"
 RTM_SOURCE_FORECAST = "rtm_forecast_api"
-
-# After this local time, API window shifts to tomorrow; intraday block filter is disabled
-# so inserts run for blocks 1–96 (today's wall-clock "current block" refers to the wrong day).
-EVENING_CUTOVER_HM = (22, 30)
-
-
-def _get_rtm_timezone():
-    tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
-    try:
-        return ZoneInfo(tz_name)
-    except Exception:
-        return ZoneInfo("Asia/Kolkata")
-
-
-def _current_time_block_1_to_96(now_local: datetime) -> int:
-    minutes_from_midnight = now_local.hour * 60 + now_local.minute
-    time_block = (minutes_from_midnight // 15) + 1
-    if time_block > 96:
-        time_block = 96
-    if time_block < 1:
-        time_block = 1
-    return time_block
-
-
-def _should_write_forecast_block(
-    scheduled_date: date,
-    time_block: int,
-    today_ist: date,
-    current_block: int,
-    after_evening_cutover: bool = False,
-    min_ahead_blocks: int = 0,
-) -> bool:
-    """
-    Decide whether a time block should be written on this cron run.
-
-    - Past dates: never write.
-    - After evening cutover (22:30 IST): write all blocks 1–96 for today and future
-      (API window targets tomorrow; intraday current_block filter is not applied).
-    - Same day before cutover: only blocks from active session onward — current block
-      plus RTM_FORECAST_MIN_AHEAD_BLOCKS offset (not all 96 blocks).
-    - Future dates (before cutover): write all blocks.
-    """
-    if scheduled_date < today_ist:
-        return False
-    if after_evening_cutover:
-        return True
-    if scheduled_date == today_ist:
-        # Wrapped strict-after threshold over a 1..96 circular time-block space.
-        target_block = ((int(current_block) - 1 + int(min_ahead_blocks)) % 96) + 1
-        next_block = (target_block % 96) + 1
-        # Example: 22:30 -> current=91, offset=5 => target=96 -> next=1 (allow all blocks).
-        # Example: 23:00 -> current=93, offset=5 => target=2 -> next=3 (allow 3..96).
-        return int(time_block) >= next_block
-    return True
+EVENING_CUTOVER_HM = (22, 30)  # re-export for tests / fetch logic
 
 
 class RTMForecastAPIProcessor(BaseRawDataProcessor):
@@ -182,11 +134,12 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
 
             logger.info("Processing %d date entries from RTM forecast API response", len(data_items))
 
-            tz = _get_rtm_timezone()
+            tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
+            tz = get_rtm_timezone(tz_name)
             now_local = datetime.now(tz)
             today_ist = now_local.date()
-            current_block = _current_time_block_1_to_96(now_local)
-            after_evening_cutover = (now_local.hour, now_local.minute) >= EVENING_CUTOVER_HM
+            current_block = current_time_block_1_to_96(now_local)
+            after_evening_cutover = is_after_evening_cutover(now_local)
             min_ahead_blocks = max(0, int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)))
             target_block = ((current_block - 1 + min_ahead_blocks) % 96) + 1
             next_block = (target_block % 96) + 1
@@ -209,6 +162,16 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     logger.warning("Invalid date format: %s", date_str)
                     continue
 
+                freq_by_block: Dict[int, float] = {}
+                for fr in date_entry.get("frequency_forecast", []) or []:
+                    try:
+                        tb = fr.get("time_block")
+                        if tb is None:
+                            continue
+                        freq_by_block[int(tb)] = float(fr.get("forecast_frequency", 0.0) or 0.0)
+                    except Exception:
+                        continue
+
                 # Demand -> forecast_serve (IDF, source=rtm_forecast_api)
                 demand_data = date_entry.get("demand") or {}
                 demand_records = demand_data.get("data") or []
@@ -216,6 +179,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     stored = await self._store_forecast_serve(
                         scheduled_at=scheduled_at,
                         data=demand_records,
+                        freq_by_block=freq_by_block,
                         today_ist=today_ist,
                         current_block=current_block,
                         after_evening_cutover=after_evening_cutover,
@@ -327,7 +291,8 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             auth_header = api_config.get('auth_header', 'X-API-Key')
             date_range_days = api_config.get('date_range_days', 1)
             date_param_name = api_config.get('date_param_name', 'date')
-            tz = _get_rtm_timezone()
+            tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
+            tz = get_rtm_timezone(tz_name)
             today = datetime.now(tz).date()
             now_local = datetime.now(tz)
             if (now_local.hour, now_local.minute) >= EVENING_CUTOVER_HM:
@@ -402,7 +367,8 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
         self,
         scheduled_at: datetime,
         data: List[Dict[str, Any]],
-        today_ist: date,
+        freq_by_block: Dict[int, float],
+        today_ist,
         current_block: int,
         after_evening_cutover: bool = False,
         min_ahead_blocks: int = 0,
@@ -430,7 +396,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
 
             bulk_records: List[Dict[str, Any]] = []
             for time_block, record in time_block_data.items():
-                if not _should_write_forecast_block(
+                if not should_write_forecast_block(
                     scheduled_date,
                     int(time_block),
                     today_ist,
@@ -445,6 +411,9 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                         "scheduled_at": scheduled_at,
                         "time_block": int(time_block),
                         "forecast": forecast_mw,
+                        "forecasted_frequency": float(
+                            freq_by_block.get(int(time_block), 0.0) or 0.0
+                        ),
                     }
                 )
 
@@ -495,7 +464,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     if time_block is None:
                         continue
                     tb_i = int(time_block)
-                    if not _should_write_forecast_block(
+                    if not should_write_forecast_block(
                         scheduled_date,
                         tb_i,
                         today_ist,

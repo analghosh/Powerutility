@@ -31,6 +31,9 @@ class ForecastServeEntity(BaseModel):
     time_block: int = Field(..., description="Time block 1-96")
     type: Literal["IDF"] = Field(default="IDF", description="Market type")
     forecast: Optional[float] = Field(None, description="Forecast demand MW")
+    forecasted_frequency: Optional[float] = Field(
+        None, description="Forecasted frequency (RTM API source only)"
+    )
     source: ForecastSource = Field(..., description="Data source identifier")
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)

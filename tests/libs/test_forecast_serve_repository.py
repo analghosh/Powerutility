@@ -93,36 +93,72 @@ async def test_rtm_processor_uses_forecast_serve_not_demand_serve():
         count = await processor._store_forecast_serve(
             scheduled_at=scheduled_at,
             data=data,
+            freq_by_block={10: 49.5},
             today_ist=scheduled_at.date(),
             current_block=1,
+            after_evening_cutover=True,
         )
         assert count == 1
         mock_repo.bulk_upsert_forecasts.assert_called_once()
         call_args = mock_repo.bulk_upsert_forecasts.call_args
         assert call_args.kwargs["source"] == FORECAST_SOURCE_RTM_API
         assert call_args.args[0][0]["forecast"] == 500.0
+        assert call_args.args[0][0]["forecasted_frequency"] == 49.5
 
 
 def test_should_write_forecast_block_active_session_only_today():
-    from services.ingestion.app.processors.rtm_forecast_api_processor import (
-        _should_write_forecast_block,
-    )
+    from libs.helpers.rtm_forecast_block_filter import should_write_forecast_block
 
     today = date(2026, 5, 15)
     # current_block=10, min_ahead=5 -> target=15, next_block=16 -> blocks 16..96 only
-    assert _should_write_forecast_block(today, 16, today, 10, False, 5) is True
-    assert _should_write_forecast_block(today, 15, today, 10, False, 5) is False
-    assert _should_write_forecast_block(today, 1, today, 10, False, 5) is False
+    assert should_write_forecast_block(today, 16, today, 10, False, 5) is True
+    assert should_write_forecast_block(today, 15, today, 10, False, 5) is False
+    assert should_write_forecast_block(today, 1, today, 10, False, 5) is False
 
 
 def test_should_write_forecast_block_after_evening_cutover_all_blocks():
-    from services.ingestion.app.processors.rtm_forecast_api_processor import (
-        _should_write_forecast_block,
-    )
+    from libs.helpers.rtm_forecast_block_filter import should_write_forecast_block
 
     today = date(2026, 5, 15)
-    assert _should_write_forecast_block(today, 1, today, 50, True, 5) is True
-    assert _should_write_forecast_block(today, 96, today, 50, True, 5) is True
+    assert should_write_forecast_block(today, 1, today, 50, True, 5) is True
+    assert should_write_forecast_block(today, 96, today, 50, True, 5) is True
+
+
+@pytest.mark.asyncio
+async def test_upsert_includes_forecasted_frequency(repo):
+    scheduled_at = datetime(2026, 5, 15)
+    mock_result = MagicMock(upserted_id="abc", modified_count=1)
+    repo.collection.update_one = AsyncMock(return_value=mock_result)
+
+    await repo.upsert_forecast(
+        scheduled_at=scheduled_at,
+        time_block=42,
+        forecast=1250.5,
+        source=FORECAST_SOURCE_RTM_API,
+    )
+    # upsert_forecast does not pass frequency — bulk path does
+    update_doc = repo.collection.update_one.call_args[0][1]
+    assert "forecasted_frequency" not in update_doc["$set"]
+
+
+@pytest.mark.asyncio
+async def test_bulk_upsert_includes_forecasted_frequency(repo):
+    scheduled_at = datetime(2026, 5, 15)
+    mock_bulk = MagicMock(matched_count=1, modified_count=1, upserted_ids={0: "id1"})
+    repo.collection.bulk_write = AsyncMock(return_value=mock_bulk)
+
+    records = [
+        {
+            "scheduled_at": scheduled_at,
+            "time_block": 10,
+            "forecast": 500.0,
+            "forecasted_frequency": 49.8,
+        },
+    ]
+    await repo.bulk_upsert_forecasts(records, source=FORECAST_SOURCE_RTM_API)
+
+    operations = repo.collection.bulk_write.call_args[0][0]
+    assert operations[0]._doc["$set"]["forecasted_frequency"] == 49.8
 
 
 @pytest.mark.asyncio
@@ -145,6 +181,7 @@ async def test_store_forecast_serve_skips_past_blocks_in_active_session():
         count = await processor._store_forecast_serve(
             scheduled_at=scheduled_at,
             data=data,
+            freq_by_block={},
             today_ist=scheduled_at.date(),
             current_block=10,
             after_evening_cutover=False,
@@ -176,6 +213,7 @@ async def test_store_forecast_serve_writes_all_blocks_after_cutover():
         count = await processor._store_forecast_serve(
             scheduled_at=scheduled_at,
             data=data,
+            freq_by_block={},
             today_ist=scheduled_at.date(),
             current_block=10,
             after_evening_cutover=True,
