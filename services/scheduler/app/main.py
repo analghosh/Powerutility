@@ -59,6 +59,28 @@ def run_timeblock_seeder():
         logger.error("Failed to run timeblock seeder: %s", str(e))
 
 
+async def ensure_forecast_serve_indexes():
+    """Create indexes on forecast_serve collection at startup."""
+    try:
+        from libs.repository.forecast_serve_repository import forecast_serve_repository
+
+        await forecast_serve_repository.create_indexes()
+        logger.info("forecast_serve indexes ensured")
+    except Exception as e:
+        logger.error("Failed to ensure forecast_serve indexes: %s", e)
+
+
+async def ensure_idf_forecast_parameters():
+    """Seed idf_forecast_switch parameter defaults."""
+    try:
+        from libs.repository.parameter_repository import parameter_repository
+
+        await parameter_repository.ensure_idf_forecast_switch_default()
+        logger.info("idf_forecast_switch parameter ensured")
+    except Exception as e:
+        logger.error("Failed to ensure idf_forecast_switch parameter: %s", e)
+
+
 def validate_database_configuration():
     """Validate database configuration"""
     try:
@@ -125,6 +147,8 @@ async def lifespan(app: FastAPI):
     
     # Validate configuration on startup
     validate_database_configuration()
+    await ensure_forecast_serve_indexes()
+    await ensure_idf_forecast_parameters()
     # Run timeblock seeder
     run_timeblock_seeder()
     

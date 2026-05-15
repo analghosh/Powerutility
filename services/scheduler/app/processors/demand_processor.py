@@ -11,6 +11,8 @@ from .base_processor import BaseProcessor
 from libs.models.demand_serve_entity import DemandServeEntity, DemandServeHistoricalEntity
 from libs.enum.updated_flag import UpdatedFlag
 from libs.core.job_entities import JobDetail
+from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV
+from libs.repository.forecast_serve_repository import forecast_serve_repository
 from ..repository.demand_serve_repository import demand_serve_repository
 from ..repository.supply_serve_repository import supply_serve_repository
 from ..repository.exchange_repository import ExchangeRepository
@@ -31,6 +33,7 @@ class DemandProcessor(BaseProcessor):
         
         # Use the existing demand serve repository
         self.demand_repository = demand_serve_repository
+        self.forecast_repository = forecast_serve_repository
         self.supply_repository = supply_serve_repository
         
         # Initialize exchange repository for fetching area prices
@@ -41,6 +44,18 @@ class DemandProcessor(BaseProcessor):
         self.master_plants_repository = MasterPlantsRepository()
 
 
+
+    def _parse_idf_forecast_from_raw(self, raw_record: Dict[str, Any]) -> Optional[float]:
+        """Parse IDF forecast from CSV row; None if column missing or empty."""
+        if "forecast" not in raw_record:
+            return None
+        val = raw_record.get("forecast")
+        if val is None or val == "":
+            return None
+        try:
+            return self._safe_float(val)
+        except (TypeError, ValueError):
+            return None
 
     def _calculate_demand_multiplier(self, plants: List[Dict[str, Any]]) -> float:
         """
@@ -733,6 +748,7 @@ class DemandProcessor(BaseProcessor):
             # 3. Process Entities
             demand_entities = []
             historical_entities = []
+            csv_forecast_records: List[Dict[str, Any]] = []
             today_date = datetime.now().date()
             
             for raw_record in valid_items:
@@ -779,6 +795,16 @@ class DemandProcessor(BaseProcessor):
                         if sch_at.date() == today_date and tb is not None and tb < current_block:
                             logger.debug(f"Skipping IDF record for past block {tb} (current={current_block})")
                             continue
+
+                        csv_forecast = self._parse_idf_forecast_from_raw(raw_record)
+                        csv_forecast_records.append(
+                            {
+                                "scheduled_at": sch_at,
+                                "time_block": tb,
+                                "forecast": csv_forecast,
+                            }
+                        )
+                        raw_record.pop("forecast", None)
 
                     # For DAF records: sync actual, drawal, rostering from existing IDF in system
                     # (IDF holds the real-time actuals; DAF and IDF share the same actual
@@ -854,6 +880,20 @@ class DemandProcessor(BaseProcessor):
                 except Exception as entity_error:
                     logger.error(f"Error processing demand record in loop: {entity_error}")
                     continue
+
+            if csv_forecast_records:
+                try:
+                    fs_result = await self.forecast_repository.bulk_upsert_forecasts(
+                        csv_forecast_records,
+                        source=FORECAST_SOURCE_CSV,
+                    )
+                    logger.info(
+                        "Forecast Serve CSV bulk result: upserted=%s modified=%s",
+                        fs_result.get("upserted"),
+                        fs_result.get("modified"),
+                    )
+                except Exception as fs_err:
+                    logger.error("Error bulk upserting forecast_serve (csv): %s", fs_err)
 
             if demand_entities:
                 # Use delete-insert strategy via optimized bulk write

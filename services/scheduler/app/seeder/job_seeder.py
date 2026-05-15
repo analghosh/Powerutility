@@ -71,6 +71,20 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 5
             },
             {
+                "job_type": "idf_forecast_merge",
+                "name": "IDF Forecast Merge",
+                "type": "data_processing",
+                "schedule": getattr(
+                    self.settings,
+                    "IDF_FORECAST_MERGE_CRON_SCHEDULE",
+                    "*/15 * * * *",
+                ),
+                "enabled": getattr(self.settings, "IDF_FORECAST_MERGE_CRON_ENABLED", True),
+                "timezone": getattr(self.settings, "CRON_TIMEZONE", "Asia/Kolkata"),
+                "description": "Merges forecast_serve (RTM API or CSV) into demand_serve IDF per idf_forecast_switch",
+                "priority": 5,
+            },
+            {
                 "job_type": "supply_data_processing",
                 "name": "Supply Data Processing",
                 "type": "data_processing",

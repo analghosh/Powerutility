@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     MONGODB_URI: str = "mongodb://localhost:27017/epms"
     MONGODB_DATABASE: str = "epms"
     MONGODB_RAW_DATA_COLLECTION: str = "raw_data"
+    MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
     
     # Audit Database Configuration
     AUDIT_DB_URI: str = "mongodb://localhost:27017/audit_db"
