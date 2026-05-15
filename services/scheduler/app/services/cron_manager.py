@@ -50,6 +50,7 @@ from services.scheduler.app.processors.block_bid_book_processor import BlockBidB
 from services.scheduler.app.processors.bid_trade_live_sync_processor import BidTradeLiveSyncProcessor
 from services.scheduler.app.processors.supply_tomorrow_sync_processor import SupplyTomorrowSyncProcessor
 from services.scheduler.app.processors.demand_temp_sync_processor import DemandTempSyncProcessor
+from services.scheduler.app.processors.idf_forecast_merge_processor import IdfForecastMergeProcessor
 from services.scheduler.app.processors.exchange_dsm_processor import ExchangeDsmProcessor
 from services.scheduler.app.processors.rtm_bid_lapse_processor import RTMBidLapseProcessor
 from services.scheduler.app.processors.dam_bid_capture_processor import DAMBidCaptureProcessor
@@ -109,6 +110,7 @@ class CronManager(BaseCronManager):
         self.bid_trade_live_sync_processor = BidTradeLiveSyncProcessor() # Add live sync processor
         self.supply_tomorrow_sync_processor = SupplyTomorrowSyncProcessor() # Add supply tomorrow sync processor
         self.demand_temp_sync_processor = DemandTempSyncProcessor() # Add demand temp sync processor
+        self.idf_forecast_merge_processor = IdfForecastMergeProcessor()
         self.exchange_dsm_processor = ExchangeDsmProcessor() # Add Exchange DSM processor
         self.rtm_bid_lapse_processor = RTMBidLapseProcessor() # Add RTM Bid Lapse processor
         self.dam_bid_capture_processor = DAMBidCaptureProcessor()
@@ -274,6 +276,7 @@ class CronManager(BaseCronManager):
 
             # Demand Temp Sync
             "demand_temp_sync": self.demand_temp_sync_processor.execute_cron_job,
+            "idf_forecast_merge": self.idf_forecast_merge_processor.execute_cron_job,
 
             # RTM Bid Lapse
             "rtm_bid_lapse_processing": self.rtm_bid_lapse_processor.execute_cron_job,

@@ -1,7 +1,7 @@
 """
 RTM Forecast API Processor
 Handles fetching RTM forecast data from external API and storing:
-- Demand forecast (IDF) and forecasted_frequency in demand_serve
+- IDF demand forecast in forecast_serve (source=rtm_forecast_api)
 - RTM forecasted price in limit_values (RTM_forecasted_price)
 """
 
@@ -11,10 +11,17 @@ import asyncio
 import aiohttp
 from datetime import date, datetime, timedelta
 from typing import Dict, Any, List, Optional
-from zoneinfo import ZoneInfo
 
 from libs.database.mongo_client_factory import get_mongo_client
+from libs.helpers.rtm_forecast_block_filter import (
+    current_time_block_1_to_96,
+    get_rtm_timezone,
+    is_after_evening_cutover,
+    should_write_forecast_block,
+)
+from libs.models.forecast_serve_entity import FORECAST_SOURCE_RTM_API
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
+from libs.repository.forecast_serve_repository import forecast_serve_repository
 from services.ingestion.app.core.config import settings
 from services.ingestion.app.core.logger import get_ingestion_logger
 from services.ingestion.app.processors.base_raw_data_processor import BaseRawDataProcessor
@@ -25,54 +32,13 @@ logger = get_ingestion_logger("rtm_forecast_api_processor")
 RTM_MARKET = "RTM"
 RTM_FORECASTED_PRICE_ID = "RTM_forecasted_price"
 RTM_SOURCE_FORECAST = "rtm_forecast_api"
-
-# After this local time, API window shifts to tomorrow; intraday block filter is disabled
-# so inserts run for blocks 1–96 (today's wall-clock "current block" refers to the wrong day).
-EVENING_CUTOVER_HM = (22, 30)
-
-
-def _get_rtm_timezone():
-    tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
-    try:
-        return ZoneInfo(tz_name)
-    except Exception:
-        return ZoneInfo("Asia/Kolkata")
-
-
-def _current_time_block_1_to_96(now_local: datetime) -> int:
-    minutes_from_midnight = now_local.hour * 60 + now_local.minute
-    time_block = (minutes_from_midnight // 15) + 1
-    if time_block > 96:
-        time_block = 96
-    if time_block < 1:
-        time_block = 1
-    return time_block
-
-
-def _should_write_forecast_block(
-    scheduled_date: date,
-    time_block: int,
-    today_ist: date,
-    current_block: int,
-    after_evening_cutover: bool = False,
-    min_ahead_blocks: int = 0,
-) -> bool:
-    if scheduled_date < today_ist:
-        return False
-    if scheduled_date == today_ist:
-        # Wrapped strict-after threshold over a 1..96 circular time-block space.
-        target_block = ((int(current_block) - 1 + int(min_ahead_blocks)) % 96) + 1
-        next_block = (target_block % 96) + 1
-        # Example: 22:30 -> current=91, offset=5 => target=96 -> next=1 (allow all blocks).
-        # Example: 23:00 -> current=93, offset=5 => target=2 -> next=3 (allow 3..96).
-        return int(time_block) >= next_block
-    return True
+EVENING_CUTOVER_HM = (22, 30)  # re-export for tests / fetch logic
 
 
 class RTMForecastAPIProcessor(BaseRawDataProcessor):
     """
-    Processor for fetching RTM forecast data from external API and storing demand + frequency
-    into demand_serve and forecasted RTM price into limit_values.
+    Processor for fetching RTM forecast data from external API and storing IDF demand
+    forecast into forecast_serve and forecasted RTM price into limit_values.
     """
 
     def __init__(self, audit_logger=None):
@@ -158,7 +124,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     await self.record_job_completion(job_type, job_name, schedule, start_time, datetime.now(), execution_id, "error", False, execution_id, result, "Failed to fetch API data")
                 return result
 
-            demand_serve_stored = 0
+            forecast_serve_stored = 0
             limit_values_stored = 0
 
             data_items = self._normalize_response_items(api_response)
@@ -168,11 +134,12 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
 
             logger.info("Processing %d date entries from RTM forecast API response", len(data_items))
 
-            tz = _get_rtm_timezone()
+            tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
+            tz = get_rtm_timezone(tz_name)
             now_local = datetime.now(tz)
             today_ist = now_local.date()
-            current_block = _current_time_block_1_to_96(now_local)
-            after_evening_cutover = (now_local.hour, now_local.minute) >= EVENING_CUTOVER_HM
+            current_block = current_time_block_1_to_96(now_local)
+            after_evening_cutover = is_after_evening_cutover(now_local)
             min_ahead_blocks = max(0, int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)))
             target_block = ((current_block - 1 + min_ahead_blocks) % 96) + 1
             next_block = (target_block % 96) + 1
@@ -195,7 +162,6 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     logger.warning("Invalid date format: %s", date_str)
                     continue
 
-                # Frequency forecast lookup by time_block
                 freq_by_block: Dict[int, float] = {}
                 for fr in date_entry.get("frequency_forecast", []) or []:
                     try:
@@ -206,14 +172,12 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     except Exception:
                         continue
 
-                # Demand -> demand_serve (IDF)
+                # Demand -> forecast_serve (IDF, source=rtm_forecast_api)
                 demand_data = date_entry.get("demand") or {}
-                market_type = (demand_data.get("market") or "IDF").strip() or "IDF"
                 demand_records = demand_data.get("data") or []
                 if isinstance(demand_records, list) and demand_records:
-                    stored = await self._store_demand_serve(
+                    stored = await self._store_forecast_serve(
                         scheduled_at=scheduled_at,
-                        market_type=market_type,
                         data=demand_records,
                         freq_by_block=freq_by_block,
                         today_ist=today_ist,
@@ -221,7 +185,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                         after_evening_cutover=after_evening_cutover,
                         min_ahead_blocks=min_ahead_blocks,
                     )
-                    demand_serve_stored += stored
+                    forecast_serve_stored += stored
 
                 # RTM forecasted price -> limit_values
                 price_records = date_entry.get("rtm_forecasted_price") or []
@@ -240,7 +204,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             execution_time = (end_time - start_time).total_seconds()
             result = {
                 'status': 'success',
-                'demand_serve_stored': demand_serve_stored,
+                'forecast_serve_stored': forecast_serve_stored,
                 'limit_values_stored': limit_values_stored,
                 'execution_time': execution_time,
                 'execution_id': execution_id,
@@ -251,8 +215,8 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             if execution_id:
                 await self.record_job_completion(job_type, job_name, schedule, start_time, end_time, execution_id, "success", True, execution_id, result)
             logger.info(
-                "RTM Forecast API processing completed: demand_serve=%d, limit_values=%d in %.2fs",
-                demand_serve_stored,
+                "RTM Forecast API processing completed: forecast_serve=%d, limit_values=%d in %.2fs",
+                forecast_serve_stored,
                 limit_values_stored,
                 execution_time
             )
@@ -327,7 +291,8 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             auth_header = api_config.get('auth_header', 'X-API-Key')
             date_range_days = api_config.get('date_range_days', 1)
             date_param_name = api_config.get('date_param_name', 'date')
-            tz = _get_rtm_timezone()
+            tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
+            tz = get_rtm_timezone(tz_name)
             today = datetime.now(tz).date()
             now_local = datetime.now(tz)
             if (now_local.hour, now_local.minute) >= EVENING_CUTOVER_HM:
@@ -398,36 +363,28 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             logger.error("Error fetching RTM forecast data: %s", str(e))
             return None
 
-    async def _store_demand_serve(
+    async def _store_forecast_serve(
         self,
         scheduled_at: datetime,
-        market_type: str,
         data: List[Dict[str, Any]],
         freq_by_block: Dict[int, float],
-        today_ist: date,
+        today_ist,
         current_block: int,
         after_evening_cutover: bool = False,
         min_ahead_blocks: int = 0,
     ) -> int:
         """
-        Store RTM demand forecasts in demand_serve collection.
+        Store RTM IDF demand forecasts in forecast_serve (source=rtm_forecast_api).
 
-        Uses market_type from API (expected: IDF) and overwrites forecasted_frequency each run.
-        When after_evening_cutover, writes blocks 1–96 for non-past dates (current_block ignored).
+        Uses the same block filter as legacy demand_serve writes: only active-session
+        blocks on the current day (current_block + min_ahead_blocks), or all blocks
+        1–96 after evening cutover / for future dates.
         """
         try:
             if not data:
                 return 0
 
-            client = get_mongo_client(self.mongo_uri, "rtm_forecast_demand_serve")
-            db = client[self.database_name]
-            collection = db["demand_serve"]
-
-            current_time = datetime.now()
-            stored_count = 0
             scheduled_date = scheduled_at.date()
-
-            # Deduplicate by time_block (keep first)
             time_block_data: Dict[int, Dict[str, Any]] = {}
             for record in data:
                 tb = record.get("time_block")
@@ -437,85 +394,45 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 if tb_i not in time_block_data:
                     time_block_data[tb_i] = record
 
-            rostering_by_block: Dict[int, float] = {}
-            try:
-                cursor = collection.find(
-                    {"scheduled_at": scheduled_at, "type": "IDF"},
-                    {"time_block": 1, "rostering": 1},
-                )
-                docs = await self._cursor_to_docs(cursor)
-                for doc in docs:
-                    tb = doc.get("time_block")
-                    if tb is not None:
-                        rostering_by_block[int(tb)] = float(doc.get("rostering") or 0.0)
-            except Exception as prefetch_err:
-                logger.warning(
-                    "Failed to prefetch rostering from demand_serve (IDF): %s",
-                    prefetch_err,
-                )
-
+            bulk_records: List[Dict[str, Any]] = []
             for time_block, record in time_block_data.items():
-                try:
-                    if not _should_write_forecast_block(
-                        scheduled_date,
-                        int(time_block),
-                        today_ist,
-                        current_block,
-                        after_evening_cutover=after_evening_cutover,
-                        min_ahead_blocks=min_ahead_blocks,
-                    ):
-                        continue
-                    forecast_mw = float(record.get("demand_forecast_mw", 0.0) or 0.0)
-                    forecasted_frequency = float(freq_by_block.get(int(time_block), 0.0) or 0.0)
-                    rostering = float(rostering_by_block.get(int(time_block), 0.0) or 0.0)
-                    comp_act_demand = forecast_mw + rostering
-
-                    filter_doc = {
+                if not should_write_forecast_block(
+                    scheduled_date,
+                    int(time_block),
+                    today_ist,
+                    current_block,
+                    after_evening_cutover=after_evening_cutover,
+                    min_ahead_blocks=min_ahead_blocks,
+                ):
+                    continue
+                forecast_mw = float(record.get("demand_forecast_mw", 0.0) or 0.0)
+                bulk_records.append(
+                    {
                         "scheduled_at": scheduled_at,
                         "time_block": int(time_block),
-                        "type": market_type,
+                        "forecast": forecast_mw,
+                        "forecasted_frequency": float(
+                            freq_by_block.get(int(time_block), 0.0) or 0.0
+                        ),
                     }
+                )
 
-                    update_doc = {
-                        "$set": {
-                            "scheduled_at": scheduled_at,
-                            "time_block": int(time_block),
-                            "type": market_type,
-                            "forecast": forecast_mw,
-                            "forecasted_frequency": forecasted_frequency,
-                            "updated_at": current_time,
-                            "timestamp": current_time,
-                            "source_forecast": RTM_SOURCE_FORECAST,
-                            "comp_act_demand": comp_act_demand,
-                            "comp_udm": forecast_mw,
-                        },
-                        "$setOnInsert": {
-                            "inserted_at": current_time,
-                            "created_at": current_time,
-                            "source": RTM_SOURCE_FORECAST,
-                            "system_revision_number": 1,
-                        },
-                    }
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
-                    # result = await self._maybe_await(collection.update_one(filter_doc, update_doc, upsert=True))
-                    if result.upserted_id or result.modified_count > 0:
-                        stored_count += 1
-                except Exception as record_error:
-                    logger.warning(
-                        "Failed to store RTM demand_serve record: time_block=%s, error=%s",
-                        time_block,
-                        str(record_error),
-                    )
+            if not bulk_records:
+                return 0
 
+            result = await forecast_serve_repository.bulk_upsert_forecasts(
+                bulk_records,
+                source=FORECAST_SOURCE_RTM_API,
+            )
+            stored_count = result.get("modified", 0) + result.get("upserted", 0)
             logger.info(
-                "Stored %d demand_serve records for date %s, type %s",
+                "Stored %d forecast_serve records (rtm_forecast_api) for date %s",
                 stored_count,
-                scheduled_at.strftime('%Y-%m-%d'),
-                market_type,
+                scheduled_at.strftime("%Y-%m-%d"),
             )
             return stored_count
         except Exception as e:
-            logger.error("Error storing RTM demand_serve: %s", str(e))
+            logger.error("Error storing RTM forecast_serve: %s", str(e))
             return 0
 
     async def _store_rtm_forecasted_price_limit_values(
@@ -547,7 +464,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     if time_block is None:
                         continue
                     tb_i = int(time_block)
-                    if not _should_write_forecast_block(
+                    if not should_write_forecast_block(
                         scheduled_date,
                         tb_i,
                         today_ist,
