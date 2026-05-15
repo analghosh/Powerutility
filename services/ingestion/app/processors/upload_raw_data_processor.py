@@ -674,7 +674,7 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
             provider_service = self.provider_service
 
             # Get provider details directly
-            provider = provider_service.get_provider_by_code_and_data_type(
+            provider = await provider_service.get_provider_by_code_and_data_type(
                 provider_type, data_type.lower()
             )
 
