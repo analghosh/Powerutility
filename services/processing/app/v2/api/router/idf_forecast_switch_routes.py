@@ -9,11 +9,12 @@ from typing import Any, Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
-from libs.audit_queue.simple_logger import AuditLogger
+from libs.audit_queue.simple_logger import AuditLogger, AuditLogLevel
+from libs.helpers.idf_forecast_audit import request_audit_context, switch_change_audit_fields
 from libs.middleware import get_correlation_id
 from ....core.dependencies import get_audit_logger
 from ...controller.idf_forecast_switch_controller import idf_forecast_switch_controller
-from ...dependencies import get_user_context
+from ...dependencies import get_authenticated_user, get_user_context
 
 router = APIRouter(
     prefix="/idf-forecast",
@@ -41,6 +42,16 @@ class IdfForecastSwitchResponse(BaseModel):
     timestamp: Optional[str] = None
 
 
+def _user_id_from_context(user_context: Dict[str, Any]) -> str:
+    user = user_context.get("user") or {}
+    return str(
+        user_context.get("user_id")
+        or user.get("id")
+        or user.get("user_id")
+        or "anonymous"
+    )
+
+
 @router.get(
     "/switch",
     response_model=IdfForecastSwitchResponse,
@@ -52,7 +63,8 @@ async def get_idf_forecast_switch(
     user_context: Dict[str, Any] = Depends(get_user_context),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
-    user_id = user_context.get("user_id", "anonymous")
+    user_id = _user_id_from_context(user_context)
+    username = user_context.get("username") or user_id
     correlation_id = user_context.get("correlation_id") or get_correlation_id()
 
     try:
@@ -63,7 +75,13 @@ async def get_idf_forecast_switch(
             action="idf_forecast_switch_get",
             message="IDF forecast switch fetched",
             correlation_id=correlation_id,
+            session_id=correlation_id,
+            username=username,
             success=True,
+            **request_audit_context(request),
+            use_rtm_api=data.get("use_rtm_api"),
+            active_source=data.get("active_source"),
+            para_value=data.get("para_value"),
         )
         return IdfForecastSwitchResponse(
             **data,
@@ -94,28 +112,57 @@ async def get_idf_forecast_switch(
 async def put_idf_forecast_switch(
     request: Request,
     body: IdfForecastSwitchUpdate,
-    user_context: Dict[str, Any] = Depends(get_user_context),
+    current_user: Dict[str, Any] = Depends(get_authenticated_user),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
-    user_id = user_context.get("user_id", "anonymous")
-    correlation_id = user_context.get("correlation_id") or get_correlation_id()
+    user_id = str(current_user.get("id") or current_user.get("user_id") or "unknown")
+    username = current_user.get("username") or user_id
+    correlation_id = getattr(request.state, "correlation_id", None) or get_correlation_id()
 
     try:
         data = await idf_forecast_switch_controller.set_switch(
             use_rtm_api=body.use_rtm_api,
             updated_by=user_id,
         )
+        previous = {
+            "use_rtm_api": data.get("previous_use_rtm_api"),
+            "active_source": data.get("previous_active_source"),
+            "para_value": data.get("previous_para_value"),
+            "para_key": data.get("para_key"),
+        }
+        new_state = {
+            "use_rtm_api": data.get("use_rtm_api"),
+            "active_source": data.get("active_source"),
+            "para_value": data.get("para_value"),
+            "para_key": data.get("para_key"),
+        }
+        changed = (
+            previous.get("use_rtm_api") != new_state.get("use_rtm_api")
+            or previous.get("para_value") != new_state.get("para_value")
+        )
         audit_logger.log_user_action(
             service="processing",
             user_id=user_id,
             action="idf_forecast_switch_update",
-            message=f"IDF forecast switch set use_rtm_api={body.use_rtm_api}",
+            message=(
+                "IDF forecast switch changed"
+                if changed
+                else "IDF forecast switch set (no value change)"
+            ),
             correlation_id=correlation_id,
-            use_rtm_api=body.use_rtm_api,
+            session_id=correlation_id,
+            username=username,
             success=True,
+            level=AuditLogLevel.HIGH if changed else AuditLogLevel.MEDIUM,
+            change_source="api",
+            value_changed=changed,
+            requested_use_rtm_api=body.use_rtm_api,
+            **request_audit_context(request),
+            **switch_change_audit_fields(previous, new_state),
         )
+        response_data = {k: v for k, v in data.items() if not str(k).startswith("previous_")}
         return IdfForecastSwitchResponse(
-            **data,
+            **response_data,
             correlation_id=correlation_id,
             timestamp=datetime.now().isoformat(),
         )

@@ -4,7 +4,6 @@ Upserts IDF forecasts into forecast_serve — one document per source per block.
 """
 
 import logging
-import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -12,8 +11,6 @@ from pymongo import UpdateOne
 
 from libs.database.base_repository import BaseRepository
 from libs.models.forecast_serve_entity import (
-    FORECAST_SOURCE_CSV,
-    FORECAST_SOURCE_RTM_API,
     ensure_forecast_serve_indexes,
 )
 
@@ -28,12 +25,10 @@ class ForecastServeRepository(BaseRepository):
 
     def __init__(
         self,
-        mongodb_uri: Optional[str] = None,
-        database_name: Optional[str] = None,
+        mongodb_uri: str,
+        database_name: str,
         collection_name: str = DEFAULT_COLLECTION,
     ):
-        mongodb_uri = mongodb_uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017/epms")
-        database_name = database_name or os.getenv("MONGODB_DATABASE", "epms")
         super().__init__(collection_name, mongodb_uri, database_name)
 
     async def create_indexes(self) -> None:
@@ -195,6 +190,3 @@ class ForecastServeRepository(BaseRepository):
         except Exception as e:
             logger.error("Error finding forecast_serve by block: %s", e)
             return []
-
-
-forecast_serve_repository = ForecastServeRepository()
