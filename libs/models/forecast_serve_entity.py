@@ -39,6 +39,16 @@ class ForecastServeEntity(BaseModel):
     updated_at: datetime = Field(default_factory=datetime.now)
 
 
+class ForecastServeHistoricalEntity(ForecastServeEntity):
+    """Archived forecast_serve row (forecast_serve_historical)."""
+
+    archived_at: datetime = Field(default_factory=datetime.now)
+    archived_timestamp: datetime = Field(
+        default_factory=datetime.now,
+        description="Time-series index field for historical collection",
+    )
+
+
 def ensure_forecast_serve_indexes(collection) -> None:
     """Ensure indexes for forecast_serve collection."""
     import logging
@@ -59,3 +69,23 @@ def ensure_forecast_serve_indexes(collection) -> None:
         logger.debug("forecast_serve collection indexes ensured")
     except Exception as e:
         logger.warning("Failed to create forecast_serve indexes: %s", e)
+
+
+def ensure_forecast_serve_historical_indexes(collection) -> None:
+    """Ensure indexes for forecast_serve_historical collection."""
+    import logging
+
+    logger = logging.getLogger(__name__)
+    try:
+        collection.create_index([("scheduled_at", 1)], background=True)
+        collection.create_index([("archived_at", -1)], background=True)
+        collection.create_index([("archived_timestamp", -1)], background=True)
+        collection.create_index("source", background=True)
+        collection.create_index(
+            [("scheduled_at", 1), ("type", 1), ("source", 1)],
+            background=True,
+        )
+        collection.create_index("time_block", background=True)
+        logger.debug("forecast_serve_historical collection indexes ensured")
+    except Exception as e:
+        logger.warning("Failed to create forecast_serve_historical indexes: %s", e)

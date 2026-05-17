@@ -84,6 +84,88 @@ class IdfForecastMergeProcessor(BaseProcessor):
         finally:
             self.clear_correlation_id()
 
+    async def execute_forecast_serve_archival_job(self) -> Dict[str, Any]:
+        """Archive old forecast_serve rows to forecast_serve_historical (daily job)."""
+        job_type = "forecast_serve_archival"
+        job_name = "Forecast Serve Data Archival"
+        schedule = "0 0 * * *"
+        start_time = datetime.now()
+
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        self.set_correlation_id(execution_id or "")
+
+        logger.info("=== EXECUTING FORECAST SERVE ARCHIVAL JOB ===")
+
+        try:
+            days_to_keep = getattr(settings, "FORECAST_SERVE_DAYS_TO_KEEP", 2)
+            archive_result = await self.forecast_repository.archive_old_forecast_data(
+                days_to_keep=days_to_keep
+            )
+
+            end_time = datetime.now()
+            execution_time = (end_time - start_time).total_seconds()
+
+            if archive_result.get("error"):
+                result = {
+                    "status": "error",
+                    "message": f"Forecast serve archival error: {archive_result['error']}",
+                    "execution_time": execution_time,
+                    "data_type": "forecast_serve",
+                    "correlation_id": execution_id,
+                }
+                await self._record_job_completion(
+                    job_type=job_type,
+                    job_name=job_name,
+                    schedule=schedule,
+                    execution_start=start_time,
+                    execution_end=end_time,
+                    execution_id=execution_id or "",
+                    status="error",
+                    success=False,
+                    result=result,
+                    error_message=archive_result["error"],
+                )
+                return result
+
+            archived_count = archive_result.get("archived_count", 0)
+            deleted_count = archive_result.get("deleted_count", 0)
+            result = {
+                "status": "success",
+                "message": (
+                    f"Archived {archived_count} forecast records, "
+                    f"deleted {deleted_count} from forecast_serve"
+                ),
+                "execution_time": execution_time,
+                "archived_count": archived_count,
+                "deleted_count": deleted_count,
+                "cutoff_date": archive_result.get("cutoff_date"),
+                "data_type": "forecast_serve",
+                "correlation_id": execution_id,
+            }
+            await self._record_job_completion(
+                job_type=job_type,
+                job_name=job_name,
+                schedule=schedule,
+                execution_start=start_time,
+                execution_end=end_time,
+                execution_id=execution_id or "",
+                status="success",
+                success=True,
+                result=result,
+            )
+            logger.info(
+                "Forecast serve archival completed: archived=%d deleted=%d in %.2fs",
+                archived_count,
+                deleted_count,
+                execution_time,
+            )
+            return result
+        except Exception as e:
+            logger.error("Error executing forecast serve archival job: %s", e, exc_info=True)
+            return {"status": "error", "message": str(e)}
+        finally:
+            self.clear_correlation_id()
+
     async def _maybe_reset_switch_for_new_day(self, today_ist: date) -> bool:
         """Set idf_forecast_switch to true on IST calendar day rollover."""
         last_doc = await self.parameter_repository.get_by_key(IDF_FORECAST_SWITCH_LAST_RESET_KEY)
@@ -255,7 +337,9 @@ class IdfForecastMergeProcessor(BaseProcessor):
         source_forecast_label = RTM_SOURCE_FORECAST if use_rtm_api else FORECAST_SOURCE_CSV
 
         target_dates = target_scheduled_dates_for_rtm(
-            today_ist, ctx["after_evening_cutover"]
+            today_ist,
+            ctx["after_evening_cutover"],
+            ctx.get("include_tomorrow_forecast", False),
         )
 
         merged = skipped = failed = 0

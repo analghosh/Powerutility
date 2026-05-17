@@ -354,8 +354,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 return 0
             
             client = get_mongo_client(self.mongo_uri, "forecast_limit_values")
-            db = client[self.database_name]
-            collection = db["limit_values"]
+            collection = client[self.database_name]["limit_values"]
             
             current_time = datetime.now()
             stored_count = 0
@@ -402,7 +401,9 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
@@ -441,8 +442,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 return 0
             
             client = get_mongo_client(self.mongo_uri, "forecast_demand_serve")
-            db = client[self.database_name]
-            collection = db["demand_serve"]
+            collection = client[self.database_name]["demand_serve"]
             
             current_time = datetime.now()
             stored_count = 0
@@ -488,7 +488,9 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
