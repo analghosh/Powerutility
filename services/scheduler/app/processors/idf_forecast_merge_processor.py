@@ -18,6 +18,7 @@ from libs.helpers.rtm_forecast_block_filter import (
     should_write_forecast_block,
     target_scheduled_dates_for_rtm,
 )
+from libs.helpers.idf_forecast_audit import switch_change_audit_fields
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
 from .base_processor import BaseProcessor
 from ..core.config import settings
@@ -97,12 +98,41 @@ class IdfForecastMergeProcessor(BaseProcessor):
         if last_date is not None and today_ist <= last_date:
             return False
 
+        before_doc = await self.parameter_repository.get_by_key(IDF_FORECAST_SWITCH_KEY)
+        previous_use_rtm = parse_switch_use_rtm_api((before_doc or {}).get("para_value"))
+        previous = {
+            "use_rtm_api": previous_use_rtm,
+            "active_source": (
+                FORECAST_SOURCE_RTM_API if previous_use_rtm else FORECAST_SOURCE_CSV
+            ),
+            "para_value": switch_para_value(previous_use_rtm),
+            "para_key": IDF_FORECAST_SWITCH_KEY,
+        }
+
         await self.parameter_repository.upsert_by_key(IDF_FORECAST_SWITCH_KEY, "true")
         await self.parameter_repository.upsert_by_key(
             IDF_FORECAST_SWITCH_LAST_RESET_KEY,
             today_ist.isoformat(),
         )
+        new_state = {
+            "use_rtm_api": True,
+            "active_source": FORECAST_SOURCE_RTM_API,
+            "para_value": "true",
+            "para_key": IDF_FORECAST_SWITCH_KEY,
+        }
         logger.info("IDF forecast switch reset to API mode for new IST day %s", today_ist)
+        self._audit_switch_change(
+            action="idf_forecast_switch_system_reset",
+            message=f"IDF forecast switch reset to API mode for IST day {today_ist}",
+            previous=previous,
+            new_state=new_state,
+            extra={
+                "changed_by": "system",
+                "change_source": "scheduler",
+                "trigger": "idf_forecast_merge_daily_reset",
+                "ist_date": today_ist.isoformat(),
+            },
+        )
         return True
 
     async def _get_use_rtm_api(self) -> bool:
@@ -122,6 +152,39 @@ class IdfForecastMergeProcessor(BaseProcessor):
             return float(forecast) == 0.0
         except (TypeError, ValueError):
             return True
+
+    @staticmethod
+    def _parse_csv_forecast_mw(forecast: Any) -> Optional[float]:
+        if IdfForecastMergeProcessor._csv_forecast_invalid(forecast):
+            return None
+        return float(forecast)
+
+    def _audit_switch_change(
+        self,
+        action: str,
+        message: str,
+        previous: Dict[str, Any],
+        new_state: Dict[str, Any],
+        extra: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Write audit trail for switch changes (system or future callers)."""
+        try:
+            from libs.middleware import get_correlation_id
+            from ..core.dependencies import get_audit_logger
+
+            correlation_id = get_correlation_id() or self.get_correlation_id() or ""
+            audit_logger = get_audit_logger()
+            audit_logger.log_system_operation(
+                service="scheduler",
+                operation=action,
+                message=message,
+                correlation_id=correlation_id,
+                success=True,
+                **switch_change_audit_fields(previous, new_state),
+                **(extra or {}),
+            )
+        except Exception as audit_err:
+            logger.warning("Failed to write IDF forecast switch audit log: %s", audit_err)
 
     async def _get_rostering(
         self, scheduled_at: datetime, time_block: int
@@ -169,7 +232,6 @@ class IdfForecastMergeProcessor(BaseProcessor):
             "$setOnInsert": {
                 "inserted_at": now,
                 "created_at": now,
-                "source": source_forecast,
                 "system_revision_number": 1,
             },
         }
@@ -228,10 +290,10 @@ class IdfForecastMergeProcessor(BaseProcessor):
                         forecast_mw = float(doc.get("forecast") or 0.0)
                         forecasted_frequency = float(doc.get("forecasted_frequency") or 0.0)
                     else:
-                        if self._csv_forecast_invalid(doc.get("forecast")):
+                        forecast_mw = self._parse_csv_forecast_mw(doc.get("forecast"))
+                        if forecast_mw is None:
                             skipped += 1
                             continue
-                        forecast_mw = float(doc.get("forecast"))
                         existing = await self.demand_repository.serve_collection.find_one(
                             {
                                 "scheduled_at": scheduled_at,
