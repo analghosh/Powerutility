@@ -17,7 +17,11 @@ from libs.helpers.rtm_forecast_block_filter import (
     current_time_block_1_to_96,
     get_rtm_timezone,
     is_after_evening_cutover,
+    is_tomorrow_forecast_window,
+    rtm_api_fetch_date_range,
+    is_rtm_forecast_scheduled_date_allowed,
     should_write_forecast_block,
+    target_scheduled_dates_for_rtm,
 )
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_RTM_API
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
@@ -141,16 +145,25 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             today_ist = now_local.date()
             current_block = current_time_block_1_to_96(now_local)
             after_evening_cutover = is_after_evening_cutover(now_local)
+            include_tomorrow_forecast = is_tomorrow_forecast_window(now_local)
             min_ahead_blocks = max(0, int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)))
             target_block = ((current_block - 1 + min_ahead_blocks) % 96) + 1
             next_block = (target_block % 96) + 1
+            allowed_dates = {
+                d.isoformat()
+                for d in target_scheduled_dates_for_rtm(
+                    today_ist, after_evening_cutover, include_tomorrow_forecast
+                )
+            }
             logger.info(
-                "RTM block filter context: current_block=%d, min_ahead_blocks=%d, target_block=%d, next_block=%d, after_evening_cutover=%s",
+                "RTM block filter context: current_block=%d, min_ahead_blocks=%d, target_block=%d, next_block=%d, after_evening_cutover=%s, include_tomorrow_forecast=%s, allowed_dates=%s",
                 current_block,
                 min_ahead_blocks,
                 target_block,
                 next_block,
                 after_evening_cutover,
+                include_tomorrow_forecast,
+                sorted(allowed_dates),
             )
 
             for date_entry in data_items:
@@ -161,6 +174,18 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                     scheduled_at = datetime.strptime(date_str, "%Y-%m-%d")
                 except ValueError:
                     logger.warning("Invalid date format: %s", date_str)
+                    continue
+
+                if not is_rtm_forecast_scheduled_date_allowed(
+                    scheduled_at.date(),
+                    today_ist,
+                    after_evening_cutover,
+                    include_tomorrow_forecast,
+                ):
+                    logger.info(
+                        "Skipping RTM forecast date %s (not in allowed window; demand and price)",
+                        date_str,
+                    )
                     continue
 
                 freq_by_block: Dict[int, float] = {}
@@ -212,6 +237,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 'today_ist': today_ist.isoformat(),
                 'current_block': current_block,
                 'after_evening_cutover': after_evening_cutover,
+                'include_tomorrow_forecast': include_tomorrow_forecast,
             }
             if execution_id:
                 await self.record_job_completion(job_type, job_name, schedule, start_time, end_time, execution_id, "success", True, execution_id, result)
@@ -296,14 +322,17 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             tz = get_rtm_timezone(tz_name)
             today = datetime.now(tz).date()
             now_local = datetime.now(tz)
-            if (now_local.hour, now_local.minute) >= EVENING_CUTOVER_HM:
-                base_date = today + timedelta(days=1)
-                tomorrow_shift = True
-            else:
-                base_date = today
-                tomorrow_shift = False
-            start_date = base_date.strftime('%Y-%m-%d')
-            end_date = (base_date + timedelta(days=date_range_days - 1)).strftime('%Y-%m-%d')
+            after_evening_cutover = is_after_evening_cutover(now_local)
+            include_tomorrow_forecast = is_tomorrow_forecast_window(now_local)
+            start_date, end_date = rtm_api_fetch_date_range(
+                today,
+                after_evening_cutover,
+                include_tomorrow_forecast,
+            )
+            if not include_tomorrow_forecast and not after_evening_cutover:
+                end_date = (
+                    today + timedelta(days=date_range_days - 1)
+                ).strftime('%Y-%m-%d')
 
             headers = {auth_header: api_key, 'User-Agent': 'EPMS-Backend/1.0'}
             # Keep start/end range params and also send a single-date param for
@@ -314,12 +343,13 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 date_param_name: start_date,
             }
             logger.info(
-                "Fetching RTM forecast data from %s for dates %s to %s (base_date=%s, tomorrow_shift=%s)",
+                "Fetching RTM forecast data from %s for dates %s to %s "
+                "(after_evening_cutover=%s, include_tomorrow_forecast=%s)",
                 url,
                 start_date,
                 end_date,
-                base_date.isoformat(),
-                tomorrow_shift,
+                after_evening_cutover,
+                include_tomorrow_forecast,
             )
 
             for attempt in range(self.retry_attempts):
