@@ -451,8 +451,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 return 0
 
             client = get_mongo_client(self.mongo_uri, "rtm_forecast_limit_values")
-            db = client[self.database_name]
-            collection = db["limit_values"]
+            collection = client[self.database_name]["limit_values"]
 
             current_time = datetime.now()
             stored_count = 0
@@ -505,8 +504,9 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                             "created_by": "rtm_forecast_api_processor",
                         },
                     }
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
-                    # result = await self._maybe_await(collection.update_one(filter_doc, update_doc, upsert=True))
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
                 except Exception as record_error:
