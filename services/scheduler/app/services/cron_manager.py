@@ -243,6 +243,7 @@ class CronManager(BaseCronManager):
             # Data Scraping Jobs (disabled due to import issues)
             "exchange_serve_archival": self._execute_exchange_serve_archival_job,
             "demand_serve_archival": self._execute_demand_serve_archival_job,
+            "forecast_serve_archival": self._execute_forecast_serve_archival_job,
             "supply_serve_archival": self._execute_supply_serve_archival_job,
             "weather_serve_archival": self._execute_weather_serve_archival_job,
             "bid_serve_archival": self._execute_bid_serve_archival_job,
@@ -521,6 +522,13 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "demand_serve_archival",
                 "name": "Demand Serve Data Archival",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "forecast_serve_archival",
+                "name": "Forecast Serve Data Archival",
                 "schedule": "0 0 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
@@ -1497,6 +1505,20 @@ class CronManager(BaseCronManager):
         except Exception as e:
             logger.error("Error in demand archival job: %s", str(e))
             return {'status': 'error', 'error': str(e)}
+        finally:
+            self._cleanup_job_connections()
+
+    def _execute_forecast_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
+        """Execute forecast_serve archival job."""
+        logger.info("Executing forecast serve archival job")
+        try:
+            result = self._safe_run_async(
+                self.idf_forecast_merge_processor.execute_forecast_serve_archival_job()
+            )
+            return result
+        except Exception as e:
+            logger.error("Error in forecast serve archival job: %s", str(e))
+            return {"status": "error", "error": str(e)}
         finally:
             self._cleanup_job_connections()
     

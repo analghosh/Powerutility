@@ -118,6 +118,9 @@ class Settings(BaseSettings):
     MONGODB_DEMAND_SERVE_COLLECTION: str = "demand_serve"
     MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "demand_serve_historical"
     MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
+    MONGODB_FORECAST_SERVE_HISTORICAL_COLLECTION: str = "forecast_serve_historical"
+    # Rolling window in forecast_serve (same as demand_serve: 2 => 4-day window with tomorrow)
+    FORECAST_SERVE_DAYS_TO_KEEP: int = 2
 
     # IDF forecast merge (forecast_serve -> demand_serve)
     IDF_FORECAST_MERGE_CRON_ENABLED: bool = True

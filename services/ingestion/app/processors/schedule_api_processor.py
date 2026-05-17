@@ -323,8 +323,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                 return 0
             
             client = get_mongo_client(self.mongo_uri, "schedule_supply_serve")
-            db = client[self.database_name]
-            collection = db["serve_dam_scheduling"]
+            collection = client[self.database_name]["serve_dam_scheduling"]
             
             current_time = datetime.now()
             stored_count = 0
@@ -360,7 +359,9 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
