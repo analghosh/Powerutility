@@ -4,7 +4,6 @@ Read/write parameters collection for scheduler and processing services.
 """
 
 import logging
-import os
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -21,12 +20,10 @@ class ParameterRepository(BaseRepository):
 
     def __init__(
         self,
-        mongodb_uri: Optional[str] = None,
-        database_name: Optional[str] = None,
+        mongodb_uri: str,
+        database_name: str,
         collection_name: str = DEFAULT_PARAMETERS_COLLECTION,
     ):
-        mongodb_uri = mongodb_uri or os.getenv("MONGODB_URI", "mongodb://localhost:27017/epms")
-        database_name = database_name or os.getenv("MONGODB_DATABASE", "epms")
         super().__init__(collection_name, mongodb_uri, database_name)
 
     async def get_by_key(self, para_key: str) -> Optional[Dict[str, Any]]:
@@ -64,6 +61,3 @@ class ParameterRepository(BaseRepository):
         existing = await self.get_by_key(IDF_FORECAST_SWITCH_KEY)
         if not existing:
             await self.upsert_by_key(IDF_FORECAST_SWITCH_KEY, "true")
-
-
-parameter_repository = ParameterRepository()

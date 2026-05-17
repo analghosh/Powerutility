@@ -11,9 +11,14 @@ from .base_processor import BaseProcessor
 from libs.models.demand_serve_entity import DemandServeEntity, DemandServeHistoricalEntity
 from libs.enum.updated_flag import UpdatedFlag
 from libs.core.job_entities import JobDetail
+from libs.helpers.rtm_forecast_block_filter import (
+    rtm_forecast_run_context,
+    should_write_forecast_block,
+)
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV
-from libs.repository.forecast_serve_repository import forecast_serve_repository
+from ..core.config import settings
 from ..repository.demand_serve_repository import demand_serve_repository
+from ..repository.forecast_serve_repository import forecast_serve_repository
 from ..repository.supply_serve_repository import supply_serve_repository
 from ..repository.exchange_repository import ExchangeRepository
 from libs.audit_queue.simple_logger import AuditLogger
@@ -785,15 +790,30 @@ class DemandProcessor(BaseProcessor):
                             else:
                                 raw_record["forecast"] = None
 
-                    # Condition 4: For IDF, only update current block and future (not past blocks of today or earlier dates)
+                    # Condition 4: For IDF CSV forecast, same block window as RTM merge (IST, current + min_ahead)
                     if typ == "IDF":
-                        now = datetime.now()
-                        current_block = now.hour * 4 + (now.minute // 15) + 1
-                        if sch_at.date() < today_date:
-                            logger.debug(f"Skipping IDF record for past date {sch_at.date()}, block={tb}")
+                        if tb is None:
                             continue
-                        if sch_at.date() == today_date and tb is not None and tb < current_block:
-                            logger.debug(f"Skipping IDF record for past block {tb} (current={current_block})")
+                        tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
+                        min_ahead = max(
+                            0,
+                            int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)),
+                        )
+                        block_ctx = rtm_forecast_run_context(tz_name, min_ahead)
+                        if not should_write_forecast_block(
+                            sch_at.date(),
+                            int(tb),
+                            block_ctx["today_ist"],
+                            block_ctx["current_block"],
+                            after_evening_cutover=block_ctx["after_evening_cutover"],
+                            min_ahead_blocks=block_ctx["min_ahead_blocks"],
+                        ):
+                            logger.debug(
+                                "Skipping IDF CSV forecast outside block window: "
+                                "date=%s block=%s",
+                                sch_at.date(),
+                                tb,
+                            )
                             continue
 
                         csv_forecast = self._parse_idf_forecast_from_raw(raw_record)
