@@ -482,7 +482,7 @@ class DemandProcessor(BaseProcessor):
         
         try:
             # Archive old demand data based on new 3-day active window (yesterday,today,tomorrow)
-            archive_result = self.demand_repository.archive_old_demand_data(days_to_keep=2)
+            archive_result = await self.demand_repository.archive_old_demand_data(days_to_keep=2)
             
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()

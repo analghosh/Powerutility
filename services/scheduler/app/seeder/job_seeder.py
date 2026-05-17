@@ -222,6 +222,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 7
             },
             {
+                "job_type": "forecast_serve_archival",
+                "name": "Forecast Serve Data Archival",
+                "type": "maintenance",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Archives forecast_serve to forecast_serve_historical; keeps 4-day rolling window in forecast_serve (same pattern as demand_serve)",
+                "priority": 7,
+            },
+            {
                 "job_type": "supply_serve_archival",
                 "name": "Supply Serve Data Archival",
                 "type": "maintenance",
