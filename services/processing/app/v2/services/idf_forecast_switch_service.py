@@ -12,14 +12,16 @@ from libs.constants.idf_forecast import (
     switch_para_value,
 )
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
-from libs.repository.parameter_repository import parameter_repository
+from ...repository.idf_forecast_parameter_repository import (
+    idf_forecast_parameter_repository,
+)
 
 logger = logging.getLogger(__name__)
 
 
 class IdfForecastSwitchService:
     def __init__(self):
-        self.parameter_repository = parameter_repository
+        self.parameter_repository = idf_forecast_parameter_repository
 
     async def get_switch(self) -> Dict[str, Any]:
         await self.parameter_repository.ensure_idf_forecast_switch_default()

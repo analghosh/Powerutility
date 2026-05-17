@@ -422,6 +422,13 @@ class CronManager(BaseCronManager):
                 "timezone": settings.CRON_TIMEZONE
             },
             {
+                "job_type": "idf_forecast_merge",
+                "name": "IDF Forecast Merge",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE,
+            },
+            {
                 "job_type": "supply_tomorrow_sync",
                 "name": "Supply Tomorrow Sync",
                 "schedule": "*/15 * * * *",

@@ -19,12 +19,11 @@ from libs.helpers.rtm_forecast_block_filter import (
     target_scheduled_dates_for_rtm,
 )
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
-from libs.repository.forecast_serve_repository import forecast_serve_repository
-from libs.repository.parameter_repository import parameter_repository
-
 from .base_processor import BaseProcessor
 from ..core.config import settings
 from ..repository.demand_serve_repository import demand_serve_repository
+from ..repository.forecast_serve_repository import forecast_serve_repository
+from ..repository.parameter_repository import parameter_repository
 
 logger = logging.getLogger(__name__)
 
@@ -214,17 +213,18 @@ class IdfForecastMergeProcessor(BaseProcessor):
                     time_block = int(tb)
                     scheduled_date = scheduled_at.date()
 
+                    if not should_write_forecast_block(
+                        scheduled_date,
+                        time_block,
+                        today_ist,
+                        ctx["current_block"],
+                        after_evening_cutover=ctx["after_evening_cutover"],
+                        min_ahead_blocks=ctx["min_ahead_blocks"],
+                    ):
+                        skipped += 1
+                        continue
+
                     if use_rtm_api:
-                        if not should_write_forecast_block(
-                            scheduled_date,
-                            time_block,
-                            today_ist,
-                            ctx["current_block"],
-                            after_evening_cutover=ctx["after_evening_cutover"],
-                            min_ahead_blocks=ctx["min_ahead_blocks"],
-                        ):
-                            skipped += 1
-                            continue
                         forecast_mw = float(doc.get("forecast") or 0.0)
                         forecasted_frequency = float(doc.get("forecasted_frequency") or 0.0)
                     else:

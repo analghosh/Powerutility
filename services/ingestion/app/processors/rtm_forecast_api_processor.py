@@ -21,7 +21,7 @@ from libs.helpers.rtm_forecast_block_filter import (
 )
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_RTM_API
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
-from libs.repository.forecast_serve_repository import forecast_serve_repository
+from ..repository.forecast_serve_repository import forecast_serve_repository
 from services.ingestion.app.core.config import settings
 from services.ingestion.app.core.logger import get_ingestion_logger
 from services.ingestion.app.processors.base_raw_data_processor import BaseRawDataProcessor
@@ -54,6 +54,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
+        self.forecast_repository = forecast_serve_repository
 
     # async def _maybe_await(self, value: Any) -> Any:
     #     """Resolve awaitables so code supports sync and async Mongo clients."""
@@ -420,7 +421,7 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             if not bulk_records:
                 return 0
 
-            result = await forecast_serve_repository.bulk_upsert_forecasts(
+            result = await self.forecast_repository.bulk_upsert_forecasts(
                 bulk_records,
                 source=FORECAST_SOURCE_RTM_API,
             )
