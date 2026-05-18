@@ -683,12 +683,6 @@ class SupplyProcessor(BaseProcessor):
                 dc_sg_val = item.get("dc_sg")
                 time_block = item.get("time_block")
                 
-                now_time = datetime.now().time()
-                # Using dt_time to avoid any potential shadowing of top-level from datetime import time
-                from datetime import time as dt_time
-                if (dt_time(7, 45) > now_time or now_time > dt_time(10, 10)) and dc_sg_val == "DC":
-                    continue
-                
                 if final_plant_id and dc_sg_val and time_block:
                     item["_parsed_scheduled_at"] = scheduled_at # Cache parsed date
                     item["_resolved_plant_id"] = final_plant_id
@@ -840,6 +834,20 @@ class SupplyProcessor(BaseProcessor):
                     if max_mw_dc_value is None and existing_record:
                         max_mw_dc_value = existing_record.get("max_mw_dc")
 
+                    # rtm_max: SG of tomorrow captured at 10:05-10:15 AM (locked once set)
+                    rtm_max_value = None
+                    if (process_type == "tomorrow" and str(item.get("dc_sg")).upper() == "SG"
+                            and raw_timestamp is not None):
+                        raw_time = raw_timestamp.time()
+                        from datetime import time as dt_time
+                        if dt_time(10, 5, 0) <= raw_time <= dt_time(10, 15, 0):
+                            rtm_max_value = self._safe_float(item.get("volume"))
+                            logger.info(f"Setting rtm_max={rtm_max_value} for plant {item['_resolved_plant_id']} block {item.get('time_block')} (tomorrow SG in 10:05-10:15 window)")
+
+                    # Preserve existing rtm_max once it has been set
+                    if rtm_max_value is None and existing_record:
+                        rtm_max_value = existing_record.get("rtm_max")
+
                     # Calculate TM values for DC records (55% of volume)
                     volume_value = self._safe_float(item.get("dc_afterloss", 0.0))
                     volume = self._safe_float(item.get("volume", 0.0))
@@ -892,7 +900,10 @@ class SupplyProcessor(BaseProcessor):
                         process_type=process_type,
                         updated_flag=updated_flag,
                         max_mw_dc=max_mw_dc_value,
-                        eightThirtyValue=eightThirtyValue
+                        eightThirtyValue=eightThirtyValue,
+                        entire_shared_onbar_ent_amount=item.get("entire_shared_onbar_ent_amount"),
+                        entire_shared_offbar_ent_amount=item.get("entire_shared_offbar_ent_amount"),
+                        rtm_max=rtm_max_value
                     )
                     entities_to_upsert.append(entity)
                     
@@ -1266,6 +1277,9 @@ class SupplyProcessor(BaseProcessor):
                 updated_flag=UpdatedFlag.UPDATED,
                 plant_id=staged_item.get("plant_id"),
                 source=staged_item.get("source"),
+                entire_shared_onbar_ent_amount=staged_item.get("entire_shared_onbar_ent_amount"),
+                entire_shared_offbar_ent_amount=staged_item.get("entire_shared_offbar_ent_amount"),
+                rtm_max=staged_item.get("rtm_max"),
                 # Revision tracking
                 source_revision_number=source_revision,
                 system_revision_number=1  # New record starts at 1
@@ -1320,6 +1334,10 @@ class SupplyProcessor(BaseProcessor):
                 updated_at=datetime.now(),
                 timestamp=datetime.now(),
                 source=staged_item.get("source"),
+                entire_shared_onbar_ent_amount=staged_item.get("entire_shared_onbar_ent_amount"),
+                entire_shared_offbar_ent_amount=staged_item.get("entire_shared_offbar_ent_amount"),
+                # Preserve rtm_max once set — never overwrite with None
+                rtm_max=staged_item.get("rtm_max") or existing_record.get("rtm_max"),
                 # Revision tracking
                 source_revision_number=source_revision,
                 system_revision_number=new_system_revision  # Increment on update
@@ -1531,13 +1549,16 @@ class SupplyProcessor(BaseProcessor):
                                 px_price=dc_rec.get("px_price"),
                                 vc_price=dc_rec.get("vc_price"),
                                 price_group=dc_rec.get("price_group"),
-                                dam_tm= dam_tm_value,
-                                rtm_tm= dc_rec.get("rtm_tm"),
-                                multiplier=multiplier, # UPDATED from lookup
+                                dam_tm=dam_tm_value,
+                                rtm_tm=dc_rec.get("rtm_tm"),
+                                multiplier=multiplier,  # UPDATED from lookup
                                 ramping=dc_rec.get("ramping", ""),
-                                ramp_up=ramp_val, # UPDATED
-                                ramp_down=ramp_val, # UPDATED
-                                dc_afterloss=dc_afterloss, # UPDATED
+                                ramp_up=ramp_val,  # UPDATED
+                                ramp_down=ramp_val,  # UPDATED
+                                dc_afterloss=dc_afterloss,  # UPDATED
+                                entire_shared_onbar_ent_amount=dc_rec.get("entire_shared_onbar_ent_amount"),
+                                entire_shared_offbar_ent_amount=dc_rec.get("entire_shared_offbar_ent_amount"),
+                                rtm_max=dc_rec.get("rtm_max"),
                                 source=dc_rec.get("source"),
                                 inserted_at=dc_rec.get("inserted_at", datetime.now()),
                                 updated_at=datetime.now(),
