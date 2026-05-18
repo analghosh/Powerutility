@@ -59,6 +59,7 @@ def run_timeblock_seeder():
         logger.error("Failed to run timeblock seeder: %s", str(e))
 
 
+
 def validate_database_configuration():
     """Validate database configuration"""
     try:
@@ -125,6 +126,7 @@ async def lifespan(app: FastAPI):
     
     # Validate configuration on startup
     validate_database_configuration()
+
     # Run timeblock seeder
     run_timeblock_seeder()
     

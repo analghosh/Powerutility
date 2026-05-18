@@ -893,8 +893,8 @@ class NewDSMProcessor(BaseProcessor):
                 return 0
 
             # Execute bulk operations
-            result = demand_serve_repository.bulk_delete_insert_custom(bulk_operations)
-            
+            result = await demand_serve_repository.bulk_delete_insert_custom(bulk_operations)
+
             inserted_count = result.get("inserted_count", 0)
             logger.info(f"Successfully batch updated {inserted_count} demand records with new DSM data for time block {timeblock} on {date}")
             return inserted_count

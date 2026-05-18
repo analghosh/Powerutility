@@ -117,6 +117,15 @@ class Settings(BaseSettings):
     MONGODB_DUMMY_COLLECTION: str = "dummy"
     MONGODB_DEMAND_SERVE_COLLECTION: str = "demand_serve"
     MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "demand_serve_historical"
+    MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
+    MONGODB_FORECAST_SERVE_HISTORICAL_COLLECTION: str = "forecast_serve_historical"
+    # Rolling window in forecast_serve (same as demand_serve: 2 => 4-day window with tomorrow)
+    FORECAST_SERVE_DAYS_TO_KEEP: int = 2
+
+    # IDF forecast merge (forecast_serve -> demand_serve)
+    IDF_FORECAST_MERGE_CRON_ENABLED: bool = True
+    IDF_FORECAST_MERGE_CRON_SCHEDULE: str = "*/15 * * * *"
+    RTM_FORECAST_MIN_AHEAD_BLOCKS: int = 5
     MONGODB_SUPPLY_SERVE_COLLECTION: str = "supply_serve"
     MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION: str = "supply_serve_historical"
     MONGODB_DC_SG_COLLECTION: str = "dc_sg"  # 1-day temporary storage for supply data

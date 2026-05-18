@@ -461,8 +461,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             limit_values_collection_name = getattr(settings, 'MONGODB_LIMIT_VALUES_COLLECTION', 'limit_values')
             
             client = get_mongo_client(mongo_uri, "ingestion_limit_values_direct")
-            db = client[database_name]
-            collection = db[limit_values_collection_name]
+            collection = client[database_name][limit_values_collection_name]
             
             current_time = datetime.now()
             stored_count = 0
@@ -521,7 +520,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                         update_doc["$set"]["inserted_at"] = record.get("inserted_at")
                     
                     # Upsert the record
-                    result = await collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1

@@ -50,6 +50,7 @@ from services.scheduler.app.processors.block_bid_book_processor import BlockBidB
 from services.scheduler.app.processors.bid_trade_live_sync_processor import BidTradeLiveSyncProcessor
 from services.scheduler.app.processors.supply_tomorrow_sync_processor import SupplyTomorrowSyncProcessor
 from services.scheduler.app.processors.demand_temp_sync_processor import DemandTempSyncProcessor
+from services.scheduler.app.processors.idf_forecast_merge_processor import IdfForecastMergeProcessor
 from services.scheduler.app.processors.exchange_dsm_processor import ExchangeDsmProcessor
 from services.scheduler.app.processors.rtm_bid_lapse_processor import RTMBidLapseProcessor
 from services.scheduler.app.processors.dam_bid_capture_processor import DAMBidCaptureProcessor
@@ -109,6 +110,7 @@ class CronManager(BaseCronManager):
         self.bid_trade_live_sync_processor = BidTradeLiveSyncProcessor() # Add live sync processor
         self.supply_tomorrow_sync_processor = SupplyTomorrowSyncProcessor() # Add supply tomorrow sync processor
         self.demand_temp_sync_processor = DemandTempSyncProcessor() # Add demand temp sync processor
+        self.idf_forecast_merge_processor = IdfForecastMergeProcessor()
         self.exchange_dsm_processor = ExchangeDsmProcessor() # Add Exchange DSM processor
         self.rtm_bid_lapse_processor = RTMBidLapseProcessor() # Add RTM Bid Lapse processor
         self.dam_bid_capture_processor = DAMBidCaptureProcessor()
@@ -241,6 +243,7 @@ class CronManager(BaseCronManager):
             # Data Scraping Jobs (disabled due to import issues)
             "exchange_serve_archival": self._execute_exchange_serve_archival_job,
             "demand_serve_archival": self._execute_demand_serve_archival_job,
+            "forecast_serve_archival": self._execute_forecast_serve_archival_job,
             "supply_serve_archival": self._execute_supply_serve_archival_job,
             "weather_serve_archival": self._execute_weather_serve_archival_job,
             "bid_serve_archival": self._execute_bid_serve_archival_job,
@@ -274,6 +277,7 @@ class CronManager(BaseCronManager):
 
             # Demand Temp Sync
             "demand_temp_sync": self.demand_temp_sync_processor.execute_cron_job,
+            "idf_forecast_merge": self.idf_forecast_merge_processor.execute_cron_job,
 
             # RTM Bid Lapse
             "rtm_bid_lapse_processing": self.rtm_bid_lapse_processor.execute_cron_job,
@@ -419,6 +423,13 @@ class CronManager(BaseCronManager):
                 "timezone": settings.CRON_TIMEZONE
             },
             {
+                "job_type": "idf_forecast_merge",
+                "name": "IDF Forecast Merge",
+                "schedule": "*/15 * * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE,
+            },
+            {
                 "job_type": "supply_tomorrow_sync",
                 "name": "Supply Tomorrow Sync",
                 "schedule": "*/15 * * * *",
@@ -511,6 +522,13 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "demand_serve_archival",
                 "name": "Demand Serve Data Archival",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "forecast_serve_archival",
+                "name": "Forecast Serve Data Archival",
                 "schedule": "0 0 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
@@ -1487,6 +1505,20 @@ class CronManager(BaseCronManager):
         except Exception as e:
             logger.error("Error in demand archival job: %s", str(e))
             return {'status': 'error', 'error': str(e)}
+        finally:
+            self._cleanup_job_connections()
+
+    def _execute_forecast_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
+        """Execute forecast_serve archival job."""
+        logger.info("Executing forecast serve archival job")
+        try:
+            result = self._safe_run_async(
+                self.idf_forecast_merge_processor.execute_forecast_serve_archival_job()
+            )
+            return result
+        except Exception as e:
+            logger.error("Error in forecast serve archival job: %s", str(e))
+            return {"status": "error", "error": str(e)}
         finally:
             self._cleanup_job_connections()
     

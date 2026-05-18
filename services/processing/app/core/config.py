@@ -124,6 +124,7 @@ class Settings(BaseSettings):
     MONGODB_WEATHER_SERVE: str = "weather_serve"
 
     MONGODB_DEMAND_SERVE_COLLECTION: str = "demand_serve"
+    MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
     MONGODB_TEMP_DEMAND_SERVE_COLLECTION: str = "temp_demand_serve"
     MONGODBT_EMP_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "temp_demand_serve_historical" 
     MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "demand_serve_historical" 

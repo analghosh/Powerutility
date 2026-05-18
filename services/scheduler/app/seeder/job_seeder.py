@@ -71,6 +71,20 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 5
             },
             {
+                "job_type": "idf_forecast_merge",
+                "name": "IDF Forecast Merge",
+                "type": "data_processing",
+                "schedule": getattr(
+                    self.settings,
+                    "IDF_FORECAST_MERGE_CRON_SCHEDULE",
+                    "*/15 * * * *",
+                ),
+                "enabled": getattr(self.settings, "IDF_FORECAST_MERGE_CRON_ENABLED", True),
+                "timezone": getattr(self.settings, "CRON_TIMEZONE", "Asia/Kolkata"),
+                "description": "Merges forecast_serve (RTM API or CSV) into demand_serve IDF per idf_forecast_switch",
+                "priority": 5,
+            },
+            {
                 "job_type": "supply_data_processing",
                 "name": "Supply Data Processing",
                 "type": "data_processing",
@@ -206,6 +220,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Archives demand serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
+            },
+            {
+                "job_type": "forecast_serve_archival",
+                "name": "Forecast Serve Data Archival",
+                "type": "maintenance",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Archives forecast_serve to forecast_serve_historical; keeps 4-day rolling window in forecast_serve (same pattern as demand_serve)",
+                "priority": 7,
             },
             {
                 "job_type": "supply_serve_archival",
