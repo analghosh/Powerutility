@@ -435,6 +435,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 7
             },
             {
+                "job_type": "rtm_block_bid_book_sync",
+                "name": "RTM Block Bid Book Sync",
+                "type": "data_sync",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Syncs RTM block bid book data every 15 minutes",
+                "priority": 7
+            },
+            {
                 "job_type": "dam_bid_capture_snapshot",
                 "name": "DAM Bid Capture Snapshot",
                 "type": "data_sync",
