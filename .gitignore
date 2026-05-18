@@ -16,6 +16,11 @@ venv/
 .venv/
 env/
 .env/
+*.md
+
+*.txt
+*.json
+*.kiro
 
 # Environment and secrets
 .env

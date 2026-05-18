@@ -145,30 +145,70 @@ class Settings(BaseSettings):
         return self
     
     def check_security_warnings(self):
-        """Log warnings for insecure security configuration at startup."""
+        """Validate security configuration and fail startup if insecure.
+        Call this at application startup (auth service only).
+        """
         import logging
         logger = logging.getLogger(__name__)
-
-        if not self.JWT_SECRET_KEY or len(self.JWT_SECRET_KEY) < 32 or \
-                "your-super-secret-jwt-key-change-in-production" in self.JWT_SECRET_KEY:
-            logger.critical(
-                "SECURITY WARNING: JWT_SECRET_KEY is not set or uses insecure default. "
-                "Set JWT_SECRET_KEY to a secure random string (>=32 chars) via environment variable."
+        
+        # Check JWT_SECRET_KEY
+        if not self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY must be set via environment variable. "
+                "Set JWT_SECRET_KEY to a secure random string (>=32 chars)."
             )
-
-        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32 or \
-                "your-super-secret-key-change-in-production" in self.SECRET_KEY:
-            logger.critical(
-                "SECURITY WARNING: SECRET_KEY is not set or uses insecure default. "
-                "Set SECRET_KEY to a secure random string (>=32 chars) via environment variable."
+        
+        if len(self.JWT_SECRET_KEY) < 32:
+            raise ValueError(
+                f"SECURITY ERROR: JWT_SECRET_KEY must be at least 32 characters long. "
+                f"Current length: {len(self.JWT_SECRET_KEY)}"
             )
-
-        if not self.ADMIN_INITIAL_PASSWORD or len(self.ADMIN_INITIAL_PASSWORD) < 8 or \
-                "Infi@7983" in self.ADMIN_INITIAL_PASSWORD:
-            logger.critical(
-                "SECURITY WARNING: ADMIN_INITIAL_PASSWORD is not set or uses insecure default. "
-                "Set ADMIN_INITIAL_PASSWORD via environment variable before first startup."
+        
+        if "your-super-secret-jwt-key-change-in-production" in self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY contains insecure default value. "
+                "Set a secure random string via JWT_SECRET_KEY environment variable."
             )
+        
+        # Check SECRET_KEY
+        if not self.SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: SECRET_KEY must be set via environment variable. "
+                "Set SECRET_KEY to a secure random string (>=32 chars)."
+            )
+        
+        if len(self.SECRET_KEY) < 32:
+            raise ValueError(
+                f"SECURITY ERROR: SECRET_KEY must be at least 32 characters long. "
+                f"Current length: {len(self.SECRET_KEY)}"
+            )
+        
+        if "your-super-secret-key-change-in-production" in self.SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: SECRET_KEY contains insecure default value. "
+                "Set a secure random string via SECRET_KEY environment variable."
+            )
+        
+        # Check ADMIN_INITIAL_PASSWORD
+        if not self.ADMIN_INITIAL_PASSWORD:
+            raise ValueError(
+                "SECURITY ERROR: ADMIN_INITIAL_PASSWORD must be set via environment variable. "
+                "Set ADMIN_INITIAL_PASSWORD before first startup."
+            )
+        
+        if len(self.ADMIN_INITIAL_PASSWORD) < 8:
+            raise ValueError(
+                f"SECURITY ERROR: ADMIN_INITIAL_PASSWORD must be at least 8 characters long. "
+                f"Current length: {len(self.ADMIN_INITIAL_PASSWORD)}"
+            )
+        
+        if "Infi@7983" in self.ADMIN_INITIAL_PASSWORD:
+            raise ValueError(
+                "SECURITY ERROR: ADMIN_INITIAL_PASSWORD contains insecure default value. "
+                "Set a secure password via ADMIN_INITIAL_PASSWORD environment variable."
+            )
+        
+        logger.info("Security configuration validation passed")
     
     @property
     def BASE_PATH(self) -> str:

@@ -14,7 +14,7 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "ingestion-service"
     SERVICE_PORT: int = 8002
     SERVICE_HOST: str = "0.0.0.0"
-    DEBUG: bool = False
+    DEBUG: bool = False  # Default to False for security; set to True explicitly for development
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     
@@ -69,7 +69,8 @@ class Settings(BaseSettings):
     AUTH_SERVICE_URL: str = "http://localhost:8001"
     AUTH_SERVICE_TIMEOUT: int = 10
     
-    # JWT Configuration (algorithm kept for reference; secret lives only in auth service)
+    # JWT Configuration - must be set via env var; no insecure fallback
+    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -82,10 +83,12 @@ class Settings(BaseSettings):
     RATE_LIMIT_REQUESTS: int = 50
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
     
-    # Trusted Proxies (comma-separated IPs that may set X-Forwarded-For)
+    # Proxy Configuration
+    # Comma-separated trusted reverse-proxy IPs. XFF/X-Real-IP only honoured from these peers.
     TRUSTED_PROXIES: str = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
 
     # CORS Configuration
+    # When credentials are allowed, wildcard "*" is not permitted for security
     CORS_ORIGINS: List[str] = ["http://localhost:3005", "http://localhost:8080"]
     CORS_ALLOW_CREDENTIALS: bool = True
     
@@ -149,6 +152,42 @@ class Settings(BaseSettings):
     def BASE_PATH(self) -> str:
         """Get base path for current environment (computed dynamically)"""
         return "/ingestion" if self.ENVIRONMENT in ["server", "docker"] else ""
+    
+    def check_security_warnings(self):
+        """Validate security configuration and fail startup if insecure.
+        Call this at application startup.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Check JWT_SECRET_KEY
+        if not self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY must be set via environment variable. "
+                "Set JWT_SECRET_KEY to a secure random string (>=32 chars)."
+            )
+        
+        if len(self.JWT_SECRET_KEY) < 32:
+            raise ValueError(
+                f"SECURITY ERROR: JWT_SECRET_KEY must be at least 32 characters long. "
+                f"Current length: {len(self.JWT_SECRET_KEY)}"
+            )
+        
+        if "your-super-secret-jwt-key-change-in-production" in self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY contains insecure default value. "
+                "Set a secure random string via JWT_SECRET_KEY environment variable."
+            )
+        
+        # Check CORS configuration security
+        if "*" in self.CORS_ORIGINS and self.CORS_ALLOW_CREDENTIALS:
+            raise ValueError(
+                "SECURITY ERROR: CORS configuration insecure. "
+                "Wildcard origin '*' cannot be used with CORS_ALLOW_CREDENTIALS=True. "
+                "Specify explicit origins instead."
+            )
+        
+        logger.info("Security configuration validation passed")
 
     class Config:
         """Pydantic configuration for Settings class"""

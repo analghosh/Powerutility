@@ -82,6 +82,15 @@ class GridIndiaParser(BaseParser):
                 "approval_no": None
             })
 
+            # Aggregation storage for DC (from EntitlementList): plant_id -> {'volume': [], 'onbar': [], 'offbar': []}
+            aggregated_dc = defaultdict(lambda: {
+                "volume": [0.0] * 96,
+                "onbar": [0.0] * 96,
+                "offbar": [0.0] * 96,
+                "revision_no": full_schd_revision_no,
+                "approval_no": None
+            })
+
             for group in group_list:
                 # 1. Process EntitlementList (DC)
                 # 2. Process NetScheduleSummary for OA_PX, OA_GNA, OA_TGNA
@@ -193,6 +202,56 @@ class GridIndiaParser(BaseParser):
                         entry["volume"][idx] += v
                         entry["sg_bl"][idx] += b
 
+                # 4. Process EntitlementList (DC) — OnbarFinalEntAmount is the DC before-loss value
+                entitlement_list = group.get("EntitlementList", [])
+                for ent_item in entitlement_list:
+                    plant_id = ent_item.get("SellerAcronym")
+                    if not plant_id:
+                        continue
+
+                    ent_data = ent_item.get("EntitlementData", {})
+                    # Try Thermal first, then Nuclear
+                    data_source = ent_data.get("ThermalEntJsonData") or ent_data.get("NuclearEntJsonData") or {}
+
+                    if not data_source:
+                        continue
+
+                    vol_list = data_source.get("OnbarFinalEntAmount") or []
+                    onbar_list = data_source.get("EntireSharedOnbarEntAmount") or []
+                    offbar_list = data_source.get("EntireSharedOffbarEntAmount") or []
+
+                    entry = aggregated_dc[plant_id]
+                    for idx in range(96):
+                        if idx < len(vol_list) and vol_list[idx] is not None:
+                            try:
+                                entry["volume"][idx] += float(vol_list[idx])
+                            except (ValueError, TypeError):
+                                pass
+                        if idx < len(onbar_list) and onbar_list[idx] is not None:
+                            try:
+                                entry["onbar"][idx] += float(onbar_list[idx])
+                            except (ValueError, TypeError):
+                                pass
+                        if idx < len(offbar_list) and offbar_list[idx] is not None:
+                            try:
+                                entry["offbar"][idx] += float(offbar_list[idx])
+                            except (ValueError, TypeError):
+                                pass
+
+            # Append DC Aggregated Records (from EntitlementList)
+            for plant_id, agg in aggregated_dc.items():
+                self._append_records(
+                    raw_data,
+                    date_str,
+                    plant_id,
+                    "DC",
+                    agg["volume"],
+                    agg["revision_no"],
+                    agg["approval_no"],
+                    onbar_list=agg["onbar"],
+                    offbar_list=agg["offbar"]
+                )
+
             # Append Aggregated Records
             for plant_id, agg in aggregated_sg.items():
                 # Check if any data exists to avoid zero records if desired? 
@@ -209,17 +268,6 @@ class GridIndiaParser(BaseParser):
                     sg_beforelosses_list=agg["sg_bl"]
                 )
 
-            # Time-based duplication: if between 7:45 AM and 10:10 AM, copy all records with dc_sg="DC"
-            now_time = datetime.datetime.now().time()
-            if datetime.time(7, 45) <= now_time <= datetime.time(10, 10):
-                logger.info("Current time %s is within 7:45-10:10 window, duplicating records as DC", now_time)
-                extra_records = []
-                for record in raw_data:
-                    new_record = record.copy()
-                    new_record["dc_sg"] = "DC"
-                    extra_records.append(new_record)
-                raw_data.extend(extra_records)
-
             logger.info("Parsed Grid India JSON: created %d flattened records", len(raw_data))
             return raw_data
 
@@ -227,7 +275,7 @@ class GridIndiaParser(BaseParser):
             logger.error("Error parsing Grid India content: %s", e, exc_info=True)
             raise ValueError(f"Grid India parsing failed: {str(e)}") from e
 
-    def _append_records(self, raw_data_list, date_str, plant_id, dc_sg, values_list, revision_no, approval_no=None, sg_beforelosses_list=None):
+    def _append_records(self, raw_data_list, date_str, plant_id, dc_sg, values_list, revision_no, approval_no=None, sg_beforelosses_list=None, onbar_list=None, offbar_list=None):
         """Helper to append 96-block records to the list"""
         
         # Determine if the record is for tomorrow
@@ -280,7 +328,19 @@ class GridIndiaParser(BaseParser):
                             record["sg_beforelosses"] = float(val_bl)
                         except (ValueError, TypeError):
                             pass
-                
+
+                if onbar_list and idx < len(onbar_list) and onbar_list[idx] is not None:
+                    try:
+                        record["entire_shared_onbar_ent_amount"] = float(onbar_list[idx])
+                    except (ValueError, TypeError):
+                        pass
+
+                if offbar_list and idx < len(offbar_list) and offbar_list[idx] is not None:
+                    try:
+                        record["entire_shared_offbar_ent_amount"] = float(offbar_list[idx])
+                    except (ValueError, TypeError):
+                        pass
+
                 raw_data_list.append(record)
 
     def validate_content(self, content: str) -> bool:
