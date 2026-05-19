@@ -305,11 +305,15 @@ class GenericRepository:
         keys: List[Tuple[str, int]],
         name: Optional[str] = None,
         unique: bool = False,
+        expireAfterSeconds: Optional[int] = None,
     ):
         """Create an index on the specified collection."""
         try:
             collection = self.db[collection_name]
-            await collection.create_index(keys, name=name, unique=unique)
+            kwargs = {"name": name, "unique": unique}
+            if expireAfterSeconds is not None:
+                kwargs["expireAfterSeconds"] = expireAfterSeconds
+            await collection.create_index(keys, **kwargs)
             logger.info(f"Created index '{name}' on '{collection_name}' with keys: {keys}")
         except Exception as e:
             logger.error(f"Error creating index on '{collection_name}': {e}")

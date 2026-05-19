@@ -23,7 +23,7 @@ class MasterPlantsRepository(GenericRepository):
             # Drop old non-unique idx_plant_id so it can be re-created as unique
             for index_name in ["plant_id_1", "idx_plant_id"]:
                 try:
-                    collection.drop_index(index_name)
+                    await collection.drop_index(index_name)
                 except Exception:
                     pass
 
@@ -35,7 +35,7 @@ class MasterPlantsRepository(GenericRepository):
             )
 
             # Compound unique index on (plant_id, approval_no)
-            collection.create_index(
+            await collection.create_index(
                 [("plant_id", 1), ("approval_no", 1)],
                 unique=True,
                 name="unique_plant_id_approval"

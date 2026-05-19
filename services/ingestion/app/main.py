@@ -48,6 +48,7 @@ class HealthResponse(BaseModel):
 async def lifespan(_: FastAPI):
     """Lifespan context manager for startup/shutdown events"""
     # Startup
+    settings.check_security_warnings()
     logger.info("Starting EPMS Ingestion Service...")
     logger.info("   Service: %s", settings.SERVICE_NAME if hasattr(settings, 'SERVICE_NAME') else 'ingestion-service')
     logger.info("   Host: %s:%s", settings.SERVICE_HOST, settings.SERVICE_PORT)

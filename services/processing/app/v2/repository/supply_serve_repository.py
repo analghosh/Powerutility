@@ -225,11 +225,12 @@ class SupplyServeRepository(GenericRepository):
                         "dc_afterloss": 1,
                         "max_mw_dc": 1,  # Added for SG schedule logic
                         "dam_tm": {"$ifNull": ["$dam_tm", 0]},  # Default to 0 if still null
-                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]}   # Default to 0 if still null
+                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]},  # Default to 0 if still null
+                        "rtm_max": {"$ifNull": ["$rtm_max", None]}  # RTM Max (tomorrow SG at 10:10 AM)
                     }
                 }
             ]
-            
+
             # Simplified pipeline for historical (no $lookup - too slow on time-series)
             historical_pipeline = [
                 {
@@ -250,7 +251,8 @@ class SupplyServeRepository(GenericRepository):
                         "ramp_down": 1,
                         "dc_afterloss": 1,
                         "dam_tm": {"$ifNull": ["$dam_tm", 0]},
-                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]}
+                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]},
+                        "rtm_max": {"$ifNull": ["$rtm_max", None]}  # RTM Max (tomorrow SG at 10:10 AM)
                     }
                 }
             ]

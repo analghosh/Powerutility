@@ -149,6 +149,42 @@ class Settings(BaseSettings):
     def BASE_PATH(self) -> str:
         """Get base path for current environment (computed dynamically)"""
         return "/ingestion" if self.ENVIRONMENT in ["server", "docker"] else ""
+    
+    def check_security_warnings(self):
+        """Validate security configuration and fail startup if insecure.
+        Call this at application startup.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+        
+        # Check JWT_SECRET_KEY
+        if not self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY must be set via environment variable. "
+                "Set JWT_SECRET_KEY to a secure random string (>=32 chars)."
+            )
+        
+        if len(self.JWT_SECRET_KEY) < 32:
+            raise ValueError(
+                f"SECURITY ERROR: JWT_SECRET_KEY must be at least 32 characters long. "
+                f"Current length: {len(self.JWT_SECRET_KEY)}"
+            )
+        
+        if "your-super-secret-jwt-key-change-in-production" in self.JWT_SECRET_KEY:
+            raise ValueError(
+                "SECURITY ERROR: JWT_SECRET_KEY contains insecure default value. "
+                "Set a secure random string via JWT_SECRET_KEY environment variable."
+            )
+        
+        # Check CORS configuration security
+        if "*" in self.CORS_ORIGINS and self.CORS_ALLOW_CREDENTIALS:
+            raise ValueError(
+                "SECURITY ERROR: CORS configuration insecure. "
+                "Wildcard origin '*' cannot be used with CORS_ALLOW_CREDENTIALS=True. "
+                "Specify explicit origins instead."
+            )
+        
+        logger.info("Security configuration validation passed")
 
     class Config:
         """Pydantic configuration for Settings class"""
