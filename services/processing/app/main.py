@@ -59,6 +59,16 @@ async def lifespan(app: FastAPI):
     from .v2.repository.bid_trade_serve_repository import BidTradeServeRepository
     BidTradeServeRepository()
 
+    # Ensure indexes on limit_audit_log (121M+ docs with no query indexes — primary OOM cause)
+    try:
+        from .v2.repository.limit_workflow_repository import limit_workflow_repository
+        from .core.config import settings as processing_settings
+        await limit_workflow_repository.ensure_audit_indexes(
+            processing_settings.MONGODB_LIMIT_AUDIT_COLLECTION
+        )
+    except Exception as e:
+        logger.error(f"Failed to ensure limit_audit_log indexes: {e}")
+
     # One-time migration: encrypt plaintext BearerTokens in exchange_config
     try:
         from .v2.migrations.encrypt_bearer_tokens import run_encrypt_bearer_tokens_migration

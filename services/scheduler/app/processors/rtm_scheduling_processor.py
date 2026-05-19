@@ -1246,14 +1246,17 @@ class RTMSchedulingProcessor(BaseProcessor):
                         planttmvalue = float(availability_plnt_arrayyy.get("rtm_tm", 0) or 0)
 
                         plantSEZvalue = all_sez_values.get(f"{availability_plnt_arrayyy['scheduled_at']}_{plant_key}_{time_block_num}", 0)
-                        
+
                         # Previous block volume (or current SG volume if first block)
                         prev_vol = reviseDataArray.get(blk, {}).get("genrated_sg_volume", {}).get(plant_key)
                         if prev_vol is None:
                              prev_vol = float(availability_plnt_arrayyy.get("volume", 0))
 
                         dc_afterloss = float(availability_plnt_arrayyy.get("dc_afterloss", 0) or 0)
-                        
+
+                        # Lower value = Min(rtm_tm, dc_afterloss) — scheduled value cannot go below this
+                        lower_value = min(planttmvalue, dc_afterloss) if dc_afterloss > 0 else planttmvalue
+
                         # Get ramp_down from DC collection data for this plant+block
                         dc_plant_data = dc_data_map.get(time_block_num, {}).get(plant_key, {})
                         ramping_limit = float(dc_plant_data.get("ramp_down", 0) or 0)
@@ -1264,8 +1267,8 @@ class RTMSchedulingProcessor(BaseProcessor):
                              ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
                         # Compare from previous block: prev_vol - ramping
-                        # A plant cannot go below TM
-                        min_vol_to_schedule = max(prev_vol - ramping_limit, planttmvalue)
+                        # A plant cannot go below Lower value = Min(rtm_tm, dc_afterloss)
+                        min_vol_to_schedule = max(prev_vol - ramping_limit, lower_value)
                         max_back_down_possible = max(prev_vol - min_vol_to_schedule, 0.0)
 
                         sell_volume = 0.0
@@ -1348,6 +1351,11 @@ class RTMSchedulingProcessor(BaseProcessor):
                              prev_vol = float(availability_plnt_arrayyy.get("volume", 0))
 
                         dc_afterloss = float(availability_plnt_arrayyy.get("dc_afterloss", 0) or 0)
+                        rtm_max_raw = availability_plnt_arrayyy.get("rtm_max")
+                        rtm_max_val = float(rtm_max_raw) if rtm_max_raw is not None else dc_afterloss
+
+                        # Upper value = Min(rtm_max, dc_afterloss) — scheduled value cannot exceed this
+                        upper_value = min(rtm_max_val, dc_afterloss) if dc_afterloss > 0 else rtm_max_val
 
                         # Get ramp_up from DC collection data for this plant+block
                         dc_plant_data = dc_data_map.get(time_block_num, {}).get(plant_key, {})
@@ -1358,8 +1366,8 @@ class RTMSchedulingProcessor(BaseProcessor):
                         if ramping_limit == 0:
                              ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
-                        # Cannot exceed dc_afterloss (max capacity)
-                        max_vol_to_schedule = min(prev_vol + ramping_limit, dc_afterloss)
+                        # Cannot exceed Upper value = Min(rtm_max, dc_afterloss)
+                        max_vol_to_schedule = min(prev_vol + ramping_limit, upper_value)
                         max_ramp_up = max(max_vol_to_schedule - prev_vol, 0.0)
 
                         ramp_up_amount = 0.0
@@ -1516,6 +1524,9 @@ class RTMSchedulingProcessor(BaseProcessor):
 
                         dc_afterloss = float(availability_plnt_arrayyy.get("dc_afterloss", 0) or 0)
 
+                        # Lower value = Min(rtm_tm, dc_afterloss) — scheduled value cannot go below this
+                        lower_value = min(planttmvalue, dc_afterloss) if dc_afterloss > 0 else planttmvalue
+
                         dc_plant_data = dc_data_map.get(time_block_num, {}).get(plant_key, {})
                         ramping_limit = float(dc_plant_data.get("ramp_down", 0) or 0)
                         if ramping_limit == 0:
@@ -1523,7 +1534,8 @@ class RTMSchedulingProcessor(BaseProcessor):
                         if ramping_limit == 0:
                             ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
-                        min_vol_to_schedule = max(prev_vol - ramping_limit, planttmvalue)
+                        # A plant cannot go below Lower value = Min(rtm_tm, dc_afterloss)
+                        min_vol_to_schedule = max(prev_vol - ramping_limit, lower_value)
                         max_back_down_possible = max(prev_vol - min_vol_to_schedule, 0.0)
 
                         sell_volume = 0.0
@@ -1597,6 +1609,11 @@ class RTMSchedulingProcessor(BaseProcessor):
                             prev_vol = float(availability_plnt_arrayyy.get("volume", 0))
 
                         dc_afterloss = float(availability_plnt_arrayyy.get("dc_afterloss", 0) or 0)
+                        rtm_max_raw = availability_plnt_arrayyy.get("rtm_max")
+                        rtm_max_val = float(rtm_max_raw) if rtm_max_raw is not None else dc_afterloss
+
+                        # Upper value = Min(rtm_max, dc_afterloss) — scheduled value cannot exceed this
+                        upper_value = min(rtm_max_val, dc_afterloss) if dc_afterloss > 0 else rtm_max_val
 
                         dc_plant_data = dc_data_map.get(time_block_num, {}).get(plant_key, {})
                         ramping_limit = float(dc_plant_data.get("ramp_up", 0) or 0)
@@ -1605,7 +1622,8 @@ class RTMSchedulingProcessor(BaseProcessor):
                         if ramping_limit == 0:
                             ramping_limit = await self.__get_plant_rmp_value(availability_plnt_arrayyy, get_plant_list)
 
-                        max_vol_to_schedule = min(prev_vol + ramping_limit, dc_afterloss)
+                        # Cannot exceed Upper value = Min(rtm_max, dc_afterloss)
+                        max_vol_to_schedule = min(prev_vol + ramping_limit, upper_value)
                         max_ramp_up = max(max_vol_to_schedule - prev_vol, 0.0)
 
                         ramp_up_amount = 0.0

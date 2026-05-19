@@ -82,10 +82,11 @@ async def run_historical_deduplication():
     logger.info("Starting STREAMING historical deduplication...")
 
     try:
-        # High-performance client configuration
+        # Streaming dedup runs long but should not hold connections indefinitely.
+        # socketTimeoutMS=3600000 (1 hr) was exhausting the connection pool; 5 min is sufficient.
         client = get_mongo_client(settings.MONGODB_URI, "deduplicator_streaming_client",
-                                 socketTimeoutMS=3600000,
-                                 maxPoolSize=100)
+                                 socketTimeoutMS=300000,
+                                 maxPoolSize=10)
         db = client[settings.MONGODB_DATABASE]
 
         dedup_configs = [
