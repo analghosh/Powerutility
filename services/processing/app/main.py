@@ -55,16 +55,15 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting EPMS Processing Service...")
     from .v2.repository.master_plants_repository import master_plants_repository
-    master_plants_repository.create_indexes()
+    await master_plants_repository.create_indexes()
     from .v2.repository.bid_trade_serve_repository import BidTradeServeRepository
     BidTradeServeRepository()
 
     # Ensure indexes on limit_audit_log (121M+ docs with no query indexes — primary OOM cause)
     try:
         from .v2.repository.limit_workflow_repository import limit_workflow_repository
-        from .core.config import settings as processing_settings
         await limit_workflow_repository.ensure_audit_indexes(
-            processing_settings.MONGODB_LIMIT_AUDIT_COLLECTION
+            settings.MONGODB_LIMIT_AUDIT_COLLECTION
         )
     except Exception as e:
         logger.error(f"Failed to ensure limit_audit_log indexes: {e}")

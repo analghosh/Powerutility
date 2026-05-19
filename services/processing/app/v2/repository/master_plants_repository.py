@@ -35,7 +35,7 @@ class MasterPlantsRepository(GenericRepository):
             )
 
             # Compound unique index on (plant_id, approval_no)
-            collection.create_index(
+            await collection.create_index(
                 [("plant_id", 1), ("approval_no", 1)],
                 unique=True,
                 name="unique_plant_id_approval"

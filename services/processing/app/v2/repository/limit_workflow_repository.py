@@ -78,13 +78,9 @@ class LimitWorkflowRepository:
                 [("action", 1), ("ts", -1)],
                 name="action_ts_idx"
             )
-            # TTL: auto-delete records older than 90 days to prevent unbounded growth
-            await self.repository.create_index(
-                audit_collection_name,
-                [("ts", 1)],
-                name="ttl_90d_idx",
-                expireAfterSeconds=7776000
-            )
+            # NOTE: TTL index intentionally omitted — retention policy for limit_audit_log
+            # must be decided explicitly (compliance/dispute history may be required).
+            # To add TTL, call: create_index([("ts", 1)], expireAfterSeconds=<seconds>)
             logger.info(f"Audit indexes ensured on '{audit_collection_name}'")
         except Exception as e:
             logger.error(f"Failed to ensure audit indexes on {audit_collection_name}: {e}")
