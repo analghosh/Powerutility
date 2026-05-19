@@ -19,6 +19,7 @@ from ..repository.demand_serve_repository import demand_serve_repository
 from ..repository.exchange_repository import exchange_repository
 from ..helpers.rtm_scheduling_helpers import get_time_block_start_end
 from libs.core.job_entities import JobDetail
+from libs.models.forecast_serve_entity import map_forecast_source_display
 from ..core.config import settings
 
 
@@ -945,6 +946,8 @@ class RTMSchedulingProcessor(BaseProcessor):
         # Volume and forecast fields - use new names only
         if "demand_forecast" in base_data or base_data.get("demand_forecast") is not None:
             record["demand_forecast_mw"] = base_data.get("demand_forecast")
+        if "forecast_source" in base_data:
+            record["forecast_source"] = base_data.get("forecast_source")
         if "total_supply_availablity" in base_data or base_data.get("total_supply_availablity") is not None:
             record["total_supply_available_mw"] = base_data.get("total_supply_availablity")
         if "surplus_deficit" in base_data or base_data.get("surplus_deficit") is not None:
@@ -1289,6 +1292,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "dc_sg_type": availability_data_array_b_wise.get("dc_sg_type", "SG"),
                             "session_number": get_session_no.get(time_block_num, {}).get("session_number", 0),
                             "demand_forecast": float(TotalblkwiseData["forecast_value"]),
+                            "forecast_source": TotalblkwiseData.get("forecast_source"),
                             "total_supply_availablity": float(TotalblkwiseData["totalAvailability"]),
                             "surplus_deficit": float(TotalblkwiseData["surplus_deficit"]),
                             "price": px_price,
@@ -1382,6 +1386,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "dc_sg_type": availability_data_array_b_wise.get("dc_sg_type", "SG"),
                             "session_number": get_session_no.get(time_block_num, {}).get("session_number", 0),
                             "demand_forecast": float(TotalblkwiseData["forecast_value"]),
+                            "forecast_source": TotalblkwiseData.get("forecast_source"),
                             "total_supply_availablity": float(TotalblkwiseData["totalAvailability"]),
                             "surplus_deficit": float(TotalblkwiseData["surplus_deficit"]),
                             "price": px_price,
@@ -1436,6 +1441,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         "dc_sg_type": availability_data_array_b_wise.get("dc_sg_type", "SG"),
                         "session_number": get_session_no.get(time_block_num, {}).get("session_number", 0),
                         "demand_forecast": float(TotalblkwiseData["forecast_value"]),
+                        "forecast_source": TotalblkwiseData.get("forecast_source"),
                         "total_supply_availablity": float(TotalblkwiseData["totalAvailability"]),
                         "surplus_deficit": float(TotalblkwiseData["surplus_deficit"]),
                         "price": px_price,
@@ -1545,6 +1551,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "dc_sg_type": availability_data_array_b_wise.get("dc_sg_type", "SG"),
                             "session_number": get_session_no.get(time_block_num, {}).get("session_number", 0),
                             "demand_forecast": float(TotalblkwiseData["forecast_value"]),
+                            "forecast_source": TotalblkwiseData.get("forecast_source"),
                             "total_supply_availablity": float(TotalblkwiseData["totalAvailability"]),
                             "surplus_deficit": float(TotalblkwiseData["surplus_deficit"]),
                             "price": px_price,
@@ -1626,6 +1633,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                             "dc_sg_type": availability_data_array_b_wise.get("dc_sg_type", "SG"),
                             "session_number": get_session_no.get(time_block_num, {}).get("session_number", 0),
                             "demand_forecast": float(TotalblkwiseData["forecast_value"]),
+                            "forecast_source": TotalblkwiseData.get("forecast_source"),
                             "total_supply_availablity": float(TotalblkwiseData["totalAvailability"]),
                             "surplus_deficit": float(TotalblkwiseData["surplus_deficit"]),
                             "price": px_price,
@@ -1669,6 +1677,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         "dc_sg_type": availability_data_array_b_wise.get("dc_sg_type", "SG"),
                         "session_number": get_session_no.get(time_block_num, {}).get("session_number", 0),
                         "demand_forecast": float(TotalblkwiseData["forecast_value"]),
+                        "forecast_source": TotalblkwiseData.get("forecast_source"),
                         "total_supply_availablity": float(TotalblkwiseData["totalAvailability"]),
                         "surplus_deficit": float(TotalblkwiseData["surplus_deficit"]),
                         "price": px_price,
@@ -1722,6 +1731,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         "dc_sg_type": availability_data_array_b_wise.get("dc_sg_type", "SG"),
                         "session_number": get_session_no.get(time_block_num, {}).get("session_number", 0),
                         "demand_forecast": float(TotalblkwiseData.get("forecast_value", 0)),
+                        "forecast_source": TotalblkwiseData.get("forecast_source"),
                         "total_supply_availablity": float(TotalblkwiseData.get("totalAvailability", 0)),
                         "surplus_deficit": float(TotalblkwiseData.get("surplus_deficit", 0)),
                         "price": px_price,
@@ -2118,7 +2128,10 @@ class RTMSchedulingProcessor(BaseProcessor):
                 
                 # Get forecast value
                 forecast_value = forecast_item.get('forecast', 0) + self.customdemand
-                
+                forecast_source = map_forecast_source_display(
+                    forecast_item.get("source_forecast")
+                )
+
                 # Get total availability
                 bltotalvolume = getplantsDataaa.get('totalAvailability', 0)
                 
@@ -2128,6 +2141,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                     'BlockNo': getplantsDataaa.get('time_block', 0),
                     'dc_sg_type': getplantsDataaa.get('dc_sg_type', ''),
                     'forecast_value': forecast_value,
+                    'forecast_source': forecast_source,
                     'surplus_deficit': bltotalvolume - forecast_value,
                     'totalAvailability': bltotalvolume
                 }

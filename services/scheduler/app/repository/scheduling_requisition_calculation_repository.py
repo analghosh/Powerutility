@@ -127,6 +127,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                         "schedule_date_timestamp": {"$first": "$scheduled_at_timestamp"},
                         "totalAvailability": {"$first": "$total_supply_available_mw"},
                         "demand_forecast": {"$first": "$demand_forecast_mw"},
+                        "forecast_source": {"$first": "$forecast_source"},
                         "surplus_deficit": {"$first": "$net_surplus_deficit_mw"},
                         "rtm_forecasted_price": {"$first": "$rtm_forecasted_price"},
                         "surplus_deficit_updated": {"$first": "$updated_surplus_deficit_mw"},
