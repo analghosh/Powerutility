@@ -13,6 +13,18 @@ FORECAST_SOURCE_CSV = "csv"
 
 ForecastSource = Literal["rtm_forecast_api", "csv"]
 
+FORECAST_SOURCE_DISPLAY_AUTO = "Auto"
+FORECAST_SOURCE_DISPLAY_MANUAL = "Manual"
+
+
+def map_forecast_source_display(source_forecast: Optional[str]) -> Optional[str]:
+    """Map demand_serve.source_forecast to API forecast_source label."""
+    if source_forecast == FORECAST_SOURCE_RTM_API:
+        return FORECAST_SOURCE_DISPLAY_AUTO
+    if source_forecast == FORECAST_SOURCE_CSV:
+        return FORECAST_SOURCE_DISPLAY_MANUAL
+    return None
+
 
 class ForecastServeEntity(BaseModel):
     """One forecast document per (scheduled_at, time_block, type, source)."""
