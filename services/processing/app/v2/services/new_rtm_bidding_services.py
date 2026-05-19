@@ -42,6 +42,7 @@ from ..repository.bid_capture_repository import CaptureServeTableDataRepository
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
 from libs.messaging.job_publisher import JobPublisher
+from libs.models.forecast_serve_entity import map_forecast_source_display
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +226,8 @@ class RTMBiddingServices:
                                 {
                                     "$group": {
                                         "_id": None,
-                                        "forecast": {"$sum": "$forecast"}
+                                        "forecast": {"$sum": "$forecast"},
+                                        "source_forecast": {"$first": "$source_forecast"},
                                     }
                                 }
                             ],
@@ -243,6 +245,7 @@ class RTMBiddingServices:
                             "time_block": "$_id",
                             "supply_total": 1,
                             "forecast": "$demand.forecast",
+                            "_source_forecast": "$demand.source_forecast",
                             "block_bid_submitted_volume": {"$literal": "0"},
                             "block_bid_approved_volume": {"$literal": "0"},
                             "single_bid_submitted_volume": {"$literal": "0"},
@@ -257,6 +260,16 @@ class RTMBiddingServices:
                     {"$sort": {"time_block": 1}}
                 ]
             result = await self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline)
+            for row in result:
+                source_forecast = row.pop("_source_forecast", None)
+                forecast_source = map_forecast_source_display(source_forecast)
+                ordered = OrderedDict()
+                for key, value in row.items():
+                    ordered[key] = value
+                    if key == "forecast":
+                        ordered["forecast_source"] = forecast_source
+                row.clear()
+                row.update(ordered)
             return {"data": result}
         except Exception as e:
             logger.exception(f"[RTMBiddingServices] Failed to fetch demand data: {str(e)}")
@@ -763,6 +776,7 @@ class RTMBiddingServices:
                         'time_block': TotalblkwiseData['BlockNo'],  
                         'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],   
                         'forecast': round(TotalblkwiseData['forecast_value']),
+                        'forecast_source': TotalblkwiseData['forecast_source'],
                         'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                         'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                         'price': mustplantPrice,
@@ -798,6 +812,7 @@ class RTMBiddingServices:
                         'time_block': TotalblkwiseData['BlockNo'],
                         'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],
                         'forecast': round(TotalblkwiseData['forecast_value']),
+                        'forecast_source': TotalblkwiseData['forecast_source'],
                         'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                         'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                         'price': mustplantPrice,
@@ -909,6 +924,7 @@ class RTMBiddingServices:
                                     'time_block': TotalblkwiseData['BlockNo'],  
                                     'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],   # Fetch session number from rtm_product_hardcoded_data collection
                                     'forecast': round(TotalblkwiseData['forecast_value']),
+                                    'forecast_source': TotalblkwiseData['forecast_source'],
                                     'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                                     'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                                     'price': px_price,
@@ -955,6 +971,7 @@ class RTMBiddingServices:
                             'time_block': TotalblkwiseData['BlockNo'],
                             'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],
                             'forecast': round(TotalblkwiseData['forecast_value']),
+                            'forecast_source': TotalblkwiseData['forecast_source'],
                             'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                             'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                             'price': px_price,
@@ -995,7 +1012,12 @@ class RTMBiddingServices:
         """
         data_ar = []
         getplantsData = [v for k, v in raw_data.items()]
-        
+        forecast_by_block = {
+            doc["time_block"]: doc
+            for doc in (getForecastedValue or [])
+            if doc.get("time_block") is not None
+        }
+
         for i, getplantsDataaa in enumerate(getplantsData):
             if not isinstance(getplantsDataaa, dict):
                 # skip invalid entries
@@ -1033,19 +1055,17 @@ class RTMBiddingServices:
                 must_merit_fiftyfive_volume_bl_sum = blk_volume_sum_fiftyfive + blk_volume_sum_must
             
             
-            if i < len(getForecastedValue):
-                forecast_val = getForecastedValue[i].get('forecast', 0)
-            else:
-                forecast_val = 0
-            # block_no = getplantsData[i]["time_block"]
-            # forecast_val = forecast_map.get(block_no, 0)
-            
-            # print()
-            
+            block_no = getplantsData[i]["time_block"]
+            forecast_doc = forecast_by_block.get(block_no, {})
+            forecast_val = forecast_doc.get("forecast", 0)
+            forecast_source = map_forecast_source_display(
+                forecast_doc.get("source_forecast")
+            )
+
             data_ar.append({
                 'bltotalvolume': bltotalvolume,
                 # 'full_time': getplantsDataaa.get("full_time"),
-                'BlockNo': getplantsData[i]["time_block"],
+                'BlockNo': block_no,
                 'volume_for_bid_submision': volume_for_bid_submision,
                 'total_volume_mritbl': total_volume_mritbl, 
                 'total_volume_mritbl_45': total_volume_mritbl * 0.45,
@@ -1053,6 +1073,7 @@ class RTMBiddingServices:
                 'blk_volume_sum_must': blk_volume_sum_must,
                 'must_merit_fiftyfive_volume_bl_sum': must_merit_fiftyfive_volume_bl_sum,
                 'forecast_value': forecast_val,
+                'forecast_source': forecast_source,
                 'diff_for_bid_cal': forecast_val - must_merit_fiftyfive_volume_bl_sum,
                 'surplus_deficit': bltotalvolume - forecast_val
             })
