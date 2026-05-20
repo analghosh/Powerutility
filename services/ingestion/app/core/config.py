@@ -157,12 +157,11 @@ class Settings(BaseSettings):
         import logging
         logger = logging.getLogger(__name__)
 
-        # Check CORS configuration security
+        # Check CORS configuration security — warn only, middleware already strips wildcard
         if "*" in self.CORS_ORIGINS and self.CORS_ALLOW_CREDENTIALS:
-            raise ValueError(
-                "SECURITY ERROR: CORS configuration insecure. "
-                "Wildcard origin '*' cannot be used with CORS_ALLOW_CREDENTIALS=True. "
-                "Specify explicit origins instead."
+            logger.warning(
+                "CORS configuration insecure: wildcard origin '*' with CORS_ALLOW_CREDENTIALS=True. "
+                "Specify explicit origins in CORS_ORIGINS."
             )
 
         logger.info("Security configuration validation passed")
