@@ -402,7 +402,8 @@ class IdfForecastMergeProcessor(BaseProcessor):
             csv_by_block = index_forecast_by_block(csv_docs)
             api_by_block = index_forecast_by_block(api_docs)
 
-            if not use_rtm_api:
+            # Flip only from today's active-session CSV — not tomorrow/future delivery day.
+            if not use_rtm_api and scheduled_date == today_ist:
                 should_flip, trigger = active_session_should_flip_manual_to_auto(
                     active_blocks, csv_by_block
                 )
