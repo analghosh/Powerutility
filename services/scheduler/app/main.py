@@ -178,9 +178,9 @@ app = FastAPI(
     title=settings.SERVICE_NAME,
     version="1.0.0",
     lifespan=lifespan,
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url="/redoc" if settings.DEBUG else None,
-    openapi_url="/openapi.json" if settings.DEBUG else None,
+    docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    openapi_url="/openapi.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
 )
 
 # Add error handling middleware

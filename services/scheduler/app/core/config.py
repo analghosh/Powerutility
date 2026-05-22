@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     SERVICE_PORT: int = 8004
     SERVICE_HOST: str = "0.0.0.0"
     DEBUG: bool = False
+    ENABLE_SWAGGER: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     DEDUPLICATION_ONLY: bool = True
