@@ -30,41 +30,72 @@ class BaseConsumer(ABC, threading.Thread):
         self.daemon = True  # Daemon thread so it stops when main process stops
         self.name = f"Consumer-{queue_name}"
         
+    # Auth errors: stop retrying entirely — wrong credentials won't fix themselves
+    _AUTH_ERROR_CODES = {403}
+    _AUTH_ERROR_PHRASES = ("ACCESS_REFUSED", "authentication", "ProbableAuthenticationError", "credentials")
+
+    def _is_auth_error(self, exc: Exception) -> bool:
+        """Return True if the exception indicates a permanent auth failure."""
+        msg = str(exc)
+        if isinstance(exc, pika.exceptions.ProbableAuthenticationError):
+            return True
+        if isinstance(exc, pika.exceptions.ConnectionClosedByBroker):
+            if exc.reply_code in self._AUTH_ERROR_CODES:
+                return True
+        return any(phrase in msg for phrase in self._AUTH_ERROR_PHRASES)
+
     def run(self):
-        """Main consumer loop"""
+        """Main consumer loop with exponential backoff and auth-error fast-fail."""
         logger.info(f"Starting consumer for queue: {self.queue_name}")
-        
+
+        retry_delay = 5      # seconds — initial backoff
+        max_delay = 300      # cap at 5 minutes for transient errors
+        consecutive_failures = 0
+
         while not self.should_stop:
             try:
-                # Get connection and channel
                 self.connection = self.manager.create_connection()
                 if not self.connection or self.connection.is_closed:
-                    logger.warning("Connection lost, reconnecting...")
-                    time.sleep(5)
+                    logger.warning("Connection unavailable, retrying...")
+                    time.sleep(retry_delay)
                     continue
-                    
+
+                # Reset backoff on successful connection
+                retry_delay = 5
+                consecutive_failures = 0
+
                 self.channel = self.connection.channel()
-                
-                # Setup topology (ensure queue exists)
                 self.setup_topology()
-                
-                # Set prefetch count
                 self.channel.basic_qos(prefetch_count=config.RABBITMQ_CONSUMER_PREFETCH)
-                
-                # Start consuming
                 self.channel.basic_consume(
                     queue=self.queue_name,
                     on_message_callback=self._on_message,
                     auto_ack=False
                 )
-                
+
                 logger.info(f"Consumer listening on {self.queue_name}")
                 self.channel.start_consuming()
-                
+
             except Exception as e:
-                logger.error(f"Consumer error: {str(e)}")
+                if self._is_auth_error(e):
+                    # Auth errors are permanent — stop the consumer thread entirely
+                    logger.error(
+                        f"Consumer [{self.queue_name}] stopping: authentication failed. "
+                        f"Fix RABBITMQ_USER/RABBITMQ_PASSWORD or set USE_RABBITMQ_JOBS=false. "
+                        f"Error: {e}"
+                    )
+                    self.should_stop = True
+                    break
+
+                # Transient error — exponential backoff
+                consecutive_failures += 1
+                retry_delay = min(retry_delay * 2, max_delay)
+                logger.error(
+                    f"Consumer [{self.queue_name}] error (attempt {consecutive_failures}), "
+                    f"retrying in {retry_delay}s: {e}"
+                )
                 if not self.should_stop:
-                    time.sleep(5)  # Wait before retry
+                    time.sleep(retry_delay)
             finally:
                 self._cleanup()
 

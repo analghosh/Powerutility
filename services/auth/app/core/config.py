@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"  # Alias for SERVICE_HOST
     PORT: str = "8001"  # Alias for SERVICE_PORT
     DEBUG: bool = False  # Default to False for security; set to True explicitly for development
+    ENABLE_SWAGGER: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     
@@ -81,7 +82,16 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
-    
+
+    # RabbitMQ Configuration
+    RABBITMQ_HOST: str = "127.0.0.1"
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = "guest"
+    RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"
+    USE_RABBITMQ_JOBS: bool = False   # auth service does not publish jobs
+    USE_RABBITMQ_AUDIT: bool = False
+
     # MFA Configuration
     MFA_ENABLED: bool = True
     MFA_ISSUER: str = "EPMS"  # Can be overridden by APP_NAME env var
