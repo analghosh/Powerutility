@@ -82,7 +82,16 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 50
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
-    
+
+    # RabbitMQ Configuration
+    RABBITMQ_HOST: str = "127.0.0.1"
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = "guest"
+    RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"
+    USE_RABBITMQ_JOBS: bool = True
+    USE_RABBITMQ_AUDIT: bool = False
+
     # Trusted Proxies (comma-separated IPs that may set X-Forwarded-For)
     TRUSTED_PROXIES: str = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
 
