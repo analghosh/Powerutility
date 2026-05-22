@@ -23,7 +23,7 @@ class MasterPlantsRepository(GenericRepository):
             # Drop old non-unique idx_plant_id so it can be re-created as unique
             for index_name in ["plant_id_1", "idx_plant_id"]:
                 try:
-                    collection.drop_index(index_name)
+                    await collection.drop_index(index_name)
                 except Exception:
                     pass
 

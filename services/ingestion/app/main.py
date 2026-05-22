@@ -33,8 +33,6 @@ from .core.logger import get_ingestion_logger
 # Initialize logger (uses global config from configure_logging above)
 logger = get_ingestion_logger("ingestion_service")
 
-settings.check_security_warnings()
-
 
 class HealthResponse(BaseModel):
     """Health check response model"""
@@ -50,6 +48,7 @@ class HealthResponse(BaseModel):
 async def lifespan(_: FastAPI):
     """Lifespan context manager for startup/shutdown events"""
     # Startup
+    settings.check_security_warnings()
     logger.info("Starting EPMS Ingestion Service...")
     logger.info("   Service: %s", settings.SERVICE_NAME if hasattr(settings, 'SERVICE_NAME') else 'ingestion-service')
     logger.info("   Host: %s:%s", settings.SERVICE_HOST, settings.SERVICE_PORT)
@@ -125,6 +124,7 @@ app = FastAPI(
     version="1.0.0",
     docs_url="/docs" if settings.DEBUG else None,
     redoc_url="/redoc" if settings.DEBUG else None,
+    openapi_url="/openapi.json" if settings.DEBUG else None,
     lifespan=lifespan,
     openapi_tags=[
         {
@@ -229,7 +229,6 @@ if settings.BASE_PATH:
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
-# Security headers added to every response
 app.add_middleware(SecurityHeadersMiddleware)
 # Add cache middleware third (executes third to last)
 app.add_middleware(
