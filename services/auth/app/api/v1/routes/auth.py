@@ -487,6 +487,7 @@ async def get_current_user_info(
             email=current_user.email,
             is_active=current_user.is_active,
             is_verified=True,  # Assuming verified if they have a valid token
+            is_mfa_enabled=current_user.mfa_enabled,
             roles=current_user.roles,
             permissions=current_user.permissions,
             created_at=current_user.created_at,
