@@ -206,6 +206,75 @@ async def test_run_merge_active_session_csv_zero_flips_and_writes_api(processor)
 
 
 @pytest.mark.asyncio
+async def test_run_merge_tomorrow_active_zero_does_not_flip(processor):
+    """Tomorrow CSV zero on active blocks must not flip; only today's active session counts."""
+    today = date(2026, 5, 15)
+    tomorrow = date(2026, 5, 16)
+    ctx = {
+        "today_ist": today,
+        "current_block": 10,
+        "after_evening_cutover": False,
+        "min_ahead_blocks": 5,
+        "include_tomorrow_forecast": True,
+    }
+
+    processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
+    processor.parameter_repository.get_by_key = AsyncMock(
+        side_effect=lambda key: (
+            {"para_value": today.isoformat()}
+            if key == IDF_FORECAST_SWITCH_LAST_RESET_KEY
+            else {"para_value": "false"}
+        )
+    )
+    processor.parameter_repository.upsert_by_key = AsyncMock()
+
+    async def find_forecast(scheduled_at, source):
+        day = scheduled_at.date()
+        if source == FORECAST_SOURCE_CSV:
+            if day == today:
+                return [
+                    {"time_block": 9, "forecast": 100.0},
+                    {"time_block": 10, "forecast": 110.0},
+                    {"time_block": 20, "forecast": 50.0},
+                ]
+            return [
+                {"time_block": 9, "forecast": 0},
+                {"time_block": 10, "forecast": 0},
+            ]
+        return []
+
+    processor.forecast_repository.find_by_scheduled_at_and_source = AsyncMock(
+        side_effect=find_forecast
+    )
+    processor.demand_repository.serve_collection.find_one = AsyncMock(
+        return_value={"forecasted_frequency": 48.0}
+    )
+    update_result = MagicMock(upserted_id=None, modified_count=1)
+    processor.demand_repository.serve_collection.update_one = AsyncMock(
+        return_value=update_result
+    )
+
+    with patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.rtm_forecast_run_context",
+        return_value=ctx,
+    ), patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.target_scheduled_dates_for_rtm",
+        return_value=[today, tomorrow],
+    ), patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.should_write_forecast_block",
+        return_value=True,
+    ):
+        await processor.run_merge()
+
+    processor.parameter_repository.upsert_by_key.assert_not_called()
+    written = [
+        c[0][1]["$set"]
+        for c in processor.demand_repository.serve_collection.update_one.call_args_list
+    ]
+    assert all(w["source_forecast"] == FORECAST_SOURCE_CSV for w in written)
+
+
+@pytest.mark.asyncio
 async def test_run_merge_both_api_only_stays_manual_without_csv_zero(processor):
     """API-only on active session does not flip; only CSV zero/null does."""
     today = date(2026, 5, 15)
