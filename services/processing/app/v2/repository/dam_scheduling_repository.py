@@ -27,6 +27,34 @@ class DamSchedulingRepository:
         self.plant_master_collection = settings.MONGODB_PLANT_MASTER_COLLECTION
         logger.info(f"DamSchedulingRepository initialized with collections: {self.collection_name}, staging: {self.staging_collection_name}")
 
+    async def ensure_indexes(self):
+        """
+        Ensure indexes on serve_dam_scheduling for common query patterns.
+        Called once at service startup.
+        """
+        try:
+            # Primary sort: schedule_date + time_block (most queries use this order)
+            await self.repository.create_index(
+                self.collection_name,
+                [("schedule_date", 1), ("time_block", 1)],
+                name="schedule_date_time_block_idx"
+            )
+            # Compound for paginated listing with plant filter
+            await self.repository.create_index(
+                self.collection_name,
+                [("schedule_date", 1), ("time_block", 1), ("plant_id", 1)],
+                name="schedule_date_time_block_plant_idx"
+            )
+            # scheduled_at for datetime-based queries
+            await self.repository.create_index(
+                self.collection_name,
+                [("scheduled_at", -1)],
+                name="scheduled_at_desc_idx"
+            )
+            logger.info(f"Indexes ensured on '{self.collection_name}'")
+        except Exception as e:
+            logger.error(f"Failed to ensure indexes on {self.collection_name}: {e}")
+
     async def validate_plant_exists(self, plant_id: str) -> bool:
         """
         Validate if a plant exists in the plant_master collection.

@@ -32,6 +32,7 @@ class AuditLogEntry(BaseModel):
     username: Optional[str] = Field(None, description="Username from auth_db")
     name: Optional[str] = Field(None, description="Full name from auth_db profile")
     email: Optional[str] = Field(None, description="Email from auth_db")
+    ip_address: Optional[str] = Field(None, description="IP address of the request")
     correlation_id: Optional[str] = Field(None, description="Request correlation ID")
     data: Optional[Dict[str, Any]] = Field(None, description="Additional audit data")
     success: Optional[bool] = Field(None, description="Whether the action was successful")

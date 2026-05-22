@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     HOST: str = "0.0.0.0"  # Alias for SERVICE_HOST
     PORT: str = "8001"  # Alias for SERVICE_PORT
     DEBUG: bool = False  # Default to False for security; set to True explicitly for development
+    ENABLE_SWAGGER: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     

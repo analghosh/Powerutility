@@ -388,6 +388,7 @@ async def delete_user(
 async def assign_roles_to_user(
     user_id: str,
     role_data: RoleAssignmentRequest,
+    request: Request,
     current_user: UserPrincipal = Depends(get_current_user),
     audit_logger: AuditLogger = Depends(get_audit_logger)
 ):
@@ -407,6 +408,7 @@ async def assign_roles_to_user(
         audit_logger.log_user_action( # audit_logger methods are sync (do not await)
             service="auth",
             user_id=current_user.user_id,
+            ip_address=request.client.host if request.client else None,
             action="assign_roles",
             message=f"Admin {current_user.user_id} updated roles for user {user.username}",
             target_user_id=user_id,

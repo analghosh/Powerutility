@@ -217,6 +217,8 @@ class AuditLogger:
         action: str,
         message: str,
         session_id: Optional[str] = None,
+        username: Optional[str] = None,
+        ip_address: Optional[str] = None,
         success: bool = True,
         level: AuditLogLevel = AuditLogLevel.MEDIUM,
         **additional_data
@@ -253,7 +255,7 @@ class AuditLogger:
             sanitized_message, sanitized_data = self._sanitize_if_enabled(message, log_data)
             
             # Create actor object (user_id will be sanitized in data)
-            actor = Actor(id=user_id, type="user")
+            actor = Actor(id=user_id, name=username, ip_address=ip_address)
             
             # Create trace object for session correlation
             trace = None

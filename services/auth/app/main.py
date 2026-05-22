@@ -170,9 +170,9 @@ app = FastAPI(
     The Auth Service provides endpoints for other services to validate tokens and retrieve user information.
     """,
     version="1.1.0",
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url="/redoc" if settings.DEBUG else None,
-    openapi_url="/auth_api.json" if settings.DEBUG else None,
+    docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    openapi_url="/auth_api.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
     lifespan=lifespan,
     tags=[
         {

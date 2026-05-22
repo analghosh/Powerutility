@@ -68,6 +68,21 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure limit_audit_log indexes: {e}")
 
+    # Ensure targeted indexes on audit_logs (matched to API query patterns only)
+    try:
+        from .v2.services.audit_logger_service import audit_logger_service
+        await audit_logger_service.ensure_indexes()
+    except Exception as e:
+        logger.error(f"Failed to ensure audit_logs indexes: {e}")
+
+    # Ensure indexes on serve_dam_scheduling (207K docs, previously only _id index)
+    try:
+        from .v2.repository.dam_scheduling_repository import DamSchedulingRepository
+        dam_scheduling_repo = DamSchedulingRepository()
+        await dam_scheduling_repo.ensure_indexes()
+    except Exception as e:
+        logger.error(f"Failed to ensure dam_scheduling indexes: {e}")
+
     # One-time migration: encrypt plaintext BearerTokens in exchange_config
     try:
         from .v2.migrations.encrypt_bearer_tokens import run_encrypt_bearer_tokens_migration
@@ -138,17 +153,17 @@ app = FastAPI(
     **Environment**: {environment}
     """,
     version=APP_VERSION,
-    docs_url="/docs" if settings.DEBUG else None,
-    redoc_url="/redoc" if settings.DEBUG else None,
-    openapi_url="/openapi.json" if settings.DEBUG else None,
+    docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    openapi_url="/openapi.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
     lifespan=lifespan,
     root_path=settings.BASE_PATH
 )
 
 # V2 Sub-application with proper swagger configuration for server environments
-v2_docs_url = "/docs" if settings.DEBUG else None
-v2_redoc_url = "/redoc" if settings.DEBUG else None
-v2_openapi_url = "/openapi.json" if settings.DEBUG else None
+v2_docs_url = "/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None
+v2_redoc_url = "/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None
+v2_openapi_url = "/openapi.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None
 
 v2_app = FastAPI(
     title="EPMS Processing Service - V2",
