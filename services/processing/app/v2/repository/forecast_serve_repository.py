@@ -49,5 +49,25 @@ class ForecastServeRepository(GenericRepository):
             limit=256,
         )
 
+    async def find_by_scheduled_at_and_source(
+        self,
+        scheduled_at: datetime,
+        source: str,
+        market_type: str = IDF_TYPE,
+    ) -> List[Dict[str, Any]]:
+        """All forecast_serve rows for one delivery date and source."""
+        end_date = scheduled_at + timedelta(days=1)
+        query: Dict[str, Any] = {
+            "scheduled_at": {"$gte": scheduled_at, "$lt": end_date},
+            "type": market_type,
+            "source": source,
+        }
+        return await self.get_all(
+            self.collection_name,
+            filter=query,
+            sort=[("time_block", 1)],
+            limit=500,
+        )
+
 
 forecast_serve_repository = ForecastServeRepository()

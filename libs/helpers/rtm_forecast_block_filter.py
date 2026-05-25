@@ -7,6 +7,11 @@ from datetime import date, datetime
 from typing import Optional, Tuple
 from zoneinfo import ZoneInfo
 
+
+def _time_block_to_session_id(time_block: int) -> int:
+    block = max(1, min(96, int(time_block)))
+    return (block - 1) // 2 + 1
+
 # After this local time, intraday block filter is disabled (all blocks writable for today).
 EVENING_CUTOVER_HM: Tuple[int, int] = (22, 30)
 
@@ -57,7 +62,8 @@ def should_write_forecast_block(
 
     - Past dates: never write.
     - After evening cutover (22:30 IST): write all blocks 1–96 (delivery day is tomorrow only).
-    - Same day before cutover: only blocks from active session onward (current + offset).
+    - Same day before cutover: active RTM session through block 96 (both blocks per
+      session, including the in-progress session even if its first block has passed).
     - Future dates (before cutover): write all blocks.
     """
     if scheduled_date < today_ist:
@@ -65,9 +71,9 @@ def should_write_forecast_block(
     if after_evening_cutover:
         return True
     if scheduled_date == today_ist:
-        target_block = ((int(current_block) - 1 + int(min_ahead_blocks)) % 96) + 1
-        next_block = (target_block % 96) + 1
-        return int(time_block) >= next_block
+        active_session_id = _time_block_to_session_id(int(current_block))
+        block_session_id = _time_block_to_session_id(int(time_block))
+        return block_session_id >= active_session_id
     return True
 
 
