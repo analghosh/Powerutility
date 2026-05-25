@@ -13,13 +13,6 @@ from libs.constants.idf_forecast import (
     parse_switch_use_rtm_api,
     switch_para_value,
 )
-from libs.helpers.idf_active_session import (
-    active_session_blocks_from_mapping,
-    active_session_should_flip_manual_to_auto,
-    csv_forecast_mw,
-    index_forecast_by_block,
-    merge_time_blocks_active_through_session_48,
-)
 from libs.helpers.rtm_forecast_block_filter import (
     rtm_forecast_run_context,
     should_write_forecast_block,
@@ -32,7 +25,6 @@ from ..core.config import settings
 from ..repository.demand_serve_repository import demand_serve_repository
 from ..repository.forecast_serve_repository import forecast_serve_repository
 from ..repository.parameter_repository import parameter_repository
-from ..repository.rtm_product_hardcoded_data_repository import RTMProductHardCodedDataRepository
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +39,6 @@ class IdfForecastMergeProcessor(BaseProcessor):
         self.demand_repository = demand_serve_repository
         self.forecast_repository = forecast_serve_repository
         self.parameter_repository = parameter_repository
-        self.rtm_hardcoded_repository = RTMProductHardCodedDataRepository()
 
     async def execute_cron_job(self) -> Dict[str, Any]:
         job_type = "idf_forecast_merge"
@@ -277,37 +268,6 @@ class IdfForecastMergeProcessor(BaseProcessor):
         except Exception as audit_err:
             logger.warning("Failed to write IDF forecast switch audit log: %s", audit_err)
 
-    async def _flip_switch_to_auto(self, trigger: str, message: str) -> None:
-        before_doc = await self.parameter_repository.get_by_key(IDF_FORECAST_SWITCH_KEY)
-        previous_use_rtm = parse_switch_use_rtm_api((before_doc or {}).get("para_value"))
-        previous = {
-            "use_rtm_api": previous_use_rtm,
-            "active_source": (
-                FORECAST_SOURCE_RTM_API if previous_use_rtm else FORECAST_SOURCE_CSV
-            ),
-            "para_value": switch_para_value(previous_use_rtm),
-            "para_key": IDF_FORECAST_SWITCH_KEY,
-        }
-        await self.parameter_repository.upsert_by_key(IDF_FORECAST_SWITCH_KEY, "true")
-        new_state = {
-            "use_rtm_api": True,
-            "active_source": FORECAST_SOURCE_RTM_API,
-            "para_value": "true",
-            "para_key": IDF_FORECAST_SWITCH_KEY,
-        }
-        logger.info("%s — idf_forecast_switch set to Auto (API)", message)
-        self._audit_switch_change(
-            action="idf_forecast_switch_auto_fallback",
-            message=message,
-            previous=previous,
-            new_state=new_state,
-            extra={
-                "changed_by": "system",
-                "change_source": "scheduler",
-                "trigger": trigger,
-            },
-        )
-
     async def _get_rostering(
         self, scheduled_at: datetime, time_block: int
     ) -> float:
@@ -373,12 +333,8 @@ class IdfForecastMergeProcessor(BaseProcessor):
 
         await self._maybe_reset_switch_for_new_day(today_ist)
         use_rtm_api = await self._get_use_rtm_api()
-
-        session_mapping = await self.rtm_hardcoded_repository.get_session_mapping()
-        active_blocks = active_session_blocks_from_mapping(
-            session_mapping, ctx["current_block"]
-        )
-        active_session_start = min(active_blocks) if active_blocks else ctx["current_block"]
+        active_source = FORECAST_SOURCE_RTM_API if use_rtm_api else FORECAST_SOURCE_CSV
+        source_forecast_label = RTM_SOURCE_FORECAST if use_rtm_api else FORECAST_SOURCE_CSV
 
         target_dates = target_scheduled_dates_for_rtm(
             today_ist,
@@ -387,44 +343,22 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
 
         merged = skipped = failed = 0
-        switch_flipped = False
 
         for target_date in target_dates:
             scheduled_at = self._scheduled_at_midnight(target_date)
-            scheduled_date = scheduled_at.date()
-
-            csv_docs = await self.forecast_repository.find_by_scheduled_at_and_source(
-                scheduled_at, FORECAST_SOURCE_CSV
-            )
-            api_docs = await self.forecast_repository.find_by_scheduled_at_and_source(
-                scheduled_at, FORECAST_SOURCE_RTM_API
-            )
-            csv_by_block = index_forecast_by_block(csv_docs)
-            api_by_block = index_forecast_by_block(api_docs)
-
-            if not use_rtm_api:
-                should_flip, trigger = active_session_should_flip_manual_to_auto(
-                    active_blocks, csv_by_block
-                )
-                if should_flip:
-                    await self._flip_switch_to_auto(
-                        trigger=trigger,
-                        message=(
-                            f"Active session blocks {active_blocks}: "
-                            f"switching Manual to Auto ({trigger})"
-                        ),
-                    )
-                    use_rtm_api = True
-                    switch_flipped = True
-
-            source_forecast_label = (
-                RTM_SOURCE_FORECAST if use_rtm_api else FORECAST_SOURCE_CSV
+            docs = await self.forecast_repository.find_by_scheduled_at_and_source(
+                scheduled_at, active_source
             )
 
-            for time_block in merge_time_blocks_active_through_session_48(
-                active_session_start
-            ):
+            for doc in docs:
                 try:
+                    tb = doc.get("time_block")
+                    if tb is None:
+                        skipped += 1
+                        continue
+                    time_block = int(tb)
+                    scheduled_date = scheduled_at.date()
+
                     if not should_write_forecast_block(
                         scheduled_date,
                         time_block,
@@ -437,23 +371,10 @@ class IdfForecastMergeProcessor(BaseProcessor):
                         continue
 
                     if use_rtm_api:
-                        doc = api_by_block.get(time_block)
-                        if not doc:
-                            skipped += 1
-                            continue
                         forecast_mw = float(doc.get("forecast") or 0.0)
-                        forecasted_frequency = float(
-                            doc.get("forecasted_frequency") or 0.0
-                        )
+                        forecasted_frequency = float(doc.get("forecasted_frequency") or 0.0)
                     else:
-                        doc = csv_by_block.get(time_block)
-                        if not doc:
-                            skipped += 1
-                            continue
-                        forecast_mw = csv_forecast_mw(
-                            doc.get("forecast"),
-                            treat_blank_as_zero=True,
-                        )
+                        forecast_mw = self._parse_csv_forecast_mw(doc.get("forecast"))
                         if forecast_mw is None:
                             skipped += 1
                             continue
@@ -486,20 +407,16 @@ class IdfForecastMergeProcessor(BaseProcessor):
                     logger.warning(
                         "Merge failed scheduled_at=%s block=%s: %s",
                         scheduled_at,
-                        time_block,
+                        doc.get("time_block"),
                         block_err,
                     )
 
-        active_source = FORECAST_SOURCE_RTM_API if use_rtm_api else FORECAST_SOURCE_CSV
         logger.info(
-            "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d "
-            "switch_flipped=%s active_session=%s",
+            "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d",
             active_source,
             merged,
             skipped,
             failed,
-            switch_flipped,
-            active_blocks,
         )
         return merged, skipped, failed
 
