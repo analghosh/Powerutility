@@ -107,14 +107,18 @@ async def test_rtm_processor_uses_forecast_serve_not_demand_serve():
 
 
 def test_should_write_forecast_block_active_session_only_today():
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
     from libs.helpers.rtm_forecast_block_filter import should_write_forecast_block
 
     today = date(2026, 5, 15)
-    # current_block=10 -> active session 5 (blocks 9-10); writable from session 5 through 96
-    assert should_write_forecast_block(today, 9, today, 10, False, 5) is True
-    assert should_write_forecast_block(today, 10, today, 10, False, 5) is True
-    assert should_write_forecast_block(today, 8, today, 10, False, 5) is False
-    assert should_write_forecast_block(today, 16, today, 10, False, 5) is True
+    # ~02:20 IST: current session 5, RTM active session 8 (blocks 15-16+)
+    now = datetime(2026, 5, 15, 2, 20, tzinfo=ZoneInfo("Asia/Kolkata"))
+    assert should_write_forecast_block(today, 15, today, 10, False, 5, now_local=now) is True
+    assert should_write_forecast_block(today, 16, today, 10, False, 5, now_local=now) is True
+    assert should_write_forecast_block(today, 9, today, 10, False, 5, now_local=now) is False
+    assert should_write_forecast_block(today, 8, today, 10, False, 5, now_local=now) is False
 
 
 def test_should_write_forecast_block_after_evening_cutover_all_blocks():

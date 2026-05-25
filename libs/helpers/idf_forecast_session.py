@@ -3,10 +3,13 @@ RTM session helpers for IDF forecast merge (2 time blocks per 30-minute session)
 Aligned with rtm_transaction_service / rtm_bidding block indexing.
 """
 
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
-from libs.helpers.rtm_forecast_block_filter import should_write_forecast_block
+from libs.helpers.rtm_forecast_block_filter import (
+    rtm_active_session_id,
+    should_write_forecast_block,
+)
 
 SessionMergeOp = Tuple[int, float, float, str]
 
@@ -21,15 +24,15 @@ def session_to_time_blocks(session_id: int) -> Tuple[int, int]:
     return 2 * sid - 1, 2 * sid
 
 
-def first_writable_block(current_block: int, min_ahead_blocks: int = 0) -> int:
-    """First time block of the active RTM session (session pair start)."""
-    _ = min_ahead_blocks  # retained for call-site compatibility; session rule ignores offset
-    active_session_id = time_block_to_session_id(int(current_block))
-    return session_to_time_blocks(active_session_id)[0]
+def first_writable_block(now_local: datetime, min_ahead_blocks: int = 0) -> int:
+    """First time block of the RTM active session (IST session + offset)."""
+    _ = min_ahead_blocks
+    return session_to_time_blocks(rtm_active_session_id(now_local))[0]
 
 
-def active_session_id(current_block: int) -> int:
-    return time_block_to_session_id(int(current_block))
+def active_session_id(now_local: datetime) -> int:
+    """RTM active session (IST current session + 3), not the in-block session."""
+    return rtm_active_session_id(now_local)
 
 
 def blocks_from_first_through_96(first_block: int) -> List[int]:
@@ -40,12 +43,28 @@ def session_ids_from_block_through_96(first_block: int) -> List[int]:
     return list(range(time_block_to_session_id(first_block), 49))
 
 
+def session_ids_from_active_session_through_96(now_local: datetime) -> List[int]:
+    """Session IDs from RTM active session (IST session + offset) through session 48."""
+    return list(range(active_session_id(now_local), 49))
+
+
+def session_has_csv_forecast_present(
+    session_id: int,
+    csv_by_block: Dict[int, Dict[str, Any]],
+) -> bool:
+    """True if forecast_serve has a CSV row for at least one block in the session pair."""
+    b1, b2 = session_to_time_blocks(session_id)
+    return b1 in csv_by_block or b2 in csv_by_block
+
+
 def writable_blocks_for_date(
     scheduled_date: date,
     today_ist: date,
     current_block: int,
     after_evening_cutover: bool,
     min_ahead_blocks: int,
+    active_rtm_session_id: int,
+    now_local: Optional[datetime] = None,
 ) -> List[int]:
     return [
         b
@@ -57,6 +76,8 @@ def writable_blocks_for_date(
             current_block,
             after_evening_cutover=after_evening_cutover,
             min_ahead_blocks=min_ahead_blocks,
+            active_rtm_session_id=active_rtm_session_id,
+            now_local=now_local,
         )
     ]
 
