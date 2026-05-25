@@ -11,18 +11,17 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 from pymongo import UpdateOne
 
 from libs.constants.idf_forecast import (
-    IDF_FORECAST_SWITCH_AUTO_FALLBACK_MESSAGE_KEY,
     IDF_FORECAST_SWITCH_KEY,
     IDF_FORECAST_SWITCH_LAST_RESET_KEY,
-    MANUAL_AUTO_FLIP_ACTIVE_SESSION_CSV_MESSAGE,
     parse_switch_use_rtm_api,
     switch_para_value,
 )
-from libs.helpers.idf_forecast_switch_validation import active_session_csv_requires_auto_flip
 from libs.helpers.idf_forecast_session import (
+    block_has_resolvable_forecast,
+    demand_forecast_invalid,
+    first_writable_block,
     index_forecast_docs,
-    resolve_session_merge_ops_api_only,
-    resolve_session_merge_ops_csv_manual,
+    resolve_session_merge_ops,
     session_ids_from_block_through_96,
     session_to_time_blocks,
     time_block_to_session_id,
@@ -210,11 +209,6 @@ class IdfForecastMergeProcessor(BaseProcessor):
             IDF_FORECAST_SWITCH_LAST_RESET_KEY,
             today_ist.isoformat(),
         )
-        await self.parameter_repository.upsert_by_key(
-            IDF_FORECAST_SWITCH_AUTO_FALLBACK_MESSAGE_KEY,
-            "",
-            extra_set={"trigger": "idf_forecast_merge_daily_reset", "changed_by": "system"},
-        )
         new_state = {
             "use_rtm_api": True,
             "active_source": FORECAST_SOURCE_RTM_API,
@@ -287,12 +281,7 @@ class IdfForecastMergeProcessor(BaseProcessor):
         except Exception as audit_err:
             logger.warning("Failed to write IDF forecast switch audit log: %s", audit_err)
 
-    async def _flip_switch_to_auto(
-        self,
-        trigger: str,
-        message: str,
-        user_message: Optional[str] = None,
-    ) -> None:
+    async def _flip_switch_to_auto(self, trigger: str, message: str) -> None:
         before_doc = await self.parameter_repository.get_by_key(IDF_FORECAST_SWITCH_KEY)
         previous_use_rtm = parse_switch_use_rtm_api((before_doc or {}).get("para_value"))
         previous = {
@@ -304,15 +293,6 @@ class IdfForecastMergeProcessor(BaseProcessor):
             "para_key": IDF_FORECAST_SWITCH_KEY,
         }
         await self.parameter_repository.upsert_by_key(IDF_FORECAST_SWITCH_KEY, "true")
-        display_message = user_message or message
-        await self.parameter_repository.upsert_by_key(
-            IDF_FORECAST_SWITCH_AUTO_FALLBACK_MESSAGE_KEY,
-            display_message,
-            extra_set={
-                "trigger": trigger,
-                "changed_by": "system",
-            },
-        )
         new_state = {
             "use_rtm_api": True,
             "active_source": FORECAST_SOURCE_RTM_API,
@@ -406,22 +386,39 @@ class IdfForecastMergeProcessor(BaseProcessor):
         demand_by_block: Dict[int, Dict[str, Any]],
         writable_set: Set[int],
     ) -> bool:
-        """Return True if switch was flipped to Auto (active session CSV zero/empty)."""
-        _ = api_by_block, demand_by_block, writable_set
-        active_sid = time_block_to_session_id(ctx["current_block"])
-        should_flip, user_message = active_session_csv_requires_auto_flip(
-            active_sid, csv_by_block
-        )
-        if should_flip:
+        """Return True if switch was flipped to Auto."""
+        first_b = first_writable_block(ctx["current_block"], ctx["min_ahead_blocks"])
+        tail_blocks = [
+            b
+            for b in range(first_b, 97)
+            if b in writable_set
+        ]
+        if tail_blocks and not any(
+            block_has_resolvable_forecast(b, csv_by_block, api_by_block)
+            for b in tail_blocks
+        ):
             await self._flip_switch_to_auto(
-                trigger="active_session_csv_zero_or_empty",
+                trigger="manual_gap_active_to_96",
                 message=(
-                    f"Active session {active_sid} on {scheduled_date} has zero/empty "
-                    f"CSV forecast; switching to Auto"
+                    "No CSV/API forecast from active session through block 96; "
+                    "switching to Auto"
                 ),
-                user_message=user_message or MANUAL_AUTO_FLIP_ACTIVE_SESSION_CSV_MESSAGE,
             )
             return True
+
+        active_sid = time_block_to_session_id(ctx["current_block"])
+        b1, b2 = session_to_time_blocks(active_sid)
+        for block in (b1, b2):
+            row = demand_by_block.get(block)
+            if row is None or demand_forecast_invalid(row.get("forecast")):
+                await self._flip_switch_to_auto(
+                    trigger="active_session_demand_empty",
+                    message=(
+                        f"IDF demand empty/zero in active session {active_sid} "
+                        f"block {block}; switching to Auto"
+                    ),
+                )
+                return True
         return False
 
     async def _merge_delivery_day_manual(
@@ -440,12 +437,20 @@ class IdfForecastMergeProcessor(BaseProcessor):
         first_b = first_writable_block(ctx["current_block"], ctx["min_ahead_blocks"])
 
         for session_id in session_ids_from_block_through_96(first_b):
-            ops = resolve_session_merge_ops_csv_manual(
+            ops = resolve_session_merge_ops(
                 session_id,
                 csv_by_block,
+                api_by_block,
                 demand_by_block,
                 FORECAST_SOURCE_CSV,
+                RTM_SOURCE_FORECAST,
             )
+            if not ops:
+                b1, b2 = session_to_time_blocks(session_id)
+                for b in (b1, b2):
+                    if b in writable_set:
+                        skipped += 1
+                continue
 
             for time_block, forecast_mw, freq, source_label in ops:
                 if time_block not in writable_set:
@@ -490,41 +495,29 @@ class IdfForecastMergeProcessor(BaseProcessor):
         merged = skipped = failed = 0
         now = datetime.now()
         bulk_ops: List[UpdateOne] = []
-        first_b = first_writable_block(ctx["current_block"], ctx["min_ahead_blocks"])
 
-        for session_id in session_ids_from_block_through_96(first_b):
-            ops = resolve_session_merge_ops_api_only(
-                session_id,
-                api_by_block,
-                RTM_SOURCE_FORECAST,
-            )
-            if not ops:
-                b1, b2 = session_to_time_blocks(session_id)
-                for b in (b1, b2):
-                    if b in writable_set:
-                        skipped += 1
+        for time_block in sorted(writable_set):
+            doc = api_by_block.get(time_block)
+            if not doc:
+                skipped += 1
                 continue
-
-            for time_block, forecast_mw, freq, source_label in ops:
-                if time_block not in writable_set:
-                    continue
-                try:
-                    bulk_ops.append(
-                        self._build_merge_update_op(
-                            scheduled_at,
-                            time_block,
-                            forecast_mw,
-                            freq,
-                            source_label,
-                            demand_by_block,
-                            now,
-                        )
+            try:
+                bulk_ops.append(
+                    self._build_merge_update_op(
+                        scheduled_at,
+                        time_block,
+                        float(doc.get("forecast") or 0.0),
+                        float(doc.get("forecasted_frequency") or 0.0),
+                        RTM_SOURCE_FORECAST,
+                        demand_by_block,
+                        now,
                     )
-                except Exception as block_err:
-                    failed += 1
-                    logger.warning(
-                        "API merge op failed block=%s: %s", time_block, block_err
-                    )
+                )
+            except Exception as block_err:
+                failed += 1
+                logger.warning(
+                    "API merge op failed block=%s: %s", time_block, block_err
+                )
 
         try:
             merged = await self._execute_bulk_merge(bulk_ops)

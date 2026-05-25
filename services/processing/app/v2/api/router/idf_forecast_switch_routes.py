@@ -13,10 +13,7 @@ from libs.audit_queue.simple_logger import AuditLogger, AuditLogLevel
 from libs.helpers.idf_forecast_audit import request_audit_context, switch_change_audit_fields
 from libs.middleware import get_correlation_id
 from ....core.dependencies import get_audit_logger
-from ...controller.idf_forecast_switch_controller import (
-    ManualSwitchNotAllowedError,
-    idf_forecast_switch_controller,
-)
+from ...controller.idf_forecast_switch_controller import idf_forecast_switch_controller
 from ...dependencies import get_authenticated_user, get_user_context
 
 router = APIRouter(
@@ -41,13 +38,6 @@ class IdfForecastSwitchResponse(BaseModel):
     para_value: str
     updated_at: Optional[str] = None
     updated_by: Optional[str] = None
-    auto_fallback_message: Optional[str] = Field(
-        None,
-        description=(
-            "Set when the system auto-switched from Manual to Auto "
-            "(e.g. active session CSV zero/empty)"
-        ),
-    )
     correlation_id: Optional[str] = None
     timestamp: Optional[str] = None
 
@@ -176,25 +166,6 @@ async def put_idf_forecast_switch(
             correlation_id=correlation_id,
             timestamp=datetime.now().isoformat(),
         )
-    except ManualSwitchNotAllowedError as e:
-        audit_logger.log_user_action(
-            service="processing",
-            user_id=user_id,
-            action="idf_forecast_switch_update_rejected",
-            message=str(e.message),
-            correlation_id=correlation_id,
-            session_id=correlation_id,
-            username=username,
-            success=False,
-            level=AuditLogLevel.MEDIUM,
-            change_source="api",
-            requested_use_rtm_api=body.use_rtm_api,
-            **request_audit_context(request),
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=e.message,
-        ) from e
     except Exception as e:
         audit_logger.log_error_event(
             service="processing",

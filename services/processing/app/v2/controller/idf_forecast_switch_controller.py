@@ -3,10 +3,7 @@
 import logging
 from typing import Any, Dict, Optional
 
-from ..services.idf_forecast_switch_service import (
-    ManualSwitchNotAllowedError,
-    idf_forecast_switch_service,
-)
+from ..services.idf_forecast_switch_service import idf_forecast_switch_service
 
 logger = logging.getLogger(__name__)
 
