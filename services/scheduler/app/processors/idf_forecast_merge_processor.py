@@ -20,6 +20,7 @@ from libs.constants.idf_forecast import (
 )
 from libs.helpers.idf_forecast_switch_validation import active_session_csv_requires_auto_flip
 from libs.helpers.idf_forecast_session import (
+    first_writable_block,
     index_forecast_docs,
     resolve_session_merge_ops_api_only,
     resolve_session_merge_ops_csv_manual,
