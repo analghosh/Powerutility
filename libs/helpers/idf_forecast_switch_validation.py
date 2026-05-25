@@ -4,7 +4,6 @@ from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from libs.helpers.idf_forecast_session import (
-    active_session_id,
     index_forecast_docs,
     parse_csv_forecast_mw,
     session_has_complete_csv,
@@ -54,7 +53,7 @@ def active_session_has_any_valid_csv(
 def validate_csv_coverage_for_manual_switch(
     csv_docs_by_date: Dict[date, List[Dict[str, Any]]],
     today_ist: date,
-    current_block: int,
+    active_rtm_session_id: int,
     after_evening_cutover: bool,
     include_tomorrow_forecast: bool,
 ) -> Tuple[bool, str]:
@@ -69,7 +68,7 @@ def validate_csv_coverage_for_manual_switch(
     - Future sessions (active+1 through 48): not validated. They may be all
       missing or zero; switch is still allowed when the active session is valid.
     """
-    active_sid = active_session_id(current_block)
+    active_sid = int(active_rtm_session_id)
 
     target_dates = target_scheduled_dates_for_rtm(
         today_ist,
