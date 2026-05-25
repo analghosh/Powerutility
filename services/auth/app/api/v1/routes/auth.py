@@ -402,11 +402,11 @@ async def logout(
         
         audit_logger.log_user_action(
                 service="auth",
-                user_id=user_info.get("id", "unknown"),
+                user_id=user_info.get("user_id", "unknown"),
+                username=user_info.get("username"),
                 action="logout",
                 message=f"User logged out: {user_info.get('username', 'unknown')}",
                 client_ip=client_ip,
-                username=user_info.get("username", "unknown"),
                 user_agent=user_agent,
                 success=True
             ) # type: ignore

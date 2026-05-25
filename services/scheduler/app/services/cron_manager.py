@@ -153,6 +153,9 @@ class CronManager(BaseCronManager):
                 logger.error("Failed to create job seeder: %s", e)
                 self.cron_job_seeder = None
         
+        # Reference to the FastAPI event loop — set in _run_all_jobs_on_startup
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
+
         # Initialize the parent BaseCronManager with audit logger
         super().__init__(
             service_name="scheduler",
@@ -658,7 +661,7 @@ class CronManager(BaseCronManager):
     async def _run_all_jobs_on_startup(self):
         """Run all enabled jobs immediately on startup according to priority with parallel execution for same priority"""
         try:
-            
+            self._main_loop = asyncio.get_running_loop()
             logger.info("Running all enabled jobs on startup...")
             logger.info("   Startup delay: %s seconds", settings.STARTUP_JOB_DELAY_SECONDS)
             
@@ -1440,19 +1443,31 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
     
     def _safe_run_async(self, coro):
-        """Safely run an async coroutine, handling existing event loops"""
+        """Safely run an async coroutine from a sync (executor thread) context.
+
+        When called from run_in_executor threads, submits to the FastAPI event loop
+        via run_coroutine_threadsafe so Motor clients (bound to that loop) work correctly.
+        """
         import asyncio
         try:
             asyncio.get_running_loop()
-        except RuntimeError:
-            # No event loop running, safe to use asyncio.run
-            return asyncio.run(coro)
+            # Called from within the event loop thread — cannot block synchronously
+            coro.close()
+            raise RuntimeError(
+                "_safe_run_async cannot synchronously wait while an event loop is running; "
+                "await the coroutine or schedule it with asyncio.create_task instead"
+            )
+        except RuntimeError as exc:
+            if "cannot synchronously wait" in str(exc):
+                raise
+            # No running loop in this thread (called from executor) — proceed below
 
-        coro.close()
-        raise RuntimeError(
-            "_safe_run_async cannot synchronously wait while an event loop is running; "
-            "await the coroutine or schedule it with asyncio.create_task instead"
-        )
+        # Prefer the captured FastAPI loop so Motor clients work across the boundary
+        if self._main_loop is not None and self._main_loop.is_running():
+            return asyncio.run_coroutine_threadsafe(coro, self._main_loop).result()
+
+        # Fallback: create a new event loop (safe only before the FastAPI loop starts)
+        return asyncio.run(coro)
 
     def _cleanup_job_connections(self):
         """
