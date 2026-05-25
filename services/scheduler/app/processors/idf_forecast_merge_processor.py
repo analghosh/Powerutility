@@ -616,8 +616,10 @@ class IdfForecastMergeProcessor(BaseProcessor):
                     writable_set,
                 ):
                     switch_flipped = True
+                    api_merge_this_run = True
                     logger.info(
-                        "IDF forecast switch set to Auto; API merge deferred to next run"
+                        "IDF forecast switch set to Auto; applying rtm_forecast_api "
+                        "merge for remainder of this run"
                     )
 
             if api_merge_this_run:
@@ -644,7 +646,9 @@ class IdfForecastMergeProcessor(BaseProcessor):
             failed += f
 
         merge_source = (
-            FORECAST_SOURCE_RTM_API if api_merge_this_run else FORECAST_SOURCE_CSV
+            FORECAST_SOURCE_RTM_API
+            if (api_merge_this_run or switch_flipped)
+            else FORECAST_SOURCE_CSV
         )
         logger.info(
             "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d "

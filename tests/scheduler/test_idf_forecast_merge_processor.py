@@ -293,8 +293,8 @@ async def test_run_merge_manual_no_forecast_flips_auto(processor):
 
 
 @pytest.mark.asyncio
-async def test_auto_flip_defers_api_merge_until_next_run(processor):
-    """When auto-flip fires, parameter becomes Auto but this run stays on Manual merge."""
+async def test_auto_flip_applies_api_merge_same_run(processor):
+    """When auto-flip fires, same run writes demand_serve from rtm_forecast_api (not csv)."""
     today = date(2026, 5, 15)
     ctx = _merge_test_ctx(today)
 
@@ -307,14 +307,23 @@ async def test_auto_flip_defers_api_merge_until_next_run(processor):
         )
     )
     processor.parameter_repository.upsert_by_key = AsyncMock()
+
+    async def find_forecast(scheduled_at, source):
+        if source == FORECAST_SOURCE_CSV:
+            return []
+        return [
+            {"time_block": 9, "forecast": 500.0, "forecasted_frequency": 49.5},
+            {"time_block": 10, "forecast": 510.0, "forecasted_frequency": 50.0},
+        ]
+
     processor.forecast_repository.find_by_scheduled_at_and_source = AsyncMock(
-        return_value=[]
+        side_effect=find_forecast
     )
     processor.demand_repository.serve_collection.find = MagicMock(
         return_value=_mock_demand_cursor([])
     )
     processor.demand_repository.serve_collection.bulk_write = AsyncMock(
-        return_value=_bulk_result(modified=0)
+        return_value=_bulk_result(modified=2)
     )
 
     with patch(
@@ -324,12 +333,14 @@ async def test_auto_flip_defers_api_merge_until_next_run(processor):
         "services.scheduler.app.processors.idf_forecast_merge_processor.target_scheduled_dates_for_rtm",
         return_value=[today],
     ):
-        await processor.run_merge()
+        merged, skipped, failed = await processor.run_merge()
 
     processor.parameter_repository.upsert_by_key.assert_any_call(
         IDF_FORECAST_SWITCH_KEY, "true"
     )
-    processor.demand_repository.serve_collection.bulk_write.assert_not_called()
+    assert merged == 2
+    ops = processor.demand_repository.serve_collection.bulk_write.call_args[0][0]
+    assert all(op._doc["$set"]["source_forecast"] == FORECAST_SOURCE_RTM_API for op in ops)
 
 
 @pytest.mark.asyncio
