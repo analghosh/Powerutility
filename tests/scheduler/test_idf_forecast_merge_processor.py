@@ -118,8 +118,8 @@ async def test_run_merge_api_mode_applies_block_filter(processor):
 
     assert failed == 0
     assert merged == 1
-    # Writable blocks 16–96 (81 total); only block 20 has API data.
-    assert skipped == 80
+    # Writable blocks 9–96 (88 total); only block 20 has API data.
+    assert skipped == 87
     processor.demand_repository.serve_collection.bulk_write.assert_called_once()
     ops = processor.demand_repository.serve_collection.bulk_write.call_args[0][0]
     written_blocks = [op._filter["time_block"] for op in ops]
@@ -128,8 +128,8 @@ async def test_run_merge_api_mode_applies_block_filter(processor):
 
 
 @pytest.mark.asyncio
-async def test_run_merge_csv_session_uses_api_fallback_same_session(processor):
-    """Blocks 20–21 same session: CSV empty on 20, API fills both (no mix)."""
+async def test_run_merge_csv_session_writes_zero_when_csv_missing(processor):
+    """Manual mode: incomplete CSV in a session writes 0 MW (no API fallback)."""
     today = date(2026, 5, 15)
     scheduled_at = datetime(2026, 5, 15)
     ctx = {
@@ -152,6 +152,8 @@ async def test_run_merge_csv_session_uses_api_fallback_same_session(processor):
     async def find_forecast(scheduled_at, source):
         if source == FORECAST_SOURCE_CSV:
             return [
+                {"time_block": 9, "forecast": 100.0},
+                {"time_block": 10, "forecast": 101.0},
                 {"time_block": 20, "forecast": 0},
                 {"time_block": 21, "forecast": 150.0},
             ]
@@ -189,9 +191,64 @@ async def test_run_merge_csv_session_uses_api_fallback_same_session(processor):
     ops = processor.demand_repository.serve_collection.bulk_write.call_args[0][0]
     assert len(ops) == 2
     for op in ops:
-        assert op._doc["$set"]["source_forecast"] == FORECAST_SOURCE_RTM_API
+        assert op._doc["$set"]["source_forecast"] == FORECAST_SOURCE_CSV
+        assert op._doc["$set"]["forecast"] == 0.0
     blocks = sorted(op._filter["time_block"] for op in ops)
-    assert blocks == [20, 21]
+    assert blocks == [19, 20]
+
+
+@pytest.mark.asyncio
+async def test_run_merge_manual_active_session_csv_empty_flips_auto(processor):
+    """When active session CSV is zero/empty, Manual flips to Auto with user message."""
+    from libs.constants.idf_forecast import (
+        IDF_FORECAST_SWITCH_AUTO_FALLBACK_MESSAGE_KEY,
+        IDF_FORECAST_SWITCH_LAST_RESET_KEY,
+        MANUAL_AUTO_FLIP_ACTIVE_SESSION_CSV_MESSAGE,
+    )
+
+    today = date(2026, 5, 15)
+    ctx = {
+        "today_ist": today,
+        "current_block": 10,
+        "after_evening_cutover": False,
+        "min_ahead_blocks": 5,
+        "include_tomorrow_forecast": False,
+    }
+
+    processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
+    processor.parameter_repository.get_by_key = AsyncMock(
+        side_effect=lambda key: (
+            {"para_value": today.isoformat()}
+            if key == IDF_FORECAST_SWITCH_LAST_RESET_KEY
+            else {"para_value": "false"}
+        )
+    )
+    processor.parameter_repository.upsert_by_key = AsyncMock()
+    processor.forecast_repository.find_by_scheduled_at_and_source = AsyncMock(
+        return_value=[
+            {"time_block": 9, "forecast": 0},
+            {"time_block": 10, "forecast": 101.0},
+        ]
+    )
+    processor.demand_repository.serve_collection.find = MagicMock(
+        return_value=_mock_demand_cursor([])
+    )
+
+    with patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.rtm_forecast_run_context",
+        return_value=ctx,
+    ), patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.target_scheduled_dates_for_rtm",
+        return_value=[today],
+    ):
+        await processor.run_merge()
+
+    calls = processor.parameter_repository.upsert_by_key.call_args_list
+    assert any(c[0][0] == "idf_forecast_switch" and c[0][1] == "true" for c in calls)
+    msg_call = next(
+        c for c in calls if c[0][0] == IDF_FORECAST_SWITCH_AUTO_FALLBACK_MESSAGE_KEY
+    )
+    assert msg_call[0][1] == MANUAL_AUTO_FLIP_ACTIVE_SESSION_CSV_MESSAGE
 
 
 @pytest.mark.asyncio

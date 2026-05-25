@@ -21,9 +21,15 @@ def session_to_time_blocks(session_id: int) -> Tuple[int, int]:
     return 2 * sid - 1, 2 * sid
 
 
-def first_writable_block(current_block: int, min_ahead_blocks: int) -> int:
-    target = ((int(current_block) - 1 + int(min_ahead_blocks)) % 96) + 1
-    return (target % 96) + 1
+def first_writable_block(current_block: int, min_ahead_blocks: int = 0) -> int:
+    """First time block of the active RTM session (session pair start)."""
+    _ = min_ahead_blocks  # retained for call-site compatibility; session rule ignores offset
+    active_session_id = time_block_to_session_id(int(current_block))
+    return session_to_time_blocks(active_session_id)[0]
+
+
+def active_session_id(current_block: int) -> int:
+    return time_block_to_session_id(int(current_block))
 
 
 def blocks_from_first_through_96(first_block: int) -> List[int]:
@@ -120,3 +126,81 @@ def resolve_session_merge_ops(
             (b2, float(api2.get("forecast") or 0.0), float(api2.get("forecasted_frequency") or 0.0), api_source_label),
         ]
     return None
+
+
+def resolve_session_merge_ops_csv_manual(
+    session_id: int,
+    csv_by_block: Dict[int, Dict[str, Any]],
+    demand_by_block: Dict[int, Dict[str, Any]],
+    csv_source_label: str,
+) -> List[SessionMergeOp]:
+    """
+    Manual mode merge for a session: both blocks use CSV source; missing or zero
+    CSV forecast is written as 0 MW in demand_serve.
+    """
+    b1, b2 = session_to_time_blocks(session_id)
+
+    def freq_from_demand(block: int, doc: Optional[Dict[str, Any]]) -> float:
+        if doc is not None and doc.get("forecasted_frequency") is not None:
+            return float(doc.get("forecasted_frequency") or 0.0)
+        return float((demand_by_block.get(block) or {}).get("forecasted_frequency") or 0.0)
+
+    def mw_for_block(block: int) -> float:
+        parsed = parse_csv_forecast_mw((csv_by_block.get(block) or {}).get("forecast"))
+        return 0.0 if parsed is None else parsed
+
+    return [
+        (b1, mw_for_block(b1), freq_from_demand(b1, csv_by_block.get(b1)), csv_source_label),
+        (b2, mw_for_block(b2), freq_from_demand(b2, csv_by_block.get(b2)), csv_source_label),
+    ]
+
+
+def resolve_session_merge_ops_csv_only(
+    session_id: int,
+    csv_by_block: Dict[int, Dict[str, Any]],
+    demand_by_block: Dict[int, Dict[str, Any]],
+    csv_source_label: str,
+) -> Optional[List[SessionMergeOp]]:
+    """Manual mode: both blocks in the session must have valid CSV forecast."""
+    b1, b2 = session_to_time_blocks(session_id)
+    csv1 = parse_csv_forecast_mw((csv_by_block.get(b1) or {}).get("forecast"))
+    csv2 = parse_csv_forecast_mw((csv_by_block.get(b2) or {}).get("forecast"))
+    if csv1 is None or csv2 is None:
+        return None
+
+    def freq_from_demand(block: int, doc: Optional[Dict[str, Any]]) -> float:
+        if doc is not None and doc.get("forecasted_frequency") is not None:
+            return float(doc.get("forecasted_frequency") or 0.0)
+        return float((demand_by_block.get(block) or {}).get("forecasted_frequency") or 0.0)
+
+    return [
+        (b1, csv1, freq_from_demand(b1, csv_by_block.get(b1)), csv_source_label),
+        (b2, csv2, freq_from_demand(b2, csv_by_block.get(b2)), csv_source_label),
+    ]
+
+
+def resolve_session_merge_ops_api_only(
+    session_id: int,
+    api_by_block: Dict[int, Dict[str, Any]],
+    api_source_label: str,
+) -> Optional[List[SessionMergeOp]]:
+    """Auto mode: both blocks in the session must have RTM API forecast."""
+    b1, b2 = session_to_time_blocks(session_id)
+    api1, api2 = api_by_block.get(b1), api_by_block.get(b2)
+    if api1 is None or api2 is None:
+        return None
+    return [
+        (b1, float(api1.get("forecast") or 0.0), float(api1.get("forecasted_frequency") or 0.0), api_source_label),
+        (b2, float(api2.get("forecast") or 0.0), float(api2.get("forecasted_frequency") or 0.0), api_source_label),
+    ]
+
+
+def session_has_complete_csv(
+    session_id: int,
+    csv_by_block: Dict[int, Dict[str, Any]],
+) -> bool:
+    b1, b2 = session_to_time_blocks(session_id)
+    return (
+        parse_csv_forecast_mw((csv_by_block.get(b1) or {}).get("forecast")) is not None
+        and parse_csv_forecast_mw((csv_by_block.get(b2) or {}).get("forecast")) is not None
+    )
