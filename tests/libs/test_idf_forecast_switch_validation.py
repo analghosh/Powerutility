@@ -1,15 +1,32 @@
 """Tests for Manual switch CSV validation."""
 
-from datetime import date
+from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from libs.helpers.idf_forecast_session import session_ids_from_block_through_96, session_to_time_blocks
 from libs.constants.idf_forecast import MANUAL_AUTO_FLIP_ACTIVE_SESSION_CSV_MESSAGE
+from libs.helpers.idf_forecast_session import (
+    session_has_csv_forecast_present,
+    session_ids_from_active_session_through_96,
+)
 from libs.helpers.idf_forecast_switch_validation import (
     MANUAL_SWITCH_ACTIVE_SESSION_INVALID_MESSAGE,
     MANUAL_SWITCH_BLOCKED_MESSAGE,
     active_session_csv_requires_auto_flip,
     validate_csv_coverage_for_manual_switch,
 )
+
+
+def test_session_ids_from_active_session_ist_plus_offset():
+    """Block 80 (~19:45 IST): current session 40, RTM active session 43."""
+    now = datetime(2026, 5, 25, 19, 52, tzinfo=ZoneInfo("Asia/Kolkata"))
+    assert session_ids_from_active_session_through_96(now) == list(range(43, 49))
+
+
+def test_session_has_csv_forecast_present():
+    csv_by_block = {9: {"forecast": 0}, 10: {"forecast": 100}}
+    assert session_has_csv_forecast_present(5, csv_by_block) is True
+    assert session_has_csv_forecast_present(6, csv_by_block) is False
 
 
 def test_active_session_csv_requires_auto_flip_when_incomplete():
@@ -36,7 +53,7 @@ def test_validate_csv_coverage_all_sessions_ok():
     ok, msg = validate_csv_coverage_for_manual_switch(
         {today: csv_docs},
         today,
-        current_block=10,
+        active_rtm_session_id=5,
         after_evening_cutover=False,
         include_tomorrow_forecast=False,
     )
@@ -54,7 +71,7 @@ def test_validate_csv_coverage_active_only_future_all_zero_allows_manual():
     ok, msg = validate_csv_coverage_for_manual_switch(
         {today: csv_docs},
         today,
-        current_block=10,
+        active_rtm_session_id=5,
         after_evening_cutover=False,
         include_tomorrow_forecast=False,
     )
@@ -73,7 +90,7 @@ def test_validate_csv_coverage_partial_csv_allows_manual():
     ok, msg = validate_csv_coverage_for_manual_switch(
         {today: csv_docs},
         today,
-        current_block=10,
+        active_rtm_session_id=5,
         after_evening_cutover=False,
         include_tomorrow_forecast=False,
     )
@@ -86,7 +103,7 @@ def test_validate_csv_coverage_all_sessions_missing_blocks_manual():
     ok, msg = validate_csv_coverage_for_manual_switch(
         {today: []},
         today,
-        current_block=10,
+        active_rtm_session_id=5,
         after_evening_cutover=False,
         include_tomorrow_forecast=False,
     )
@@ -103,7 +120,7 @@ def test_validate_csv_coverage_active_session_zero_blocks_manual():
     ok, msg = validate_csv_coverage_for_manual_switch(
         {today: csv_docs},
         today,
-        current_block=10,
+        active_rtm_session_id=5,
         after_evening_cutover=False,
         include_tomorrow_forecast=False,
     )
@@ -123,7 +140,7 @@ def test_validate_csv_coverage_active_invalid_future_valid_still_blocks():
     ok, msg = validate_csv_coverage_for_manual_switch(
         {today: csv_docs},
         today,
-        current_block=10,
+        active_rtm_session_id=5,
         after_evening_cutover=False,
         include_tomorrow_forecast=False,
     )
@@ -140,7 +157,7 @@ def test_validate_csv_coverage_only_zero_csv_blocks_manual():
     ok, msg = validate_csv_coverage_for_manual_switch(
         {today: csv_docs},
         today,
-        current_block=10,
+        active_rtm_session_id=5,
         after_evening_cutover=False,
         include_tomorrow_forecast=False,
     )

@@ -21,6 +21,24 @@ TOMORROW_FORECAST_START_HM: Tuple[int, int] = (12, 0)
 DEFAULT_CRON_TIMEZONE = "Asia/Kolkata"
 DEFAULT_MIN_AHEAD_BLOCKS = 5
 
+# Same offset as RTM bid lapse: active session is ahead of the current IST session.
+RTM_ACTIVE_SESSION_OFFSET = 3
+SESSIONS_PER_DAY = 48
+
+
+def ist_current_session_id(now_local: datetime) -> int:
+    """IST 30-minute session (1–48) for the clock time, not the 15-minute block index."""
+    total_minutes = now_local.hour * 60 + now_local.minute
+    return min(SESSIONS_PER_DAY, (total_minutes // 30) + 1)
+
+
+def rtm_active_session_id(
+    now_local: datetime,
+    offset: int = RTM_ACTIVE_SESSION_OFFSET,
+) -> int:
+    """RTM active session = IST current session + offset (aligned with bid lapse)."""
+    return min(SESSIONS_PER_DAY, ist_current_session_id(now_local) + offset)
+
 
 def get_rtm_timezone(tz_name: Optional[str] = None):
     name = tz_name or DEFAULT_CRON_TIMEZONE
@@ -56,24 +74,30 @@ def should_write_forecast_block(
     current_block: int,
     after_evening_cutover: bool = False,
     min_ahead_blocks: int = 0,
+    active_rtm_session_id: Optional[int] = None,
+    now_local: Optional[datetime] = None,
 ) -> bool:
     """
     Decide whether a time block should be written on this cron run.
 
     - Past dates: never write.
     - After evening cutover (22:30 IST): write all blocks 1–96 (delivery day is tomorrow only).
-    - Same day before cutover: active RTM session through block 96 (both blocks per
-      session, including the in-progress session even if its first block has passed).
+    - Same day before cutover: RTM active session (IST session + offset) through block 96.
     - Future dates (before cutover): write all blocks.
     """
+    _ = current_block, min_ahead_blocks
     if scheduled_date < today_ist:
         return False
     if after_evening_cutover:
         return True
     if scheduled_date == today_ist:
-        active_session_id = _time_block_to_session_id(int(current_block))
+        active_sid = active_rtm_session_id
+        if active_sid is None and now_local is not None:
+            active_sid = rtm_active_session_id(now_local)
+        if active_sid is None:
+            active_sid = _time_block_to_session_id(int(current_block))
         block_session_id = _time_block_to_session_id(int(time_block))
-        return block_session_id >= active_session_id
+        return block_session_id >= active_sid
     return True
 
 
@@ -89,11 +113,15 @@ def rtm_forecast_run_context(
     after_evening = is_after_evening_cutover(now_local)
     include_tomorrow = is_tomorrow_forecast_window(now_local)
     ahead = max(0, int(min_ahead_blocks if min_ahead_blocks is not None else DEFAULT_MIN_AHEAD_BLOCKS))
+    current_session_id = ist_current_session_id(now_local)
+    active_session_id = rtm_active_session_id(now_local)
     return {
         "tz": tz,
         "now_local": now_local,
         "today_ist": today_ist,
         "current_block": current_block,
+        "current_session_id": current_session_id,
+        "active_session_id": active_session_id,
         "after_evening_cutover": after_evening,
         "include_tomorrow_forecast": include_tomorrow,
         "min_ahead_blocks": ahead,
