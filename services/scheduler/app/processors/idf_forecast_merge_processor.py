@@ -3,9 +3,12 @@ Merges forecast_serve (rtm_forecast_api or csv) into demand_serve IDF records.
 Runs every 15 minutes; respects idf_forecast_switch in parameters collection.
 """
 
+import asyncio
 import logging
-from datetime import date, datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import date, datetime
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+from pymongo import UpdateOne
 
 from libs.constants.idf_forecast import (
     IDF_FORECAST_SWITCH_KEY,
@@ -13,9 +16,19 @@ from libs.constants.idf_forecast import (
     parse_switch_use_rtm_api,
     switch_para_value,
 )
+from libs.helpers.idf_forecast_session import (
+    block_has_resolvable_forecast,
+    demand_forecast_invalid,
+    first_writable_block,
+    index_forecast_docs,
+    resolve_session_merge_ops,
+    session_ids_from_block_through_96,
+    session_to_time_blocks,
+    time_block_to_session_id,
+    writable_blocks_for_date,
+)
 from libs.helpers.rtm_forecast_block_filter import (
     rtm_forecast_run_context,
-    should_write_forecast_block,
     target_scheduled_dates_for_rtm,
 )
 from libs.helpers.idf_forecast_audit import switch_change_audit_fields
@@ -268,59 +281,250 @@ class IdfForecastMergeProcessor(BaseProcessor):
         except Exception as audit_err:
             logger.warning("Failed to write IDF forecast switch audit log: %s", audit_err)
 
-    async def _get_rostering(
-        self, scheduled_at: datetime, time_block: int
-    ) -> float:
-        existing = await self.demand_repository.serve_collection.find_one(
-            {"scheduled_at": scheduled_at, "time_block": int(time_block), "type": "IDF"},
-            {"rostering": 1},
+    async def _flip_switch_to_auto(self, trigger: str, message: str) -> None:
+        before_doc = await self.parameter_repository.get_by_key(IDF_FORECAST_SWITCH_KEY)
+        previous_use_rtm = parse_switch_use_rtm_api((before_doc or {}).get("para_value"))
+        previous = {
+            "use_rtm_api": previous_use_rtm,
+            "active_source": (
+                FORECAST_SOURCE_RTM_API if previous_use_rtm else FORECAST_SOURCE_CSV
+            ),
+            "para_value": switch_para_value(previous_use_rtm),
+            "para_key": IDF_FORECAST_SWITCH_KEY,
+        }
+        await self.parameter_repository.upsert_by_key(IDF_FORECAST_SWITCH_KEY, "true")
+        new_state = {
+            "use_rtm_api": True,
+            "active_source": FORECAST_SOURCE_RTM_API,
+            "para_value": "true",
+            "para_key": IDF_FORECAST_SWITCH_KEY,
+        }
+        logger.info("%s — idf_forecast_switch set to Auto (API)", message)
+        self._audit_switch_change(
+            action="idf_forecast_switch_auto_fallback",
+            message=message,
+            previous=previous,
+            new_state=new_state,
+            extra={
+                "changed_by": "system",
+                "change_source": "scheduler",
+                "trigger": trigger,
+            },
         )
-        if existing and existing.get("rostering") is not None:
-            return float(existing.get("rostering") or 0.0)
-        return 0.0
 
-    async def _merge_block(
-        self,
+    async def _load_demand_idf_by_block(
+        self, scheduled_at: datetime
+    ) -> Dict[int, Dict[str, Any]]:
+        cursor = self.demand_repository.serve_collection.find(
+            {"scheduled_at": scheduled_at, "type": "IDF"},
+            {"time_block": 1, "forecast": 1, "rostering": 1, "forecasted_frequency": 1},
+        )
+        docs = await cursor.to_list(length=200)
+        return {
+            int(doc["time_block"]): doc
+            for doc in docs
+            if doc.get("time_block") is not None
+        }
+
+    @staticmethod
+    def _build_merge_update_op(
         scheduled_at: datetime,
         time_block: int,
         forecast_mw: float,
         forecasted_frequency: float,
         source_forecast: str,
-        use_rtm_api: bool,
-    ) -> bool:
-        now = datetime.now()
-        rostering = await self._get_rostering(scheduled_at, time_block)
+        demand_by_block: Dict[int, Dict[str, Any]],
+        now: datetime,
+    ) -> UpdateOne:
+        rostering = float(
+            (demand_by_block.get(time_block) or {}).get("rostering") or 0.0
+        )
         comp_act_demand = forecast_mw + rostering
-        comp_udm = forecast_mw
-
         filter_doc = {
             "scheduled_at": scheduled_at,
             "time_block": int(time_block),
             "type": "IDF",
         }
-        update_doc = {
-            "$set": {
-                "scheduled_at": scheduled_at,
-                "time_block": int(time_block),
-                "type": "IDF",
-                "forecast": forecast_mw,
-                "forecasted_frequency": forecasted_frequency,
-                "comp_act_demand": comp_act_demand,
-                "comp_udm": comp_udm,
-                "source_forecast": source_forecast,
-                "updated_at": now,
-                "timestamp": now,
+        return UpdateOne(
+            filter_doc,
+            {
+                "$set": {
+                    "scheduled_at": scheduled_at,
+                    "time_block": int(time_block),
+                    "type": "IDF",
+                    "forecast": forecast_mw,
+                    "forecasted_frequency": forecasted_frequency,
+                    "comp_act_demand": comp_act_demand,
+                    "comp_udm": forecast_mw,
+                    "source_forecast": source_forecast,
+                    "updated_at": now,
+                    "timestamp": now,
+                },
+                "$setOnInsert": {
+                    "inserted_at": now,
+                    "created_at": now,
+                    "system_revision_number": 1,
+                },
             },
-            "$setOnInsert": {
-                "inserted_at": now,
-                "created_at": now,
-                "system_revision_number": 1,
-            },
-        }
-        result = await self.demand_repository.serve_collection.update_one(
-            filter_doc, update_doc, upsert=True
+            upsert=True,
         )
-        return bool(result.upserted_id or result.modified_count > 0)
+
+    async def _execute_bulk_merge(self, bulk_ops: List[UpdateOne]) -> int:
+        if not bulk_ops:
+            return 0
+        result = await self.demand_repository.serve_collection.bulk_write(
+            bulk_ops, ordered=False
+        )
+        return int(result.modified_count) + len(result.upserted_ids)
+
+    async def _manual_pre_checks_flip_auto(
+        self,
+        ctx: Dict[str, Any],
+        scheduled_date: date,
+        csv_by_block: Dict[int, Dict[str, Any]],
+        api_by_block: Dict[int, Dict[str, Any]],
+        demand_by_block: Dict[int, Dict[str, Any]],
+        writable_set: Set[int],
+    ) -> bool:
+        """Return True if switch was flipped to Auto."""
+        first_b = first_writable_block(ctx["current_block"], ctx["min_ahead_blocks"])
+        tail_blocks = [
+            b
+            for b in range(first_b, 97)
+            if b in writable_set
+        ]
+        if tail_blocks and not any(
+            block_has_resolvable_forecast(b, csv_by_block, api_by_block)
+            for b in tail_blocks
+        ):
+            await self._flip_switch_to_auto(
+                trigger="manual_gap_active_to_96",
+                message=(
+                    "No CSV/API forecast from active session through block 96; "
+                    "switching to Auto"
+                ),
+            )
+            return True
+
+        active_sid = time_block_to_session_id(ctx["current_block"])
+        b1, b2 = session_to_time_blocks(active_sid)
+        for block in (b1, b2):
+            row = demand_by_block.get(block)
+            if row is None or demand_forecast_invalid(row.get("forecast")):
+                await self._flip_switch_to_auto(
+                    trigger="active_session_demand_empty",
+                    message=(
+                        f"IDF demand empty/zero in active session {active_sid} "
+                        f"block {block}; switching to Auto"
+                    ),
+                )
+                return True
+        return False
+
+    async def _merge_delivery_day_manual(
+        self,
+        scheduled_at: datetime,
+        scheduled_date: date,
+        ctx: Dict[str, Any],
+        csv_by_block: Dict[int, Dict[str, Any]],
+        api_by_block: Dict[int, Dict[str, Any]],
+        demand_by_block: Dict[int, Dict[str, Any]],
+        writable_set: Set[int],
+    ) -> Tuple[int, int, int]:
+        merged = skipped = failed = 0
+        now = datetime.now()
+        bulk_ops: List[UpdateOne] = []
+        first_b = first_writable_block(ctx["current_block"], ctx["min_ahead_blocks"])
+
+        for session_id in session_ids_from_block_through_96(first_b):
+            ops = resolve_session_merge_ops(
+                session_id,
+                csv_by_block,
+                api_by_block,
+                demand_by_block,
+                FORECAST_SOURCE_CSV,
+                RTM_SOURCE_FORECAST,
+            )
+            if not ops:
+                b1, b2 = session_to_time_blocks(session_id)
+                for b in (b1, b2):
+                    if b in writable_set:
+                        skipped += 1
+                continue
+
+            for time_block, forecast_mw, freq, source_label in ops:
+                if time_block not in writable_set:
+                    continue
+                try:
+                    bulk_ops.append(
+                        self._build_merge_update_op(
+                            scheduled_at,
+                            time_block,
+                            forecast_mw,
+                            freq,
+                            source_label,
+                            demand_by_block,
+                            now,
+                        )
+                    )
+                except Exception as block_err:
+                    failed += 1
+                    logger.warning(
+                        "Merge op build failed scheduled_at=%s block=%s: %s",
+                        scheduled_at,
+                        time_block,
+                        block_err,
+                    )
+
+        try:
+            merged = await self._execute_bulk_merge(bulk_ops)
+        except Exception as bulk_err:
+            logger.error("bulk_write failed for %s: %s", scheduled_at, bulk_err)
+            failed += len(bulk_ops)
+        return merged, skipped, failed
+
+    async def _merge_delivery_day_auto(
+        self,
+        scheduled_at: datetime,
+        scheduled_date: date,
+        ctx: Dict[str, Any],
+        api_by_block: Dict[int, Dict[str, Any]],
+        demand_by_block: Dict[int, Dict[str, Any]],
+        writable_set: Set[int],
+    ) -> Tuple[int, int, int]:
+        merged = skipped = failed = 0
+        now = datetime.now()
+        bulk_ops: List[UpdateOne] = []
+
+        for time_block in sorted(writable_set):
+            doc = api_by_block.get(time_block)
+            if not doc:
+                skipped += 1
+                continue
+            try:
+                bulk_ops.append(
+                    self._build_merge_update_op(
+                        scheduled_at,
+                        time_block,
+                        float(doc.get("forecast") or 0.0),
+                        float(doc.get("forecasted_frequency") or 0.0),
+                        RTM_SOURCE_FORECAST,
+                        demand_by_block,
+                        now,
+                    )
+                )
+            except Exception as block_err:
+                failed += 1
+                logger.warning(
+                    "API merge op failed block=%s: %s", time_block, block_err
+                )
+
+        try:
+            merged = await self._execute_bulk_merge(bulk_ops)
+        except Exception as bulk_err:
+            logger.error("bulk_write API failed for %s: %s", scheduled_at, bulk_err)
+            failed += len(bulk_ops)
+        return merged, skipped, failed
 
     async def run_merge(self) -> Tuple[int, int, int]:
         tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
@@ -333,8 +537,7 @@ class IdfForecastMergeProcessor(BaseProcessor):
 
         await self._maybe_reset_switch_for_new_day(today_ist)
         use_rtm_api = await self._get_use_rtm_api()
-        active_source = FORECAST_SOURCE_RTM_API if use_rtm_api else FORECAST_SOURCE_CSV
-        source_forecast_label = RTM_SOURCE_FORECAST if use_rtm_api else FORECAST_SOURCE_CSV
+        switch_flipped = False
 
         target_dates = target_scheduled_dates_for_rtm(
             today_ist,
@@ -346,77 +549,74 @@ class IdfForecastMergeProcessor(BaseProcessor):
 
         for target_date in target_dates:
             scheduled_at = self._scheduled_at_midnight(target_date)
-            docs = await self.forecast_repository.find_by_scheduled_at_and_source(
-                scheduled_at, active_source
+            scheduled_date = scheduled_at.date()
+            writable_list = writable_blocks_for_date(
+                scheduled_date,
+                today_ist,
+                ctx["current_block"],
+                ctx["after_evening_cutover"],
+                ctx["min_ahead_blocks"],
             )
+            writable_set: Set[int] = set(writable_list)
 
-            for doc in docs:
-                try:
-                    tb = doc.get("time_block")
-                    if tb is None:
-                        skipped += 1
-                        continue
-                    time_block = int(tb)
-                    scheduled_date = scheduled_at.date()
+            csv_docs, api_docs, demand_by_block = await asyncio.gather(
+                self.forecast_repository.find_by_scheduled_at_and_source(
+                    scheduled_at, FORECAST_SOURCE_CSV
+                ),
+                self.forecast_repository.find_by_scheduled_at_and_source(
+                    scheduled_at, FORECAST_SOURCE_RTM_API
+                ),
+                self._load_demand_idf_by_block(scheduled_at),
+            )
+            csv_by_block = index_forecast_docs(csv_docs)
+            api_by_block = index_forecast_docs(api_docs)
 
-                    if not should_write_forecast_block(
-                        scheduled_date,
-                        time_block,
-                        today_ist,
-                        ctx["current_block"],
-                        after_evening_cutover=ctx["after_evening_cutover"],
-                        min_ahead_blocks=ctx["min_ahead_blocks"],
-                    ):
-                        skipped += 1
-                        continue
+            if not use_rtm_api:
+                if await self._manual_pre_checks_flip_auto(
+                    ctx,
+                    scheduled_date,
+                    csv_by_block,
+                    api_by_block,
+                    demand_by_block,
+                    writable_set,
+                ):
+                    use_rtm_api = True
+                    switch_flipped = True
 
-                    if use_rtm_api:
-                        forecast_mw = float(doc.get("forecast") or 0.0)
-                        forecasted_frequency = float(doc.get("forecasted_frequency") or 0.0)
-                    else:
-                        forecast_mw = self._parse_csv_forecast_mw(doc.get("forecast"))
-                        if forecast_mw is None:
-                            skipped += 1
-                            continue
-                        existing = await self.demand_repository.serve_collection.find_one(
-                            {
-                                "scheduled_at": scheduled_at,
-                                "time_block": time_block,
-                                "type": "IDF",
-                            },
-                            {"forecasted_frequency": 1},
-                        )
-                        forecasted_frequency = float(
-                            (existing or {}).get("forecasted_frequency") or 0.0
-                        )
+            if use_rtm_api:
+                m, s, f = await self._merge_delivery_day_auto(
+                    scheduled_at,
+                    scheduled_date,
+                    ctx,
+                    api_by_block,
+                    demand_by_block,
+                    writable_set,
+                )
+            else:
+                m, s, f = await self._merge_delivery_day_manual(
+                    scheduled_at,
+                    scheduled_date,
+                    ctx,
+                    csv_by_block,
+                    api_by_block,
+                    demand_by_block,
+                    writable_set,
+                )
+            merged += m
+            skipped += s
+            failed += f
 
-                    ok = await self._merge_block(
-                        scheduled_at,
-                        time_block,
-                        forecast_mw,
-                        forecasted_frequency,
-                        source_forecast_label,
-                        use_rtm_api,
-                    )
-                    if ok:
-                        merged += 1
-                    else:
-                        skipped += 1
-                except Exception as block_err:
-                    failed += 1
-                    logger.warning(
-                        "Merge failed scheduled_at=%s block=%s: %s",
-                        scheduled_at,
-                        doc.get("time_block"),
-                        block_err,
-                    )
-
+        active_source = (
+            FORECAST_SOURCE_RTM_API if use_rtm_api else FORECAST_SOURCE_CSV
+        )
         logger.info(
-            "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d",
+            "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d "
+            "switch_flipped=%s",
             active_source,
             merged,
             skipped,
             failed,
+            switch_flipped,
         )
         return merged, skipped, failed
 
