@@ -265,11 +265,15 @@ class AuthController:
         try:
             # Extract request info for audit
             request_info = self._extract_request_info(request)
-            
+
+            from services.auth.app.services.jwt_service import jwt_service
+            token_info = jwt_service.get_user_session_info(access_token) or {}
+
             # Attempt logout
             self.audit_logger.log_user_action(
                 service="auth",
-                user_id=self._extract_session_id(access_token),
+                user_id=token_info.get("user_id") or self._extract_session_id(access_token) or "unknown",
+                username=token_info.get("username"),
                 action="Log Out",
                 message="User logged out",
                 client_ip=request_info.get("ip_address"),

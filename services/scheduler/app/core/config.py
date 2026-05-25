@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     SERVICE_PORT: int = 8004
     SERVICE_HOST: str = "0.0.0.0"
     DEBUG: bool = False
+    ENABLE_SWAGGER: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     DEDUPLICATION_ONLY: bool = True
@@ -173,7 +174,16 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 20
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
-    
+
+    # RabbitMQ Configuration
+    RABBITMQ_HOST: str = "127.0.0.1"
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = "guest"
+    RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"
+    USE_RABBITMQ_JOBS: bool = True
+    USE_RABBITMQ_AUDIT: bool = False
+
     # CORS Configuration
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
     CORS_ALLOW_CREDENTIALS: bool = True
