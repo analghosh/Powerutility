@@ -4,6 +4,7 @@ Unit tests for IdfForecastMergeProcessor.
 
 from datetime import date, datetime
 from unittest.mock import AsyncMock, MagicMock, patch
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -43,6 +44,23 @@ def _bulk_result(modified=1, upserted=0):
     return r
 
 
+def _merge_test_ctx(today: date, current_block: int = 10) -> dict:
+    """IST ~00:50 -> current session 2, RTM active session 5 (blocks 9-10)."""
+    now_local = datetime(
+        today.year, today.month, today.day, 0, 50, tzinfo=ZoneInfo("Asia/Kolkata")
+    )
+    return {
+        "today_ist": today,
+        "current_block": current_block,
+        "now_local": now_local,
+        "current_session_id": 2,
+        "active_session_id": 5,
+        "after_evening_cutover": False,
+        "min_ahead_blocks": 5,
+        "include_tomorrow_forecast": False,
+    }
+
+
 @pytest.mark.asyncio
 async def test_midnight_reset_sets_switch_true(processor):
     today = date(2026, 5, 16)
@@ -72,13 +90,7 @@ async def test_csv_forecast_zero_invalid(processor):
 async def test_run_merge_api_mode_applies_block_filter(processor):
     today = date(2026, 5, 15)
     scheduled_at = datetime(2026, 5, 15)
-    ctx = {
-        "today_ist": today,
-        "current_block": 10,
-        "after_evening_cutover": False,
-        "min_ahead_blocks": 5,
-        "include_tomorrow_forecast": False,
-    }
+    ctx = _merge_test_ctx(today)
 
     processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
     processor.parameter_repository.get_by_key = AsyncMock(
@@ -92,8 +104,8 @@ async def test_run_merge_api_mode_applies_block_filter(processor):
     async def find_forecast(scheduled_at, source):
         if source == FORECAST_SOURCE_RTM_API:
             return [
-                {"time_block": 5, "forecast": 100.0, "forecasted_frequency": 49.0},
-                {"time_block": 20, "forecast": 200.0, "forecasted_frequency": 50.0},
+                {"time_block": 9, "forecast": 100.0, "forecasted_frequency": 49.0},
+                {"time_block": 10, "forecast": 200.0, "forecasted_frequency": 50.0},
             ]
         return []
 
@@ -104,7 +116,7 @@ async def test_run_merge_api_mode_applies_block_filter(processor):
         return_value=_mock_demand_cursor([])
     )
     processor.demand_repository.serve_collection.bulk_write = AsyncMock(
-        return_value=_bulk_result(modified=1)
+        return_value=_bulk_result(modified=2)
     )
 
     with patch(
@@ -117,28 +129,19 @@ async def test_run_merge_api_mode_applies_block_filter(processor):
         merged, skipped, failed = await processor.run_merge()
 
     assert failed == 0
-    assert merged == 1
-    # Writable blocks 9–96 (88 total); only block 20 has API data.
-    assert skipped == 87
+    assert merged == 2
     processor.demand_repository.serve_collection.bulk_write.assert_called_once()
     ops = processor.demand_repository.serve_collection.bulk_write.call_args[0][0]
-    written_blocks = [op._filter["time_block"] for op in ops]
-    assert 5 not in written_blocks
-    assert 20 in written_blocks
+    written_blocks = sorted(op._filter["time_block"] for op in ops)
+    assert written_blocks == [9, 10]
 
 
 @pytest.mark.asyncio
 async def test_run_merge_csv_session_writes_zero_when_csv_missing(processor):
-    """Manual mode: incomplete CSV in a session writes 0 MW (no API fallback)."""
+    """Manual mode: session pair with CSV present updates both blocks (0 MW if missing)."""
     today = date(2026, 5, 15)
     scheduled_at = datetime(2026, 5, 15)
-    ctx = {
-        "today_ist": today,
-        "current_block": 10,
-        "after_evening_cutover": False,
-        "min_ahead_blocks": 5,
-        "include_tomorrow_forecast": False,
-    }
+    ctx = _merge_test_ctx(today)
 
     processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
     processor.parameter_repository.get_by_key = AsyncMock(
@@ -174,7 +177,7 @@ async def test_run_merge_csv_session_writes_zero_when_csv_missing(processor):
         )
     )
     processor.demand_repository.serve_collection.bulk_write = AsyncMock(
-        return_value=_bulk_result(modified=2)
+        return_value=_bulk_result(modified=6)
     )
 
     with patch(
@@ -187,14 +190,20 @@ async def test_run_merge_csv_session_writes_zero_when_csv_missing(processor):
         merged, skipped, failed = await processor.run_merge()
 
     assert failed == 0
-    assert merged == 2
+    assert merged == 6
     ops = processor.demand_repository.serve_collection.bulk_write.call_args[0][0]
-    assert len(ops) == 2
+    assert len(ops) == 6
     for op in ops:
         assert op._doc["$set"]["source_forecast"] == FORECAST_SOURCE_CSV
-        assert op._doc["$set"]["forecast"] == 0.0
     blocks = sorted(op._filter["time_block"] for op in ops)
-    assert blocks == [19, 20]
+    assert blocks == [9, 10, 19, 20, 21, 22]
+    by_block = {op._filter["time_block"]: op._doc["$set"]["forecast"] for op in ops}
+    assert by_block[9] == 100.0
+    assert by_block[10] == 101.0
+    assert by_block[19] == 0.0
+    assert by_block[20] == 0.0
+    assert by_block[21] == 150.0
+    assert by_block[22] == 0.0
 
 
 @pytest.mark.asyncio
@@ -207,13 +216,7 @@ async def test_run_merge_manual_active_session_csv_empty_flips_auto(processor):
     )
 
     today = date(2026, 5, 15)
-    ctx = {
-        "today_ist": today,
-        "current_block": 10,
-        "after_evening_cutover": False,
-        "min_ahead_blocks": 5,
-        "include_tomorrow_forecast": False,
-    }
+    ctx = _merge_test_ctx(today)
 
     processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
     processor.parameter_repository.get_by_key = AsyncMock(
@@ -254,13 +257,7 @@ async def test_run_merge_manual_active_session_csv_empty_flips_auto(processor):
 @pytest.mark.asyncio
 async def test_run_merge_manual_no_forecast_flips_auto(processor):
     today = date(2026, 5, 15)
-    ctx = {
-        "today_ist": today,
-        "current_block": 10,
-        "after_evening_cutover": False,
-        "min_ahead_blocks": 5,
-        "include_tomorrow_forecast": False,
-    }
+    ctx = _merge_test_ctx(today)
 
     processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
     processor.parameter_repository.get_by_key = AsyncMock(
@@ -293,3 +290,98 @@ async def test_run_merge_manual_no_forecast_flips_auto(processor):
     processor.parameter_repository.upsert_by_key.assert_any_call(
         IDF_FORECAST_SWITCH_KEY, "true"
     )
+
+
+@pytest.mark.asyncio
+async def test_auto_flip_defers_api_merge_until_next_run(processor):
+    """When auto-flip fires, parameter becomes Auto but this run stays on Manual merge."""
+    today = date(2026, 5, 15)
+    ctx = _merge_test_ctx(today)
+
+    processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
+    processor.parameter_repository.get_by_key = AsyncMock(
+        side_effect=lambda key: (
+            {"para_value": today.isoformat()}
+            if key == IDF_FORECAST_SWITCH_LAST_RESET_KEY
+            else {"para_value": "false"}
+        )
+    )
+    processor.parameter_repository.upsert_by_key = AsyncMock()
+    processor.forecast_repository.find_by_scheduled_at_and_source = AsyncMock(
+        return_value=[]
+    )
+    processor.demand_repository.serve_collection.find = MagicMock(
+        return_value=_mock_demand_cursor([])
+    )
+    processor.demand_repository.serve_collection.bulk_write = AsyncMock(
+        return_value=_bulk_result(modified=0)
+    )
+
+    with patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.rtm_forecast_run_context",
+        return_value=ctx,
+    ), patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.target_scheduled_dates_for_rtm",
+        return_value=[today],
+    ):
+        await processor.run_merge()
+
+    processor.parameter_repository.upsert_by_key.assert_any_call(
+        IDF_FORECAST_SWITCH_KEY, "true"
+    )
+    processor.demand_repository.serve_collection.bulk_write.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_auto_flip_not_triggered_for_secondary_delivery_date(processor):
+    """Empty CSV on tomorrow must not flip switch while today's primary date is still Manual."""
+    today = date(2026, 5, 15)
+    tomorrow = date(2026, 5, 16)
+    ctx = _merge_test_ctx(today)
+    ctx["include_tomorrow_forecast"] = True
+
+    processor.parameter_repository.ensure_idf_forecast_switch_default = AsyncMock()
+    processor.parameter_repository.get_by_key = AsyncMock(
+        side_effect=lambda key: (
+            {"para_value": today.isoformat()}
+            if key == IDF_FORECAST_SWITCH_LAST_RESET_KEY
+            else {"para_value": "false"}
+        )
+    )
+    processor.parameter_repository.upsert_by_key = AsyncMock()
+
+    async def find_forecast(scheduled_at, source):
+        if source != FORECAST_SOURCE_CSV:
+            return []
+        if scheduled_at.date() == today:
+            return [
+                {"time_block": 9, "forecast": 100.0},
+                {"time_block": 10, "forecast": 101.0},
+            ]
+        return []
+
+    processor.forecast_repository.find_by_scheduled_at_and_source = AsyncMock(
+        side_effect=find_forecast
+    )
+    processor.demand_repository.serve_collection.find = MagicMock(
+        return_value=_mock_demand_cursor([])
+    )
+    processor.demand_repository.serve_collection.bulk_write = AsyncMock(
+        return_value=_bulk_result(modified=2)
+    )
+
+    with patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.rtm_forecast_run_context",
+        return_value=ctx,
+    ), patch(
+        "services.scheduler.app.processors.idf_forecast_merge_processor.target_scheduled_dates_for_rtm",
+        return_value=[today, tomorrow],
+    ):
+        await processor.run_merge()
+
+    flip_calls = [
+        c
+        for c in processor.parameter_repository.upsert_by_key.call_args_list
+        if c[0][0] == IDF_FORECAST_SWITCH_KEY and c[0][1] == "true"
+    ]
+    assert flip_calls == []

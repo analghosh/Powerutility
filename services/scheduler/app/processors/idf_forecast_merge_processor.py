@@ -20,11 +20,11 @@ from libs.constants.idf_forecast import (
 )
 from libs.helpers.idf_forecast_switch_validation import active_session_csv_requires_auto_flip
 from libs.helpers.idf_forecast_session import (
-    first_writable_block,
     index_forecast_docs,
     resolve_session_merge_ops_api_only,
     resolve_session_merge_ops_csv_manual,
-    session_ids_from_block_through_96,
+    session_has_csv_forecast_present,
+    session_ids_from_active_session_through_96,
     session_to_time_blocks,
     time_block_to_session_id,
     writable_blocks_for_date,
@@ -398,6 +398,23 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
         return int(result.modified_count) + len(result.upserted_ids)
 
+    @staticmethod
+    def _is_primary_delivery_date_for_auto_flip(
+        scheduled_date: date,
+        ctx: Dict[str, Any],
+    ) -> bool:
+        """
+        Evaluate auto-flip only on the primary intraday delivery date (today before
+        22:30 IST, tomorrow after evening cutover) so a future day with empty CSV
+        does not flip the switch while today is still in Manual.
+        """
+        primary_dates = target_scheduled_dates_for_rtm(
+            ctx["today_ist"],
+            ctx["after_evening_cutover"],
+            ctx.get("include_tomorrow_forecast", False),
+        )
+        return bool(primary_dates) and scheduled_date == primary_dates[0]
+
     async def _manual_pre_checks_flip_auto(
         self,
         ctx: Dict[str, Any],
@@ -409,7 +426,9 @@ class IdfForecastMergeProcessor(BaseProcessor):
     ) -> bool:
         """Return True if switch was flipped to Auto (active session CSV zero/empty)."""
         _ = api_by_block, demand_by_block, writable_set
-        active_sid = time_block_to_session_id(ctx["current_block"])
+        if not self._is_primary_delivery_date_for_auto_flip(scheduled_date, ctx):
+            return False
+        active_sid = int(ctx["active_session_id"])
         should_flip, user_message = active_session_csv_requires_auto_flip(
             active_sid, csv_by_block
         )
@@ -438,9 +457,15 @@ class IdfForecastMergeProcessor(BaseProcessor):
         merged = skipped = failed = 0
         now = datetime.now()
         bulk_ops: List[UpdateOne] = []
-        first_b = first_writable_block(ctx["current_block"], ctx["min_ahead_blocks"])
 
-        for session_id in session_ids_from_block_through_96(first_b):
+        for session_id in session_ids_from_active_session_through_96(ctx["now_local"]):
+            if not session_has_csv_forecast_present(session_id, csv_by_block):
+                b1, b2 = session_to_time_blocks(session_id)
+                for block in (b1, b2):
+                    if block in writable_set:
+                        skipped += 1
+                continue
+
             ops = resolve_session_merge_ops_csv_manual(
                 session_id,
                 csv_by_block,
@@ -491,9 +516,8 @@ class IdfForecastMergeProcessor(BaseProcessor):
         merged = skipped = failed = 0
         now = datetime.now()
         bulk_ops: List[UpdateOne] = []
-        first_b = first_writable_block(ctx["current_block"], ctx["min_ahead_blocks"])
 
-        for session_id in session_ids_from_block_through_96(first_b):
+        for session_id in session_ids_from_active_session_through_96(ctx["now_local"]):
             ops = resolve_session_merge_ops_api_only(
                 session_id,
                 api_by_block,
@@ -544,7 +568,8 @@ class IdfForecastMergeProcessor(BaseProcessor):
         today_ist = ctx["today_ist"]
 
         await self._maybe_reset_switch_for_new_day(today_ist)
-        use_rtm_api = await self._get_use_rtm_api()
+        switch_prefers_api = await self._get_use_rtm_api()
+        api_merge_this_run = switch_prefers_api
         switch_flipped = False
 
         target_dates = target_scheduled_dates_for_rtm(
@@ -564,6 +589,8 @@ class IdfForecastMergeProcessor(BaseProcessor):
                 ctx["current_block"],
                 ctx["after_evening_cutover"],
                 ctx["min_ahead_blocks"],
+                int(ctx["active_session_id"]),
+                ctx.get("now_local"),
             )
             writable_set: Set[int] = set(writable_list)
 
@@ -579,7 +606,7 @@ class IdfForecastMergeProcessor(BaseProcessor):
             csv_by_block = index_forecast_docs(csv_docs)
             api_by_block = index_forecast_docs(api_docs)
 
-            if not use_rtm_api:
+            if not api_merge_this_run:
                 if await self._manual_pre_checks_flip_auto(
                     ctx,
                     scheduled_date,
@@ -588,10 +615,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
                     demand_by_block,
                     writable_set,
                 ):
-                    use_rtm_api = True
                     switch_flipped = True
+                    logger.info(
+                        "IDF forecast switch set to Auto; API merge deferred to next run"
+                    )
 
-            if use_rtm_api:
+            if api_merge_this_run:
                 m, s, f = await self._merge_delivery_day_auto(
                     scheduled_at,
                     scheduled_date,
@@ -614,17 +643,18 @@ class IdfForecastMergeProcessor(BaseProcessor):
             skipped += s
             failed += f
 
-        active_source = (
-            FORECAST_SOURCE_RTM_API if use_rtm_api else FORECAST_SOURCE_CSV
+        merge_source = (
+            FORECAST_SOURCE_RTM_API if api_merge_this_run else FORECAST_SOURCE_CSV
         )
         logger.info(
             "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d "
-            "switch_flipped=%s",
-            active_source,
+            "switch_flipped=%s switch_prefers_api=%s",
+            merge_source,
             merged,
             skipped,
             failed,
             switch_flipped,
+            switch_prefers_api or switch_flipped,
         )
         return merged, skipped, failed
 
