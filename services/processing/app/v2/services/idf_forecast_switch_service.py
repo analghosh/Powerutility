@@ -24,7 +24,7 @@ from ...core.config import settings
 from ...repository.idf_forecast_parameter_repository import (
     idf_forecast_parameter_repository,
 )
-from ...repository.forecast_serve_repository import forecast_serve_repository
+from ..repository.forecast_serve_repository import forecast_serve_repository
 
 logger = logging.getLogger(__name__)
 
