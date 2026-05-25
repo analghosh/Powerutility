@@ -110,10 +110,11 @@ def test_should_write_forecast_block_active_session_only_today():
     from libs.helpers.rtm_forecast_block_filter import should_write_forecast_block
 
     today = date(2026, 5, 15)
-    # current_block=10, min_ahead=5 -> target=15, next_block=16 -> blocks 16..96 only
+    # current_block=10 -> active session 5 (blocks 9-10); writable from session 5 through 96
+    assert should_write_forecast_block(today, 9, today, 10, False, 5) is True
+    assert should_write_forecast_block(today, 10, today, 10, False, 5) is True
+    assert should_write_forecast_block(today, 8, today, 10, False, 5) is False
     assert should_write_forecast_block(today, 16, today, 10, False, 5) is True
-    assert should_write_forecast_block(today, 15, today, 10, False, 5) is False
-    assert should_write_forecast_block(today, 1, today, 10, False, 5) is False
 
 
 def test_should_write_forecast_block_after_evening_cutover_all_blocks():
