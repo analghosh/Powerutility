@@ -2,6 +2,7 @@
 Limit Values Repository (main table operations)
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
@@ -70,9 +71,6 @@ class LimitValuesRepository:
         For each unique key (block, id, market, category, area), returns the record with the latest inserted_at.
         """
         try:
-            # Ensure indexes exist even on read-first scenarios
-            await self.ensure_collection_exists(collection_name)
-            
             pipeline = []
             
             # 1. Date matching stage
@@ -159,10 +157,8 @@ class LimitValuesRepository:
         Uses optimized pipeline for speed.
         """
         try:
-            # 0. Ensure indexes exist
             if date_filter and date_filter < datetime.now().strftime("%Y-%m-%d"):
                 collection_name = f"{collection_name}_historical"
-            await self.ensure_collection_exists(collection_name)
 
             base_pipeline = []
 
@@ -225,18 +221,17 @@ class LimitValuesRepository:
             # Even then, the grouping stage is the bottleneck.
             
             count_pipeline = base_pipeline + [{"$count": "total"}]
-            count_result = await self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
-            total = count_result[0]["total"] if count_result else 0
-
-            # 5. Main data pipeline
-            # We filter by block range directly on the matched documents.
-            # No grouping needed because of our unique index guarantees.
             data_pipeline = base_pipeline + [
                 {"$match": {"block": {"$gte": from_block, "$lte": to_block}}},
                 {"$sort": {"block": 1, "id": 1}}
             ]
-            
-            data = await self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
+
+            # 5. Run count and data pipelines in parallel
+            count_result, data = await asyncio.gather(
+                self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000),
+                self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000),
+            )
+            total = count_result[0]["total"] if count_result else 0
             
             # Pagination calculations
             page_size = to_block - from_block + 1

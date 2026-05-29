@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from typing import Dict, Any, Optional, List
 
@@ -10,19 +11,26 @@ class DAMBidCaptureProcessor:
     async def execute_block_capture_job(self, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Process queued DAM bid-capture tasks after submit-for-approval (one or many blocks).
+        All capture tasks run concurrently instead of sequentially.
         """
         captures: List[Dict[str, Any]] = (payload or {}).get("captures") or []
         if not captures:
             return {"status": "success", "processed": 0, "errors": []}
+
+        results = await asyncio.gather(
+            *[dam_bidding_services.apply_capture_task(task) for task in captures],
+            return_exceptions=True,
+        )
+
         errors: List[Dict[str, Any]] = []
         processed = 0
-        for i, task in enumerate(captures):
-            try:
-                await dam_bidding_services.apply_capture_task(task)
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                logger.error("DAM block capture task %s failed: %s", i, result, exc_info=result)
+                errors.append({"index": i, "error": str(result)})
+            else:
                 processed += 1
-            except Exception as exc:
-                logger.error("DAM block capture task %s failed: %s", i, exc, exc_info=True)
-                errors.append({"index": i, "error": str(exc)})
+
         return {
             "status": "success" if not errors else "partial",
             "processed": processed,

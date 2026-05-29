@@ -1467,14 +1467,22 @@ class DAMBiddingServices:
             rldc_revision_no = 1
 
         bid_block_no = int(blno[1]) if len(blno) > 1 else 0
-        existing_auto = await self.capture_serve_repo.find_one_by_schedule_dc_sg_bid_block_revision(
-            schedule_date, "SG", bid_block_no, revision_no
-        )
-        existing_manual = None
-        if manual_capture_bid:
-            existing_manual = await self.manual_capture_serve_repo.find_one_by_schedule_dc_sg_bid_block_revision(
+
+        # Check existing auto and manual capture records in parallel
+        manual_check_coro = (
+            self.manual_capture_serve_repo.find_one_by_schedule_dc_sg_bid_block_revision(
                 schedule_date, "SG", bid_block_no, revision_no
             )
+            if manual_capture_bid
+            else asyncio.sleep(0, result=None)
+        )
+        existing_auto, existing_manual = await asyncio.gather(
+            self.capture_serve_repo.find_one_by_schedule_dc_sg_bid_block_revision(
+                schedule_date, "SG", bid_block_no, revision_no
+            ),
+            manual_check_coro,
+        )
+
         should_insert_auto = existing_auto is None
         should_insert_manual = bool(manual_capture_bid and existing_manual is None)
         if not should_insert_auto and not should_insert_manual:
@@ -1491,21 +1499,32 @@ class DAMBiddingServices:
         capture_bid_revision_no = "NA" if is_1059_snapshot else revision_no
         capture_bid_session_no = "NA" if is_1059_snapshot else session_block
         capture_exchange_submission_flag = "NA" if is_1059_snapshot else "N"
+
+        # Fetch plant map and graph metrics in parallel (both are independent)
         plant_ids = [str(row.get("plant_id")) for row in serve_rows if row.get("plant_id")]
-        plant_map = await self.plants_list_repo.get_plants_map_by_ids(plant_ids)
-        graph_metrics = {}
-        try:
-            graph_response = await self.dam_single_bid_graph(schedule_date, bid_block_no, bid_block_no)
-            graph_rows = (graph_response or {}).get("data") or []
-            if graph_rows:
-                matched_row = next((r for r in graph_rows if int(r.get("time_block", 0)) == bid_block_no), graph_rows[0])
-                graph_metrics = {
-                    "supply_total": matched_row.get("supply_total"),
-                    "forecast": matched_row.get("forecast"),
-                    "surplus_deficit": matched_row.get("surplus_deficit"),
-                }
-        except Exception as graph_err:
-            logger.warning(f"Failed to fetch DAM single-bid-graph metrics for capture: {graph_err}")
+
+        async def _fetch_graph_metrics():
+            try:
+                graph_response = await self.dam_single_bid_graph(schedule_date, bid_block_no, bid_block_no)
+                graph_rows = (graph_response or {}).get("data") or []
+                if graph_rows:
+                    matched_row = next(
+                        (r for r in graph_rows if int(r.get("time_block", 0)) == bid_block_no),
+                        graph_rows[0],
+                    )
+                    return {
+                        "supply_total": matched_row.get("supply_total"),
+                        "forecast": matched_row.get("forecast"),
+                        "surplus_deficit": matched_row.get("surplus_deficit"),
+                    }
+            except Exception as graph_err:
+                logger.warning(f"Failed to fetch DAM single-bid-graph metrics for capture: {graph_err}")
+            return {}
+
+        plant_map, graph_metrics = await asyncio.gather(
+            self.plants_list_repo.get_plants_map_by_ids(plant_ids),
+            _fetch_graph_metrics(),
+        )
 
         capture_docs = []
         for row in serve_rows:
@@ -1588,10 +1607,14 @@ class DAMBiddingServices:
             }
             capture_docs.append(doc)
 
+        # Insert into auto and manual repos in parallel
+        insert_coros = []
         if capture_docs and should_insert_auto:
-            await self.capture_serve_repo.insert_many(capture_docs)
+            insert_coros.append(self.capture_serve_repo.insert_many(capture_docs))
         if capture_docs and should_insert_manual:
-            await self.manual_capture_serve_repo.insert_many(capture_docs)
+            insert_coros.append(self.manual_capture_serve_repo.insert_many(capture_docs))
+        if insert_coros:
+            await asyncio.gather(*insert_coros)
         return rldc_revision_no
 
     async def apply_capture_task(self, task: Dict[str, Any]) -> Optional[int]:
