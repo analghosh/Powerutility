@@ -310,10 +310,18 @@ class DAMTransactionService:
         )
         
         # 3. Fetch asset details and delivery date in parallel (both are independent)
-        asset_response, delivery_response = await asyncio.gather(
-            api_client.get_asset_details(bid_type="single-bid"),
-            api_client.get_delivery_dates(bid_type="single-bid"),
-        )
+        try:
+            asset_response, delivery_response = await asyncio.gather(
+                api_client.get_asset_details(bid_type="single-bid"),
+                api_client.get_delivery_dates(bid_type="single-bid"),
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Exchange API timed out fetching asset/delivery info.")
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach exchange API: {type(e).__name__}: {e}")
+
         asset_details_list = asset_response.get("AssetDetails", [])
         asset_details = asset_details_list[0] if asset_details_list else {}
         asset_id = asset_details.get("AssetId", "INDIA")
@@ -321,6 +329,8 @@ class DAMTransactionService:
         upperDPR = asset_details.get("UpperDPR", 10000)
         biddedQtyDecimal = asset_details.get("OrderQtyDecimal", 10)
         delivery_date = delivery_response.get("DeliveryDate", 0)
+        if not delivery_date:
+            raise HTTPException(status_code=502, detail="Exchange API returned no DeliveryDate.")
         
         delivery_dt = datetime.fromtimestamp(delivery_date, tz=timezone.utc)
         delivery_date_str = delivery_dt.strftime("%Y-%m-%d")
@@ -510,8 +520,12 @@ class DAMTransactionService:
         await asyncio.gather(*[_mark_doc_submitted(doc) for doc in aggregated_docs], return_exceptions=True)
 
         # 9. Get Bid Details
-        bid_details_response = await api_client.get_bid_details(transaction_id, delivery_date, bid_type="single-bid")
-        
+        try:
+            bid_details_response = await api_client.get_bid_details(transaction_id, delivery_date, bid_type="single-bid")
+        except Exception as e:
+            logger.warning(f"get_bid_details failed after DAM submission (TransactionId={transaction_id}): {e}")
+            bid_details_response = {}
+
         # Map API response to DB — all detail updates run in parallel
         single_bid_details = bid_details_response.get("SingleBidDetails", [])
         updated_at = datetime.now()
