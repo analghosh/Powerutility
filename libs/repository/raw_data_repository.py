@@ -115,8 +115,9 @@ class RawDataRepository(BaseRepository):
         try:
             asyncio.get_running_loop().create_task(_do_create())
         except RuntimeError:
-            pass
-    
+            # No running event loop — run synchronously (e.g. during sync startup/testing)
+            asyncio.run(_do_create())
+
     def _create_indexes(self):
         """Create necessary indexes for time series collection"""
         import asyncio
@@ -147,8 +148,8 @@ class RawDataRepository(BaseRepository):
         try:
             asyncio.get_running_loop().create_task(_do_create())
         except RuntimeError:
-            pass
-    
+            asyncio.run(_do_create())
+
     async def create_raw_data(self, entity: RawDataEntity) -> str:
         """
         Create raw data record in single collection
@@ -200,7 +201,6 @@ class RawDataRepository(BaseRepository):
 
             for record in records:
                 record["_id"] = str(record["_id"])
-                records.append(record)
             
             logger.info("Retrieved %d raw data records by IDs", len(records))
             return records

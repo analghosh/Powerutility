@@ -1292,7 +1292,7 @@ class DemandProcessor(BaseProcessor):
             time_block = self._safe_int(idf_raw_item.get("time_block"))
             
             # Find existing DAF record to preserve its fields (like forecast)
-            existing_daf = self.demand_repository.find_by_unique_key(
+            existing_daf = await self.demand_repository.find_by_unique_key(
                 scheduled_at=scheduled_at,
                 time_block=time_block,
                 type="DAF"
