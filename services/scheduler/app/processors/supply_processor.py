@@ -1785,7 +1785,7 @@ class SupplyProcessor(BaseProcessor):
         logger.info("=== EXECUTING SUPPLY DATA ARCHIVAL JOB ===")
         
         try:
-            archive_result = self.supply_repository.archive_old_supply_data()
+            archive_result = await self.supply_repository.archive_old_supply_data()
             
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()

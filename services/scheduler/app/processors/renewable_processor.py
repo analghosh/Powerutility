@@ -626,11 +626,9 @@ class RenewableProcessor(BaseProcessor):
             logger.info("Renewable archival: archive < %s, delete < %s", archive_cutoff, delete_cutoff)
 
             # 1. Find records to archive
-            cursor = self.renewable_repository.find_many({
+            archival_candidates = await self.renewable_repository.find_many({
                 "scheduled_at": {"$lt": datetime.combine(archive_cutoff, datetime.min.time())}
-            })
-            
-            archival_candidates = await cursor.to_list(length=10000)
+            }, limit=10000)
             
             if not archival_candidates:
                 logger.info("No renewable records found for archival")
@@ -646,12 +644,12 @@ class RenewableProcessor(BaseProcessor):
                     max_date = max(d["scheduled_at"] for d in archival_candidates)
                     
                     # Deduplication using Unique Key: scheduled_at, time_block, type, plant_id
-                    existing_hist_cursor = self.renewable_repository.find_historical_many({
+                    existing_hist_docs = await self.renewable_repository.find_historical_many({
                         "scheduled_at": {"$gte": min_date, "$lte": max_date}
                     })
-                    
+
                     existing_keys = set()
-                    for doc in existing_hist_cursor:
+                    for doc in existing_hist_docs:
                         key = (
                             doc.get("scheduled_at"),
                             doc.get("time_block"),

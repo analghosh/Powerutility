@@ -149,8 +149,8 @@ class RawDataService:
                 logger.info("Created processing status record: %s for raw_data_id: %s (collection: %s)", 
                            processing_status_id, document_id, status_repo.collection_name)
                 
-            except (ValueError, TypeError, OSError, RuntimeError) as status_error:
-                logger.error("Failed to create processing status record for raw_data_id %s: %s", 
+            except Exception as status_error:
+                logger.error("Failed to create processing status record for raw_data_id %s: %s",
                            document_id, status_error, exc_info=True)
                 # Continue even if status record creation fails - raw data is still stored
             
@@ -164,7 +164,7 @@ class RawDataService:
                 "total_records": len(raw_data)
             }
             
-        except (ValueError, TypeError, OSError, RuntimeError) as e:
+        except Exception as e:
             logger.error("Error processing raw data: %s", e, exc_info=True)
             return {
                 "success": False,
