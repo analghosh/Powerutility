@@ -328,18 +328,20 @@ class GridIndiaParser(BaseParser):
                             record["sg_beforelosses"] = float(val_bl)
                         except (ValueError, TypeError):
                             pass
-
+                logger.info("Onbar value for plant %s time_block %d: %s", plant_id, idx + 1, onbar_list[idx] if onbar_list and idx < len(onbar_list) else "N/A")
                 if onbar_list and idx < len(onbar_list) and onbar_list[idx] is not None:
                     try:
                         record["entire_shared_onbar_ent_amount"] = float(onbar_list[idx])
+                        logger.info("Added entire_shared_onbar_ent_amount for plant %s time_block %d: %f", plant_id, idx + 1, float(onbar_list[idx]))
                     except (ValueError, TypeError):
-                        pass
-
+                        logger.warning("Could not parse onbar value for plant %s time_block %d: %s", plant_id, idx + 1, onbar_list[idx])
+                logger.info("Offbar value for plant %s time_block %d: %s", plant_id, idx + 1, offbar_list[idx] if offbar_list and idx < len(offbar_list) else "N/A")
                 if offbar_list and idx < len(offbar_list) and offbar_list[idx] is not None:
                     try:
                         record["entire_shared_offbar_ent_amount"] = float(offbar_list[idx])
+                        logger.info("Added entire_shared_offbar_ent_amount for plant %s time_block %d: %f", plant_id, idx + 1, float(offbar_list[idx]))
                     except (ValueError, TypeError):
-                        pass
+                        logger.warning("Could not parse offbar value for plant %s time_block %d: %s", plant_id, idx + 1, offbar_list[idx])
 
                 raw_data_list.append(record)
 
