@@ -162,9 +162,14 @@ class JWTService:
         """Get user and session information from token"""
         payload = self.verify_access_token(token)
         if payload:
+            profile = payload.get("profile") or {}
+            first_name = profile.get("first_name", "")
+            last_name = profile.get("last_name", "")
+            full_name = f"{first_name} {last_name}".strip() or None
             return {
-                "user_id": payload.get("user_id"),
+                "user_id": payload.get("user_id") or payload.get("sub"),
                 "username": payload.get("username"),
+                "name": full_name,
                 "session_id": payload.get("session_id"),
                 "roles": payload.get("roles", []),
                 "permissions": payload.get("permissions", [])

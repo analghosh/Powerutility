@@ -395,15 +395,16 @@ async def logout(
             user_id=user_info.get("user_id", "unknown"),
             client_ip=client_ip,
             username=user_info.get("username", "unknown"),
+            name=user_info.get("name"),
             session_id=user_info.get("session_id"),
             user_agent=user_agent,
             success=True
         )
-        
+
         audit_logger.log_user_action(
                 service="auth",
                 user_id=user_info.get("user_id", "unknown"),
-                username=user_info.get("username"),
+                username=user_info.get("name") or user_info.get("username"),
                 action="logout",
                 message=f"User logged out: {user_info.get('username', 'unknown')}",
                 client_ip=client_ip,

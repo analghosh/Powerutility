@@ -164,14 +164,8 @@ class LimitWorkflowRepository:
     async def list_approvals(self, approval_collection: str, status: Optional[str] = None) -> List[Dict[str, Any]]:
         try:
             filt = {"status": status} if status else {}
-            cursor = self.repository.find(approval_collection, filt).sort("requested_at", -1)
-            if hasattr(cursor, 'close'):
-                try:
-                    return await cursor.to_list(length=10000)
-                finally:
-                    cursor.close()
-            else:
-                return await cursor.to_list(length=10000)
+            cursor = self.repository.db[approval_collection].find(filt).sort("requested_at", -1)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.exception(f"[LimitWorkflowRepository] list_approvals failed: {str(e)}")
             raise

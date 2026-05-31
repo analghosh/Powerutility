@@ -408,7 +408,7 @@ async def assign_roles_to_user(
         audit_logger.log_user_action( # audit_logger methods are sync (do not await)
             service="auth",
             user_id=current_user.user_id,
-            ip_address=request.client.host if request.client else None,
+            client_ip=request.client.host if request.client else None,
             action="assign_roles",
             message=f"Admin {current_user.user_id} updated roles for user {user.username}",
             target_user_id=user_id,
