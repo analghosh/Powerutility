@@ -205,8 +205,8 @@ app = FastAPI(
             "description": "❤️ Health check and service status endpoints"
         }
     ],
-    root_path=settings.BASE_PATH
 )
+
 
 # Configure security schemes for Swagger UI
 app.openapi_schema = None  # Reset to regenerate with security
@@ -228,9 +228,7 @@ def custom_openapi():
     base_path = settings.BASE_PATH
     environment = settings.ENVIRONMENT
     
-    # root_path is already set on the FastAPI app, so Swagger UI prepends it
-    # automatically. Only list the path-relative URL here to avoid doubling.
-    openapi_schema["servers"] = [{"url": "/api/v1", "description": "API v1"}]
+    openapi_schema["servers"] = [{"url": "/", "description": "API"}]
     
     # Add security schemes
     openapi_schema["components"]["securitySchemes"] = {
