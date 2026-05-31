@@ -162,22 +162,9 @@ def custom_openapi():
     # Add server URLs with base path for proper OpenAPI documentation
     base_path = settings.BASE_PATH
     environment = settings.ENVIRONMENT
-    servers = []
-    
-    # For server environments, add the full server URL with base path
-    if base_path:
-        servers.append({
-            "url": f"{base_path}/api/v1", 
-            "description": f"Server environment ({environment}) - Use this for server deployment"
-        })
-    
-    # Always add local development URL
-    servers.append({
-        "url": "/api/v1", 
-        "description": "Local development - Use this for local testing"
-    })
-    
-    openapi_schema["servers"] = servers
+    # root_path is already set on the FastAPI app, so Swagger UI prepends it
+    # automatically. Only list the path-relative URL here to avoid doubling.
+    openapi_schema["servers"] = [{"url": "/api/v1", "description": "API v1"}]
 
     # Add security scheme
     openapi_schema["components"]["securitySchemes"] = {

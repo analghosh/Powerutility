@@ -1033,13 +1033,18 @@ class LimitService:
 
     async def approve_all(self, user_ctx: Dict[str, Any], audit_logger: Optional[AuditLogger] = None) -> Dict[str, Any]:
         try:
+            import asyncio
             pending_approvals = await self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
             total_approvals = len(pending_approvals)
-            approved_count = 0
-            for approval in pending_approvals:
-                await self.approve(approval["_id"], user_ctx, audit_logger)
-                approved_count += 1
-            return {"total_pending": total_approvals, "total_approved": approved_count}
+            results = await asyncio.gather(
+                *[self.approve(approval["_id"], user_ctx, audit_logger) for approval in pending_approvals],
+                return_exceptions=True
+            )
+            approved_count = sum(1 for r in results if not isinstance(r, Exception))
+            failed = [str(r) for r in results if isinstance(r, Exception)]
+            if failed:
+                logger.warning(f"[LimitService] approve_all: {len(failed)} item(s) failed: {failed}")
+            return {"total_pending": total_approvals, "total_approved": approved_count, "failed": len(failed)}
         except Exception as e:
             logger.exception(f"[LimitService] approve_all failed: {str(e)}")
             raise
