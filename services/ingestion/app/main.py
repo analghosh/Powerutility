@@ -140,8 +140,8 @@ app = FastAPI(
             "description": "Provider CRUD operations and management",
         },
     ],
-    root_path=settings.BASE_PATH
 )
+
 
 # Configure security scheme for Bearer token authentication
 security = HTTPBearer(auto_error=False)
@@ -162,9 +162,7 @@ def custom_openapi():
     # Add server URLs with base path for proper OpenAPI documentation
     base_path = settings.BASE_PATH
     environment = settings.ENVIRONMENT
-    # root_path is already set on the FastAPI app, so Swagger UI prepends it
-    # automatically. Only list the path-relative URL here to avoid doubling.
-    openapi_schema["servers"] = [{"url": "/api/v1", "description": "API v1"}]
+    openapi_schema["servers"] = [{"url": "/", "description": "API"}]
 
     # Add security scheme
     openapi_schema["components"]["securitySchemes"] = {
