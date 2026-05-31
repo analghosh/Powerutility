@@ -31,7 +31,7 @@ class DataMigrationService:
         self.batch_size = settings.JOB_LOGS_MIGRATION_BATCH_SIZE
         self.migration_timeout = settings.JOB_LOGS_MIGRATION_TIMEOUT
     
-    def migrate_old_executions_to_historical(self) -> Dict[str, Any]:
+    async def migrate_old_executions_to_historical(self) -> Dict[str, Any]:
         """
         Migrate old execution logs from active to historical collection
         
@@ -47,7 +47,7 @@ class DataMigrationService:
             logger.info("Starting data migration from active to historical collection")
             
             # Get old executions for migration
-            old_executions = job_detail_repository.get_old_executions_for_migration(
+            old_executions = await job_detail_repository.get_old_executions_for_migration(
                 self.migration_threshold_days
             )
             
@@ -132,7 +132,7 @@ class DataMigrationService:
             logger.error("Failed to delete migrated executions: %s", str(e))
             return 0
     
-    def cleanup_old_historical_data(self) -> Dict[str, Any]:
+    async def cleanup_old_historical_data(self) -> Dict[str, Any]:
         """
         Clean up old historical data beyond retention period
         
@@ -184,7 +184,7 @@ class DataMigrationService:
                 "duration_seconds": time.time() - start_time
             }
     
-    def get_migration_status(self) -> Dict[str, Any]:
+    async def get_migration_status(self) -> Dict[str, Any]:
         """
         Get current migration status and statistics
         
@@ -193,11 +193,11 @@ class DataMigrationService:
         """
         try:
             # Get counts from both collections
-            active_count = job_detail_repository.get_execution_count()
+            active_count = await job_detail_repository.get_execution_count()
             historical_count = job_detail_repository.get_historical_data_count()
             
             # Get old data counts
-            old_active_count = len(job_detail_repository.get_old_executions_for_migration(
+            old_active_count = len(await job_detail_repository.get_old_executions_for_migration(
                 self.migration_threshold_days
             ))
             
@@ -236,7 +236,7 @@ class DataMigrationService:
                 }
             }
     
-    def run_full_data_lifecycle(self) -> Dict[str, Any]:
+    async def run_full_data_lifecycle(self) -> Dict[str, Any]:
         """
         Run complete data lifecycle management (migration + cleanup)
         
@@ -246,10 +246,10 @@ class DataMigrationService:
         logger.info("Starting full data lifecycle management")
         
         # Step 1: Migrate old data to historical
-        migration_result = self.migrate_old_executions_to_historical()
+        migration_result = await self.migrate_old_executions_to_historical()
         
         # Step 2: Clean up old historical data
-        cleanup_result = self.cleanup_old_historical_data()
+        cleanup_result = await self.cleanup_old_historical_data()
         
         # Combine results
         total_duration = migration_result.get("duration_seconds", 0) + cleanup_result.get("duration_seconds", 0)

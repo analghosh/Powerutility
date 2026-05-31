@@ -37,7 +37,7 @@ class BlockBidBookRepository(GenericRepository):
                 {"scheduled_at": scheduled_at},
                 sort=[("FromPeriodId", 1)],
             )
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             for doc in results:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
@@ -60,7 +60,7 @@ class BlockBidBookRepository(GenericRepository):
                 },
                 sort=[("FromPeriodId", 1)],
             )
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             for doc in results:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])

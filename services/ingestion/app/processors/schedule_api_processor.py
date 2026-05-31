@@ -54,7 +54,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
         
         # Record job start
-        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
         
         logger.info("Starting schedule API processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
         
@@ -71,7 +71,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                 }
                 if execution_id:
                     end_time = datetime.now()
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "error", False, execution_id, result, "No API configuration found"
                     )
@@ -89,7 +89,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                 }
                 if execution_id:
                     end_time = datetime.now()
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "error", False, execution_id, result, "Failed to fetch API data"
                     )
@@ -133,7 +133,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
             }
             
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "success", True, execution_id, result
                 )
@@ -151,7 +151,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
             result = {'status': 'error', 'error': str(e), 'execution_time': execution_time}
             
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, execution_id, result, str(e)
                 )
@@ -268,7 +268,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                             try:
                                 log_entity = IntegrationApiLogEntity(
                                     provider_id="schedule_api_provider",
-                                    raw_data=response,
+                                    raw_data=response_data,
                                     timestamp=datetime.now(),
                                     metadata={
                                         "url": url,
@@ -323,8 +323,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                 return 0
             
             client = get_mongo_client(self.mongo_uri, "schedule_supply_serve")
-            db = client[self.database_name]
-            collection = db["serve_dam_scheduling"]
+            collection = client[self.database_name]["serve_dam_scheduling"]
             
             current_time = datetime.now()
             stored_count = 0
@@ -360,7 +359,9 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1

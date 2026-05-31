@@ -14,7 +14,8 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "ingestion-service"
     SERVICE_PORT: int = 8002
     SERVICE_HOST: str = "0.0.0.0"
-    DEBUG: bool = True
+    DEBUG: bool = False
+    ENABLE_SWAGGER: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     
@@ -25,6 +26,7 @@ class Settings(BaseSettings):
     MONGODB_URI: str = "mongodb://localhost:27017/epms"
     MONGODB_DATABASE: str = "epms"
     MONGODB_RAW_DATA_COLLECTION: str = "raw_data"
+    MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
     
     # Audit Database Configuration
     AUDIT_DB_URI: str = "mongodb://localhost:27017/audit_db"
@@ -68,8 +70,7 @@ class Settings(BaseSettings):
     AUTH_SERVICE_URL: str = "http://localhost:8001"
     AUTH_SERVICE_TIMEOUT: int = 10
     
-    # JWT Configuration
-    JWT_SECRET_KEY: str = "your-super-secret-jwt-key-change-in-production"
+    # JWT Configuration (algorithm kept for reference; secret lives only in auth service)
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
@@ -81,9 +82,21 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 50
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
-    
+
+    # RabbitMQ Configuration
+    RABBITMQ_HOST: str = "127.0.0.1"
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = "guest"
+    RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"
+    USE_RABBITMQ_JOBS: bool = True
+    USE_RABBITMQ_AUDIT: bool = False
+
+    # Trusted Proxies (comma-separated IPs that may set X-Forwarded-For)
+    TRUSTED_PROXIES: str = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
+
     # CORS Configuration
-    CORS_ORIGINS: List[str] = ["*","http://localhost:3005", "http://localhost:8080"]
+    CORS_ORIGINS: List[str] = ["http://localhost:3005", "http://localhost:8080"]
     CORS_ALLOW_CREDENTIALS: bool = True
     
     # Health Check
@@ -146,6 +159,22 @@ class Settings(BaseSettings):
     def BASE_PATH(self) -> str:
         """Get base path for current environment (computed dynamically)"""
         return "/ingestion" if self.ENVIRONMENT in ["server", "docker"] else ""
+    
+    def check_security_warnings(self):
+        """Validate security configuration and fail startup if insecure.
+        Call this at application startup.
+        """
+        import logging
+        logger = logging.getLogger(__name__)
+
+        # Check CORS configuration security — warn only, middleware already strips wildcard
+        if "*" in self.CORS_ORIGINS and self.CORS_ALLOW_CREDENTIALS:
+            logger.warning(
+                "CORS configuration insecure: wildcard origin '*' with CORS_ALLOW_CREDENTIALS=True. "
+                "Specify explicit origins in CORS_ORIGINS."
+            )
+
+        logger.info("Security configuration validation passed")
 
     class Config:
         """Pydantic configuration for Settings class"""

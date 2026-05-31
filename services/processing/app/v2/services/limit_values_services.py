@@ -530,7 +530,7 @@ class LimitService:
                         raise ValueError(f"Item missing required unique key fields: {', '.join(missing_keys)}")
 
                     # A. Find the *previous* document
-                    previous_doc = self.flow_repo.find_one(self.approval_collection, filter_doc)
+                    previous_doc = await self.flow_repo.find_one(self.approval_collection, filter_doc)
                     
                     # We need to find the *data* from the previous doc
                     previous_value_data = None
@@ -569,7 +569,7 @@ class LimitService:
                     }
 
                     # C. Perform the upsert
-                    upsert_result = self.flow_repo.upsert_one(
+                    upsert_result = await self.flow_repo.upsert_one(
                         self.approval_collection,
                         filter_doc,  # Find by composite key
                         update_payload
@@ -604,7 +604,7 @@ class LimitService:
 
             # 4. Batch write all audit logs at once
             if audit_logs_to_write:
-                self.flow_repo.write_audit_many(self.audit_collection, audit_logs_to_write)
+                await self.flow_repo.write_audit_many(self.audit_collection, audit_logs_to_write)
             
             if audit_logger:
                 try:
@@ -649,7 +649,7 @@ class LimitService:
     
     async def stage_edit(self, approval_id: Any, items: List[Dict[str, Any]], user_ctx: Dict[str, Any]) -> Dict[str, Any]:
         try:
-            approval = self.flow_repo.get_approval(self.approval_collection, approval_id)
+            approval = await self.flow_repo.get_approval(self.approval_collection, approval_id)
             if not approval:
                 raise ValueError("Approval request not found")
             if approval["status"] != "PENDING" and approval["status"] != "REJECTED":
@@ -673,7 +673,7 @@ class LimitService:
                 "applied_upserts": approval.get("counts", {}).get("applied_upserts", 0),
                 "applied_deletes": approval.get("counts", {}).get("applied_deletes", 0),
             }
-            self.flow_repo.update_approval(
+            await self.flow_repo.update_approval(
                 self.approval_collection,
                 approval_id,
                 {
@@ -685,7 +685,7 @@ class LimitService:
                 }
             )
 
-            self.flow_repo.write_audit(self.audit_collection, {
+            await self.flow_repo.write_audit(self.audit_collection, {
                 "ts": now,
                 "actor_id": user_ctx.get("user_id", "anonymous"),
                 "actor_username": user_ctx.get("username", "anonymous"),
@@ -706,7 +706,7 @@ class LimitService:
     # --------- Pending list ---------
     async def list_pending(self, user_ctx: Dict[str, Any]) -> List[Dict[str, Any]]:
         try:
-            return self.flow_repo.list_approvals(self.approval_collection)
+            return await self.flow_repo.list_approvals(self.approval_collection)
         except Exception as e:
             logger.exception(f"[LimitService] list_pending failed: {str(e)}")
             raise
@@ -803,7 +803,7 @@ class LimitService:
         try:
             # 1. Get the single approval document
             # (Assuming self.flow_repo.get_approval is a find_one_by_id)
-            approval = self.flow_repo.get_approval(self.approval_collection, approval_id)
+            approval = await self.flow_repo.get_approval(self.approval_collection, approval_id)
             
             if not approval:
                 raise ValueError(f"Approval request '{approval_id}' not found")
@@ -884,7 +884,7 @@ class LimitService:
             logger.info(f"Built limit_values document for approval {approval_id}: {limit_values_doc}")
 
             # 6. Mark the approval document as "APPROVED"
-            self.flow_repo.update_approval(
+            await self.flow_repo.update_approval(
                 self.approval_collection,
                 approval["_id"],
                 {
@@ -898,7 +898,7 @@ class LimitService:
             )
 
             # 7. Write the "APPROVE" audit log
-            self.flow_repo.write_audit(self.audit_collection, {
+            await self.flow_repo.write_audit(self.audit_collection, {
                 "ts": now,
                 "actor_id": actor_id,
                 "actor_username": actor_username,
@@ -928,7 +928,7 @@ class LimitService:
                 logger.info(f"[UPSERT DEBUG] Attempting upsert with key: {key}")
                 logger.info(f"[UPSERT DEBUG] Update payload: {update_payload}")
                 
-                result = self.values_repo.repository.update_one(
+                result = await self.values_repo.repository.update_one(
                     self.values_collection,
                     key,  # Unique key without date
                     update_payload,
@@ -938,7 +938,7 @@ class LimitService:
                 logger.info(f"[UPSERT DEBUG] Upsert result - matched: {result.matched_count}, modified: {result.modified_count}, upserted_id: {result.upserted_id}")
 
                 # Write the "APPLY_UPSERT" audit log
-                self.flow_repo.write_audit(self.audit_collection, {
+                await self.flow_repo.write_audit(self.audit_collection, {
                     "ts": now,
                     "actor_id": actor_id,
                     "actor_username": actor_username,
@@ -954,7 +954,7 @@ class LimitService:
                 })
 
                 # Delete from approval collection
-                self.flow_repo.write_audit(self.audit_collection, {
+                await self.flow_repo.write_audit(self.audit_collection, {
                     "ts": now,
                     "actor_id": actor_id,
                     "actor_username": actor_username,
@@ -969,7 +969,7 @@ class LimitService:
                 })
 
                 logger.info(f"[LimitService] About to delete approved request: {approval['_id']}")
-                self.flow_repo.delete_approval(self.approval_collection, approval["_id"])
+                await self.flow_repo.delete_approval(self.approval_collection, approval["_id"])
                 logger.info(f"[LimitService] Successfully deleted approval: {approval['_id']}")
                 
                 if audit_logger:
@@ -1022,7 +1022,7 @@ class LimitService:
             logger.exception(f"[LimitService] approve failed for {approval_id}: {str(e)}")
             # Optionally, mark the item as FAILED
             try:
-                self.flow_repo.update_approval(
+                await self.flow_repo.update_approval(
                     self.approval_collection,
                     approval_id,
                     {"status": "FAILED", "error_message": str(e)}
@@ -1033,13 +1033,18 @@ class LimitService:
 
     async def approve_all(self, user_ctx: Dict[str, Any], audit_logger: Optional[AuditLogger] = None) -> Dict[str, Any]:
         try:
-            pending_approvals = self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
+            import asyncio
+            pending_approvals = await self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
             total_approvals = len(pending_approvals)
-            approved_count = 0
-            for approval in pending_approvals:
-                await self.approve(approval["_id"], user_ctx, audit_logger)
-                approved_count += 1
-            return {"total_pending": total_approvals, "total_approved": approved_count}
+            results = await asyncio.gather(
+                *[self.approve(approval["_id"], user_ctx, audit_logger) for approval in pending_approvals],
+                return_exceptions=True
+            )
+            approved_count = sum(1 for r in results if not isinstance(r, Exception))
+            failed = [str(r) for r in results if isinstance(r, Exception)]
+            if failed:
+                logger.warning(f"[LimitService] approve_all: {len(failed)} item(s) failed: {failed}")
+            return {"total_pending": total_approvals, "total_approved": approved_count, "failed": len(failed)}
         except Exception as e:
             logger.exception(f"[LimitService] approve_all failed: {str(e)}")
             raise
@@ -1061,7 +1066,7 @@ class LimitService:
 
             if not is_valid_oid:
                 logger.info(f"[LimitService] Treating {approval_id} as business ID")
-                pending = self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
+                pending = await self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
                 matches = [x for x in pending if str(x.get("id")) == str(approval_id)]
                 
                 logger.info(f"[LimitService] Found {len(matches)} matches for business ID {approval_id}")
@@ -1076,7 +1081,7 @@ class LimitService:
                 return {"message": f"Rejected {len(results)} items for ID {approval_id}", "details": results}
 
             logger.info(f"[LimitService] Fetching approval doc for {approval_id}")
-            approval = self.flow_repo.get_approval(self.approval_collection, approval_id)
+            approval = await self.flow_repo.get_approval(self.approval_collection, approval_id)
             if not approval:
                 logger.error(f"[LimitService] Approval request {approval_id} not found")
                 raise ValueError("Approval request not found")
@@ -1091,7 +1096,7 @@ class LimitService:
             # Ensure we are using the ObjectId from the document we just fetched
             doc_id = approval["_id"]
             
-            self.flow_repo.update_approval(
+            await self.flow_repo.update_approval(
                 self.approval_collection,
                 doc_id,
                 {
@@ -1104,7 +1109,7 @@ class LimitService:
             )
             logger.info(f"[LimitService] Updated approval {doc_id} status to REJECTED")
 
-            self.flow_repo.write_audit(self.audit_collection, {
+            await self.flow_repo.write_audit(self.audit_collection, {
                 "ts": now,
                 "actor_id": approver_ctx.get("user_id", "approver"),
                 "actor_username": approver_ctx.get("username", "approver"),
@@ -1139,7 +1144,7 @@ class LimitService:
     async def reject_all(self, user_ctx: Dict[str, Any], reason: Optional[str], audit_logger: Optional[AuditLogger] = None) -> Dict[str, Any]:
         try:
             logger.info("[LimitService] reject_all called")
-            pending_approvals = self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
+            pending_approvals = await self.flow_repo.list_approvals(self.approval_collection, status="PENDING")
             total_approvals = len(pending_approvals)
             logger.info(f"[LimitService] Found {total_approvals} pending approvals to reject")
             
@@ -1179,7 +1184,7 @@ class LimitService:
             
             # Try to find existing record
             try:
-                existing_record = self.values_repo.repository.find_one(
+                existing_record = await self.values_repo.repository.find_one(
                     self.values_collection, business_key
                 )
                 if existing_record:
@@ -1230,10 +1235,10 @@ class LimitService:
             }
             
             # Create approval request
-            approval_id = self.flow_repo.create_approval(self.approval_collection, approval_doc)
-            
+            approval_id = await self.flow_repo.create_approval(self.approval_collection, approval_doc)
+
             # Write audit log
-            self.flow_repo.write_audit(self.audit_collection, {
+            await self.flow_repo.write_audit(self.audit_collection, {
                 "ts": now,
                 "actor_id": user_ctx.get("user_id", "anonymous"),
                 "actor_username": user_ctx.get("username", "anonymous"),
@@ -1317,7 +1322,7 @@ class LimitService:
                     business_key = _business_key(normalized_item)
                     current_values = None
                     try:
-                        existing_record = self.values_repo.repository.find_one(
+                        existing_record = await self.values_repo.repository.find_one(
                             self.values_collection, business_key
                         )
                         if existing_record:
@@ -1367,10 +1372,10 @@ class LimitService:
                         "created_by": user_ctx.get("user_id", "anonymous"),
                     }
                     
-                    approval_id = self.flow_repo.create_approval(self.approval_collection, approval_doc)
-                    
+                    approval_id = await self.flow_repo.create_approval(self.approval_collection, approval_doc)
+
                     # Audit log for each item
-                    self.flow_repo.write_audit(self.audit_collection, {
+                    await self.flow_repo.write_audit(self.audit_collection, {
                         "ts": now,
                         "actor_id": user_ctx.get("user_id", "anonymous"),
                         "actor_username": user_ctx.get("username", "anonymous"),

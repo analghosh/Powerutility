@@ -36,7 +36,7 @@ class WeatherProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -80,7 +80,7 @@ class WeatherProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -111,7 +111,7 @@ class WeatherProcessor(BaseProcessor):
                 "cron_job":"weather"
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -134,9 +134,9 @@ class WeatherProcessor(BaseProcessor):
 
 # In your WeatherProcessor class
 
-    def process_raw_data_to_serve(
-        self, 
-        raw_data: List[Dict[str, Any]], 
+    async def process_raw_data_to_serve(
+        self,
+        raw_data: List[Dict[str, Any]],
         metadata: Dict[str, Any],
         provider_config: Dict[str, Any]
     ) -> bool:
@@ -172,10 +172,10 @@ class WeatherProcessor(BaseProcessor):
                         continue
 
                     # Find an existing record to check if data has changed
-                    existing_record = self.repository.find_one({
-                        "valid_time_local": valid_time_local, 
+                    existing_record = await self.repository.find_one({
+                        "valid_time_local": valid_time_local,
                         "source": source,
-                        "city": city 
+                        "city": city
                     })
 
                     weather_entity = WeatherServeEntity.from_raw_data(
@@ -216,7 +216,7 @@ class WeatherProcessor(BaseProcessor):
                     
                     # CRITICAL FIX: Delete ALL existing records for this timestamp and source
                     # This prevents any possibility of duplicates.
-                    delete_count = self.repository.delete_by_time_and_source(valid_time_local, source,city)
+                    delete_count = await self.repository.delete_by_time_and_source(valid_time_local, source,city)
                     if delete_count > 0:
                         logger.debug(f"Deleted {delete_count} old record(s) for {valid_time_local}")
 
@@ -239,7 +239,7 @@ class WeatherProcessor(BaseProcessor):
             serve_success = True
             if weather_entities_to_save:
                 try:
-                    inserted_count = self.repository.bulk_insert(weather_entities_to_save)
+                    inserted_count = await self.repository.bulk_insert(weather_entities_to_save)
                     logger.info("Successfully inserted/updated %d records in the serve collection.", inserted_count)
                 except Exception as e:
                     logger.error("Error during bulk insert to serve collection: %s", str(e))
@@ -248,7 +248,8 @@ class WeatherProcessor(BaseProcessor):
             historical_success = True
             if historical_entities_to_save:
                 try:
-                    inserted_count = self.repository.bulk_insert_historical(historical_entities_to_save)
+                    inserted_ids = await self.repository.bulk_insert_historical(historical_entities_to_save)
+                    inserted_count = len(inserted_ids) if isinstance(inserted_ids, list) else (inserted_ids if isinstance(inserted_ids, int) else 0)
                     logger.info("Successfully inserted %d records in the historical collection.", inserted_count)
                 except Exception as e:
                     logger.error("Error inserting historical weather entities: %s", str(e))
@@ -272,7 +273,7 @@ class WeatherProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -289,7 +290,7 @@ class WeatherProcessor(BaseProcessor):
         
         try:
             # Archive old weather data (older than 4 days)
-            archive_result = self.repository.archive_old_weather_data()
+            archive_result = await self.repository.archive_old_weather_data()
             
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -303,7 +304,7 @@ class WeatherProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                self._record_job_completion(
+                await self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -330,7 +331,7 @@ class WeatherProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                self._record_job_completion(
+                await self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -357,7 +358,7 @@ class WeatherProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

@@ -58,7 +58,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 }
             ]
             cursor = self.collection.aggregate(pipeline)
-            return {(doc["_id"]["trade_session"], doc["_id"]["time_block"]): doc["max_revision"] for doc in cursor}
+            docs = await cursor.to_list(length=1000)
+            return {(doc["_id"]["trade_session"], doc["_id"]["time_block"]): doc["max_revision"] for doc in docs}
         except Exception as e:
             logger.error(f"Failed to get max revisions: {str(e)}")
             return {}
@@ -81,7 +82,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
             logger.info(f"Inserting {len(documents)} documents into collection...")
             
-            result= self.collection.insert_many(documents, ordered=False)
+            result= await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             
             logger.info("Bulk insert successful")
@@ -96,7 +97,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to aggregate DAM product data: %s", str(e))
             return []
@@ -110,34 +111,14 @@ class BlockBidCurrentDataRepository(GenericRepository):
           that the cron should have already lapsed.
         """
         try:
-            today = datetime.datetime.now().strftime("%Y-%m-%d")
-            if date < today:
-                # Past date: only show terminal statuses (Submitted, Rejected, Cancelled, Executed)
-                status_filter = {"$nin": ["Pending", "pending", "Approved"]}
-            else:
-                # Today/future: exclude only already-lapsed records
-                status_filter = {"$not": {"$regex": "_lapse$"}}
-
-            pipeline = [
-                {"$match": {"biding_date": date, "status": status_filter}},
-                {"$sort": {"revision_no": -1}},
-                {
-                    "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
-                        "doc": {"$first": "$$ROOT"}
-                    }
-                },
-                {"$replaceRoot": {"newRoot": "$doc"}},
-                {"$sort": {"from": 1}},
-            ]
-            cursor = self.collection.aggregate(pipeline)
-            result = []
-
-            for doc in cursor:
+            cursor = (
+                self.collection.find({"biding_date": date})
+                .sort([("from", 1), ("trade_session", 1), ("revision_no", 1)])
+            )
+            result = await cursor.to_list(length=10000)
+            for doc in result:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
-                result.append(doc)
-
             return result
 
         except Exception as e:
@@ -146,7 +127,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
         
     async def updatedata(self, record_id, data):
-        result =  self.collection.update_one(
+        result =  await self.collection.update_one(
             {"_id": ObjectId(record_id)},
             {"$set": data}
         )
@@ -156,7 +137,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
     async def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Dict[str, Any]:
         """Update a single document matching the filter (e.g. to add exchange fields after submission)."""
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error(f"Failed to update block bid record: {str(e)}")
@@ -205,8 +186,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 "market_type": market_type
             }
             
-            cursor = self.collection.find(query).sort("from", 1)
-            results = list(cursor)
+            results = await self.collection.find(query).sort("from", 1).to_list(length=10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -220,15 +200,17 @@ class BlockBidCurrentDataRepository(GenericRepository):
             logger.error(f"Error getting block bid data for date {datebid}, market_type {market_type}: {str(e)}")
             return []
 
+
     async def get_approved_block_bid_quantities_by_time_block(
         self,
         biding_date: str,
         market_type: str = "RTM"
     ) -> Dict[str, float]:
         """
-        Get cumulative total volume of Submitted block bids grouped by time_block.
-        Uses only the latest revision_no per (trade_session, time_block), same as get_approved_bids.
-        If number_of_bids > 1, quantum is multiplied by number_of_bids to get correct quantity.
+        Sum block-bid quantity for every matched document, grouped by ``time_block``.
+        Includes status ``Approved`` and ``Submitted``; every matching row contributes
+        (no revision de-duplication). If ``number_of_bids`` > 1, quantum is multiplied
+        by ``number_of_bids`` to get quantity per row.
 
         Args:
             biding_date: Schedule date in YYYY-MM-DD format
@@ -240,13 +222,14 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Note:
             For DAM, only ``trade_session`` 0 (or null / missing) is included — same as
             ``insert_block_bid`` (DAM has no multi-session split). RTM sums all sessions
-            that share the same clock ``time_block`` string.
+            that share the same clock ``time_block`` string. If old revision rows remain
+            in the collection, they are all summed unless filtered elsewhere.
         """
         try:
             match_filter: Dict[str, Any] = {
                 "biding_date": biding_date,
                 "market_type": market_type,
-                "status": "Submitted",
+                "status": {"$in": ["Submitted", "submitted"]},
             }
             if str(market_type).upper() == "DAM":
                 # Avoid double-counting when stray non-zero trade_session rows exist for DAM
@@ -254,14 +237,6 @@ class BlockBidCurrentDataRepository(GenericRepository):
 
             pipeline = [
                 {"$match": match_filter},
-                {"$sort": {"revision_no": -1}},
-                {
-                    "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
-                        "doc": {"$first": "$$ROOT"},
-                    }
-                },
-                {"$replaceRoot": {"newRoot": "$doc"}},
                 {
                     "$project": {
                         "time_block": 1,
@@ -306,22 +281,102 @@ class BlockBidCurrentDataRepository(GenericRepository):
                     quantities_dict[time_block] = total_quantum
 
             logger.info(
-                f"Retrieved Submitted block bid quantities (latest revision only) for "
+                f"Retrieved block bid quantities (all matched Approved/Submitted rows) for "
                 f"{len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}"
             )
             if quantities_dict:
-                logger.debug(f"Submitted block bid time blocks: {list(quantities_dict.keys())}")
+                logger.debug(f"Block bid time blocks: {list(quantities_dict.keys())}")
             else:
                 logger.warning(
-                    f"No Submitted block bids found for date {biding_date}, market_type {market_type} "
-                    f"(status must be exactly 'Submitted', latest revision per session/block)."
+                    f"No Approved/Submitted block bids found for date {biding_date}, "
+                    f"market_type {market_type}."
                 )
             return quantities_dict
 
         except Exception as e:
             logger.error(
-                f"Error getting Submitted block bid quantities for date {biding_date}, "
+                f"Error getting block bid quantities for date {biding_date}, "
                 f"market_type {market_type}: {str(e)}"
+            )
+            return {}
+
+    async def get_approved_reserved_block_bid_quantities_by_time_block(
+        self,
+        biding_date: str,
+    ) -> Dict[str, float]:
+        """
+        Sum block-bid quantity for **Reserved** selections only, grouped by ``time_block``.
+
+        Matches ``biding_date``, ``status`` exactly ``Approved``, and ``selected_for``
+        exactly ``Reserved`` only (no ``market_type`` filter, so e.g. RTM/GRTM rows all
+        count). Quantity per row matches ``get_approved_block_bid_quantities_by_time_block``
+        (``number_of_bids`` multiplies ``quantum`` when > 1).
+        """
+        try:
+            match_filter: Dict[str, Any] = {
+                "biding_date": biding_date,
+                "status": "Approved",
+                "selected_for": "Reserved",
+            }
+
+            pipeline = [
+                {"$match": match_filter},
+                {
+                    "$project": {
+                        "time_block": 1,
+                        "quantum": 1,
+                        "number_of_bids": {"$ifNull": ["$number_of_bids", 1]},
+                        "calculated_quantity": {
+                            "$cond": {
+                                "if": {"$gt": [{"$ifNull": ["$number_of_bids", 1]}, 1]},
+                                "then": {
+                                    "$multiply": [
+                                        "$quantum",
+                                        {"$ifNull": ["$number_of_bids", 1]},
+                                    ]
+                                },
+                                "else": "$quantum",
+                            }
+                        },
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$time_block",
+                        "total_quantum": {"$sum": "$calculated_quantity"},
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "time_block": "$_id",
+                        "total_quantum": 1,
+                    }
+                },
+            ]
+
+            results = await self.aggregate(pipeline)
+
+            quantities_dict: Dict[str, float] = {}
+            for result in results:
+                time_block = result.get("time_block", "")
+                total_quantum = float(result.get("total_quantum", 0))
+                if time_block:
+                    quantities_dict[time_block] = total_quantum
+
+            logger.info(
+                f"Retrieved Reserved (Approved-only) block bid quantities for "
+                f"{len(quantities_dict)} time blocks on {biding_date} (all market_type)"
+            )
+            if not quantities_dict:
+                logger.debug(
+                    f"No Approved Reserved block bids for {biding_date}."
+                )
+            return quantities_dict
+
+        except Exception as e:
+            logger.error(
+                f"Error getting reserved block bid quantities for date {biding_date}: {str(e)}"
             )
             return {}
 
@@ -359,8 +414,9 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$replaceRoot": {"newRoot": "$doc"}},
             ]
             cursor = self.collection.aggregate(pipeline)
+            docs = await cursor.to_list(length=1000)
             result: Dict[tuple, Dict[str, Any]] = {}
-            for doc in cursor:
+            for doc in docs:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
                 result[(int(doc["trade_session"]), doc.get("time_block", ""))] = doc
@@ -374,8 +430,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Find documents by filters with optional projection.
         """
         try:
-            query = self.collection.find(filters, projection or {})
-            return list(query)
+            return await self.collection.find(filters, projection or {}).to_list(length=10000)
         except Exception as e:
             logger.error(f"Failed to find block bid records: {str(e)}")
             return []
@@ -406,7 +461,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"$sort": {"from": 1}},  # restore chronological order
             ]
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             for doc in results:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
@@ -440,13 +495,13 @@ class BlockBidCurrentDataRepository(GenericRepository):
                     }
                 }
             ]
-            latest_docs = list(self.collection.aggregate(pipeline))
+            latest_docs = await self.collection.aggregate(pipeline).to_list(length=10000)
             ids_to_update = [doc["doc_id"] for doc in latest_docs]
 
             if not ids_to_update:
                 return 0
 
-            result = self.collection.update_many(
+            result = await self.collection.update_many(
                 {"_id": {"$in": ids_to_update}},
                 {"$set": {"status": to_status}}
             )

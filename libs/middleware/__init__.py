@@ -16,6 +16,7 @@ from .cache_middleware import (
     invalidate_cache_keys
 )
 from .utils import extract_bearer_token, generate_correlation_id
+from .security_headers import SecurityHeadersMiddleware
 
 __all__ = [
     "CorrelationMiddleware",
@@ -41,5 +42,6 @@ __all__ = [
     "clear_cache_pattern",
     "invalidate_cache_keys",
     "extract_bearer_token",
-    "generate_correlation_id"
+    "generate_correlation_id",
+    "SecurityHeadersMiddleware",
 ]

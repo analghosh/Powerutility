@@ -386,7 +386,7 @@ class BaseRawDataProcessor(ABC):
             metadata={"job_type": job_type, "schedule": schedule}
         )
 
-    def record_job_completion(self, job_type: str, job_name: str, schedule: str,
+    async def record_job_completion(self, job_type: str, job_name: str, schedule: str,
                              execution_start: datetime, execution_end: datetime, execution_id: str,
                              status: str, success: bool, job_id: str, result: Optional[Dict[str, Any]] = None,
                              error_message: Optional[str] = None) -> None:
@@ -421,7 +421,7 @@ class BaseRawDataProcessor(ABC):
             }
             
             # Update the existing job detail record
-            updated = self.job_detail_repository.update_execution(execution_id, update_data)
+            updated = await self.job_detail_repository.update_execution(execution_id, update_data)
             
             if updated:
                 logger.info("Updated job completion: %s - %s (execution_id: %s)", job_type, job_name, execution_id)
@@ -444,13 +444,13 @@ class BaseRawDataProcessor(ABC):
                     metadata={"job_type": job_type, "schedule": schedule}
                 )
                 
-                self.job_detail_repository.log_execution(job_detail)
+                await self.job_detail_repository.log_execution(job_detail)
                 logger.info("Created new job completion record: %s - %s", job_type, job_name)
 
         except Exception as e:
             logger.error("Failed to record job completion for %s: %s", job_type, str(e))
 
-    def record_job_start(self, job_type: str, job_name: str, schedule: str, execution_start: datetime) -> Optional[str]:
+    async def record_job_start(self, job_type: str, job_name: str, schedule: str, execution_start: datetime) -> Optional[str]:
         """
         Record job start in audit database
         
@@ -469,7 +469,7 @@ class BaseRawDataProcessor(ABC):
 
         try:
             # Get the job_id (ObjectId) from job_data collection using job_type
-            job_data = self.job_data_repository.get_job(job_type)
+            job_data = await self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return None
@@ -486,7 +486,7 @@ class BaseRawDataProcessor(ABC):
                 job_id=str(job_data.get('_id'))
             )
 
-            self.job_detail_repository.log_execution(job_detail)
+            await self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (job_type: %s, execution_id: %s) in audit database",
                        job_name, job_type, execution_id)
 

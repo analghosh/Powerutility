@@ -56,7 +56,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
         
         # Record job start
-        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
         
         logger.info("Starting forecast API processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
         
@@ -73,7 +73,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 }
                 if execution_id:
                     end_time = datetime.now()
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "error", False, execution_id, result, "No API configuration found"
                     )
@@ -91,7 +91,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 }
                 if execution_id:
                     end_time = datetime.now()
-                    self.record_job_completion(
+                    await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "error", False, execution_id, result, "Failed to fetch API data"
                     )
@@ -157,7 +157,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             }
             
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "success", True, execution_id, result
                 )
@@ -175,7 +175,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             result = {'status': 'error', 'error': str(e), 'execution_time': execution_time}
             
             if execution_id:
-                self.record_job_completion(
+                await self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, execution_id, result, str(e)
                 )
@@ -299,7 +299,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                             try:
                                 log_entity = IntegrationApiLogEntity(
                                     provider_id="forecast_api_provider",
-                                    raw_data=response,
+                                    raw_data=response_data,
                                     timestamp=datetime.now(),
                                     metadata={
                                         "url": url,
@@ -354,8 +354,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 return 0
             
             client = get_mongo_client(self.mongo_uri, "forecast_limit_values")
-            db = client[self.database_name]
-            collection = db["limit_values"]
+            collection = client[self.database_name]["limit_values"]
             
             current_time = datetime.now()
             stored_count = 0
@@ -402,7 +401,9 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
@@ -441,8 +442,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                 return 0
             
             client = get_mongo_client(self.mongo_uri, "forecast_demand_serve")
-            db = client[self.database_name]
-            collection = db["demand_serve"]
+            collection = client[self.database_name]["demand_serve"]
             
             current_time = datetime.now()
             stored_count = 0
@@ -488,7 +488,9 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                         }
                     }
                     
-                    result = collection.update_one(filter_doc, update_doc, upsert=True)
+                    result = await asyncio.to_thread(
+                        collection.update_one, filter_doc, update_doc, upsert=True
+                    )
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1

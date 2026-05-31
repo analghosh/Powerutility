@@ -40,9 +40,13 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "job_type": "demand_data_processing",
                 "name": "Demand Data Processing",
                 "type": "data_processing",
-                "schedule": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_SCHEDULE', '0 1 * * *'),
-                "enabled": getattr(self.settings, 'DEMAND_DATA__PROCESSING_CRON_ENABLED', True),
-                "timezone": getattr(self.settings, 'DEMAND_DATA__PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
+                "schedule": getattr(
+                    self.settings,
+                    'DEMAND_DATA_PROCESSING_CRON',
+                    getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_SCHEDULE', '*/15 * * * *')
+                ),
+                "enabled": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_ENABLED', True),
+                "timezone": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Processes demand data from raw data to serve collections",
                 "priority": 4
             },
@@ -67,12 +71,30 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 5
             },
             {
+                "job_type": "idf_forecast_merge",
+                "name": "IDF Forecast Merge",
+                "type": "data_processing",
+                "schedule": getattr(
+                    self.settings,
+                    "IDF_FORECAST_MERGE_CRON_SCHEDULE",
+                    "*/15 * * * *",
+                ),
+                "enabled": getattr(self.settings, "IDF_FORECAST_MERGE_CRON_ENABLED", True),
+                "timezone": getattr(self.settings, "CRON_TIMEZONE", "Asia/Kolkata"),
+                "description": "Merges forecast_serve (RTM API or CSV) into demand_serve IDF per idf_forecast_switch",
+                "priority": 5,
+            },
+            {
                 "job_type": "supply_data_processing",
                 "name": "Supply Data Processing",
                 "type": "data_processing",
-                "schedule": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_SCHEDULE', '0 1 * * *'),
-                "enabled": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_ENABLED', True),
-                "timezone": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
+                "schedule": getattr(
+                    self.settings,
+                    'SUPPLY_DATA_PROCESSING_CRON',
+                    getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_SCHEDULE', '*/15 * * * *')
+                ),
+                "enabled": getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_ENABLED', True),
+                "timezone": getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Processes supply data from raw data to serve collections",
                 "priority": 4
             },
@@ -154,9 +176,29 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "System Cleanup",
                 "type": "maintenance",
                 "schedule": getattr(self.settings, 'SYSTEM_CLEANUP_SCHEDULE', '0 2 * * *'),
-                "enabled": getattr(self.settings, 'SYSTEM_CLEANUP_ENABLED', False),
+                "enabled": getattr(self.settings, 'SYSTEM_CLEANUP_ENABLED', True),
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
-                "description": "Cleans up old system data and logs",
+                "description": "Cleans up old integration apilog data dynamically across all *_integration_apilog collections",
+                "priority": 8
+            },
+            {
+                "job_type": "integration_apilog_cleanup",
+                "name": "Integration API Log Cleanup",
+                "type": "maintenance",
+                "schedule": getattr(self.settings, 'INTEGRATION_API_LOG_CLEANUP_SCHEDULE', '0 2 * * *'),
+                "enabled": getattr(self.settings, 'INTEGRATION_API_LOG_CLEANUP_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
+                "description": "Deletes integration API logs older than 7 days from all *_integration_apilog collections",
+                "priority": 8
+            },
+            {
+                "job_type": "scheduling_history_cleanup",
+                "name": "Scheduling History Cleanup",
+                "type": "maintenance",
+                "schedule": getattr(self.settings, 'SCHEDULING_HISTORY_CLEANUP_SCHEDULE', '0 1 * * *'),
+                "enabled": getattr(self.settings, 'SCHEDULING_HISTORY_CLEANUP_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
+                "description": "Deletes scheduling requisition calculation history older than 90 days",
                 "priority": 8
             },
             {
@@ -178,6 +220,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Archives demand serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
+            },
+            {
+                "job_type": "forecast_serve_archival",
+                "name": "Forecast Serve Data Archival",
+                "type": "maintenance",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Archives forecast_serve to forecast_serve_historical; keeps 4-day rolling window in forecast_serve (same pattern as demand_serve)",
+                "priority": 7,
             },
             {
                 "job_type": "supply_serve_archival",
@@ -236,9 +288,9 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "Job Logs Cleanup",
                 "type": "maintenance",
                 "schedule": getattr(self.settings, 'JOB_LOGS_CLEANUP_SCHEDULE', '0 4 * * *'),
-                "enabled": False,
+                "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
-                "description": "Cleans up old job execution logs",
+                "description": "Cleans up old job execution logs from job_detail older than 60 days",
                 "priority": 11
             }
             ,
@@ -380,6 +432,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Marks RTM block bids as lapsed when trade_session passes active window (current session + 3)",
+                "priority": 7
+            },
+            {
+                "job_type": "rtm_block_bid_book_sync",
+                "name": "RTM Block Bid Book Sync",
+                "type": "data_sync",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Syncs RTM block bid book data every 15 minutes",
                 "priority": 7
             },
             {

@@ -21,10 +21,6 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "dicision_rtm_block_bid_iex_response"
         logger.info(f"DecisionRtmBlockBidIexResponseRepository initialized with collection: {self.collection_name}")
-        self._create_collection_if_not_exists()
-        self._create_related_collections_if_not_exists()
-        self._create_indexes()
-    
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.
@@ -164,7 +160,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             
             query = {"inserted_date": inserted_date}
             cursor = self.collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by time_block
             # NOTE: multiple docs can exist per time_block; use list to avoid overwriting
@@ -213,7 +209,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             }
             
             cursor = collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -261,7 +257,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             # PHP orders by submited_bid_response.order_id, but that's nested
             # We'll order by _id first, then sort in Python if needed
             cursor = collection.find(query).sort("_id", 1)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -287,7 +283,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
         Called once per bid entry in the exchange response bid_details[].
         """
         try:
-            self.collection.insert_one(doc)
+            await self.collection.insert_one(doc)
             return True
         except Exception as e:
             logger.error(f"Failed to insert IEX response doc: {str(e)}")
@@ -299,7 +295,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
         Used before cancellation to retrieve last_updated_time.
         """
         try:
-            doc = self.collection.find_one({"order_id": order_id})
+            doc = await self.collection.find_one({"order_id": order_id})
             if doc and "_id" in doc:
                 doc["_id"] = str(doc["_id"])
             return doc
@@ -316,7 +312,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             update = {"status": status}
             if extra_fields:
                 update.update(extra_fields)
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"order_id": order_id},
                 {"$set": update}
             )
@@ -333,7 +329,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
         if not docs:
             return 0
         try:
-            result = self.collection.insert_many(docs, ordered=False)
+            result = await self.collection.insert_many(docs, ordered=False)
             return len(result.inserted_ids)
         except Exception as e:
             logger.error(f"Failed to bulk insert IEX response docs: {str(e)}")
@@ -388,7 +384,7 @@ class DecisionRtmBlockBidIexResponseRepository(GenericRepository):
             }
 
             cursor = self.collection.find(query).sort("_id", 1)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:

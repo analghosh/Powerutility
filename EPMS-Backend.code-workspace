@@ -1,0 +1,91 @@
+{
+    "folders": [
+        {
+            "path": ".",
+            "name": "EPMS-Backend"
+        }
+    ],
+    "settings": {
+        "python.analysis.extraPaths": [
+            "./libs",
+            "./services/auth",
+            "./services/ingestion",
+            "./services/processing",
+            "./services/scheduler"
+        ],
+        "cursorpyright.analysis.extraPaths": [
+            "./libs",
+            "./services/auth",
+            "./services/ingestion",
+            "./services/processing",
+            "./services/scheduler"
+        ],
+        "python.testing.pytestEnabled": true,
+        "python.testing.pytestArgs": [
+            "tests"
+        ],
+        "python.testing.unittestEnabled": false,
+        "python.testing.nosetestsEnabled": false
+    },
+    "launch": {
+        "version": "0.2.0",
+        "configurations": [
+            {
+                "name": "Auth Service",
+                "type": "python",
+                "request": "launch",
+                "module": "uvicorn",
+                "args": [
+                    "services.auth.app.main:app",
+                    "--reload",
+                    "--port",
+                    "8001"
+                ],
+                "jinja": true,
+                "justMyCode": false
+            },
+            {
+                "name": "Ingestion Service",
+                "type": "python",
+                "request": "launch",
+                "module": "uvicorn",
+                "args": [
+                    "services.ingestion.app.main:app",
+                    "--reload",
+                    "--port",
+                    "8002"
+                ],
+                "jinja": true,
+                "justMyCode": false
+            },
+            {
+                "name": "Processing Service",
+                "type": "python",
+                "request": "launch",
+                "module": "uvicorn",
+                "args": [
+                    "services.processing.app.main:app",
+                    "--reload",
+                    "--port",
+                    "8003"
+                ],
+                "jinja": true,
+                "justMyCode": false
+            },
+            {
+                "name": "Scheduler Service",
+                "type": "python",
+                "request": "launch",
+                "module": "uvicorn",
+                "args": [
+                    "services.scheduler.app.main:app",
+                    "--reload",
+                    "--port",
+                    "8004"
+                ],
+                "jinja": true,
+                "justMyCode": false
+            }
+        ]
+    }
+}

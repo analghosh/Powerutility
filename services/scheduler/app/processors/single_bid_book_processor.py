@@ -46,7 +46,7 @@ class SingleBidBookProcessor(BaseProcessor):
         schedule = "0 10 * * *"  # Typical DAM time
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             return {"status": "error", "message": "Failed to record job start"}
 
@@ -73,7 +73,7 @@ class SingleBidBookProcessor(BaseProcessor):
                 "correlation_id": execution_id
             })
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -97,7 +97,7 @@ class SingleBidBookProcessor(BaseProcessor):
                 "job_type": job_type,
                 "correlation_id": execution_id
             }
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -123,7 +123,7 @@ class SingleBidBookProcessor(BaseProcessor):
         schedule = "*/15 * * * *"  # Every 15 minutes
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             return {"status": "error", "message": "Failed to record job start"}
 
@@ -163,7 +163,7 @@ class SingleBidBookProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -187,7 +187,7 @@ class SingleBidBookProcessor(BaseProcessor):
                 "job_type": job_type,
                 "correlation_id": execution_id
             }
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -289,7 +289,7 @@ class SingleBidBookProcessor(BaseProcessor):
             
             # Use repository driven upsert
             # This handles int validation on OrderId internally
-            result_stats = repo.upsert_bids(docs_to_upsert)
+            result_stats = await repo.upsert_bids(docs_to_upsert)
             
             logger.info(f"[{market_type.upper()} Book Sync] Bulk Upsert Result: {result_stats}")
             # Do not return here, continue to update approval status
@@ -298,8 +298,7 @@ class SingleBidBookProcessor(BaseProcessor):
             docs_map = {doc["OrderId"]: doc for doc in docs_to_upsert}
         
             # Find docs in approval collection that match the OrderIds
-            # find_many is synchronous in BaseRepository
-            get_docs_to_update_in_approval = self.approval_repo.find_many({"OrderId": {"$in": orderIds}}, limit=10000)
+            get_docs_to_update_in_approval = await self.approval_repo.find_many({"OrderId": {"$in": orderIds}}, limit=10000)
             if get_docs_to_update_in_approval:
                 update_count = 0
                 for doc in get_docs_to_update_in_approval:
@@ -334,7 +333,7 @@ class SingleBidBookProcessor(BaseProcessor):
                         }
                         
                         # Perform upsert using PyMongo directly (BaseRepository has no single-doc upsert)
-                        self.approval_repo.collection.update_one(
+                        await self.approval_repo.collection.update_one(
                             {"OrderId": order_id},
                             {"$set": updates},
                             upsert=True

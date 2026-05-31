@@ -386,7 +386,13 @@ class DashboardService:
                 for s_param in filters["sort"].split(","):
                     field, direction = s_param.strip().split(":")
                     sort_params.append((field, 1 if direction.lower() == "asc" else -1))
-
+            else:
+                
+                if filters.get("type"):
+                   # Only one type → sort by time_block only
+                   sort_params = [("time_block", 1)]
+                else:
+                    sort_params = [("type", 1) ,  ("time_block", 1)] 
             # Pagination
             skip = filters.get("skip", 0)
             limit = filters.get("limit")

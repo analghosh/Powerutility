@@ -28,7 +28,7 @@ class SchedulerService(ISchedulerService):
     async def get_scheduler_status(self) -> Dict[str, Any]:
         """Get current scheduler status and job counts"""
         try:
-            jobs_info = self._cron_manager.get_all_jobs()
+            jobs_info = await self._cron_manager.get_all_jobs()
             
             return {
                 "status": "active" if self._cron_manager.is_running() else "inactive",
@@ -43,7 +43,7 @@ class SchedulerService(ISchedulerService):
     async def get_all_jobs(self) -> Dict[str, Any]:
         """Get all scheduled jobs with their current status"""
         try:
-            return self._cron_manager.get_all_jobs()
+            return await self._cron_manager.get_all_jobs()
         except Exception as e:
             self._logger.error(f"Failed to get all jobs: {str(e)}")
             raise
@@ -51,7 +51,7 @@ class SchedulerService(ISchedulerService):
     async def get_job_execution_history(self, job_type: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get execution history for a specific job type"""
         try:
-            return self._cron_manager.get_job_execution_history(job_type, limit)
+            return await self._cron_manager.get_job_execution_history(job_type, limit)
         except Exception as e:
             self._logger.error(f"Failed to get job history for {job_type}: {str(e)}")
             raise
@@ -59,7 +59,7 @@ class SchedulerService(ISchedulerService):
     async def enable_job(self, job_type: str) -> bool:
         """Enable a specific job type"""
         try:
-            return self._cron_manager.enable_job(job_type)
+            return await self._cron_manager.enable_job(job_type)
         except Exception as e:
             self._logger.error(f"Failed to enable job {job_type}: {str(e)}")
             raise
@@ -67,7 +67,7 @@ class SchedulerService(ISchedulerService):
     async def disable_job(self, job_type: str) -> bool:
         """Disable a specific job type"""
         try:
-            return self._cron_manager.disable_job(job_type)
+            return await self._cron_manager.disable_job(job_type)
         except Exception as e:
             self._logger.error(f"Failed to disable job {job_type}: {str(e)}")
             raise
@@ -83,7 +83,7 @@ class SchedulerService(ISchedulerService):
     async def reconcile_and_rerun_crons(self) -> Dict[str, Any]:
         """Reconcile data gaps and rerun all cron jobs"""
         try:
-            return self._dummy_data_service.reconcile_and_rerun_crons()
+            return await self._dummy_data_service.reconcile_and_rerun_crons()
         except Exception as e:
             self._logger.error(f"Reconciliation failed: {str(e)}")
             raise

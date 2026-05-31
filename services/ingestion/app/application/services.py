@@ -196,7 +196,7 @@ class FileUploadApplicationService:
         upload_data = await self._upload_repository.get_upload_by_id(upload_id)
         data_type = upload_data.get("data_type") if upload_data else None
         
-        status_record = self._raw_data_service.get_processing_status_by_upload_id(upload_id, data_type=data_type)
+        status_record = await self._raw_data_service.get_processing_status_by_upload_id(upload_id, data_type=data_type)
         if not status_record:
             return None
         

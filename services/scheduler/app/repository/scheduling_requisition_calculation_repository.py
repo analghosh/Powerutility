@@ -23,38 +23,26 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         self.collection_name = collection_name
         logger.info(f"SchedulingRequisitionCalculationRepository initialized with collection: {self.collection_name}")
 
-    def create(self, record: Dict[str, Any]) -> Any:
+    async def create(self, record: Dict[str, Any]) -> Any:
         """
         Insert a single scheduling calculation record.
-        
-        Args:
-            record: Scheduling calculation record to insert
-            
-        Returns:
-            Insert result
         """
         try:
-            result = self.insert_one(self.collection_name, record)
+            result = await self.insert_one(self.collection_name, record)
             return result
         except Exception as e:
             logger.error(f"Failed to insert scheduling calculation record: {str(e)}")
             raise
 
-    def bulk_create(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
+    async def bulk_create(self, records: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Insert multiple scheduling calculation records.
-        
-        Args:
-            records: List of scheduling calculation records
-            
-        Returns:
-            Dictionary with insert results
         """
         try:
             if not records:
                 return {"inserted_count": 0, "error_count": 0}
-            
-            result = self.insert_many(self.collection_name, records)
+
+            result = await self.insert_many(self.collection_name, records)
             return {
                 "inserted_count": len(result.inserted_ids) if hasattr(result, 'inserted_ids') else 0,
                 "error_count": 0
@@ -63,7 +51,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
             logger.error(f"Failed to bulk insert scheduling calculation records: {str(e)}")
             return {"inserted_count": 0, "error_count": len(records)}
 
-    def delete_all_for_schedule_date(
+    async def delete_all_for_schedule_date(
         self,
         schedule_date: str,
         audit_logger=None,
@@ -71,94 +59,54 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
     ) -> int:
         """
         Delete all scheduling calculation records for a specific schedule date.
-        
-        Args:
-            schedule_date: Schedule date in YYYY-MM-DD format
-            audit_logger: Optional audit logger
-            user_context: Optional user context for audit logging
-            
-        Returns:
-            Number of deleted records
         """
         try:
-            # Convert schedule_date string to datetime for matching
             schedule_date_dt = datetime.strptime(schedule_date, "%Y-%m-%d")
-            
-            # Delete records matching the schedule date
-            # Handle both datetime and string formats in database
+
             filter_query = {
                 "$or": [
                     {"scheduled_at": schedule_date_dt},
                     {"schedule_date": schedule_date}
                 ]
             }
-            
-            result = self.delete_many(self.collection_name, filter_query)
+
+            result = await self.delete_many(self.collection_name, filter_query)
             deleted_count = result.deleted_count if hasattr(result, 'deleted_count') else 0
-            
+
             logger.info(f"Deleted {deleted_count} scheduling calculation records for schedule_date={schedule_date}")
             return deleted_count
         except Exception as e:
             logger.error(f"Failed to delete scheduling calculation records for {schedule_date}: {str(e)}")
             return 0
 
-    def delete_blocks_from(self, schedule_date_dt: datetime, from_block: int) -> int:
+    async def delete_blocks_from(self, schedule_date_dt: datetime, from_block: int) -> int:
         """
         Delete scheduling records for a schedule date where time_block >= from_block.
         Preserves records for past blocks (time_block < from_block).
-        
-        Args:
-            schedule_date_dt: Schedule date as datetime object
-            from_block: The starting block number (1-indexed). Records with 
-                        time_block >= from_block will be deleted.
-            
-        Returns:
-            int: Number of deleted records
         """
         try:
             collection = self.db[self.collection_name]
-            
+
             filter_query = {
                 "scheduled_at": schedule_date_dt,
                 "time_block": {"$gte": from_block}
             }
-            
-            result = collection.delete_many(filter_query)
+
+            result = await collection.delete_many(filter_query)
             deleted_count = result.deleted_count
-            
+
             logger.info(f"[SchedulingRequisitionCalculationRepository] Deleted {deleted_count} records for blocks >= {from_block} on {schedule_date_dt.date()}")
             return deleted_count
         except Exception as e:
-            if "MongoClient after close" in str(e):
-                logger.warning("[SchedulingRequisitionCalculationRepository] MongoClient was closed, refreshing connection and retrying delete...")
-                self._client = None
-                self._db = None
-                try:
-                    collection = self.db[self.collection_name]
-                    filter_query = {
-                        "scheduled_at": schedule_date_dt,
-                        "time_block": {"$gte": from_block}
-                    }
-                    result = collection.delete_many(filter_query)
-                    deleted_count = result.deleted_count
-                    logger.info(f"[SchedulingRequisitionCalculationRepository] Deleted {deleted_count} records for blocks >= {from_block} on {schedule_date_dt.date()} (after reconnect)")
-                    return deleted_count
-                except Exception as retry_err:
-                    logger.error(f"[SchedulingRequisitionCalculationRepository] Failed to delete blocks from {from_block} after reconnect: {str(retry_err)}")
-                    return 0
             logger.error(f"[SchedulingRequisitionCalculationRepository] Failed to delete blocks from {from_block}: {str(e)}")
             return 0
 
-    def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
+    async def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
         """
         Get all RTM scheduling calculation data.
         Returns data grouped by time blocks with plant results.
-        
-        Returns:
-            List of scheduling records grouped by time block
         """
         try:
-            # Aggregation pipeline to group by time_block and organize plant data
             pipeline = [
                 {"$sort": {"time_block": 1, "plant_name": 1}},
                 {
@@ -179,6 +127,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                         "schedule_date_timestamp": {"$first": "$scheduled_at_timestamp"},
                         "totalAvailability": {"$first": "$total_supply_available_mw"},
                         "demand_forecast": {"$first": "$demand_forecast_mw"},
+                        "forecast_source": {"$first": "$forecast_source"},
                         "surplus_deficit": {"$first": "$net_surplus_deficit_mw"},
                         "rtm_forecasted_price": {"$first": "$rtm_forecasted_price"},
                         "surplus_deficit_updated": {"$first": "$updated_surplus_deficit_mw"},
@@ -211,76 +160,60 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 },
                 {"$sort": {"time_block": 1}}
             ]
-            
-            result = self.aggregate(self.collection_name, pipeline)
+
+            cursor = self.aggregate(self.collection_name, pipeline)
+            result = await cursor.to_list(length=10000)
             logger.info(f"Retrieved {len(result)} time blocks with scheduling data")
             return result
         except Exception as e:
             logger.error(f"Failed to get RTM scheduling data: {str(e)}")
             return []
 
-    def get_by_schedule_date(self, schedule_date: str) -> List[Dict[str, Any]]:
+    async def get_by_schedule_date(self, schedule_date: str) -> List[Dict[str, Any]]:
         """
         Get all scheduling calculation records for a specific schedule date.
-        
-        Args:
-            schedule_date: Schedule date in YYYY-MM-DD format
-            
-        Returns:
-            List of scheduling calculation records
         """
         try:
             schedule_date_dt = datetime.strptime(schedule_date, "%Y-%m-%d")
-            
+
             filter_query = {
                 "$or": [
                     {"scheduled_at": schedule_date_dt},
                     {"schedule_date": schedule_date}
                 ]
             }
-            
-            result = self.get_all(self.collection_name, filter_query)
+
+            result = await self.get_all(self.collection_name, filter_query)
             logger.info(f"Retrieved {len(result)} scheduling calculation records for {schedule_date}")
             return result
         except Exception as e:
             logger.error(f"Failed to get scheduling records for {schedule_date}: {str(e)}")
             return []
 
-    def truncate_collection(self, audit_logger=None, user_context: Optional[Dict[str, Any]] = None) -> int:
+    async def truncate_collection(self, audit_logger=None, user_context: Optional[Dict[str, Any]] = None) -> int:
         """
         Truncate (delete all records from) the scheduling_requisition_calculation_table collection.
         Use with caution - this removes ALL data from the collection.
-        
-        Args:
-            audit_logger: Optional audit logger for logging truncation operation
-            user_context: Optional user context dictionary
-        
-        Returns:
-            int: Number of records deleted
         """
         try:
             logger.warning(f"[SchedulingRequisitionCalculationRepository] TRUNCATING collection: {self.collection_name}")
-            
-            # Access the MongoDB collection
+
             collection = self.db[self.collection_name]
-            
-            # Count records before deletion for logging
-            count_before = collection.count_documents({})
-            
+
+            count_before = await collection.count_documents({})
+
             logger.warning(f"[SchedulingRequisitionCalculationRepository] Found {count_before} total record(s) to delete from {self.collection_name}")
-            
-            # Delete all records from the collection
-            result = collection.delete_many({})
-            
+
+            result = await collection.delete_many({})
+
             deleted_count = result.deleted_count
             logger.warning(f"[SchedulingRequisitionCalculationRepository] TRUNCATED {deleted_count} record(s) from {self.collection_name}")
-            
-            # Log audit information if audit_logger is provided
+
             if audit_logger:
                 correlation_id = user_context.get("correlation_id", "unknown") if user_context else "unknown"
                 user_id = user_context.get("user_id", "unknown") if user_context else "unknown"
                 username = user_context.get("username", "system") if user_context else "system"
-                
+
                 audit_logger.log_system_operation(
                     service="processing",
                     operation="rtm_scheduling_table_truncate",
@@ -294,50 +227,27 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                         "username": username
                     }
                 )
-            
+
             return deleted_count
-            
+
         except Exception as e:
             logger.exception(f"[SchedulingRequisitionCalculationRepository] Failed to truncate collection {self.collection_name}: {str(e)}")
             raise
 
     async def truncate_collection_async(self, audit_logger=None, user_context: Optional[Dict[str, Any]] = None) -> int:
         """
-        Truncate (delete all records from) the scheduling_requisition_calculation_table collection asynchronously.
-        Use with caution - this removes ALL data from the collection.
-        
-        Args:
-            audit_logger: Optional audit logger for logging truncation operation
-            user_context: Optional user context dictionary
-        
-        Returns:
-            int: Number of records deleted
+        Truncate the collection asynchronously.
+        Delegates to truncate_collection which is already async.
         """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(
-                executor,
-                audit_logger,
-                user_context
-            )
+        return await self.truncate_collection(audit_logger, user_context)
 
-    def update_block_totals(self, schedule_date: str, time_block: int, total_supply_updated: float, surplus_deficit_updated: float) -> int:
+    async def update_block_totals(self, schedule_date: str, time_block: int, total_supply_updated: float, surplus_deficit_updated: float) -> int:
         """
         Update total_availablity_updated and surplus_deficit_updated for all records in a time block.
-        
-        Args:
-            schedule_date: Schedule date string
-            time_block: Time block number
-            total_supply_updated: New total supply value
-            surplus_deficit_updated: New surplus/deficit value
-            
-        Returns:
-            int: Number of records updated
         """
         try:
-            # Handle both string and datetime formats for schedule_date
             schedule_date_dt = datetime.strptime(schedule_date, "%Y-%m-%d")
-            
+
             filter_query = {
                 "$or": [
                     {"scheduled_at": schedule_date_dt},
@@ -345,22 +255,21 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 ],
                 "time_block": time_block
             }
-            
+
             update_query = {
                 "$set": {
                     "total_availablity_updated": total_supply_updated,
                     "surplus_deficit_updated": surplus_deficit_updated
                 }
             }
-            
-            # Use update_many directly from the collection
+
             collection = self.db[self.collection_name]
-            result = collection.update_many(filter_query, update_query)
-            
+            result = await collection.update_many(filter_query, update_query)
+
             modified_count = result.modified_count
             logger.info(f"Updated totals for block {time_block}: {modified_count} records")
             return modified_count
-            
+
         except Exception as e:
             logger.error(f"Failed to update block totals for block {time_block}: {str(e)}")
             return 0

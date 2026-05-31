@@ -89,8 +89,13 @@ class JWTValidator:
     def validate_token(self, token: str) -> Optional[TokenPayload]:
         """Validate JWT token and return payload"""
         try:
-            # Decode token
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            # Decode token — verify signature, expiry, and nbf if present
+            payload = jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=[self.algorithm],
+                options={"verify_exp": True, "verify_nbf": True},
+            )
             
             # Check if token is blacklisted
             if self.is_token_blacklisted(token):
@@ -126,8 +131,13 @@ class JWTValidator:
     def validate_token_with_details(self, token: str) -> Tuple[Optional[TokenPayload], Optional[str]]:
         """Validate JWT token and return payload with error details"""
         try:
-            # Decode token
-            payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
+            # Decode token — verify signature, expiry, and nbf if present
+            payload = jwt.decode(
+                token,
+                self.secret_key,
+                algorithms=[self.algorithm],
+                options={"verify_exp": True, "verify_nbf": True},
+            )
             
             # Check if token is blacklisted
             if self.is_token_blacklisted(token):
@@ -209,7 +219,7 @@ class JWTValidator:
         try:
             payload = jwt.decode(token, self.secret_key, algorithms=[self.algorithm])
             return payload.get("exp", 0) < datetime.now().timestamp()
-        except:
+        except Exception:
             return True  # Consider invalid tokens as expired
     
     def blacklist_token(self, token: str) -> bool:

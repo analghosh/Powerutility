@@ -44,7 +44,7 @@ class APIKeyManagementService:
         """
         return secrets.token_urlsafe(length)
 
-    def create_api_key(self, name: str, description: Optional[str], api_key_prefix: Optional[str], created_by: str) -> Dict[str, Any]:
+    async def create_api_key(self, name: str, description: Optional[str], api_key_prefix: Optional[str], created_by: str) -> Dict[str, Any]:
         """
         Create a new API key
         
@@ -67,7 +67,7 @@ class APIKeyManagementService:
             secret = self.generate_secret(32)
             
             # Create in repository
-            result = self.repository.create_api_key(
+            result = await self.repository.create_api_key(
                 api_key=api_key,
                 secret=secret,
                 name=name,
@@ -100,7 +100,7 @@ class APIKeyManagementService:
                 detail=f"Failed to create API key: {str(e)}"
             )
 
-    def list_api_keys(self, is_active: Optional[bool] = None) -> List[Dict[str, Any]]:
+    async def list_api_keys(self, is_active: Optional[bool] = None) -> List[Dict[str, Any]]:
         """
         List all API keys (without secrets)
         
@@ -117,7 +117,7 @@ class APIKeyManagementService:
                 filter_dict["is_active"] = is_active
             
             # Get keys from repository
-            keys = self.repository.list_api_keys(filter=filter_dict)
+            keys = await self.repository.list_api_keys(filter=filter_dict)
             
             # Convert to response format (exclude secrets)
             result = []
@@ -145,7 +145,7 @@ class APIKeyManagementService:
                 detail=f"Failed to list API keys: {str(e)}"
             )
 
-    def get_api_key(self, api_key: str) -> Dict[str, Any]:
+    async def get_api_key(self, api_key: str) -> Dict[str, Any]:
         """
         Get API key information (without secret)
         
@@ -159,7 +159,7 @@ class APIKeyManagementService:
             HTTPException: If key not found
         """
         try:
-            key_doc = self.repository.find_by_api_key(api_key)
+            key_doc = await self.repository.find_by_api_key(api_key)
             
             if not key_doc:
                 raise HTTPException(
@@ -190,7 +190,7 @@ class APIKeyManagementService:
                 detail=f"Failed to get API key: {str(e)}"
             )
 
-    def activate_api_key(self, api_key: str) -> Dict[str, Any]:
+    async def activate_api_key(self, api_key: str) -> Dict[str, Any]:
         """
         Activate an API key
         
@@ -205,7 +205,7 @@ class APIKeyManagementService:
         """
         try:
             # Check if key exists (include inactive keys since we're activating)
-            key_doc = self.repository.find_by_api_key(api_key, include_inactive=True)
+            key_doc = await self.repository.find_by_api_key(api_key, include_inactive=True)
             if not key_doc:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -213,7 +213,7 @@ class APIKeyManagementService:
                 )
             
             # Activate the key
-            success = self.repository.update_api_key(api_key, {"is_active": True})
+            success = await self.repository.update_api_key(api_key, {"is_active": True})
             
             if not success:
                 raise HTTPException(
@@ -235,7 +235,7 @@ class APIKeyManagementService:
                 detail=f"Failed to activate API key: {str(e)}"
             )
 
-    def deactivate_api_key(self, api_key: str) -> Dict[str, Any]:
+    async def deactivate_api_key(self, api_key: str) -> Dict[str, Any]:
         """
         Deactivate an API key (revoke access)
         
@@ -250,7 +250,7 @@ class APIKeyManagementService:
         """
         try:
             # Check if key exists (include inactive keys for consistency)
-            key_doc = self.repository.find_by_api_key(api_key, include_inactive=True)
+            key_doc = await self.repository.find_by_api_key(api_key, include_inactive=True)
             if not key_doc:
                 raise HTTPException(
                     status_code=status.HTTP_404_NOT_FOUND,
@@ -258,7 +258,7 @@ class APIKeyManagementService:
                 )
             
             # Deactivate the key (revoke)
-            success = self.repository.revoke_api_key(api_key)
+            success = await self.repository.revoke_api_key(api_key)
             
             if not success:
                 raise HTTPException(

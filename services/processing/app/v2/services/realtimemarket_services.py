@@ -9,14 +9,14 @@ from datetime import datetime, timedelta
 
 from ..repository.serve_supply_table_repository import serveSupplyTableRepository
 from ..repository.rtm_single_bid_data_for_approval_repository import RTMSingleBidDataForApprovalRepository
-from ..repository.limit_value_repository import limitVallueRepository
-from ..repository.plants_master_repository import PlantsMasterRepository 
+from ..repository.limit_values_repository import LimitValuesRepository
+from ..repository.master_plants_repository import MasterPlantsRepository
 from ..repository.rtm_product_hardcoded_data_repository import RTMProductHardCodedDataRepository
-from ..repository.serve_demand_table_repository import  DashboardRepository
-from ..repository.scheduling_requisition_calculation import  SchedulingRequisitionCalculationRepository
+from ..repository.dashboard_repository import DashboardRepository
+from ..repository.scheduling_requissition_calculation_repository import SchedulingRequisitionCalculationRepository
 
 
-from ..core.helpers import dsm_calculation
+from ...core.helpers import dsm_calculation
 
 logger = logging.getLogger(__name__)
 
@@ -30,9 +30,9 @@ class RealtimemarketService:
         self.supply_repo = serveSupplyTableRepository()
         self.single_bid_data_for_approval_repo = RTMSingleBidDataForApprovalRepository(collection_name="rtm_single_bid_data_for_approval")
         self.rtm_product_hardCoded_data_repo = RTMProductHardCodedDataRepository(collection_name="rtm_product_hardCoded_data")
-        self.plants_list_repo = PlantsMasterRepository(collection_name="plant_master")
-        self.limit_values_repo = limitVallueRepository(collection_name="limit_values")
-        self.serve_demand_repo = DashboardRepository(collection_name="serve_demand_table")
+        self.plants_list_repo = MasterPlantsRepository()
+        self.limit_values_repo = LimitValuesRepository()
+        self.serve_demand_repo = DashboardRepository()
         self.scheduling_requisition_repo = SchedulingRequisitionCalculationRepository(collection_name="scheduling_requisition_calculation_table")
 
 
@@ -154,7 +154,7 @@ class RealtimemarketService:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -247,7 +247,7 @@ class RealtimemarketService:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -568,8 +568,8 @@ class RealtimemarketService:
         }
     }
 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
-            return {"result": result}
+            posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            return {"result": posted_jobs}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
             raise
@@ -895,7 +895,7 @@ class RealtimemarketService:
         }
     }
 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -1214,7 +1214,7 @@ class RealtimemarketService:
         }
     }
 ]
-            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -1346,16 +1346,16 @@ class RealtimemarketService:
             allMLTPValues = await self.limit_values_repo.get_data( yesterday, tomorrow, "RTM", "Multiplier", "OB")
             
             
-            getplantsData = self.get_all_plant_data_for_scheduling(schedule_date, "SG")
+            getplantsData = await self.get_all_plant_data_for_scheduling(schedule_date, "SG")
             # return getplantsData
-            getplantsDataDC =  self.get_all_plant_data_for_scheduling(schedule_date, "DC")
+            getplantsDataDC = await self.get_all_plant_data_for_scheduling(schedule_date, "DC")
             
             # countblockSGData = self.get_last_record_of_sg(getplantsData,0)
             
             
             
             # Fetch data from MongoDB
-            get_forecasted_value =  self.serve_demand_repo.get_demand(schedule_date)
+            get_forecasted_value = await self.serve_demand_repo.get_demand(schedule_date)
             
             totalAvailability =   self.total_availability(getplantsData,get_forecasted_value)
             
@@ -1365,7 +1365,7 @@ class RealtimemarketService:
             blk_no_to_run_schedule = 96 
             
             
-            data = self.SchedulingCalculator(
+            data = await self.SchedulingCalculator(
             total_availability=totalAvailability,
             rtm_forecasted_price=rtm_forecasted_price,
             get_plants_data=getplantsData,
@@ -1379,7 +1379,7 @@ class RealtimemarketService:
         except Exception as e:
             return {"status": "error", "message": f"Internal Server Error: {str(e)}"}
     
-    def SchedulingCalculator(self,
+    async def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,
@@ -2440,7 +2440,7 @@ class RealtimemarketService:
                             "scheduling_requisition_type": "NA",
                         }
                         # return insertData
-                        self.scheduling_requisition_repo.create(insertData)
+                        await self.scheduling_requisition_repo.create(insertData)
                         # Replace this with actual DB insert
                         # db.session.add(SchedulingRequisitionCalculation(**insertData))
                         # db.session.commit()
@@ -2508,7 +2508,7 @@ class RealtimemarketService:
                         }
                        
                         # return insertData
-                        self.scheduling_requisition_repo.create(insertData)
+                        await self.scheduling_requisition_repo.create(insertData)
                         
                         plkey += 1
                         
@@ -2528,7 +2528,7 @@ class RealtimemarketService:
         return reviseDataTotalsupply
         
 
-    def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
+    async def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
         
 
         # scheduledatetimestamp = yesterday midnight (unix timestamp)
@@ -2594,7 +2594,7 @@ class RealtimemarketService:
             {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
         ]
 
-        posted_jobs = list(self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)) # type: ignore
+        posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
         
         return posted_jobs
 

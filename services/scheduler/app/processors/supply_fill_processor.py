@@ -43,7 +43,7 @@ class SupplyFillProcessor(BaseProcessor):
         schedule = "0 0 * * *"
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {"status": "error", "message": "Failed to record job start"}
@@ -75,7 +75,7 @@ class SupplyFillProcessor(BaseProcessor):
                 "cron_job": "supply_fill"
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -99,7 +99,7 @@ class SupplyFillProcessor(BaseProcessor):
                 "data_type": "supply",
                 "correlation_id": execution_id
             }
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -125,9 +125,9 @@ class SupplyFillProcessor(BaseProcessor):
             today_dt = datetime.combine(today, datetime.min.time())
             
             # 1. Identify existing records for today
-            today_dc_sg_records = self.dc_sg_repository.get_records_by_date(today)
-            today_supply_records = self.supply_repository.find_supply_serve_by_date(today_dt)
-            if today_supply_records.count() > 0:
+            today_dc_sg_records = await self.dc_sg_repository.get_records_by_date(today)
+            today_supply_records = await self.supply_repository.find_supply_serve_by_date(today_dt)
+            if len(today_supply_records) > 0:
                 logger.info("Supply data already exists for today")
                 return True
             existing_keys = set()
@@ -144,9 +144,9 @@ class SupplyFillProcessor(BaseProcessor):
             # 2. Get all plants
             cursor = self.plant_repository.collection.find({})
             try:
-                plants = list(cursor)
+                plants = await cursor.to_list(length=10000)
             finally:
-                cursor.close()
+                await cursor.close()
             new_dc_sg_entities = []
             
             for plant in plants:
@@ -154,7 +154,7 @@ class SupplyFillProcessor(BaseProcessor):
                 if not plant_id: continue
                 
                 # Fetch latest historical record for each block and type
-                historical_records = self.dc_sg_repository.get_latest_records_per_timeblock(plant_id)
+                historical_records = await self.dc_sg_repository.get_latest_records_per_timeblock(plant_id)
                 if not historical_records:
                     logger.debug(f"No history for plant {plant_id}")
                     continue
@@ -204,7 +204,7 @@ class SupplyFillProcessor(BaseProcessor):
             # 3. Insert into dc_sg
             processed_into_dc_sg = 0
             for entity in new_dc_sg_entities:
-                res = self.dc_sg_repository.update_or_insert_record(entity)
+                res = await self.dc_sg_repository.update_or_insert_record(entity)
                 if res.upserted_id or res.modified_count > 0:
                     processed_into_dc_sg += 1
             
@@ -235,7 +235,7 @@ class SupplyFillProcessor(BaseProcessor):
                 supply_entities.append(supply_entity)
             
             if supply_entities:
-                res = self.supply_repository.bulk_insert_supply_serve_with_deduplication(supply_entities)
+                res = await self.supply_repository.bulk_insert_supply_serve_with_deduplication(supply_entities)
                 logger.info(f"Bulk inserted {res.get('inserted_count', 0)} entities into supply_serve.")
             
             # 5. Trigger demand schedule update for today
@@ -245,7 +245,7 @@ class SupplyFillProcessor(BaseProcessor):
                 # Since supply_processor._update_demand_schedule is complex, let's trigger it.
                 from .supply_processor import SupplyProcessor
                 sp = SupplyProcessor()
-                sp._update_demand_schedule([today])
+                await sp._update_demand_schedule([today])
             except Exception as e:
                 logger.warning(f"Demand schedule update failed: {e}")
 

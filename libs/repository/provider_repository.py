@@ -23,49 +23,28 @@ class ProviderRepository(BaseRepository):
     def __init__(self, mongodb_uri: str, database_name: str):
         self.collection_name = "providers"
         super().__init__(self.collection_name, mongodb_uri, database_name)
-        self._ensure_collection()
-    
-    def _ensure_collection(self):
-        """Ensure the providers collection exists with proper indexes"""
+
+    async def ensure_indexes(self):
+        """Ensure indexes exist on the providers collection — call from app startup"""
         try:
-            # Create collection if it doesn't exist
-            if self.collection_name not in self.db.list_collection_names():
-                self.db.create_collection(self.collection_name)
-                logger.info("Created providers collection")
-            
-            # Create indexes for efficient queries
-            collection = self.db[self.collection_name]
-            
-            # Unique compound index for provider code + ingestion_type + data_type
-            collection.create_index([
+            await self.collection.create_index([
                 ("code", 1),
                 ("ingestion_type", 1),
                 ("data_type", 1)
             ], unique=True)
-            
-            # Compound index for provider queries
-            collection.create_index([
+            await self.collection.create_index([
                 ("ingestion_type", 1),
                 ("data_type", 1),
                 ("enabled", 1)
             ])
-            
-            # Index for enabled providers
-            collection.create_index([("enabled", 1)])
-            
-            # Index for ingestion type
-            collection.create_index([("ingestion_type", 1)])
-            
-            # Index for data type
-            collection.create_index([("data_type", 1)])
-            
+            await self.collection.create_index([("enabled", 1)])
+            await self.collection.create_index([("ingestion_type", 1)])
+            await self.collection.create_index([("data_type", 1)])
             logger.info("Created indexes for providers collection")
-            
         except Exception as e:
-            logger.error("Error ensuring providers collection: %s", e)
-            raise
+            logger.error("Error ensuring providers indexes: %s", e)
     
-    def create_provider(self, provider: ProviderEntity) -> str:
+    async def create_provider(self, provider: ProviderEntity) -> str:
         """
         Create a new provider
         
@@ -80,7 +59,7 @@ class ProviderRepository(BaseRepository):
             provider_dict["created_at"] = datetime.now()
             provider_dict["updated_at"] = datetime.now()
             
-            result = self.collection.insert_one(provider_dict)
+            result = await self.collection.insert_one(provider_dict)
             provider_id = str(result.inserted_id)
             
             logger.info("Created provider: %s (%s)", provider_id, provider.code)
@@ -90,7 +69,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error creating provider: %s", e)
             raise
     
-    def get_provider_by_id(self, provider_id: str) -> Optional[ProviderEntity]:
+    async def get_provider_by_id(self, provider_id: str) -> Optional[ProviderEntity]:
         """
         Get provider by ID
         
@@ -101,7 +80,7 @@ class ProviderRepository(BaseRepository):
             Optional[ProviderEntity]: Provider entity or None
         """
         try:
-            provider_doc = self.collection.find_one({"_id": ObjectId(provider_id)})
+            provider_doc = await self.collection.find_one({"_id": ObjectId(provider_id)})
             
             if provider_doc:
                 provider_doc["_id"] = str(provider_doc["_id"])
@@ -114,7 +93,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error getting provider by ID: %s", e)
             raise
     
-    def get_provider_by_code(self, code: str) -> Optional[ProviderEntity]:
+    async def get_provider_by_code(self, code: str) -> Optional[ProviderEntity]:
         """
         Get provider by code
         
@@ -125,7 +104,7 @@ class ProviderRepository(BaseRepository):
             Optional[ProviderEntity]: Provider entity or None
         """
         try:
-            provider_doc = self.collection.find_one({"code": code})
+            provider_doc = await self.collection.find_one({"code": code})
             
             if provider_doc:
                 provider_doc["_id"] = str(provider_doc["_id"])
@@ -138,7 +117,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error getting provider by code: %s", e)
             raise
     
-    def get_provider_by_code_and_data_type(self, code: str, data_type: str) -> Optional[ProviderEntity]:
+    async def get_provider_by_code_and_data_type(self, code: str, data_type: str) -> Optional[ProviderEntity]:
         """
         Get provider by code and data type
         
@@ -150,7 +129,7 @@ class ProviderRepository(BaseRepository):
             Optional[ProviderEntity]: Provider entity or None
         """
         try:
-            provider_doc = self.collection.find_one({
+            provider_doc = await self.collection.find_one({
                 "code": code,
                 "data_type": data_type
             })
@@ -166,7 +145,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error getting provider by code and data type: %s", e)
             raise
     
-    def get_all_providers(
+    async def get_all_providers(
         self,
         ingestion_type: Optional[IngestionType] = None,
         data_type: Optional[DataType] = None,
@@ -200,9 +179,10 @@ class ProviderRepository(BaseRepository):
                 query["enabled"] = enabled
             
             cursor = self.collection.find(query).skip(skip).limit(limit).sort("created_at", -1)
+            docs = await cursor.to_list(length=limit)
             
             providers = []
-            for doc in cursor:
+            for doc in docs:
                 doc["_id"] = str(doc["_id"])
                 # Let the field validators handle the conversion
                 providers.append(ProviderEntity(**doc))
@@ -214,7 +194,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error getting all providers: %s", e)
             raise
     
-    def count_providers(
+    async def count_providers(
         self,
         ingestion_type: Optional[IngestionType] = None,
         data_type: Optional[DataType] = None,
@@ -243,7 +223,7 @@ class ProviderRepository(BaseRepository):
             if enabled is not None:
                 query["enabled"] = enabled
             
-            count = self.collection.count_documents(query)
+            count = await self.collection.count_documents(query)
             logger.info("Counted %d providers", count)
             return count
             
@@ -251,7 +231,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error counting providers: %s", e)
             raise
     
-    def update_provider(self, provider_id: str, updates: Dict[str, Any]) -> bool:
+    async def update_provider(self, provider_id: str, updates: Dict[str, Any]) -> bool:
         """
         Update provider
         
@@ -265,7 +245,7 @@ class ProviderRepository(BaseRepository):
         try:
             updates["updated_at"] = datetime.now()
             
-            result = self.collection.update_one(
+            result = await self.collection.update_one(
                 {"_id": ObjectId(provider_id)},
                 {"$set": updates}
             )
@@ -281,7 +261,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error updating provider: %s", e)
             raise
     
-    def delete_provider(self, provider_id: str) -> bool:
+    async def delete_provider(self, provider_id: str) -> bool:
         """
         Delete provider
         
@@ -292,7 +272,7 @@ class ProviderRepository(BaseRepository):
             bool: True if deleted successfully
         """
         try:
-            result = self.collection.delete_one({"_id": ObjectId(provider_id)})
+            result = await self.collection.delete_one({"_id": ObjectId(provider_id)})
             
             if result.deleted_count > 0:
                 logger.info("Deleted provider: %s", provider_id)
@@ -305,7 +285,7 @@ class ProviderRepository(BaseRepository):
             logger.error("Error deleting provider: %s", e)
             raise
     
-    def enable_disable_provider(self, provider_id: str, enabled: bool) -> bool:
+    async def enable_disable_provider(self, provider_id: str, enabled: bool) -> bool:
         """
         Enable or disable provider
         
@@ -317,13 +297,13 @@ class ProviderRepository(BaseRepository):
             bool: True if updated successfully
         """
         try:
-            return self.update_provider(provider_id, {"enabled": enabled})
+            return await self.update_provider(provider_id, {"enabled": enabled})
             
         except Exception as e:
             logger.error("Error enabling/disabling provider: %s", e)
             raise
     
-    def get_providers_by_ingestion_type(self, ingestion_type: IngestionType) -> List[ProviderEntity]:
+    async def get_providers_by_ingestion_type(self, ingestion_type: IngestionType) -> List[ProviderEntity]:
         """
         Get providers by ingestion type
         
@@ -334,13 +314,13 @@ class ProviderRepository(BaseRepository):
             List[ProviderEntity]: List of providers
         """
         try:
-            return self.get_all_providers(ingestion_type=ingestion_type)
+            return await self.get_all_providers(ingestion_type=ingestion_type)
             
         except Exception as e:
             logger.error("Error getting providers by ingestion type: %s", e)
             raise
     
-    def get_providers_by_data_type(self, data_type: DataType) -> List[ProviderEntity]:
+    async def get_providers_by_data_type(self, data_type: DataType) -> List[ProviderEntity]:
         """
         Get providers by data type
         
@@ -351,13 +331,13 @@ class ProviderRepository(BaseRepository):
             List[ProviderEntity]: List of providers
         """
         try:
-            return self.get_all_providers(data_type=data_type)
+            return await self.get_all_providers(data_type=data_type)
             
         except Exception as e:
             logger.error("Error getting providers by data type: %s", e)
             raise
     
-    def get_enabled_providers(self) -> List[ProviderEntity]:
+    async def get_enabled_providers(self) -> List[ProviderEntity]:
         """
         Get all enabled providers
         
@@ -365,13 +345,13 @@ class ProviderRepository(BaseRepository):
             List[ProviderEntity]: List of enabled providers
         """
         try:
-            return self.get_all_providers(enabled=True)
+            return await self.get_all_providers(enabled=True)
             
         except Exception as e:
             logger.error("Error getting enabled providers: %s", e)
             raise
     
-    def check_code_exists(self, code: str, exclude_id: Optional[str] = None) -> bool:
+    async def check_code_exists(self, code: str, exclude_id: Optional[str] = None) -> bool:
         """
         Check if provider code already exists
         
@@ -388,13 +368,13 @@ class ProviderRepository(BaseRepository):
             if exclude_id:
                 query["_id"] = {"$ne": ObjectId(exclude_id)}  # type: ignore
             
-            count = self.collection.count_documents(query)
+            count = await self.collection.count_documents(query)
             return count > 0
         except Exception as e:
             logger.error("Error checking code existence: %s", e)
             raise
     
-    def check_provider_combination_exists(
+    async def check_provider_combination_exists(
         self, 
         code: str, 
         ingestion_type: IngestionType, 
@@ -423,7 +403,7 @@ class ProviderRepository(BaseRepository):
             if exclude_id:
                 query["_id"] = {"$ne": ObjectId(exclude_id)}  # type: ignore
             
-            count = self.collection.count_documents(query)
+            count = await self.collection.count_documents(query)
             return count > 0
             
         except Exception as e:

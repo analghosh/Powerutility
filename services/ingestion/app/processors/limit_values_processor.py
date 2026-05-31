@@ -156,7 +156,7 @@ class LimitValuesRepository:
         self.approval_collection = processing_settings.MONGODB_LIMIT_APPROVAL_COLLECTION
         self.audit_collection = processing_settings.MONGODB_LIMIT_AUDIT_COLLECTION
 
-    def create_approval_request(self, approval_doc: Dict[str, Any]) -> Any:
+    async def create_approval_request(self, approval_doc: Dict[str, Any]) -> Any:
         """
         Create approval request in limit_approval collection
         
@@ -167,12 +167,12 @@ class LimitValuesRepository:
             ObjectId of created approval request
         """
         try:
-            return self.flow_repo.create_approval(self.approval_collection, approval_doc)
+            return await self.flow_repo.create_approval(self.approval_collection, approval_doc)
         except Exception as e:
             logger.error(f"Error creating approval request: {e}")
             raise
 
-    def write_audit_log(self, audit_doc: Dict[str, Any]) -> None:
+    async def write_audit_log(self, audit_doc: Dict[str, Any]) -> None:
         """
         Write audit log entry
         
@@ -180,7 +180,7 @@ class LimitValuesRepository:
             audit_doc: Audit document to write
         """
         try:
-            self.flow_repo.write_audit(self.audit_collection, audit_doc)
+            await self.flow_repo.write_audit(self.audit_collection, audit_doc)
         except Exception as e:
             logger.error(f"Error writing audit log: {e}")
             raise
@@ -522,7 +522,7 @@ class LimitValuesProcessor:
                     # We need upsert_one.
                     # Assuming self.limit_values_repository.flow_repo has upsert_one (checked via service code)
                     
-                    self.limit_values_repository.flow_repo.upsert_one(
+                    await self.limit_values_repository.flow_repo.upsert_one(
                         self.limit_values_repository.approval_collection,
                         filter_doc,
                         update_payload
@@ -536,7 +536,7 @@ class LimitValuesProcessor:
 
             
             # Write single audit log for the batch/file
-            self.limit_values_repository.write_audit_log({
+            await self.limit_values_repository.write_audit_log({
                 "ts": now,
                 "actor_id": actor_id,
                 "actor_username": actor_username,

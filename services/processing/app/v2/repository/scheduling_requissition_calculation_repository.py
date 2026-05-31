@@ -22,7 +22,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         self.collection_name = collection_name
         logger.info(f"SchedulingRequisitionCalculationRepository initialized with collection: {collection_name}")
     
-    def _get_rtm_all_plant_data_sync(self) -> List[Dict[str, Any]]:
+    async def _get_rtm_all_plant_data(self) -> List[Dict[str, Any]]:
         """
         Get all RTM plant data for scheduling.
         Maps legacy field names to standard field names in response.
@@ -122,6 +122,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                         "schedule_date_timestamp_block": {"$first": "$scheduled_at_timestamp"},
                         "totalAvailability": {"$first": "$total_supply_available_mw"},
                         "demand_forecast": {"$first": "$demand_forecast_mw"},
+                        "forecast_source": {"$first": "$forecast_source"},
                         "surplus_deficit": {"$first": "$net_surplus_deficit_mw"},
                         "rtm_forecasted_price": {"$first": "$rtm_forecasted_price"},
                         "surplus_deficit_updated": {"$first": "$updated_surplus_deficit_mw"},
@@ -160,6 +161,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                         "schedule_date_timestamp": {"$first": "$schedule_date_timestamp_block"},
                         "totalAvailability": {"$first": "$totalAvailability"},
                         "demand_forecast": {"$first": "$demand_forecast"},
+                        "forecast_source": {"$first": "$forecast_source"},
                         "surplus_deficit": {"$first": "$surplus_deficit"},
                         "rtm_forecasted_price": {"$first": "$rtm_forecasted_price"},
                         "surplus_deficit_updated": {"$first": "$surplus_deficit_updated"},
@@ -187,6 +189,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                         "schedule_date_timestamp": 1,
                         "totalAvailability": 1,
                         "demand_forecast": 1,
+                        "forecast_source": 1,
                         "surplus_deficit": 1,
                         "rtm_forecasted_price": 1,
                         "surplus_deficit_updated": 1,
@@ -202,28 +205,26 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 }
             ]
 
-            return self.aggregate(self.collection_name, pipeline)
+            return await self.aggregate(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get RTM plant data for scheduling: {str(e)}")
             return []
 
-    def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
+    async def getRTMAllPlantDataForScheduling(self) -> List[Dict[str, Any]]:
         """
-        Get all RTM plant data for scheduling (synchronous version).
+        Get all RTM plant data for scheduling.
         Returns data with standardized field names while supporting legacy field names.
         """
-        return self._get_rtm_all_plant_data_sync()
+        return await self._get_rtm_all_plant_data()
 
     async def get_rtm_all_plant_data_for_scheduling(self) -> List[Dict[str, Any]]:
         """
         Get all RTM plant data for scheduling (async version).
         Returns data with standardized field names while supporting legacy field names.
         """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._get_rtm_all_plant_data_sync)
+        return await self.getRTMAllPlantDataForScheduling()
 
-    def create(self, record_data: Dict[str, Any]) -> str:
+    async def create(self, record_data: Dict[str, Any]) -> str:
         """
         Create a new scheduling requisition calculation record (backward compatibility alias).
         Handles both standard and legacy field names.
@@ -234,16 +235,16 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
         Returns:
             Inserted document ID
         """
-        return self.create_scheduling_record(record_data)
+        return await self.create_scheduling_record(record_data)
 
-    def create_scheduling_record(self, record_data: Dict[str, Any]) -> str:
+    async def create_scheduling_record(self, record_data: Dict[str, Any]) -> str:
         """
         Create a new scheduling requisition calculation record.
         Handles both standard and legacy field names.
-        
+
         Args:
             record_data: Record data dictionary
-            
+
         Returns:
             Inserted document ID
         """
@@ -253,8 +254,8 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 record_data["scheduling_req_type"] = record_data["scheduling_requisition_type"]
             elif "scheduling_requisition_type" not in record_data and "scheduling_req_type" in record_data:
                 record_data["scheduling_requisition_type"] = record_data["scheduling_req_type"]
-            
-            result = self.insert_one(self.collection_name, record_data)
+
+            result = await self.insert_one(self.collection_name, record_data)
             logger.info(f"[SchedulingRequisitionCalculationRepository] Successfully created scheduling record with ID: {result.inserted_id}")
             return str(result.inserted_id)
         except Exception as e:
@@ -262,24 +263,10 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
             raise
 
     async def create_scheduling_record_async(self, record_data: Dict[str, Any]) -> str:
-        """
-        Create a new scheduling requisition calculation record asynchronously.
-        
-        Args:
-            record_data: Record data dictionary
-            
-        Returns:
-            Inserted document ID
-        """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(
-                executor,
-                self.create_scheduling_record,
-                record_data
-            )
+        """Alias for create_scheduling_record (backward compatibility)."""
+        return await self.create_scheduling_record(record_data)
 
-    def create_many_scheduling_records(self, records: List[Dict[str, Any]]) -> Dict[str, int]:
+    async def create_many_scheduling_records(self, records: List[Dict[str, Any]]) -> Dict[str, int]:
         """
         Create multiple scheduling requisition calculation records.
         
@@ -329,7 +316,7 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                     if old_field in record and new_field in record:
                         record.pop(old_field, None)
             
-            result = self.insert_many(self.collection_name, records)
+            result = await self.insert_many(self.collection_name, records)
             logger.info(f"[SchedulingRequisitionCalculationRepository] Successfully created {len(result.inserted_ids)} scheduling records")
             return {"inserted_count": len(result.inserted_ids)}
         except Exception as e:
@@ -337,24 +324,10 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
             raise
 
     async def create_many_scheduling_records_async(self, records: List[Dict[str, Any]]) -> Dict[str, int]:
-        """
-        Create multiple scheduling requisition calculation records asynchronously.
-        
-        Args:
-            records: List of record data dictionaries
-            
-        Returns:
-            Dictionary with inserted_count
-        """
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(
-                executor,
-                self.create_many_scheduling_records,
-                records
-            )
+        """Alias for create_many_scheduling_records (backward compatibility)."""
+        return await self.create_many_scheduling_records(records)
 
-    def get_by_schedule_date_and_block(
+    async def get_by_schedule_date_and_block(
         self,
         schedule_date: str,
         time_block: Optional[int] = None
@@ -440,12 +413,12 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
                 {"$sort": {"time_block": 1}}
             ]
             
-            return self.aggregate(self.collection_name, pipeline)
+            return await self.aggregate(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get scheduling records: {str(e)}")
             return []
     
-    def delete_all_for_schedule_date(self, schedule_date: str, audit_logger=None, user_context: Optional[Dict[str, Any]] = None) -> int:
+    async def delete_all_for_schedule_date(self, schedule_date: str, audit_logger=None, user_context: Optional[Dict[str, Any]] = None) -> int:
         """
         Delete all scheduling records for a specific schedule_date.
         Used to clear all existing records before inserting new calculations for a date.
@@ -474,14 +447,14 @@ class SchedulingRequisitionCalculationRepository(GenericRepository):
             collection = self.db[self.collection_name]
             
             # Count records before deletion for logging
-            count_before = collection.count_documents({
+            count_before = await collection.count_documents({
                 "scheduled_at": {"$gte": target_date, "$lt": end_date}
             })
-            
+
             logger.info(f"[SchedulingRequisitionCalculationRepository] Found {count_before} record(s) to delete for schedule_date={schedule_date}")
-            
+
             # Delete all records for this date range
-            result = collection.delete_many({
+            result = await collection.delete_many({
                 "scheduled_at": {"$gte": target_date, "$lt": end_date}
             })
             

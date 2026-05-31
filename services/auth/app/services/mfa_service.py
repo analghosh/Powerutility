@@ -40,11 +40,11 @@ class MFAService:
         return totp.now()
     
     def verify_totp(self, secret: str, code: str) -> bool:
-        """Verify TOTP code with window buffer"""
+        """Verify TOTP code against current time window only"""
         if not secret or not code:
             logger.warning("TOTP verification failed: empty secret or code")
             return False
-            
+
         try:
             totp = pyotp.TOTP(
                 secret,
@@ -52,8 +52,8 @@ class MFAService:
                 interval=self.period,
                 name=self.issuer
             )
-            # Use window parameter for time tolerance (1 window = ±30 seconds)
-            result = totp.verify(code, valid_window=self.window)
+            # valid_window=0 — only accept the current 30s window, no adjacent windows
+            result = totp.verify(code, valid_window=0)
             logger.info(f"TOTP verification result: {result} for code: {code}")
             return result
         except Exception as e:
