@@ -101,7 +101,7 @@ class BaseRawDataProcessor(ABC):
                     },
                     service="scheduler"
                 )
-                execution_log_id = self.job_detail_repository.log_execution(job_detail)
+                execution_log_id = await self.job_detail_repository.log_execution(job_detail)
                 logger.info("Logged job execution start: %s", execution_id)
             except (ValueError, TypeError, OSError) as log_error:
                 logger.warning("Failed to log job execution start: %s", str(log_error))
@@ -123,7 +123,7 @@ class BaseRawDataProcessor(ABC):
                 # Log job completion with no records
                 if self.job_detail_repository and execution_log_id:
                     try:
-                        self.job_detail_repository.update_execution(execution_id, {
+                        await self.job_detail_repository.update_execution(execution_id, {
                             "execution_end": end_time,
                             "duration_seconds": execution_time,
                             "status": "success",
@@ -168,14 +168,14 @@ class BaseRawDataProcessor(ABC):
                                self.provider_type, processing_status_id, raw_data_id, data_type)    
                     
                     # Update status to PROCESSING
-                    self.processing_status_repository.update_status(
+                    await self.processing_status_repository.update_status(
                         processing_status_id, 
                         RawDataStatus.PROCESSING,
                         processing_started_at=datetime.now()
                     )
                     
                     # Get raw data from time series collection
-                    raw_data_record = self.raw_data_service.get_by_id(raw_data_id)
+                    raw_data_record = await self.raw_data_service.get_by_id(raw_data_id)
                     if not raw_data_record:
                         raise ValueError(f"Raw data record not found: {raw_data_id}")
                     
@@ -186,7 +186,7 @@ class BaseRawDataProcessor(ABC):
                     
                     if processing_result.get("success", False):
                         # Update status to COMPLETED
-                        self.processing_status_repository.update_status(
+                        await self.processing_status_repository.update_status(
                             processing_status_id,
                             RawDataStatus.COMPLETED,
                             processing_completed_at=datetime.now(),
@@ -205,7 +205,7 @@ class BaseRawDataProcessor(ABC):
                         error_message = processing_result.get("error", "Unknown processing error")
                         retry_count = record.get("retry_count", 0) + 1
                         
-                        self.processing_status_repository.update_status(
+                        await self.processing_status_repository.update_status(
                             processing_status_id,
                             RawDataStatus.FAILED,
                             error_message=error_message,
@@ -225,7 +225,7 @@ class BaseRawDataProcessor(ABC):
                     # Update status to failed
                     try:
                         retry_count = record.get("retry_count", 0) + 1
-                        self.processing_status_repository.update_status(
+                        await self.processing_status_repository.update_status(
                             processing_status_id,
                             RawDataStatus.FAILED,
                             error_message=f"Processing exception: {str(record_error)}",
@@ -256,7 +256,7 @@ class BaseRawDataProcessor(ABC):
             # Log job completion
             if self.job_detail_repository and execution_log_id:
                 try:
-                    self.job_detail_repository.update_execution(execution_id, {
+                    await self.job_detail_repository.update_execution(execution_id, {
                         "execution_end": end_time,
                         "duration_seconds": execution_time,
                         "status": status,
@@ -290,7 +290,7 @@ class BaseRawDataProcessor(ABC):
             # Log job failure
             if self.job_detail_repository and execution_log_id:
                 try:
-                    self.job_detail_repository.update_execution(execution_id, {
+                    await self.job_detail_repository.update_execution(execution_id, {
                         "execution_end": end_time,
                         "duration_seconds": execution_time,
                         "status": "error",

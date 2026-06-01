@@ -49,7 +49,7 @@ class RenewableProcessor(BaseProcessor):
         schedule = "*/15 * * * *"
         start_time = datetime.now()
 
-        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -88,7 +88,7 @@ class RenewableProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -117,7 +117,7 @@ class RenewableProcessor(BaseProcessor):
                 "cron_job": "renewable"
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -223,9 +223,7 @@ class RenewableProcessor(BaseProcessor):
             plants_map: Dict[str, Any] = {}
             if plant_ids:
                 try:
-                    found_plants = await asyncio.to_thread(
-                        lambda: list(self.plant_repository.find_many({"plant_id": {"$in": list(plant_ids)}}))
-                    )
+                    found_plants = await self.plant_repository.find_many({"plant_id": {"$in": list(plant_ids)}})
                     for p in found_plants:
                         if p.get("plant_id"):
                             plants_map[p["plant_id"]] = p
@@ -322,17 +320,15 @@ class RenewableProcessor(BaseProcessor):
             target_end = datetime.combine(target_date, datetime.max.time())
 
             # 1. Which plant_ids have ANY record in dc_sg_renewable for today?
-            dc_sg_today = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.find_by_date, target_date
-            )
+            dc_sg_today = await self.dc_sg_renewable_repository.find_by_date(target_date)
             plants_in_dc_sg_today = {r.get("plant_id") for r in dc_sg_today if r.get("plant_id")}
 
             # 2. Which plant_ids have ANY record in renewable_serve for today?
             try:
-                serve_today = list(self.renewable_repository.serve_collection.find(
+                serve_today = await self.renewable_repository.serve_collection.find(
                     {"scheduled_at": {"$gte": target_start, "$lte": target_end}},
                     projection={"plant_id": 1, "_id": 0}
-                ))
+                ).to_list(length=10000)
                 plants_in_serve_today = {r.get("plant_id") for r in serve_today if r.get("plant_id")}
             except Exception as e:
                 logger.error("Error querying renewable_serve for today's plant_ids: %s", e)
@@ -340,9 +336,7 @@ class RenewableProcessor(BaseProcessor):
 
             # 3. All known plants
             try:
-                all_plants = await asyncio.to_thread(
-                    lambda: list(self.plant_repository.collection.find({}, {"plant_id": 1, "_id": 0}))
-                )
+                all_plants = await self.plant_repository.collection.find({}, {"plant_id": 1, "_id": 0}).to_list(length=10000)
                 all_plant_ids = {p.get("plant_id") for p in all_plants if p.get("plant_id")}
             except Exception as e:
                 logger.error("Error fetching all plants for rollover: %s", e)
@@ -362,9 +356,7 @@ class RenewableProcessor(BaseProcessor):
             )
 
             # 5. For each missing plant, fetch yesterday's dc_sg_renewable records
-            yesterday_records = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.find_by_date, yesterday
-            )
+            yesterday_records = await self.dc_sg_renewable_repository.find_by_date(yesterday)
 
             # Index yesterday's records by plant_id
             yesterday_by_plant: Dict[str, List[Dict]] = {}
@@ -421,9 +413,7 @@ class RenewableProcessor(BaseProcessor):
         Unique key: scheduled_at, plant_id, time_block, type
         """
         try:
-            staging_records = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.find_by_date_range, start_date, end_date
-            )
+            staging_records = await self.dc_sg_renewable_repository.find_by_date_range(start_date, end_date)
 
             if not staging_records:
                 logger.info("No dc_sg_renewable records found for %s – %s", start_date, end_date)
@@ -529,7 +519,7 @@ class RenewableProcessor(BaseProcessor):
         schedule = "0 0 * * *"
         start_time = datetime.now()
 
-        execution_id: str = self._record_job_start(job_type, job_name, schedule, start_time) or ""
+        execution_id: str = await self._record_job_start(job_type, job_name, schedule, start_time) or ""
         if execution_id:
             self.set_correlation_id(execution_id)
 
@@ -540,15 +530,11 @@ class RenewableProcessor(BaseProcessor):
             tomorrow = today + timedelta(days=1)
 
             # Carry forward for today
-            today_result = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.carry_forward_for_date, today
-            )
+            today_result = await self.dc_sg_renewable_repository.carry_forward_for_date(today)
             logger.info("Carry-forward today (%s): %s", today, today_result)
 
             # Carry forward for tomorrow
-            tomorrow_result = await asyncio.to_thread(
-                self.dc_sg_renewable_repository.carry_forward_for_date, tomorrow
-            )
+            tomorrow_result = await self.dc_sg_renewable_repository.carry_forward_for_date(tomorrow)
             logger.info("Carry-forward tomorrow (%s): %s", tomorrow, tomorrow_result)
 
             # Promote carried records to renewable_serve
@@ -567,7 +553,7 @@ class RenewableProcessor(BaseProcessor):
                 "execution_time": execution_time,
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -593,7 +579,7 @@ class RenewableProcessor(BaseProcessor):
                 "error": str(e),
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -624,7 +610,8 @@ class RenewableProcessor(BaseProcessor):
         schedule = "0 0 * * *"
         start_time = datetime.now()
 
-        execution_id: str = self._record_job_start(job_type, job_name, schedule, start_time) or ""
+        # Generate and record job start
+        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if execution_id:
             self.set_correlation_id(execution_id)
 
@@ -639,58 +626,72 @@ class RenewableProcessor(BaseProcessor):
             logger.info("Renewable archival: archive < %s, delete < %s", archive_cutoff, delete_cutoff)
 
             # 1. Find records to archive
-            cursor = self.renewable_repository.find_many({
+            archival_candidates = await self.renewable_repository.find_many({
                 "scheduled_at": {"$lt": datetime.combine(archive_cutoff, datetime.min.time())}
-            })
-            archival_candidates = list(cursor)
+            }, limit=10000)
+            
+            if not archival_candidates:
+                logger.info("No renewable records found for archival")
+            else:
+                archived_count_actual = 0
+                if archival_candidates:
+                    logger.info(f"Found {len(archival_candidates)} renewable records to potentially archive")
+                    
+                    # 2. Prepare for historical insertion with Deduplication
+                    historical_inserts = []
+                    
+                    min_date = min(d["scheduled_at"] for d in archival_candidates)
+                    max_date = max(d["scheduled_at"] for d in archival_candidates)
+                    
+                    # Deduplication using Unique Key: scheduled_at, time_block, type, plant_id
+                    existing_hist_docs = await self.renewable_repository.find_historical_many({
+                        "scheduled_at": {"$gte": min_date, "$lte": max_date}
+                    })
 
-            archived_count_actual = 0
-            if archival_candidates:
-                logger.info("Found %d renewable records to archive", len(archival_candidates))
-
-                min_date = min(d["scheduled_at"] for d in archival_candidates)
-                max_date = max(d["scheduled_at"] for d in archival_candidates)
-
-                existing_hist_cursor = self.renewable_repository.find_historical_many({
-                    "scheduled_at": {"$gte": min_date, "$lte": max_date}
-                })
-                existing_keys = set()
-                for doc in existing_hist_cursor:
-                    existing_keys.add((
-                        doc.get("scheduled_at"),
-                        doc.get("time_block"),
-                        doc.get("type"),
-                        doc.get("plant_id")
-                    ))
-
-                historical_inserts = []
-                for doc in archival_candidates:
-                    key = (doc.get("scheduled_at"), doc.get("time_block"), doc.get("type"), doc.get("plant_id"))
-                    if key not in existing_keys:
-                        hist_doc = dict(doc)
-                        if "_id" in hist_doc:
-                            del hist_doc["_id"]
-                        hist_doc["archived_at"] = datetime.now()
-                        hist_doc["archived_timestamp"] = datetime.now()
-                        historical_inserts.append(hist_doc)
-                        existing_keys.add(key)
-
-                if historical_inserts:
-                    try:
-                        repo_res = self.renewable_repository.bulk_insert_renewable_historical_with_deduplication(
-                            historical_inserts
+                    existing_keys = set()
+                    for doc in existing_hist_docs:
+                        key = (
+                            doc.get("scheduled_at"),
+                            doc.get("time_block"),
+                            doc.get("type"),
+                            doc.get("plant_id")
                         )
-                        archived_count_actual = repo_res.get("inserted_count", 0)
-                        error_count = repo_res.get("error_count", 0)
-                        logger.info("Archived %d renewable records. Errors: %d", archived_count_actual, error_count)
-                    except Exception as e:
-                        logger.error("Error bulk-inserting renewable history: %s", e)
+                        existing_keys.add(key)
+                    
+                    for doc in archival_candidates:
+                        key = (
+                            doc.get("scheduled_at"),
+                            doc.get("time_block"),
+                            doc.get("type"),
+                            doc.get("plant_id")
+                        )
+                        
+                        if key not in existing_keys:
+                            hist_doc = dict(doc)
+                            if "_id" in hist_doc: del hist_doc["_id"]
+                            
+                            hist_doc["archived_at"] = datetime.now()
+                            hist_doc["archived_timestamp"] = datetime.now()
+                            
+                            historical_inserts.append(hist_doc)
+                            existing_keys.add(key)
+                    
+                    if historical_inserts:
+                        try:
+                            repo_res = await self.renewable_repository.bulk_insert_renewable_historical_with_deduplication(historical_inserts)
+                            archived_count_actual = repo_res.get("inserted_count", 0)
+                            error_count = repo_res.get("error_count", 0)
+                            logger.info(f"✅ Archived {archived_count_actual} new renewable records to historical. Errors: {error_count}")
+                            if error_count > 0:
+                                logger.warning(f"Renewable archival encountered {error_count} errors, continuing as non-fatal.")
+                        except Exception as e:
+                            logger.error(f"Error bulk inserting renewable history: {e}")
 
             # 2. Cleanup old records from serve
             delete_query = {
                 "scheduled_at": {"$lt": datetime.combine(delete_cutoff, datetime.min.time())}
             }
-            del_res = self.renewable_repository.serve_collection.delete_many(delete_query)
+            del_res = await self.renewable_repository.serve_collection.delete_many(delete_query)
             deleted_count = del_res.deleted_count
             logger.info("Cleaned up %d renewable records older than %s", deleted_count, delete_cutoff)
 
@@ -705,8 +706,8 @@ class RenewableProcessor(BaseProcessor):
                 "cutoff_date": delete_cutoff.isoformat(),
                 "execution_time": execution_time
             }
-
-            self._record_job_completion(
+            
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -732,7 +733,7 @@ class RenewableProcessor(BaseProcessor):
                 "error": str(e)
             }
 
-            self._record_job_completion(
+            await self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -749,9 +750,142 @@ class RenewableProcessor(BaseProcessor):
             logger.error("Error: %s", str(e))
             return error_result
 
-    # ---------------------------------------------------------------
-    # Internal helpers
-    # ---------------------------------------------------------------
+    async def process_raw_data_to_serve(
+        self, 
+        raw_data: List[Dict[str, Any]], 
+        metadata: Dict[str, Any],
+        provider_config: Dict[str, Any]
+    ) -> bool:
+        """
+        Process raw renewable data and store it in the serve collection using Bulk Operations.
+        Implements the abstract method from BaseProcessor.
+        """
+        try:
+            logger.info("Processing %d renewable raw data items (Bulk Mode)", len(raw_data))
+            
+            # Key extraction for bulk pre-fetching
+            plant_ids = set()
+            lookup_keys = []
+            valid_items = []
+            
+            for item in raw_data:
+                pid = item.get('plant_id')
+                if pid:
+                    plant_ids.add(pid)
+                    # Use same key structure as repository
+                    lookup_keys.append({
+                        "scheduled_at": item.get('scheduled_at'),
+                        "time_block": item.get('time_block'),
+                        "type": item.get('type'),
+                        "plant_id": pid
+                    })
+                    valid_items.append(item)
+            
+            # 1. Bulk Fetch Plants
+            plants_map = {}
+            if plant_ids:
+                try:
+                    found_plants = await self.plant_repository.find_many({"plant_id": {"$in": list(plant_ids)}})
+                    for p in found_plants:
+                        plants_map[p.get('plant_id')] = p
+                except Exception as e:
+                    logger.error(f"Error bulk fetching plants: {e}")
+            
+            # 2. Bulk Fetch Existing Records
+            existing_records_map = {}
+            if lookup_keys:
+                found_recs = await self.renewable_repository.find_by_unique_keys(lookup_keys)
+                for rec in found_recs:
+                    k = (rec.get("scheduled_at"), rec.get("time_block"), rec.get("type"), rec.get("plant_id"))
+                    existing_records_map[k] = rec
+            
+            # Prepare date boundaries
+            today = datetime.now().date()
+            day_before_yesterday = today - timedelta(days=2)
+            
+            serve_items = []
+            historical_items = []
+            
+            processed_count = 0
+            
+            for data_item in valid_items:
+                try:
+                    pid = data_item.get('plant_id')
+                    plant = plants_map.get(pid)
+                    if not plant:
+                        continue
+
+                    # Parse scheduled_at for routing logic
+                    scheduled_at_val = data_item.get('scheduled_at')
+                    if isinstance(scheduled_at_val, str):
+                        try:
+                            # Handle 'Z' or simple ISO
+                            scheduled_date = datetime.fromisoformat(scheduled_at_val.replace('Z', '+00:00')).date()
+                        except:
+                            continue
+                    elif isinstance(scheduled_at_val, datetime):
+                        scheduled_date = scheduled_at_val.date()
+                    else:
+                        continue
+                        
+                    # Lookup existing
+                    key_tuple = (scheduled_at_val, data_item.get('time_block'), data_item.get('type'), pid)
+                    existing_record = existing_records_map.get(key_tuple)
+                    
+                    # Create entity using helper methods to preserve timestamps and handle revisions
+                    if existing_record:
+                        renewable_entity = self._create_renewable_entity_with_preserved_timestamps(
+                            data_item, metadata, plant, existing_record
+                        )
+                    else:
+                        renewable_entity = self._create_renewable_entity_from_raw(
+                            data_item, metadata, plant
+                        )
+
+                    if not renewable_entity:
+                        continue
+
+                    # Routing
+                    # Serve Logic (Today, Tomorrow, Yesterday, DayBefore)
+                    if scheduled_date >= today:
+                        # Convert to dict for repository consumption
+                        serve_items.append(renewable_entity.model_dump(by_alias=True))
+                    
+                    # Historical Logic
+                    if scheduled_date < today:
+                         # Earlier than today => Historical
+                         historical_items.append(renewable_entity.model_dump(by_alias=True))
+                    elif scheduled_date >= day_before_yesterday and scheduled_date < today:
+                         # Yesterday/DayBefore => Both Serve (handled above) AND Historical
+                         historical_items.append(renewable_entity.model_dump(by_alias=True))
+
+                    processed_count += 1
+                
+                except Exception as e:
+                    logger.error(f"Error processing item: {e}")
+                    continue
+
+            # Execute Bulk Serve Ops
+            if serve_items:
+                res = await self.renewable_repository.bulk_upsert_renewable_serve(serve_items)
+                logger.info(f"Bulk processed {len(serve_items)} serve records. Inserted: {res.get('inserted_count')}, Modified: {res.get('modified_count')}, Upserted: {res.get('upserted_count')}")
+
+            # Execute Historical Ops
+            if historical_items:
+                res_hist = await self.renewable_repository.bulk_insert_renewable_historical_with_deduplication(historical_items)
+                logger.info(f"Processed {len(historical_items)} historical records. Inserted: {res_hist.get('inserted_count')}, Duplicates Removed: {res_hist.get('duplicates_removed')}")
+
+            return processed_count > 0
+
+        except Exception as e:
+            logger.error("Error in process_raw_data_to_serve: %s", str(e))
+            return False
+        finally:
+            try:
+                if hasattr(self.renewable_repository, 'close'):
+                    self.renewable_repository.close()
+            except Exception as e:
+                logger.warning(f"Error during connection cleanup: {e}")
 
     def _create_renewable_entity_from_raw(
         self,

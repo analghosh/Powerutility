@@ -4,12 +4,19 @@ Seeds scheduler-specific cron job configurations
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from libs.core.job_seeder import BaseJobSeeder
 from libs.core.job_repositories import JobDataRepository
 from services.scheduler.app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Standalone crons superseded by demand_serve_pipeline when pipeline is enabled
+PIPELINE_STANDALONE_JOB_TYPES: Tuple[str, ...] = (
+    "idf_forecast_merge",
+    "demand_data_processing",
+    "new_dsm_rate_calculation",
+)
 
 
 class SchedulerJobSeeder(BaseJobSeeder):
@@ -19,6 +26,47 @@ class SchedulerJobSeeder(BaseJobSeeder):
         """Initialize scheduler job seeder"""
         super().__init__(job_data_repository, "scheduler")
         self.settings = settings
+
+    def _pipeline_enabled(self) -> bool:
+        return getattr(self.settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True)
+
+    def _standalone_step_cron_enabled(self, setting_attr: str, default: bool = True) -> bool:
+        """When pipeline is on, standalone step crons are disabled to avoid races."""
+        if self._pipeline_enabled():
+            return False
+        return getattr(self.settings, setting_attr, default)
+
+    async def seed_default_jobs(self) -> Dict[str, Any]:
+        results = await super().seed_default_jobs()
+        await self._sync_pipeline_job_policy()
+        return results
+
+    async def _sync_pipeline_job_policy(self) -> None:
+        """Align enabled flags in job_data with pipeline on/off."""
+        pipeline_enabled = self._pipeline_enabled()
+        for job_type in PIPELINE_STANDALONE_JOB_TYPES:
+            existing = await self.job_data_repository.get_job(job_type)
+            if not existing:
+                continue
+            desired = not pipeline_enabled
+            if existing.get("enabled", True) != desired:
+                await self.job_data_repository.update_job_enabled_status(job_type, desired)
+                logger.info(
+                    "Pipeline policy: set %s enabled=%s (pipeline_enabled=%s)",
+                    job_type,
+                    desired,
+                    pipeline_enabled,
+                )
+
+        pipeline_job = await self.job_data_repository.get_job("demand_serve_pipeline")
+        if pipeline_job and pipeline_job.get("enabled", True) != pipeline_enabled:
+            await self.job_data_repository.update_job_enabled_status(
+                "demand_serve_pipeline", pipeline_enabled
+            )
+            logger.info(
+                "Pipeline policy: set demand_serve_pipeline enabled=%s",
+                pipeline_enabled,
+            )
     
     def get_default_jobs(self) -> List[Dict[str, Any]]:
         """Get default scheduler jobs"""
@@ -40,9 +88,15 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "job_type": "demand_data_processing",
                 "name": "Demand Data Processing",
                 "type": "data_processing",
-                "schedule": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_SCHEDULE', '0 1 * * *'),
-                "enabled": getattr(self.settings, 'DEMAND_DATA__PROCESSING_CRON_ENABLED', True),
-                "timezone": getattr(self.settings, 'DEMAND_DATA__PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
+                "schedule": getattr(
+                    self.settings,
+                    'DEMAND_DATA_PROCESSING_CRON',
+                    getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_SCHEDULE', '*/15 * * * *')
+                ),
+                "enabled": self._standalone_step_cron_enabled(
+                    "DEMAND_DATA_PROCESSING_CRON_ENABLED", True
+                ),
+                "timezone": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Processes demand data from raw data to serve collections",
                 "priority": 4
             },
@@ -67,12 +121,49 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 5
             },
             {
+                "job_type": "idf_forecast_merge",
+                "name": "IDF Forecast Merge",
+                "type": "data_processing",
+                "schedule": getattr(
+                    self.settings,
+                    "IDF_FORECAST_MERGE_CRON_SCHEDULE",
+                    "*/15 * * * *",
+                ),
+                "enabled": self._standalone_step_cron_enabled(
+                    "IDF_FORECAST_MERGE_CRON_ENABLED", True
+                ),
+                "timezone": getattr(self.settings, "CRON_TIMEZONE", "Asia/Kolkata"),
+                "description": "Merges forecast_serve (RTM API or CSV) into demand_serve IDF per idf_forecast_switch",
+                "priority": 5,
+            },
+            {
+                "job_type": "demand_serve_pipeline",
+                "name": "Demand Serve Pipeline (IDF → Demand → DSM)",
+                "type": "data_processing",
+                "schedule": getattr(
+                    self.settings,
+                    "DEMAND_SERVE_PIPELINE_CRON_SCHEDULE",
+                    "*/15 * * * *",
+                ),
+                "enabled": getattr(self.settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
+                "timezone": getattr(self.settings, "CRON_TIMEZONE", "Asia/Kolkata"),
+                "description": (
+                    "Runs idf_forecast_merge, demand_data_processing, and new_dsm_rate_calculation "
+                    "sequentially every 15 minutes"
+                ),
+                "priority": 3,
+            },
+            {
                 "job_type": "supply_data_processing",
                 "name": "Supply Data Processing",
                 "type": "data_processing",
-                "schedule": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_SCHEDULE', '0 1 * * *'),
-                "enabled": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_ENABLED', True),
-                "timezone": getattr(self.settings, 'SUPPLY_DATA__PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
+                "schedule": getattr(
+                    self.settings,
+                    'SUPPLY_DATA_PROCESSING_CRON',
+                    getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_SCHEDULE', '*/15 * * * *')
+                ),
+                "enabled": getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_ENABLED', True),
+                "timezone": getattr(self.settings, 'SUPPLY_DATA_PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Processes supply data from raw data to serve collections",
                 "priority": 4
             },
@@ -154,9 +245,29 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "System Cleanup",
                 "type": "maintenance",
                 "schedule": getattr(self.settings, 'SYSTEM_CLEANUP_SCHEDULE', '0 2 * * *'),
-                "enabled": getattr(self.settings, 'SYSTEM_CLEANUP_ENABLED', False),
+                "enabled": getattr(self.settings, 'SYSTEM_CLEANUP_ENABLED', True),
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
-                "description": "Cleans up old system data and logs",
+                "description": "Cleans up old integration apilog data dynamically across all *_integration_apilog collections",
+                "priority": 8
+            },
+            {
+                "job_type": "integration_apilog_cleanup",
+                "name": "Integration API Log Cleanup",
+                "type": "maintenance",
+                "schedule": getattr(self.settings, 'INTEGRATION_API_LOG_CLEANUP_SCHEDULE', '0 2 * * *'),
+                "enabled": getattr(self.settings, 'INTEGRATION_API_LOG_CLEANUP_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
+                "description": "Deletes integration API logs older than 7 days from all *_integration_apilog collections",
+                "priority": 8
+            },
+            {
+                "job_type": "scheduling_history_cleanup",
+                "name": "Scheduling History Cleanup",
+                "type": "maintenance",
+                "schedule": getattr(self.settings, 'SCHEDULING_HISTORY_CLEANUP_SCHEDULE', '0 1 * * *'),
+                "enabled": getattr(self.settings, 'SCHEDULING_HISTORY_CLEANUP_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
+                "description": "Deletes scheduling requisition calculation history older than 90 days",
                 "priority": 8
             },
             {
@@ -178,6 +289,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Archives demand serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
+            },
+            {
+                "job_type": "forecast_serve_archival",
+                "name": "Forecast Serve Data Archival",
+                "type": "maintenance",
+                "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Archives forecast_serve to forecast_serve_historical; keeps 4-day rolling window in forecast_serve (same pattern as demand_serve)",
+                "priority": 7,
             },
             {
                 "job_type": "supply_serve_archival",
@@ -236,9 +357,9 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "Job Logs Cleanup",
                 "type": "maintenance",
                 "schedule": getattr(self.settings, 'JOB_LOGS_CLEANUP_SCHEDULE', '0 4 * * *'),
-                "enabled": False,
+                "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
-                "description": "Cleans up old job execution logs",
+                "description": "Cleans up old job execution logs from job_detail older than 60 days",
                 "priority": 11
             }
             ,
@@ -267,7 +388,9 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "New DSM Rate and Net DSM Amount Calculation",
                 "type": "data_processing",
                 "schedule": getattr(self.settings, 'NEW_DSM_RATE_CALCULATION_CRON', "*/15 * * * *"),  # Every 15 minutes
-                "enabled": getattr(self.settings, 'NEW_DSM_RATE_CALCULATION_ENABLED', True),
+                "enabled": self._standalone_step_cron_enabled(
+                    "NEW_DSM_RATE_CALCULATION_ENABLED", True
+                ),
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Calculates DSM rates using new DSM engine with multi-exchange aggregation (IEX, PXIL, HPX) every 15 minutes",
                 "priority": 5
@@ -380,6 +503,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Marks RTM block bids as lapsed when trade_session passes active window (current session + 3)",
+                "priority": 7
+            },
+            {
+                "job_type": "rtm_block_bid_book_sync",
+                "name": "RTM Block Bid Book Sync",
+                "type": "data_sync",
+                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Syncs RTM block bid book data every 15 minutes",
                 "priority": 7
             },
             {

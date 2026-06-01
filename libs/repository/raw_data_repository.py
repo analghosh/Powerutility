@@ -9,6 +9,28 @@ from datetime import datetime, timedelta
 from bson import ObjectId
 from pymongo.errors import OperationFailure
 
+
+def _safe_match_str(value: Optional[str], field: str) -> Optional[str]:
+    """
+    Validate that a value intended for a MongoDB $match filter is a plain string.
+    Rejects dicts/lists (which would be treated as operator expressions) and
+    strings that start with '$' (MongoDB operator prefix).
+    Raises ValueError on invalid input so callers fail loudly.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Invalid type for aggregation field '{field}': "
+            f"expected str, got {type(value).__name__}"
+        )
+    if value.startswith("$"):
+        raise ValueError(
+            f"Invalid value for aggregation field '{field}': "
+            f"operator-prefixed strings are not permitted"
+        )
+    return value
+
 from libs.database.base_repository import BaseRepository
 from libs.enum.raw_data_status import RawDataStatus
 from libs.models.raw_data_entity import RawDataEntity
@@ -21,11 +43,13 @@ class RawDataRepository(BaseRepository):
     Repository for managing all raw data in single collection
     Uses metadata to differentiate between data types and providers
     """
-    
+
+    _collection_initialized = set()
+
     def __init__(self, mongodb_uri: str, database_name: str, data_type: Optional[str] = None):
         """
         Initialize raw data repository
-        
+
         Args:
             mongodb_uri: MongoDB connection URI
             database_name: Database name
@@ -36,7 +60,7 @@ class RawDataRepository(BaseRepository):
             self.collection_name = f"{data_type.lower()}_raw_data"
         else:
             self.collection_name = "raw_data"
-            
+
         super().__init__(self.collection_name, mongodb_uri, database_name)
         self._create_timeseries_collection_if_not_exists()
         self._create_indexes()
@@ -46,62 +70,87 @@ class RawDataRepository(BaseRepository):
         Create time series collection if it doesn't exist
         Configures MongoDB time series collection for optimal performance
         """
-        try:
-            # Check if collection already exists
-            existing_collections = self.db.list_collection_names()
-            if self.collection_name in existing_collections:
-                logger.info("Time series collection '%s' already exists", self.collection_name)
-                return
-            
-            # Create time series collection with proper configuration
-            timeseries_options = {
-                "timeField": "created_at",           # Time field for time series
-                "metaField": "metadata",             # Metadata field for grouping
-                "granularity": "minutes"             # Time series granularity
-            }
-            
-            # Create the time series collection
-            self.db.create_collection(
-                self.collection_name,
-                timeseries=timeseries_options
-            )
-            
-            logger.info("Created time series collection '%s' with timeField='created_at', metaField='metadata'", 
-                       self.collection_name)
-            
-        except Exception as e:
-            logger.error("Error creating time series collection '%s': %s", self.collection_name, e, exc_info=True)
-            # If time series creation fails, fall back to regular collection
+        import asyncio
+
+        if self.collection_name in RawDataRepository._collection_initialized:
+            return
+
+        async def _do_create():
             try:
-                if self.collection_name not in self.db.list_collection_names():
-                    self.db.create_collection(self.collection_name)
-                    logger.warning("Created regular collection '%s' as fallback", self.collection_name)
-            except Exception as fallback_error:
-                logger.error("Error creating fallback collection: %s", fallback_error, exc_info=True)
-                raise
-    
+                # Check if collection already exists
+                existing_collections = await self.db.list_collection_names()
+                if self.collection_name in existing_collections:
+                    logger.info("Time series collection '%s' already exists", self.collection_name)
+                    RawDataRepository._collection_initialized.add(self.collection_name)
+                    return
+
+                # Create time series collection with proper configuration
+                timeseries_options = {
+                    "timeField": "created_at",           # Time field for time series
+                    "metaField": "metadata",             # Metadata field for grouping
+                    "granularity": "minutes"             # Time series granularity
+                }
+
+                # Create the time series collection
+                await self.db.create_collection(
+                    self.collection_name,
+                    timeseries=timeseries_options
+                )
+
+                logger.info("Created time series collection '%s' with timeField='created_at', metaField='metadata'",
+                           self.collection_name)
+                RawDataRepository._collection_initialized.add(self.collection_name)
+
+            except Exception as e:
+                logger.error("Error creating time series collection '%s': %s", self.collection_name, e, exc_info=True)
+                # If time series creation fails, fall back to regular collection
+                try:
+                    if self.collection_name not in await self.db.list_collection_names():
+                        await self.db.create_collection(self.collection_name)
+                        logger.warning("Created regular collection '%s' as fallback", self.collection_name)
+                        RawDataRepository._collection_initialized.add(self.collection_name)
+                except Exception as fallback_error:
+                    logger.error("Error creating fallback collection: %s", fallback_error, exc_info=True)
+                    raise
+        try:
+            asyncio.get_running_loop().create_task(_do_create())
+        except RuntimeError:
+            # No running event loop — run synchronously (e.g. during sync startup/testing)
+            asyncio.run(_do_create())
+
     def _create_indexes(self):
         """Create necessary indexes for time series collection"""
-        indexes = [
-            ([("data_type", 1), ("created_at", -1)], {}),
-            ([("provider_id", 1), ("created_at", -1)], {}),
-            ("metadata.upload_id", {}),
-        ]
-        for index_spec, kwargs in indexes:
-            try:
-                self.collection.create_index(index_spec, **kwargs)
-            except OperationFailure as e:
-                if e.code == 85:
-                    # IndexOptionsConflict: equivalent index already exists (time series originalSpec ordering), safe to ignore
-                    logger.debug("Index already exists (skipping): %s", e)
-                else:
-                    logger.error("Error creating raw data index: %s", e, exc_info=True)
-            except Exception as e:
-                logger.error("Error creating raw data index: %s", e, exc_info=True)
+        import asyncio
 
-        logger.info("Time series collection indexes created successfully")
-    
-    def create_raw_data(self, entity: RawDataEntity) -> str:
+        if self.collection_name in RawDataRepository._collection_initialized:
+            return
+
+        async def _do_create():
+            indexes = [
+                ([("data_type", 1), ("created_at", -1)], {}),
+                ([("provider_id", 1), ("created_at", -1)], {}),
+                ("metadata.upload_id", {}),
+            ]
+            for index_spec, kwargs in indexes:
+                try:
+                    await self.collection.create_index(index_spec, **kwargs)
+                except OperationFailure as e:
+                    if e.code == 85:
+                        # IndexOptionsConflict: equivalent index already exists (time series originalSpec ordering), safe to ignore
+                        logger.debug("Index already exists (skipping): %s", e)
+                    else:
+                        logger.error("Error creating raw data index: %s", e, exc_info=True)
+                except Exception as e:
+                    logger.error("Error creating raw data index: %s", e, exc_info=True)
+
+            logger.info("Time series collection indexes created successfully")
+            RawDataRepository._collection_initialized.add(self.collection_name)
+        try:
+            asyncio.get_running_loop().create_task(_do_create())
+        except RuntimeError:
+            asyncio.run(_do_create())
+
+    async def create_raw_data(self, entity: RawDataEntity) -> str:
         """
         Create raw data record in single collection
         
@@ -123,7 +172,7 @@ class RawDataRepository(BaseRepository):
                 raise ValueError("provider_id is required")
 
             # Insert document
-            result = self.collection.insert_one(data)
+            result = await self.collection.insert_one(data)
             
             logger.info("Created raw data record: %s (type: %s, provider: %s)", 
                        result.inserted_id, 
@@ -136,7 +185,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error creating raw data record: %s", e, exc_info=True)
             raise
     
-    def get_raw_data_by_ids(self, raw_data_ids: List[str]) -> List[Dict[str, Any]]:
+    async def get_raw_data_by_ids(self, raw_data_ids: List[str]) -> List[Dict[str, Any]]:
         """
         Get raw data records by their IDs
         
@@ -148,12 +197,10 @@ class RawDataRepository(BaseRepository):
         """
         try:
             object_ids = [ObjectId(rid) for rid in raw_data_ids]
-            cursor = self.collection.find({"_id": {"$in": object_ids}})
-            
-            records = []
-            for record in cursor:
+            records = await self.collection.find({"_id": {"$in": object_ids}}).to_list(length=10000)
+
+            for record in records:
                 record["_id"] = str(record["_id"])
-                records.append(record)
             
             logger.info("Retrieved %d raw data records by IDs", len(records))
             return records
@@ -164,7 +211,7 @@ class RawDataRepository(BaseRepository):
     
     
     
-    def get_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:
         """
         Get raw data by document ID
         
@@ -175,7 +222,7 @@ class RawDataRepository(BaseRepository):
             Dict[str, Any]: Raw data record or None
         """
         try:
-            record = self.collection.find_one({"_id": ObjectId(record_id)})
+            record = await self.collection.find_one({"_id": ObjectId(record_id)})
             if record:
                 record["_id"] = str(record["_id"])
             return record
@@ -184,7 +231,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error fetching raw data by ID %s: %s", record_id, e, exc_info=True)
             return None
 
-    def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
+    async def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
         """
         Get raw data by upload identifier
         
@@ -195,7 +242,7 @@ class RawDataRepository(BaseRepository):
             Dict[str, Any]: Raw data record or None
         """
         try:
-            record = self.collection.find_one({"metadata.upload_id": upload_id})
+            record = await self.collection.find_one({"metadata.upload_id": upload_id})
             if record:
                 record["_id"] = str(record["_id"])
             return record
@@ -204,7 +251,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error fetching raw data by upload_id %s: %s", upload_id, e, exc_info=True)
             return None
     
-    def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
+    async def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Get raw data statistics
         
@@ -216,12 +263,15 @@ class RawDataRepository(BaseRepository):
             Dict[str, Any]: Statistics
         """
         try:
+            safe_data_type = _safe_match_str(data_type, "data_type")
+            safe_provider_type = _safe_match_str(provider_type, "provider_type")
+
             match_filter = {}
-            if data_type:
-                match_filter["data_type"] = data_type
-            if provider_type:
-                match_filter["metadata.provider_type"] = provider_type
-            
+            if safe_data_type:
+                match_filter["data_type"] = safe_data_type
+            if safe_provider_type:
+                match_filter["metadata.provider_type"] = safe_provider_type
+
             pipeline = [
                 {"$match": match_filter},
                 {"$group": {
@@ -229,9 +279,9 @@ class RawDataRepository(BaseRepository):
                     "count": {"$sum": 1}
                 }}
             ]
-            
-            results = list(self.collection.aggregate(pipeline))
-            
+
+            results = await self.collection.aggregate(pipeline).to_list(length=10000)
+
             stats = {
                 "total": 0,
                 "pending": 0,
@@ -253,7 +303,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error getting raw data statistics: %s", e, exc_info=True)
             return {"error": str(e)}
     
-    def cleanup_old_records(self, older_than_days: int = 30) -> int:
+    async def cleanup_old_records(self, older_than_days: int = 30) -> int:
         """
         Clean up old raw data records
         
@@ -268,7 +318,7 @@ class RawDataRepository(BaseRepository):
             
             query = {"created_at": {"$lt": cutoff_date}}
             
-            result = self.collection.delete_many(query)
+            result = await self.collection.delete_many(query)
             
             logger.info("Cleaned up %d old raw data records (older than %d days)", 
                        result.deleted_count, older_than_days)
@@ -311,7 +361,7 @@ class RawDataRepository(BaseRepository):
             logger.error("Error checking time series configuration for '%s': %s", self.collection_name, e)
             return False
     
-    def get_timeseries_stats(self) -> Dict[str, Any]:
+    async def get_timeseries_stats(self) -> Dict[str, Any]:
         """
         Get time series collection statistics
         
@@ -323,7 +373,7 @@ class RawDataRepository(BaseRepository):
                 return {"error": "Collection is not configured as time series"}
             
             # Get collection stats
-            stats = self.db.command("collStats", self.collection_name)
+            stats = await self.db.command("collStats", self.collection_name)
             
             timeseries_stats = {
                 "is_timeseries": True,

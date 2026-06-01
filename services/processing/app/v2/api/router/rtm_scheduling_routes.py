@@ -65,6 +65,9 @@ class RTMSchedulingTableRecord(BaseModel):
     schedule_date_timestamp: Optional[int] = Field(None, description="Schedule date Unix timestamp", example=1761935400)
     totalAvailability: Optional[float] = Field(None, description="Total available supply in MW", example=371.0)
     demand_forecast: Optional[float] = Field(None, description="Demand forecast in MW", example=430.0)
+    forecast_source: Optional[str] = Field(
+        None, description="Forecast source: Auto (rtm_forecast_api) or Manual (csv)", example="Auto"
+    )
     surplus_deficit: Optional[float] = Field(None, description="Surplus (+) or deficit (-) in MW", example=-59.0)
     rtm_forecasted_price: Optional[float] = Field(None, description="RTM forecasted price in Rs/MWh", example=3300.96)
     surplus_deficit_updated: Optional[float] = Field(None, description="Updated surplus/deficit in MW", example=-58.66)
@@ -84,6 +87,7 @@ class RTMSchedulingTableRecord(BaseModel):
                 "schedule_date_timestamp": 1761935400,
                 "totalAvailability": 371.0,
                 "demand_forecast": 430.0,
+                "forecast_source": "Auto",
                 "surplus_deficit": -59.0,
                 "rtm_forecasted_price": 3300.96,
                 "surplus_deficit_updated": -58.66,

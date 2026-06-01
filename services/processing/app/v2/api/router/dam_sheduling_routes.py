@@ -267,41 +267,30 @@ async def debug_staging_status(
     
     # Get staging collection info
     repo = dam_scheduling_controller.service.repository
-    
+    staging_col = repo.repository.db[repo.staging_collection_name]
+
     # Count all staged records for this user
-    total_staged = repo.repository.db[repo.staging_collection_name].count_documents({
-        "staged_by": user_id
-    })
-    
+    total_staged = await staging_col.count_documents({"staged_by": user_id})
+
     # Count staged records with status
-    staged_with_status = repo.repository.db[repo.staging_collection_name].count_documents({
-        "staged_by": user_id,
-        "status": "staged"
-    })
-    
+    staged_with_status = await staging_col.count_documents({"staged_by": user_id, "status": "staged"})
+
     # Get sample records with different filters
-    sample_records_all = list(repo.repository.db[repo.staging_collection_name].find({
-        "staged_by": user_id
-    }).limit(3))
-    
-    sample_records_with_status = list(repo.repository.db[repo.staging_collection_name].find({
+    sample_records_all = await staging_col.find({"staged_by": user_id}).limit(3).to_list(length=3)
+
+    sample_records_with_status = await staging_col.find({
         "staged_by": user_id,
         "status": "staged"
-    }).limit(3))
-    
+    }).limit(3).to_list(length=3)
+
     # Get any records for this user (to see field structure)
-    any_user_records = list(repo.repository.db[repo.staging_collection_name].find({
-        "staged_by": user_id
-    }, {
-        "staged_by": 1,
-        "status": 1,
-        "plant_id": 1,
-        "staged_at": 1,
-        "_id": 1
-    }).limit(5))
-    
+    any_user_records = await staging_col.find(
+        {"staged_by": user_id},
+        {"staged_by": 1, "status": 1, "plant_id": 1, "staged_at": 1, "_id": 1}
+    ).limit(5).to_list(length=5)
+
     # Count all records in staging collection (any user)
-    total_all_staged = repo.repository.db[repo.staging_collection_name].count_documents({})
+    total_all_staged = await staging_col.count_documents({})
     
     return V2Response(
         data={
@@ -515,7 +504,7 @@ async def dam_schedule_by_date(
             success=True
         )
         
-        payload = dam_scheduling_controller.schedule_by_date(schedule_date)
+        payload = await dam_scheduling_controller.schedule_by_date(schedule_date)
         
         # Log user action
         audit_logger.log_user_action(

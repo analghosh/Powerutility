@@ -20,6 +20,41 @@ class AuditLoggerService:
         self.audit_db = None
         self.auth_db = None
 
+    async def ensure_indexes(self):
+        """
+        Create the minimal indexes required by the audit log API queries.
+
+        All three filter types (authentication / roles / data) query by:
+            service  +  data.action_type  →  sort timestamp DESC
+        Authentication additionally filters on status.
+
+        Two compound indexes cover everything — no more, no less — so write
+        performance on audit_logs is not impacted beyond what's necessary.
+        """
+        try:
+            audit_db = self._get_audit_db()
+            collection = audit_db["audit_logs"]
+
+            # Covers: roles query  →  {service, data.action_type}  sort timestamp
+            # Covers: data query   →  {service $in, data.action_type $in}  sort timestamp
+            await collection.create_index(
+                [("service", 1), ("data.action_type", 1), ("timestamp", -1)],
+                name="service_action_ts_idx",
+                background=True
+            )
+
+            # Covers: authentication query  →  {service, data.action_type, status}  sort timestamp
+            # (superset of above — MongoDB uses this for auth queries; above index used for others)
+            await collection.create_index(
+                [("service", 1), ("data.action_type", 1), ("status", 1), ("timestamp", -1)],
+                name="service_action_status_ts_idx",
+                background=True
+            )
+
+            logger.info("Audit log query indexes ensured on 'audit_logs'")
+        except Exception as e:
+            logger.error(f"Failed to ensure audit_logs indexes: {e}")
+
     def _get_audit_db(self):
         """Get audit database connection"""
         if self.audit_db is None:
@@ -73,12 +108,12 @@ class AuditLoggerService:
             # Fetch audit logs with pagination
             cursor = audit_logs_collection.find(query).skip(skip).limit(limit).sort("timestamp", -1)
             try:
-                audit_logs = list(cursor)
+                audit_logs = await cursor.to_list(length=10000)
             finally:
-                cursor.close()
+                await cursor.close()
             
             # Get total count for pagination
-            total = audit_logs_collection.count_documents(query)
+            total = await audit_logs_collection.count_documents(query)
             
             logger.info(f"Found {len(audit_logs)} audit logs (total: {total})")
             
@@ -149,7 +184,8 @@ class AuditLoggerService:
             
             # Get total count of unique users with role assignments
             count_pipeline = pipeline[:-1] + [{"$count": "total"}]
-            count_result = list(audit_logs_collection.aggregate(count_pipeline))
+            count_cursor = audit_logs_collection.aggregate(count_pipeline)
+            count_result = await count_cursor.to_list(length=10000)
             total = count_result[0]["total"] if count_result else 0
             
             # Add pagination to the main pipeline
@@ -159,7 +195,8 @@ class AuditLoggerService:
             ])
             
             # Execute aggregation
-            audit_logs = list(audit_logs_collection.aggregate(pipeline))
+            agg_cursor = audit_logs_collection.aggregate(pipeline)
+            audit_logs = await agg_cursor.to_list(length=10000)
             
             logger.info(f"Found {len(audit_logs)} latest role assignments (total unique users: {total})")
             
@@ -263,9 +300,9 @@ class AuditLoggerService:
                 )
                 
                 try:
-                    users = list(cursor)
+                    users = await cursor.to_list(length=10000)
                 finally:
-                    cursor.close()
+                    await cursor.close()
                 
                 for user in users:
                     user_id_str = str(user["_id"])
@@ -310,10 +347,13 @@ class AuditLoggerService:
                 
                 if not log.get("action_type"):
                     log["action_type"] = data.get("action_type")
-                
+
+                if not log.get("ip_address"):
+                    log["ip_address"] = data.get("ip_address") or data.get("client_ip")
+
                 if "status" in log and "success" not in log:
                     log["success"] = log["status"] == "success"
-                
+
                 if not log.get("error_message"):
                     log["error_message"] = log.get("error")
 

@@ -20,9 +20,6 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
             collection_name = settings.MONGODB_RTM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION
         self.collection_name = collection_name
         logger.info(f"RTMSingleBidDataForApprovalRepository initialized with collection: {collection_name}")
-        self._create_collection_if_not_exists()
-        self._create_indexes()
-
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.
@@ -94,10 +91,15 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         Returns {"data": True} if successful.
         """
         # return documents[0]
-        try: 
-            documents = list(documents.values())
+        try:
+            if isinstance(documents, dict):
+                documents = list(documents.values())
+            else:
+                documents = list(documents) if documents is not None else []
             documents = [doc for doc in documents if isinstance(doc, dict)]
-            result = self.collection.insert_many(documents, ordered=False)
+            if not documents:
+                return []
+            result = await self.collection.insert_many(documents, ordered=False)
             inserted_ids = [str(_id) for _id in result.inserted_ids]
             return inserted_ids
             
@@ -122,7 +124,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
 
         #     logger.info(f"Inserting {len(clean_docs)} documents into collection...")
             
-        #     result = self.collection.insert_many(clean_docs, ordered=False)
+        #     result = await self.collection.insert_many(clean_docs, ordered=False)
         #     inserted_ids = [str(_id) for _id in result.inserted_ids]
 
         #     logger.info(f"Bulk insert successful, inserted_ids: {inserted_ids}")
@@ -142,11 +144,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
 
         cursor = self.collection.aggregate(pipeline)
 
-        try:
-            result =  cursor.to_list(length=None)
-        except AttributeError:
-            # Fallback for PyMongo CommandCursor in server environment
-            result = list(cursor)
+        result = await cursor.to_list(length=10000)
 
         if result:
             return result[0].get("revision_no", 0)
@@ -158,7 +156,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             query = self.collection.find(filters, projection or {})
-            return list(query)
+            return await query.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to find RTM single bid records: %s", str(e))
             return []
@@ -168,7 +166,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         Update a single document matching the filter.
         """
         try:
-            result = self.collection.update_one(filter_query, update_query)
+            result = await self.collection.update_one(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error("Failed to update RTM single bid record: %s", str(e))
@@ -179,7 +177,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         Update multiple documents matching the filter.
         """
         try:
-            result = self.collection.update_many(filter_query, update_query)
+            result = await self.collection.update_many(filter_query, update_query)
             return {"matched_count": result.matched_count, "modified_count": result.modified_count}
         except Exception as e:
             logger.error("Failed to update RTM single bid records: %s", str(e))
@@ -191,7 +189,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         """
         try:
             cursor = self.collection.aggregate(pipeline)
-            return list(cursor)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error("Failed to aggregate RTM single bid records: %s", str(e))
             return []
@@ -216,7 +214,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
             logger.debug(f"Querying bid_status_data for date: {datebid}, collection: {self.collection_name}")
             
             # First, check if any records exist for this date (for debugging)
-            count = self.collection.count_documents({"bid_date": datebid})
+            count = await self.collection.count_documents({"bid_date": datebid})
             logger.debug(f"Found {count} documents with bid_date={datebid} in collection {self.collection_name}")
             
             pipeline = [
@@ -251,7 +249,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             logger.debug(f"Aggregation returned {len(results)} grouped results for date {datebid}")
             
@@ -323,7 +321,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by time_block
             result_dict = {}
@@ -352,7 +350,7 @@ class RTMSingleBidDataForApprovalRepository(GenericRepository):
         try:
             query = {"bid_date": datebid}
             cursor = self.collection.find(query)
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             
             # Convert to dictionary keyed by time_block
             result_dict = {}

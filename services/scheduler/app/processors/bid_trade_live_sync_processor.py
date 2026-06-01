@@ -14,7 +14,6 @@ from services.scheduler.app.core.config import settings
 from services.scheduler.app.services.scheduler_exchange_api_client import scheduler_exchange_client
 from services.scheduler.app.repository.bid_trade_serve_repository import BidTradeServeRepository
 from libs.models.bid_trade_serve_entity import BidTradeServeEntity
-from pymongo import MongoClient
 import httpx
 
 from libs.database.base_repository import BaseRepository
@@ -172,7 +171,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             logger.info(f"TESTING LOGS: [{market.upper()}] No bid details found in API response - DONE.")
             return {"processed": 0}
 
-        timeblocks = self.fetch_timeblock_data()
+        timeblocks = await self.fetch_timeblock_data()
         
         def normalize_time(t):
             if not t: return t
@@ -245,7 +244,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             bid_delivery_dt_str = bid_delivery_dt_obj.strftime("%Y-%m-%d")
 
             # --- 2. Raw Sync ---
-            self.db[target_collection_name].update_one({"OrderId": order_id}, {"$set": bid}, upsert=True)
+            await self.db[target_collection_name].update_one({"OrderId": order_id}, {"$set": bid}, upsert=True)
 
             # --- 3. Secondary Sync (Approval Records) ---
             from_period = bid.get("FromPeriodId")
@@ -257,10 +256,10 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             approval_query = {"start_time": from_period, "end_time": to_period, "bid_date": bid_delivery_dt_str, "exchangeStatus": "Submitted"}
             
             # Update approval if exists
-            approval_repo.collection.update_one(
-                approval_query, 
+            await approval_repo.collection.update_one(
+                approval_query,
                 {"$set": {
-                    "clearedVolume": traded_qty / tradeQtyDecimal, 
+                    "clearedVolume": traded_qty / tradeQtyDecimal,
                     "tradedPrice": trade_price / tradePriceDecimal
                 }}
             )
@@ -319,7 +318,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                  "record_data": e.model_dump(by_alias=True)} 
                 for e in entities_to_save
             ]
-            result = self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
+            result = await self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
             logger.info(f"TESTING LOGS: [{market.upper()}] Bulk upsert complete. Records: {result.get('total_count')}")
         
         logger.info(f"TESTING LOGS: [{market.upper()}] Process complete. Skipped: ID={skipped_order_id}, Date={skipped_date}, TB={skipped_timeblock}")
@@ -351,7 +350,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                 tradeQtyDecimal   = float(asset_details_response.get("TradeQtyDecimal")   or 1.0)
                 tradePriceDecimal = float(asset_details_response.get("TradePriceDecimal") or 1.0)
 
-            timeblocks = self.fetch_timeblock_data()
+            timeblocks = await self.fetch_timeblock_data()
 
             def normalize_time(t):
                 if not t:
@@ -408,7 +407,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                         price        = safe_float(bid.get("Price", 0))
 
                         # --- 1. Sync into dicision_rtm_block_bid_iex_response ---
-                        self.db["dicision_rtm_block_bid_iex_response"].update_one(
+                        await self.db["dicision_rtm_block_bid_iex_response"].update_one(
                             {"order_id": int(order_id)},
                             {"$set": {
                                 "status":                  order_status,
@@ -479,7 +478,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                              "record_data": e.model_dump(by_alias=True)}
                             for e in entities_to_save
                         ]
-                        result = self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
+                        result = await self.bid_trade_serve_repo.bulk_upsert_serve_records(records_with_filters)
                         logger.info(f"TESTING LOGS: [{job_name}] date={delivery_date_int} serve upsert={result.get('total_count')}")
 
                     total_processed += processed

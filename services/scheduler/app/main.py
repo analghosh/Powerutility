@@ -3,23 +3,8 @@ EPMS Scheduler Service
 Handles cron jobs and scheduling
 """
 
-# Auto-install libs package if not available
-try:
-    import libs.core.cron_manager
-except ImportError:
-    import sys
-    import subprocess
-    from pathlib import Path
-    print("📦 Installing dependencies...")
-    project_root = Path(__file__).parent.parent.parent.parent
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install", "-e", str(project_root)
-    ])
-    print("✅ Dependencies installed")
-
-import sys
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
@@ -35,7 +20,7 @@ from .seeder.timeblock_seeder import TimeblockSeeder
 from .shared.middleware.error_handler import ErrorHandlerMiddleware
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware, SecurityHeadersMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -72,6 +57,7 @@ def run_timeblock_seeder():
             
     except Exception as e:
         logger.error("Failed to run timeblock seeder: %s", str(e))
+
 
 
 def validate_database_configuration():
@@ -140,6 +126,7 @@ async def lifespan(app: FastAPI):
     
     # Validate configuration on startup
     validate_database_configuration()
+
     # Run timeblock seeder
     run_timeblock_seeder()
     
@@ -190,7 +177,10 @@ async def lifespan(app: FastAPI):
 app = FastAPI(
     title=settings.SERVICE_NAME,
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
+    docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    openapi_url="/openapi.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
 )
 
 # Add error handling middleware
@@ -217,6 +207,8 @@ logging_config = {
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
+# Security headers added to every response
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Add Auth Middleware
 # AuthMiddleware removed to allow internal trigger without authentication
@@ -332,7 +324,7 @@ async def scheduler_diagnostics():
     
     try:
         # Get scheduler status
-        scheduler_status = cron_manager.get_all_jobs()
+        scheduler_status = await cron_manager.get_all_jobs()
         
         # Get registered jobs configuration
         registered_jobs = cron_manager.get_registered_jobs()
@@ -357,19 +349,19 @@ async def scheduler_diagnostics():
             schedule = job_config.get('schedule', '')
             
             # Count executions in last 24 hours
-            count_24h = job_detail_collection.count_documents({
+            count_24h = await job_detail_collection.count_documents({
                 "job_type": job_type,
                 "execution_start": {"$gte": since_24h}
             })
-            
+
             # Count executions in last hour
-            count_1h = job_detail_collection.count_documents({
+            count_1h = await job_detail_collection.count_documents({
                 "job_type": job_type,
                 "execution_start": {"$gte": since_1h}
             })
-            
+
             # Get last execution
-            last_exec = job_detail_collection.find_one(
+            last_exec = await job_detail_collection.find_one(
                 {"job_type": job_type},
                 sort=[("execution_start", -1)]
             )
@@ -484,11 +476,52 @@ async def cache_stats():
     return get_cache_metrics()
 
 
+import re
+from fastapi import Header, HTTPException, status
+
+# Security: restricted cache pattern characters
+_CACHE_PATTERN_RE = re.compile(r"^[a-zA-Z0-9_:\-\.\*]+$")
+_MAX_PATTERN_LEN = 128
+
+async def _require_admin_auth(authorization: str = Header(None)):
+    """Dependency to require valid admin JWT for cache clear"""
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Bearer token required")
+    
+    token = authorization.split(" ", 1)[1]
+    from libs.auth_client import AuthClient
+    auth_client = AuthClient(settings.AUTH_SERVICE_URL)
+    
+    async with auth_client:
+        result = await auth_client.validate_token(token)
+    
+    if not result.valid:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
+    
+    # Require admin or cache:clear permission
+    if not (result.has_role("admin") or result.has_permission("cache:clear") or result.has_permission("*")):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Admin access required")
+    
+    return result
+
+
 @app.post("/cache/clear/{pattern}")
-async def clear_cache_pattern(pattern: str):
-    """Clear cache keys matching a pattern"""
+async def clear_cache_pattern(pattern: str, user=Depends(_require_admin_auth)):
+    """Clear cache keys matching a pattern (admin only)"""
+    # Input validation
+    if len(pattern) > _MAX_PATTERN_LEN:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pattern too long")
+    
+    if not _CACHE_PATTERN_RE.match(pattern):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid pattern characters")
+    
+    # Security: block overly broad patterns that would clear all keys
+    if pattern == "*" or pattern == "**":
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Pattern too broad")
+    
     from libs.middleware import clear_cache_pattern
     cleared_count = clear_cache_pattern(pattern)
+    logger.info(f"Cache clear by user {user.username}: pattern='{pattern}', cleared={cleared_count}")
     return {
         "message": f"Cleared {cleared_count} cache keys matching pattern '{pattern}'",
         "cleared_count": cleared_count

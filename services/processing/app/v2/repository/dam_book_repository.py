@@ -20,8 +20,6 @@ class DamBookRepository(GenericRepository):
         # Explicitly using the collection name from Scheduler config
         self.collection_name = "dam_book_collection" 
         logger.info(f"DamBookRepository initialized with collection: {self.collection_name}")
-        self._create_collection_if_not_exists()
-        
     def _create_collection_if_not_exists(self):
         try:
             db = self.db
@@ -43,7 +41,7 @@ class DamBookRepository(GenericRepository):
             # The scheduler stores DeliveryDate as int (e.g., 20250208)
             query = {"DeliveryDate": delivery_date}
             cursor = self.collection.find(query, {"_id": 0}) # Exclude _id
-            results = list(cursor)
+            results = await cursor.to_list(length=10000)
             logger.info(f"Retrieved {len(results)} DAM book entries for date {delivery_date}")
             return results
         except Exception as e:

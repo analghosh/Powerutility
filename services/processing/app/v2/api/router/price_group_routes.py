@@ -7,9 +7,9 @@ from pydantic import BaseModel, Field
 from datetime import datetime
 import logging
 
-from ....repository.price_group_repository import PriceGroupRepository
-from ....services.price_group_service import PriceGroupService
-from ....controller.price_group_controller import PriceGroupController
+from ...repository.price_group_repository import PriceGroupRepository
+from ...services.price_group_service import PriceGroupService
+from ...controller.price_group_controller import PriceGroupController
 from libs.models.price_group_entity import PriceGroupCreate, PriceGroupUpdate
 from libs.audit_queue.simple_logger import AuditLogger
 from libs.middleware import get_correlation_id
@@ -84,7 +84,7 @@ async def create_price_group(
     req_meta = build_req_meta(request)
 
     try:
-        new_id = controller.create(payload.model_dump(), user_context, req_meta)
+        new_id = await controller.create(payload.model_dump(), user_context, req_meta)
 
         audit_logger.log_user_action(
             service="processing",
@@ -144,7 +144,7 @@ async def get_price_group(
     req_meta = build_req_meta(request)
 
     try:
-        doc = controller.get(price_group_id, user_context, req_meta)
+        doc = await controller.get(price_group_id, user_context, req_meta)
         if not doc:
             raise HTTPException(status_code=404, detail="Price group not found")
 
@@ -224,7 +224,7 @@ async def list_price_groups(
         controller_start = time.time()
         logger.info(f"🔍 Starting controller.list call")
         
-        result = controller.list(filters, page, page_size, user_context, req_meta)
+        result = await controller.list(filters, page, page_size, user_context, req_meta)
         
         controller_time = time.time() - controller_start
         logger.info(f"🔍 Controller.list completed in {controller_time:.3f}s")
@@ -289,7 +289,7 @@ async def update_price_group(
             correlation_id=correlation_id,
             user_id=user_id
         )
-        updated = controller.update(price_group_id, updates.model_dump(exclude_none=True), user_context, req_meta)
+        updated = await controller.update(price_group_id, updates.model_dump(exclude_none=True), user_context, req_meta)
         if not updated:
             raise HTTPException(status_code=404, detail="Price group not found or not updated")
 
@@ -347,7 +347,7 @@ async def delete_price_group(
             correlation_id=correlation_id,
             user_id=user_id
         )
-        ok = controller.delete(price_group_id, user_context, req_meta)
+        ok = await controller.delete(price_group_id, user_context, req_meta)
         if not ok:
             raise HTTPException(status_code=404, detail="Price group not found")
 

@@ -2,11 +2,13 @@
 Limit Values Repository (main table operations)
 """
 
+import asyncio
 import logging
 from typing import List, Dict, Any, Optional
 from datetime import datetime, timedelta
 
 from .base_repository import GenericRepository
+from ...core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +16,7 @@ logger = logging.getLogger(__name__)
 class LimitValuesRepository:
     def __init__(self):
         self.repository = GenericRepository()
+        self.collection_name = getattr(settings, 'MONGODB_LIMIT_VALUES_COLLECTION', 'limit_values')
 
     async def ensure_collection_exists(self, collection_name: str):
         """
@@ -68,9 +71,6 @@ class LimitValuesRepository:
         For each unique key (block, id, market, category, area), returns the record with the latest inserted_at.
         """
         try:
-            # Ensure indexes exist even on read-first scenarios
-            await self.ensure_collection_exists(collection_name)
-            
             pipeline = []
             
             # 1. Date matching stage
@@ -136,7 +136,7 @@ class LimitValuesRepository:
                 {"$sort": {"block": 1, "id": 1}}
             ])
             
-            data = self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
+            data = await self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
             return data
             
         except Exception as e:
@@ -157,10 +157,8 @@ class LimitValuesRepository:
         Uses optimized pipeline for speed.
         """
         try:
-            # 0. Ensure indexes exist
             if date_filter and date_filter < datetime.now().strftime("%Y-%m-%d"):
                 collection_name = f"{collection_name}_historical"
-            await self.ensure_collection_exists(collection_name)
 
             base_pipeline = []
 
@@ -180,7 +178,7 @@ class LimitValuesRepository:
                         }
                     }
                 ]
-                max_date_result = self.repository.aggregate(collection_name, max_date_pipeline)
+                max_date_result = await self.repository.aggregate(collection_name, max_date_pipeline)
                 
                 if max_date_result and max_date_result[0].get("date"):
                     max_date_val = max_date_result[0]["date"]
@@ -223,18 +221,17 @@ class LimitValuesRepository:
             # Even then, the grouping stage is the bottleneck.
             
             count_pipeline = base_pipeline + [{"$count": "total"}]
-            count_result = self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
-            total = count_result[0]["total"] if count_result else 0
-
-            # 5. Main data pipeline
-            # We filter by block range directly on the matched documents.
-            # No grouping needed because of our unique index guarantees.
             data_pipeline = base_pipeline + [
                 {"$match": {"block": {"$gte": from_block, "$lte": to_block}}},
                 {"$sort": {"block": 1, "id": 1}}
             ]
-            
-            data = self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
+
+            # 5. Run count and data pipelines in parallel
+            count_result, data = await asyncio.gather(
+                self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000),
+                self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000),
+            )
+            total = count_result[0]["total"] if count_result else 0
             
             # Pagination calculations
             page_size = to_block - from_block + 1
@@ -290,7 +287,7 @@ class LimitValuesRepository:
                 count_pipeline.append({"$match": match_query})
             count_pipeline.append({"$count": "total"})
             
-            count_result = self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
+            count_result = await self.repository.aggregate(collection_name, count_pipeline, max_time_ms=30000)
             total = count_result[0]["total"] if count_result else 0
             
             # Calculate pagination
@@ -311,7 +308,7 @@ class LimitValuesRepository:
                 {"$limit": page_size}
             ])
             
-            data = self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
+            data = await self.repository.aggregate(collection_name, data_pipeline, max_time_ms=30000)
             
             return {
                 "data": data,
@@ -360,7 +357,7 @@ class LimitValuesRepository:
                 pipeline.append({"$match": match_query})
             pipeline.append({"$sort": {"scheduled_at": -1, "block": 1, "id": 1}})
             
-            data = self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
+            data = await self.repository.aggregate(collection_name, pipeline, max_time_ms=30000)
             
             return data
             
@@ -368,15 +365,126 @@ class LimitValuesRepository:
             logger.exception(f"[LimitValuesRepository] Failed get_all_data_with_filters: {str(e)}")
             raise
         
-    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    async def get_data(
+        self,
+        start_date,
+        end_date,
+        market: str,
+        id: str,
+        area: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values data asynchronously.
+        Accepts dates as either strings (YYYY-MM-DD) or date objects.
+        """
+        from datetime import date as _date
+        if isinstance(start_date, str):
+            start_date = datetime.strptime(start_date, "%Y-%m-%d").date()
+        if isinstance(end_date, str):
+            end_date = datetime.strptime(end_date, "%Y-%m-%d").date()
+        if isinstance(start_date, _date) and not isinstance(start_date, datetime):
+            start_date = datetime.combine(start_date, datetime.min.time())
+        if isinstance(end_date, _date) and not isinstance(end_date, datetime):
+            end_date = datetime.combine(end_date, datetime.min.time())
+
+        filter_query = {"scheduled_at": {"$gte": start_date, "$lt": end_date}}
+        if market and market != "":
+            filter_query["market"] = market
+        if id and id != "":
+            filter_query["category"] = id
+        if area and area != "" and area != "NA":
+            filter_query["area"] = area
+
+        return await self.repository.get_all(
+            self.collection_name,
+            filter=filter_query,
+            sort=[("scheduled_at", 1)],
+        )
+
+    async def get_data_byID_with_latest_date(
+        self,
+        ID: str,
+        market: str,
+        category: str,
+        area: str,
+        scheduled_at: datetime = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values by ID with latest date asynchronously.
+        If scheduled_at is not provided, defaults to today at midnight.
+        """
+        tomorrow_date = datetime.now() + timedelta(days=1)
+        if scheduled_at is None:
+            scheduled_at = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+        try:
+            match_filter = {
+                "scheduled_at": {"$gte": scheduled_at, "$lt": tomorrow_date},
+                "id": ID,
+                "market": market
+            }
+
+            if category and category != "":
+                match_filter["category"] = category
+            if area and area != "" and area != "NA":
+                match_filter["area"] = area
+
+            result = await self.repository.get_all(
+                self.collection_name,
+                filter=match_filter,
+                sort=[("scheduled_at", 1), ("block", 1)],
+            )
+
+            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to retrieve limit values by ID: {str(e)}")
+            return []
+
+    async def get_data_byID(
+        self,
+        schedule_date: str,
+        ID: str,
+        category: str,
+        market: str,
+        area: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Get limit values for a specific schedule date, ID, category, market and area.
+        """
+        try:
+            if isinstance(schedule_date, str):
+                target_date = datetime.strptime(schedule_date, "%Y-%m-%d")
+            elif isinstance(schedule_date, datetime):
+                target_date = schedule_date.replace(hour=0, minute=0, second=0, microsecond=0)
+            else:
+                target_date = schedule_date
+
+            filter_query = {
+                "scheduled_at": target_date,
+                "id": ID,
+                "market": market,
+            }
+            if category and category != "":
+                filter_query["category"] = category
+            if area and area != "" and area != "NA":
+                filter_query["area"] = area
+
+            result = await self.repository.get_all(
+                self.collection_name,
+                filter=filter_query,
+                sort=[("block", 1)],
+            )
+            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, date={schedule_date}")
+            return result
+        except Exception as e:
+            logger.error(f"Failed to retrieve limit values by ID and date: {str(e)}")
+            return []
+
+    async def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """
         Run an aggregation pipeline and return the list of documents.
         """
-        logger.debug("limitVallueRepository.aggregate | pipeline=%s", pipeline)
-        cursor = self.collection.aggregate(pipeline)
-        try:
-            return list(cursor)
-        finally:
-            cursor.close()
+        logger.debug("LimitValuesRepository.aggregate | pipeline=%s", pipeline)
+        return await self.repository.aggregate(self.collection_name, pipeline)
 
 limit_values_repository = LimitValuesRepository()

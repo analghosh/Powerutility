@@ -504,7 +504,7 @@ class DamSchedulingService:
         """Get tomorrow's date in IST as string."""
         return (datetime.now(timezone(timedelta(hours=5, minutes=30))).date() + timedelta(days=1)).isoformat()
 
-    def schedule_by_date(
+    async def schedule_by_date(
         self, schedule_date: Optional[str] = None
     ) -> Dict[str, Any]:
         """
@@ -584,7 +584,7 @@ class DamSchedulingService:
                 {"$sort": {"time_block": 1, "px_price": -1}}
             ]
             
-            dam_data_all = self.repository.repository.aggregate(self.repository.collection_name, dam_pipeline)
+            dam_data_all = await self.repository.repository.aggregate(self.repository.collection_name, dam_pipeline)
             
             # Group by time_block
             dam_data_by_block = {i: [] for i in range(1, 97)}
@@ -612,7 +612,7 @@ class DamSchedulingService:
                     }
                 }
             ]
-            forecast_data_all = self.demand_repo.repository.aggregate(self.demand_collection, demand_pipeline)
+            forecast_data_all = await self.demand_repo.repository.aggregate(self.demand_collection, demand_pipeline)
             
             forecast_by_block = {i: {"forecast": 0, "demand_forecast": 0} for i in range(1, 97)}
             for item in forecast_data_all:
@@ -656,7 +656,7 @@ class DamSchedulingService:
                 }
             ]
             
-            price_data_all = self.limit_repo.repository.aggregate(settings.MONGODB_LIMIT_VALUES_COLLECTION, dam_price_pipeline)
+            price_data_all = await self.limit_repo.repository.aggregate(settings.MONGODB_LIMIT_VALUES_COLLECTION, dam_price_pipeline)
             
             price_by_block = {i: 0 for i in range(1, 97)}
             for item in price_data_all:

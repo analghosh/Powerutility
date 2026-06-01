@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from io import BytesIO
 from typing import Dict, Any, List, Optional
 
+import httpx
 import pandas as pd
 from fastapi import HTTPException
 from fastapi.responses import StreamingResponse
@@ -51,14 +52,24 @@ class BlockBidServices:
         time_block_range = []
         data = []
 
-        market_type  = request.get("market_type", "RTM")
+        market_type_list = request.get("market_type", [])
         from_list    = request.get("from", [])
-
+        trade_sessions_raw = request.get("trade_session", []) or []
+        trade_sessions = []
         # DAM block bid has no session concept — use trade_session=0
-        if market_type.upper() == "DAM":
-            trade_sessions = [0] * len(from_list)
-        else:
-            trade_sessions = request.get("trade_session", [])
+        for i in range(len(from_list)):
+            market_type = market_type_list[i].upper()
+
+            if market_type == "DAM":
+                session = 0
+            else:
+                session = (
+                    int(trade_sessions_raw[i])
+                    if i < len(trade_sessions_raw) and trade_sessions_raw[i] not in (None, "")
+                    else 0
+                )
+
+            trade_sessions.append(session)
 
         # Fetch current max revision per (session, time_block) so each new insert gets max+1
         session_ints = [int(s) for s in trade_sessions]
@@ -85,7 +96,9 @@ class BlockBidServices:
                 "biding_date": formatted_date,
                 "reason": "",
                 "type": request["type"],
-                "market_type": market_type,
+                "market_type": request["market_type"][i],
+                "exchange": request["exchange"][i],
+                "selected_for": request["selected_for"][i],
                 "ex_split_string": f"IEX-{request['iex_price'][i]}_PXIL-{request['pxil_price'][i]}",
                 "revision_no": revision_no,
             }
@@ -216,16 +229,23 @@ class BlockBidServices:
             bid_type="block-bid",
         )
 
-        # 2. Fetch AssetId dynamically from exchange (same pattern as single bid)
-        asset_response = await api_client.get_asset_details(bid_type="block-bid")
+        # 2 & 3. Fetch AssetId and DeliveryDate in parallel — both are independent exchange calls
+        try:
+            asset_response, delivery_dates_resp = await asyncio.gather(
+                api_client.get_asset_details(bid_type="block-bid"),
+                api_client.get_delivery_dates(bid_type="block-bid"),
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Exchange API timed out fetching asset/delivery info.")
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach exchange API: {type(e).__name__}: {e}")
+
         asset_details_list = asset_response.get("AssetDetails", [])
         asset_id = asset_details_list[0].get("AssetId", "") if asset_details_list else ""
         logger.info(f"Asset details fetched: AssetId={asset_id}")
         biddedQtyDecimal = asset_details_list[0].get("OrderQtyDecimal", 10) if asset_details_list else 10
-
-        # 3. Fetch DeliveryDate from exchange (same pattern as single bid)
-        #    Exchange returns the exact Unix timestamp to use — don't compute it locally.
-        delivery_dates_resp = await api_client.get_delivery_dates(bid_type="block-bid")
         delivery_date_list = delivery_dates_resp.get("DeliveryDates", [])
 
         today    = datetime.now().date()
@@ -266,8 +286,15 @@ class BlockBidServices:
         # Fetch reference count once — calling it per-bid returns the same value
         # since the counter only increments on successful submission, not on fetch.
         # Use this as the base and offset each bid by blck_count for unique IDs.
-        bid_ref_base = await api_client.get_bid_reference_id()
-        bid_ref_start = bid_ref_base.get("RTMBlockBidRefCount", 0)
+        try:
+            bid_ref_base = await api_client.get_bid_reference_id()
+            bid_ref_start = bid_ref_base.get("RTMBlockBidRefCount", 0)
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Exchange API timed out fetching bid reference ID.")
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error fetching bid reference: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to fetch bid reference ID: {type(e).__name__}: {e}")
 
         for bid in bids:
             ex_split = bid.get("ex_split_string", "IEX-100_PXIL-0")
@@ -350,23 +377,13 @@ class BlockBidServices:
         rtm_bid_details = bid_details_response.get("RTMBlockBidDetails", []) if isinstance(bid_details_response, dict) else []
         response_docs: List[Dict[str, Any]] = []
         final_status = "Submitted"
+        updated_at = datetime.now()
 
-        for val in rtm_bid_details:
+        async def _update_bid_detail(val):
             order_status = val.get("OrderStatus", "Submitted")
-            final_status = order_status
             from_time    = val.get("FromPeriodId", "")
             to_time      = val.get("ToPeriodId", "")
             order_id     = val.get("OrderId", "")
-
-            # 8a. UPDATE the existing block_bid_current_data doc for this time-block
-            #     Mirrors single-bid pattern: update_one by (biding_date, from, to, status=Submitted)
-            exchange_fields = {
-                "exchangeStatus":          order_status,
-                "exchangeOrderId":         order_id,
-                "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
-                "orderId":                 order_id,
-                "updatedAt":               datetime.now(),
-            }
             await self.block_bid_repo.update_one(
                 {
                     "biding_date": biding_date,
@@ -374,11 +391,25 @@ class BlockBidServices:
                     "to":          to_time,
                     "status":      "Submitted",
                 },
-                {"$set": exchange_fields},
+                {"$set": {
+                    "exchangeStatus":          order_status,
+                    "exchangeOrderId":         order_id,
+                    "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
+                    "orderId":                 order_id,
+                    "updatedAt":               updated_at,
+                }},
             )
 
+        if rtm_bid_details:
+            final_status = rtm_bid_details[-1].get("OrderStatus", "Submitted")
+            # Fire all DB updates concurrently
+            await asyncio.gather(*[_update_bid_detail(v) for v in rtm_bid_details], return_exceptions=True)
+
+        for val in rtm_bid_details:
+            from_time  = val.get("FromPeriodId", "")
+            to_time    = val.get("ToPeriodId", "")
+            order_id   = val.get("OrderId", "")
             # 8b. Collect per-OrderId doc for dicision_rtm_block_bid_iex_response
-            #     (used by bid-book display and cancel-flow last_updated_time lookup)
             response_docs.append({
                 "trade_session":     val.get("Session"),
                 "from":              from_time,
@@ -389,7 +420,7 @@ class BlockBidServices:
                 "order_id":          order_id,
                 "ref_id":            val.get("BidReferenceId", ""),
                 "type":              "Sell" if val.get("BuySell") == "S" else "Buy",
-                "status":            order_status,
+                "status":            val.get("OrderStatus", "Submitted"),
                 "last_updated_time": val.get("LastUpdatedTime", ""),
                 "transaction_id":    transaction_id,
                 "Biding_date":       biding_date,
@@ -689,17 +720,25 @@ class BlockBidServices:
             bid_type="block-bid",
         )
 
-        # 2. Fetch AssetId
-        asset_response = await api_client.get_asset_details(bid_type="block-bid")
+        # 2 & 3. Fetch AssetId and DeliveryDate in parallel
+        try:
+            asset_response, delivery_dates_resp = await asyncio.gather(
+                api_client.get_asset_details(bid_type="block-bid"),
+                api_client.get_delivery_dates(bid_type="block-bid"),
+            )
+        except httpx.TimeoutException:
+            raise HTTPException(status_code=504, detail="Exchange API timed out fetching DAM asset/delivery info.")
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error: {e.response.text}")
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to reach DAM exchange API: {type(e).__name__}: {e}")
+
         asset_details_list = asset_response.get("AssetDetails", [])
         asset_id = asset_details_list[0].get("AssetId", "") if asset_details_list else ""
         biddedQtyDecimal = float(asset_details_list[0].get("OrderQtyDecimal", 10)) if asset_details_list else 10.0
         logger.info(f"DAM block bid: AssetId={asset_id}, QtyDecimal={biddedQtyDecimal}")
 
-        # 3. Fetch DeliveryDate
-        # DAM exchange returns a single object {DeliveryDateId, DeliveryDate}
-        # (not wrapped in a list like RTM)
-        delivery_dates_resp = await api_client.get_delivery_dates(bid_type="block-bid")
+        # DAM exchange returns a single object {DeliveryDateId, DeliveryDate} (not wrapped in a list)
         delivery_date_ts = delivery_dates_resp.get("DeliveryDate")
         if not delivery_date_ts:
             raise HTTPException(status_code=404, detail="DeliveryDate not found from DAM exchange")
@@ -857,21 +896,11 @@ class BlockBidServices:
         response_docs: List[Dict[str, Any]] = []
         final_status = "Submitted"
 
-        for val in dam_bid_details:
+        async def _update_dam_bid_detail(val):
             order_status = val.get("OrderStatus", "Submitted")
-            final_status = order_status
             from_time    = val.get("FromPeriodId", "")
             to_time      = val.get("ToPeriodId", "")
             order_id_val = val.get("OrderId", "")
-
-            # Update existing block_bid_current_data doc
-            exchange_fields = {
-                "exchangeStatus":          order_status,
-                "exchangeOrderId":         order_id_val,
-                "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
-                "orderId":                 order_id_val,
-                "updatedAt":               datetime.now(),
-            }
             await self.block_bid_repo.update_one(
                 {
                     "biding_date": biding_date,
@@ -880,19 +909,32 @@ class BlockBidServices:
                     "status":      "Submitted",
                     "market_type": "DAM",
                 },
-                {"$set": exchange_fields},
+                {"$set": {
+                    "exchangeStatus":          order_status,
+                    "exchangeOrderId":         order_id_val,
+                    "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
+                    "orderId":                 order_id_val,
+                    "updatedAt":               datetime.now(),
+                }},
             )
 
+        if dam_bid_details:
+            final_status = dam_bid_details[-1].get("OrderStatus", "Submitted")
+            await asyncio.gather(*[_update_dam_bid_detail(v) for v in dam_bid_details], return_exceptions=True)
+
+        for val in dam_bid_details:
+            from_time    = val.get("FromPeriodId", "")
+            to_time      = val.get("ToPeriodId", "")
             response_docs.append({
                 "from":              from_time,
                 "to":                to_time,
                 "time_block":        f"{from_time}-{to_time}",
                 "quantum":           abs(float(val.get("Quantity", 0))) / biddedQtyDecimal,
                 "bid_price":         float(val.get("Price", 0)),
-                "order_id":          order_id_val,
+                "order_id":          val.get("OrderId", ""),
                 "ref_id":            val.get("BidRef", ""),
                 "type":              "Sell" if val.get("BuySell") == "S" else "Buy",
-                "status":            order_status,
+                "status":            val.get("OrderStatus", "Submitted"),
                 "last_updated_time": val.get("LastUpdatedTime", ""),
                 "transaction_id":    transaction_id,
                 "Biding_date":       biding_date,
@@ -1030,10 +1072,10 @@ class BlockBidServices:
             # Fallback: submission-time snapshot until scheduler has synced
             logger.info(f"Bid-book: no scheduler-synced data for {biding_date}, falling back to iex_response collection")
             try:
-                cursor = self.iex_response_repo.collection.find(
+                docs = await self.iex_response_repo.collection.find(
                     {"inserted_date": biding_date}, sort=[("from", 1)]
-                )
-                for doc in cursor:
+                ).to_list(10000)
+                for doc in docs:
                     if "_id" in doc:
                         doc["_id"] = str(doc["_id"])
                     results.append(doc)

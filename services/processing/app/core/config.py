@@ -17,7 +17,8 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "processing-service"
     SERVICE_PORT: int = 8003
     SERVICE_HOST: str = "0.0.0.0"
-    DEBUG: bool = True
+    DEBUG: bool = False
+    ENABLE_SWAGGER: bool = False
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "text"  # "json", "text", or "colored"
     LOG_USE_COLORS: bool = True  # Enable colored console output
@@ -28,7 +29,7 @@ class Settings(BaseSettings):
     # Database Configuration
     MONGODB_URI: str = "mongodb://localhost:27017/" 
     MONGODB_DATABASE: str = "dev_epms"  # Default, overridden by .env
-    AUDIT_DB_NAME: str = "audit_db" 
+    AUDIT_DB_NAME: str = "dev_audit_db" 
     MONGODB_AUTH_COLLECTION: str = "users"
     MONGODB_SESSIONS_COLLECTION: str = "sessions"
     MONGODB_AUDIT_COLLECTION: str = "audit_logs"
@@ -80,7 +81,7 @@ class Settings(BaseSettings):
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: int = 7
     
     # Authentication Service
-    AUTH_SERVICE_URL: str = "https://api-dev.infiscopelabs.com/api/v1/auth"
+    AUTH_SERVICE_URL: str = "http://localhost:8001/api/v1/auth"
     AUTH_SERVICE_TIMEOUT: int = 10
     
     # Ingestion Service
@@ -94,7 +95,16 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 30
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
-    
+
+    # RabbitMQ Configuration
+    RABBITMQ_HOST: str = "127.0.0.1"
+    RABBITMQ_PORT: int = 5672
+    RABBITMQ_USER: str = "guest"
+    RABBITMQ_PASSWORD: str = "guest"
+    RABBITMQ_VHOST: str = "/"
+    USE_RABBITMQ_JOBS: bool = True
+    USE_RABBITMQ_AUDIT: bool = False
+
     # HMAC Authentication Configuration
     HMAC_ALLOWED_TIME_DRIFT: int = 300  # seconds (5 minutes)
     HMAC_NONCE_TTL: int = 300  # seconds (5 minutes)
@@ -124,6 +134,7 @@ class Settings(BaseSettings):
     MONGODB_WEATHER_SERVE: str = "weather_serve"
 
     MONGODB_DEMAND_SERVE_COLLECTION: str = "demand_serve"
+    MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
     MONGODB_TEMP_DEMAND_SERVE_COLLECTION: str = "temp_demand_serve"
     MONGODBT_EMP_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "temp_demand_serve_historical" 
     MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "demand_serve_historical" 
@@ -163,6 +174,7 @@ class Settings(BaseSettings):
     MONGODB_RTM_PRODUCT_HARDCODED_DATA_COLLECTION: str = "rtm_product_hardCoded_data"
     MONGODB_RTM_BID_CAPTURE_COLLECTION: str = "rtm_bid_capture"
     MONGODB_RTM_BID_CAPTURE_MANUAL_COLLECTION: str = "rtm_bid_capture_manual"
+    MONGODB_RTM_OPTIMIZATION_RAW_INPUTS_SNAPSHOT_COLLECTION: str = "rtm_optimization_raw_inputs_snapshot"
 
     MONGODB_RENEWABLE_SERVE: str = "renewable_serve"
     MONGODB_RENEWABLE_SERVE_HISTORICAL: str = "renewable_serve_historical"

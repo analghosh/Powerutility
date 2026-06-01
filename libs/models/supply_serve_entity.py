@@ -72,7 +72,10 @@ class SupplyServeEntity(BaseModel):
     ramp_up: Optional[float] = Field(None, description="Ramp up value")
     ramp_down: Optional[float] = Field(None, description="Ramp down value")
     dc_afterloss: Optional[float] = Field(None, description="DC after loss value")
-    
+    entire_shared_onbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Onbar Entitlement Amount")
+    entire_shared_offbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Offbar Entitlement Amount")
+    rtm_max: Optional[float] = Field(None, description="RTM Max value (SG of tomorrow at 10:10 AM, locked once set)")
+
     # Max MW DC for SG records (locked value from 08:00-08:14 tomorrow data)
     max_mw_dc: Optional[float] = Field(None, description="Max MW DC value (copied from volume for SG on tomorrow's 08:00-08:14 data)")
     eightThirtyValue: Optional[float] = Field(None, description="8:30 value for SG records (copied from volume for SG on tomorrow's 08:00-08:14 data)")
@@ -155,7 +158,10 @@ class SupplyServeHistoricalEntity(BaseModel):
     ramp_up: Optional[float] = Field(None, description="Ramp up value")
     ramp_down: Optional[float] = Field(None, description="Ramp down value")
     dc_afterloss: Optional[float] = Field(None, description="DC after loss value")
-    
+    entire_shared_onbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Onbar Entitlement Amount")
+    entire_shared_offbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Offbar Entitlement Amount")
+    rtm_max: Optional[float] = Field(None, description="RTM Max value (SG of tomorrow at 10:10 AM, locked once set)")
+
     # Original processing timestamps (preserved)
     inserted_at: datetime = Field(..., description="Original insertion timestamp")
     updated_at: datetime = Field(..., description="Original last update timestamp")

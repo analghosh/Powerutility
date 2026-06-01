@@ -189,9 +189,8 @@ class PlantsRepository(BaseRepository):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
-        self.create_indexes()
 
-    def create_indexes(self):
+    async def create_indexes(self):
         """Create indexes for plants collection"""
         try:
             # Drop existing indexes first to ensure cleaner state if schema changes
@@ -203,7 +202,7 @@ class PlantsRepository(BaseRepository):
             ]
             for index_name in to_drop:
                 try:
-                    self.collection.drop_index(index_name)
+                    await self.collection.drop_index(index_name)
                 except Exception:
                     pass
 
@@ -211,9 +210,9 @@ class PlantsRepository(BaseRepository):
             # This handles both cases:
             # 1. Base Plant (no approval_no): (plant_id, null) must be unique.
             # 2. Variant Plant (with approval_no): (plant_id, approval_no) must be unique.
-            self.collection.create_index(
+            await self.collection.create_index(
                 [("plant_id", 1), ("approval_no", 1)],
-                unique=True, 
+                unique=True,
                 background=True,
                 name="unique_plant_id_approval"
             )
@@ -222,7 +221,7 @@ class PlantsRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Failed to create indexes for plant_master: {str(e)}")
     
-    def bulk_upsert_plants(self, plants: List[Dict[str, Any]], filter_criteria: callable) -> Dict[str, Any]:
+    async def bulk_upsert_plants(self, plants: List[Dict[str, Any]], filter_criteria: callable) -> Dict[str, Any]:
         """
         Bulk upsert plants data with custom filter criteria
         
@@ -247,7 +246,7 @@ class PlantsRepository(BaseRepository):
                     plant_data["created_at"] = datetime.now()
                 
                 # Perform upsert
-                result = self.collection.update_one(
+                result = await self.collection.update_one(
                     filter_query,
                     {"$set": plant_data},
                     upsert=True
@@ -578,7 +577,7 @@ class PlantsProcessor:
                 }
             
             # Store directly in plants collection
-            result = self.plants_repository.bulk_upsert_plants(
+            result = await self.plants_repository.bulk_upsert_plants(
                 plants=mapped_data,
                 filter_criteria=self.create_plant_upsert_filter
             )
@@ -634,7 +633,7 @@ class PlantsProcessor:
             metadata={"job_type": job_type, "schedule": schedule}
         )
 
-    def record_job_completion(self, job_type: str, job_name: str, schedule: str,
+    async def record_job_completion(self, job_type: str, job_name: str, schedule: str,
                              execution_start: datetime, execution_end: datetime, execution_id: str,
                              status: str, success: bool, job_id: str, result: Optional[Dict[str, Any]] = None,
                              error_message: Optional[str] = None) -> None:
@@ -669,7 +668,7 @@ class PlantsProcessor:
             }
             
             # Update the existing job detail record
-            updated = self.job_detail_repository.update_execution(execution_id, update_data)
+            updated = await self.job_detail_repository.update_execution(execution_id, update_data)
             
             if updated:
                 logger.info("Updated job completion: %s - %s (execution_id: %s)", job_type, job_name, execution_id)
@@ -692,13 +691,13 @@ class PlantsProcessor:
                     metadata={"job_type": job_type, "schedule": schedule}
                 )
                 
-                self.job_detail_repository.log_execution(job_detail)
+                await self.job_detail_repository.log_execution(job_detail)
                 logger.info("Created new job completion record: %s - %s", job_type, job_name)
 
         except Exception as e:
             logger.error("Failed to record job completion for %s: %s", job_type, str(e))
 
-    def record_job_start(self, job_type: str, job_name: str, schedule: str, execution_start: datetime) -> Optional[str]:
+    async def record_job_start(self, job_type: str, job_name: str, schedule: str, execution_start: datetime) -> Optional[str]:
         """
         Record job start in audit database
         
@@ -717,7 +716,7 @@ class PlantsProcessor:
 
         try:
             # Get the job_id (ObjectId) from job_data collection using job_type
-            job_data = self.job_data_repository.get_job(job_type)
+            job_data = await self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return None
@@ -734,7 +733,7 @@ class PlantsProcessor:
                 job_id=str(job_data.get('_id'))
             )
 
-            self.job_detail_repository.log_execution(job_detail)
+            await self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (job_type: %s, execution_id: %s) in audit database",
                        job_name, job_type, execution_id)
 

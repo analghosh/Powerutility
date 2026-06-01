@@ -3,51 +3,6 @@ EPMS Processing Service - Clean Structure
 Maintains essential functionality with clean router organization
 """
 
-# Auto-install libs package if not available
-import sys
-import os
-from pathlib import Path
-
-# Add project root to Python path for development
-project_root = Path(__file__).parent.parent.parent.parent
-if str(project_root) not in sys.path:
-    sys.path.insert(0, str(project_root))
-
-# Check if libs package is available and install if needed
-try:
-    import libs.core.cron_manager
-except ImportError as e:
-    # Only auto-install if we're not in a container and haven't already tried recently
-    is_development = not os.environ.get('DOCKER_CONTAINER', False)
-    install_marker = project_root / '.libs_installed'
-    
-    if is_development and not install_marker.exists():
-        print(f"📦 Installing dependencies due to import error: {e}")
-        try:
-            import subprocess
-            subprocess.check_call([
-                sys.executable, "-m", "pip", "install", "-e", str(project_root)
-            ], timeout=60)
-            print("✅ Dependencies installed successfully")
-            
-            # Create marker file to avoid repeated installations
-            install_marker.touch()
-            
-            # Try importing again to verify
-            import libs.core.cron_manager
-        except subprocess.TimeoutExpired:
-            print("⚠️ Installation timed out, continuing without auto-install")
-        except Exception as install_error:
-            print(f"⚠️ Failed to install dependencies: {install_error}")
-            print("Continuing with manual path setup...")
-    else:
-        if install_marker.exists():
-            print("⚠️ Dependencies were recently installed but import still failing")
-            print("This might be a path issue - continuing with manual path setup...")
-        else:
-            print(f"⚠️ Import error: {e}")
-            print("Continuing with manual path setup...")
-
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -61,13 +16,14 @@ from .core.config import settings
 # Simple version constant
 APP_VERSION = "2.0.0"
 API_V2_VERSION = "2.0.0"
-from .services.health_service import processing_health_service
+from .v2.services.health_service import processing_health_service
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware, SecurityHeadersMiddleware
 
 # Import V2 authentication middleware
 from .v2.middleware.auth import V2AuthMiddleware
+from .v2.middleware.https_enforcement import HTTPSEnforcementMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -99,9 +55,33 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting EPMS Processing Service...")
     from .v2.repository.master_plants_repository import master_plants_repository
-    master_plants_repository.create_indexes()
+    await master_plants_repository.create_indexes()
     from .v2.repository.bid_trade_serve_repository import BidTradeServeRepository
     BidTradeServeRepository()
+
+    # Ensure indexes on limit_audit_log (121M+ docs with no query indexes — primary OOM cause)
+    try:
+        from .v2.repository.limit_workflow_repository import limit_workflow_repository
+        await limit_workflow_repository.ensure_audit_indexes(
+            settings.MONGODB_LIMIT_AUDIT_COLLECTION
+        )
+    except Exception as e:
+        logger.error(f"Failed to ensure limit_audit_log indexes: {e}")
+
+    # Ensure targeted indexes on audit_logs (matched to API query patterns only)
+    try:
+        from .v2.services.audit_logger_service import audit_logger_service
+        await audit_logger_service.ensure_indexes()
+    except Exception as e:
+        logger.error(f"Failed to ensure audit_logs indexes: {e}")
+
+    # Ensure indexes on serve_dam_scheduling (207K docs, previously only _id index)
+    try:
+        from .v2.repository.dam_scheduling_repository import DamSchedulingRepository
+        dam_scheduling_repo = DamSchedulingRepository()
+        await dam_scheduling_repo.ensure_indexes()
+    except Exception as e:
+        logger.error(f"Failed to ensure dam_scheduling indexes: {e}")
 
     # One-time migration: encrypt plaintext BearerTokens in exchange_config
     try:
@@ -115,9 +95,6 @@ async def lifespan(app: FastAPI):
     logger.info("Shutting down EPMS Processing Service...")
 
 
-# Import routers using the clean structure
-from .api.v1 import router as v1_router
-
 # Import V2 routers
 from .v2.api.router.dsm_overview import router as dsm_overview_router
 from .v2.api.router.market_overview import router as market_overview_router
@@ -125,6 +102,7 @@ from .v2.api.router.graph_routes import router as graph_router
 from .v2.api.router.demand_forecast_routes import router as demand_forecast_router
 from .v2.api.router.dashboard_routes import router as dashboard_v2_router
 from .v2.api.router.management_snapshot_routes import router as management_snapshot_v2_router
+from .v2.api.router.rtm_scheduling_snapshot_routes import router as rtm_scheduling_snapshot_v2_router
 from .v2.api.router.price_group_routes import router as price_group_router
 from .v2.api.router.supply_routes import router as supply_router
 from .v2.api.router.master_plants_routes import router as master_plant_router
@@ -147,6 +125,8 @@ from .v2.api.router.rtm_scheduling_routes import router as rtm_scheduling_router
 from .v2.api.router.dayaheadmarket_routes import router as dayaheadmarket_router
 from .v2.api.router.audit_logger_routes import router as audit_logger_router
 from .v2.api.router.parameter_routes import router as parameter_router
+from .v2.api.router.idf_forecast_switch_routes import router as idf_forecast_switch_router
+from .v2.api.router.forecast_serve_routes import router as forecast_serve_router
 from .v2.api.router.bid_market_routes import router as bid_market_router
 from .v2.api.router.job_execution_routes import router as job_execution_router
 from .v2.api.router.supply_manual_routes import router as supply_manual_router
@@ -157,6 +137,7 @@ from .v2.api.router.api_key_management_routes import router as api_key_managemen
 from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
 from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
 from .v2.api.router.exchange_config_routes import router as exchange_config_router
+from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -173,24 +154,17 @@ app = FastAPI(
     **Environment**: {environment}
     """,
     version=APP_VERSION,
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/openapi.json",
+    docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    openapi_url="/openapi.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
     lifespan=lifespan,
-    root_path=settings.BASE_PATH
 )
 
-# V2 Sub-application with proper swagger configuration for server environments
-v2_docs_url = "/docs"
-v2_redoc_url = "/redoc"
-v2_openapi_url = "/openapi.json"
 
-# For server environments, we need to adjust the swagger URLs to include the base path
-if settings.ENVIRONMENT in ["server", "docker"]:
-    # The swagger URLs will be accessible at /processing/api/v2/docs, etc.
-    v2_docs_url = "/docs"  # Keep relative to the mounted path
-    v2_redoc_url = "/redoc"  # Keep relative to the mounted path
-    v2_openapi_url = "/openapi.json"  # Keep relative to the mounted path
+# V2 Sub-application with proper swagger configuration for server environments
+v2_docs_url = "/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None
+v2_redoc_url = "/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None
+v2_openapi_url = "/openapi.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None
 
 v2_app = FastAPI(
     title="EPMS Processing Service - V2",
@@ -230,6 +204,8 @@ app.add_middleware(
 
 # Add correlation middleware second
 app.add_middleware(CorrelationMiddleware)
+# Security headers added to every response
+app.add_middleware(SecurityHeadersMiddleware)
 
 # Define paths to exclude from authentication
 exclude_paths = [
@@ -275,6 +251,9 @@ app.add_middleware(
     exclude_paths=exclude_paths,
 )
 
+# Add HTTPS enforcement middleware for HMAC endpoints
+app.add_middleware(HTTPSEnforcementMiddleware)
+
 # Add CORS middleware last to ensure it runs first
 app.add_middleware(
     CORSMiddleware,
@@ -296,6 +275,7 @@ v2_app.include_router(graph_router)
 v2_app.include_router(demand_forecast_router)
 v2_app.include_router(dashboard_v2_router)
 v2_app.include_router(management_snapshot_v2_router)
+v2_app.include_router(rtm_scheduling_snapshot_v2_router)
 v2_app.include_router(price_group_router)
 v2_app.include_router(supply_router)
 v2_app.include_router(master_plant_router)
@@ -314,6 +294,8 @@ v2_app.include_router(rtm_scheduling_router)
 v2_app.include_router(dayaheadmarket_router)
 v2_app.include_router(audit_logger_router)
 v2_app.include_router(parameter_router)
+v2_app.include_router(idf_forecast_switch_router)
+v2_app.include_router(forecast_serve_router)
 v2_app.include_router(bid_market_router)
 v2_app.include_router(job_execution_router)
 v2_app.include_router(supply_manual_router)
@@ -324,6 +306,7 @@ v2_app.include_router(api_key_management_router)
 v2_app.include_router(exchange_trade_router)
 v2_app.include_router(exchange_dsm_router)
 v2_app.include_router(exchange_config_router)
+v2_app.include_router(realtimemarket_router)
 
 
 
@@ -517,22 +500,7 @@ def custom_openapi_v2():
     # Add server URLs with base path for proper OpenAPI documentation
     base_path = settings.BASE_PATH
     
-    servers = []
-    
-    # For server environments, add the full server URL with base path
-    if base_path:
-        servers.append({
-            "url": f"{base_path}/api/v2", 
-            "description": f"Server environment ({environment}) - Use this for server deployment"
-        })
-    
-    # Always add local development URL
-    servers.append({
-        "url": "/api/v2", 
-        "description": "Local development - Use this for local testing"
-    })
-    
-    openapi_schema["servers"] = servers
+    openapi_schema["servers"] = [{"url": "/", "description": "API"}]
     
     # Add security scheme for JWT Bearer token
     openapi_schema["components"]["securitySchemes"] = {

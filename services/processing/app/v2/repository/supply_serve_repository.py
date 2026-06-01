@@ -8,8 +8,6 @@ from .base_repository import GenericRepository
 from ...core.config import settings
 import logging
 from datetime import datetime, timedelta
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
@@ -31,24 +29,6 @@ class SupplyServeRepository(GenericRepository):
         self.collection_name = settings.MONGODB_SUPPLY_SERVE_COLLECTION if hasattr(settings, 'MONGODB_SUPPLY_SERVE_COLLECTION') else "supply_serve"
         logger.info(f"SupplyServeRepository initialized with collection: {self.collection_name}")
 
-    def _aggregate_sync(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute aggregation pipeline synchronously"""
-        try:
-            result = super().aggregate(self.collection_name, pipeline)
-            return list(result) if result else []
-        except Exception as e:
-            logger.error(f"Failed to execute aggregation: {str(e)}")
-            return []
-
-    async def aggregate_async(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute aggregation pipeline asynchronously"""
-        loop = asyncio.get_event_loop()
-        with ThreadPoolExecutor() as executor:
-            return await loop.run_in_executor(executor, self._aggregate_sync, pipeline)
-
-    def aggregate(self, pipeline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """Execute aggregation pipeline (sync interface for compatibility)"""
-        return self._aggregate_sync(pipeline)
     
     @property
     def collection(self):
@@ -132,7 +112,7 @@ class SupplyServeRepository(GenericRepository):
                 }
             ])
             
-            return self._aggregate_sync(pipeline)
+            return await super().aggregate(self.collection_name, pipeline)
         except Exception as e:
             logger.error(f"Failed to get supply by date range: {str(e)}")
             return []
@@ -155,7 +135,7 @@ class SupplyServeRepository(GenericRepository):
                 {"$limit": 1},
                 {"$project": {"_id": 0, "source_revision_number": 1}},
             ]
-            rows = await self.aggregate_async(pipeline)
+            rows = await self.aggregate_async(self.collection_name, pipeline)
             if not rows:
                 return None
             raw = rows[0].get("source_revision_number")
@@ -245,11 +225,12 @@ class SupplyServeRepository(GenericRepository):
                         "dc_afterloss": 1,
                         "max_mw_dc": 1,  # Added for SG schedule logic
                         "dam_tm": {"$ifNull": ["$dam_tm", 0]},  # Default to 0 if still null
-                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]}   # Default to 0 if still null
+                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]},  # Default to 0 if still null
+                        "rtm_max": {"$ifNull": ["$rtm_max", None]}  # RTM Max (tomorrow SG at 10:10 AM)
                     }
                 }
             ]
-            
+
             # Simplified pipeline for historical (no $lookup - too slow on time-series)
             historical_pipeline = [
                 {
@@ -270,7 +251,8 @@ class SupplyServeRepository(GenericRepository):
                         "ramp_down": 1,
                         "dc_afterloss": 1,
                         "dam_tm": {"$ifNull": ["$dam_tm", 0]},
-                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]}
+                        "rtm_tm": {"$ifNull": ["$rtm_tm", 0]},
+                        "rtm_max": {"$ifNull": ["$rtm_max", None]}  # RTM Max (tomorrow SG at 10:10 AM)
                     }
                 }
             ]
@@ -280,10 +262,10 @@ class SupplyServeRepository(GenericRepository):
                   
             # Check if any data exists for this date (quick count check with timeout)
             try:
-                count = collection.count_documents({
+                count = await collection.count_documents({
                     "scheduled_at": {"$gte": target_date, "$lt": end_date},
                     # "plant_id": {"$nin": list(EXCLUDED_PLANTS)}
-                }, limit=1, maxTimeMS=5000)  # 5 second timeout for count
+                }, limit=1)
             except Exception as count_err:
                 logger.warning(f"PowerOpt: Count check failed for {schedule_date}: {count_err}")
                 count = 0
@@ -301,10 +283,10 @@ class SupplyServeRepository(GenericRepository):
                 
                 # Quick check if historical has data (with short timeout)
                 try:
-                    hist_count = collection.count_documents({
+                    hist_count = await collection.count_documents({
                         "scheduled_at": {"$gte": target_date, "$lt": end_date},
                         # "plant_id": {"$nin": list(EXCLUDED_PLANTS)}
-                    }, limit=1, maxTimeMS=5000)  # 5 second timeout
+                    }, limit=1)
                 except Exception as hist_err:
                     logger.warning(f"PowerOpt: Historical count check failed: {hist_err}")
                     hist_count = 0
@@ -324,7 +306,7 @@ class SupplyServeRepository(GenericRepository):
             )
                 
             try:
-                result = list(cursor)
+                result = await cursor.to_list(length=10000)
                 if using_historical:
                     logger.info(f"PowerOpt: Retrieved {len(result)} records from historical collection for {schedule_date}")
                     
@@ -360,7 +342,7 @@ class SupplyServeRepository(GenericRepository):
             logger.error(traceback.format_exc())
             return []
 
-    def get_filter_data_by_category(
+    async def get_filter_data_by_category(
         self,
         schedule_date: str,
         filter_type: str = "category",
@@ -502,7 +484,8 @@ class SupplyServeRepository(GenericRepository):
                 }
             ]
             
-            result = self._aggregate_sync(pipeline)
+            cursor = self.collection.aggregate(pipeline)
+            result = await cursor.to_list(length=10000)
             logger.info(f"Calculated filterData for {len(result)} time blocks (filter_type={filter_type}, schedule_date={schedule_date})")
             return result
             
@@ -510,7 +493,7 @@ class SupplyServeRepository(GenericRepository):
             logger.error(f"Failed to get filter data by category: {str(e)}")
             return []
 
-    def aggregate_supply_schedule(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
+    async def aggregate_supply_schedule(self, start_date: datetime, end_date: datetime) -> List[Dict[str, Any]]:
         """
         Aggregates supply schedule grouped by scheduled_at and time_block.
         Returns separate totals for Central (c_s='central') and State (c_s='state') plants.
@@ -570,7 +553,8 @@ class SupplyServeRepository(GenericRepository):
                 }
             ]
             
-            return self._aggregate_sync(pipeline)
+            cursor = self.collection.aggregate(pipeline)
+            return await cursor.to_list(length=10000)
         except Exception as e:
             logger.error(f"Failed to aggregate supply schedule: {str(e)}")
             return []

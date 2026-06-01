@@ -2,20 +2,6 @@
 EPMS Auth Service - Main Application
 """
 
-# Auto-install libs package if not available
-try:
-    import libs.core.cron_manager
-except ImportError:
-    import sys
-    import subprocess
-    from pathlib import Path
-    print("📦 Installing dependencies...")
-    project_root = Path(__file__).parent.parent.parent.parent
-    subprocess.check_call([
-        sys.executable, "-m", "pip", "install", "-e", str(project_root)
-    ])
-    print("✅ Dependencies installed")
-
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -32,7 +18,7 @@ from .core.seeder import DatabaseSeeder
 from .services import PasswordPolicyService
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware, SecurityHeadersMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -40,6 +26,9 @@ configure_logging(
     format_type=getattr(settings, 'LOG_FORMAT', 'colored'),
     include_correlation=True
 )
+
+# Security: warn if hardcoded secrets are still in use
+settings.check_security_warnings()
 
 # Lifespan context manager for startup/shutdown events
 @asynccontextmanager
@@ -56,11 +45,11 @@ async def lifespan(app_instance: FastAPI):
     try:
         seeder = DatabaseSeeder()
         # Quick check if admin user exists (lightweight check)
-        admin_user = seeder.user_repository.get_user_by_username(settings.ADMIN_USERNAME)
+        admin_user = await seeder.user_repository.get_user_by_username(settings.ADMIN_USERNAME)
         if not admin_user:
             logger.info("Admin user not found, running minimal seeding...")
-            seeder.seed_roles()
-            seeder.ensure_admin_user()
+            await seeder.seed_roles() # This is now async
+            await seeder.ensure_admin_user()
         else:
             logger.info("Admin user exists, skipping heavy seeding operations")
     except Exception as e:
@@ -181,9 +170,9 @@ app = FastAPI(
     The Auth Service provides endpoints for other services to validate tokens and retrieve user information.
     """,
     version="1.1.0",
-    docs_url="/docs",
-    redoc_url="/redoc",
-    openapi_url="/auth_api.json",
+    docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    openapi_url="/auth_api.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
     lifespan=lifespan,
     tags=[
         {
@@ -216,8 +205,8 @@ app = FastAPI(
             "description": "❤️ Health check and service status endpoints"
         }
     ],
-    root_path=settings.BASE_PATH
 )
+
 
 # Configure security schemes for Swagger UI
 app.openapi_schema = None  # Reset to regenerate with security
@@ -239,22 +228,7 @@ def custom_openapi():
     base_path = settings.BASE_PATH
     environment = settings.ENVIRONMENT
     
-    servers = []
-    
-    # For server environments, add the full server URL with base path
-    if base_path:
-        servers.append({
-            "url": f"{base_path}/api/v1", 
-            "description": f"Server environment ({environment}) - Use this for server deployment"
-        })
-    
-    # Always add local development URL
-    servers.append({
-        "url": "/api/v1", 
-        "description": "Local development - Use this for local testing"
-    })
-    
-    openapi_schema["servers"] = servers
+    openapi_schema["servers"] = [{"url": "/", "description": "API"}]
     
     # Add security schemes
     openapi_schema["components"]["securitySchemes"] = {
@@ -338,6 +312,8 @@ if settings.BASE_PATH:
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
+# Security headers added to every response
+app.add_middleware(SecurityHeadersMiddleware)
 # Add cache middleware third (executes third to last)
 # in main.py
 app.add_middleware(

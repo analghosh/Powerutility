@@ -57,8 +57,8 @@ class DemandForecastService:
             target_date = datetime.strptime(schedule_date, "%Y-%m-%d").date()
             
             # Get IDF and DAF data using proper entity field mapping
-            idf_list = self._get_demand_forecast_data(target_date, "IDF")
-            daf_list = self._get_demand_forecast_data(target_date, "DAF")
+            idf_list = await self._get_demand_forecast_data(target_date, "IDF")
+            daf_list = await self._get_demand_forecast_data(target_date, "DAF")
 
             # Normalize dicts keyed by integer time_block
             def tb_key(x):
@@ -238,8 +238,8 @@ class DemandForecastService:
         contains_today = start_dt <= today_ist <= end_dt
         results: List[Dict[str, Any]] = []
 
-        def run_pipeline(match_stage: Dict[str, Any]) -> List[Dict[str, Any]]:
-            return self.demand_forecast_repo.get_monthly_average_mape_pipeline(
+        async def run_pipeline(match_stage: Dict[str, Any]) -> List[Dict[str, Any]]:
+            return await self.demand_forecast_repo.get_monthly_average_mape_pipeline(
                 self.demand_serve_historical, match_stage
             )
 
@@ -248,14 +248,14 @@ class DemandForecastService:
             match_past = match_base.copy()
             today_datetime = datetime.combine(today_ist, datetime.min.time())
             match_past["scheduled_at"] = {"$gte": start_datetime, "$lt": today_datetime}
-            past_rows = run_pipeline(match_past)
+            past_rows = await run_pipeline(match_past)
 
             # 2) today up to current block
             current_block = await self._current_time_block()
             match_today = match_base.copy()
             match_today["scheduled_at"] = today_datetime
             match_today["time_block"] = {"$lte": current_block}
-            today_rows = run_pipeline(match_today)
+            today_rows = await run_pipeline(match_today)
 
             # Merge the two sets: sum(count), weighted-average avg_mape
             by_type: Dict[str, Dict[str, float]] = {}
@@ -279,7 +279,7 @@ class DemandForecastService:
             idf = finalize("IDF")
         else:
             # Single pass for entire month
-            rows = run_pipeline(match_base)
+            rows = await run_pipeline(match_base)
             m = {r["_id"]: r for r in rows}
             daf = {
                 "avg": round(float(m.get("DAF", {}).get("avg_mape", 0) or 0), 2),
@@ -298,17 +298,7 @@ class DemandForecastService:
             **({"zone": zone} if zone else {}),
         }
 
-    def _get_demand_forecast_data(self, target_date: date, market_type: str) -> List[Dict[str, Any]]:
-        """
-        Get demand forecast data for a specific date and market type using proper entity field mapping.
-        
-        Args:
-            target_date: The target date to query
-            market_type: Either "IDF" or "DAF"
-            
-        Returns:
-            List of demand forecast records
-        """
-        return self.demand_forecast_repo.get_demand_forecast_data_pipeline(
+    async def _get_demand_forecast_data(self, target_date: date, market_type: str) -> List[Dict[str, Any]]:
+        return await self.demand_forecast_repo.get_demand_forecast_data_pipeline(
             "demand_serve", target_date, market_type
         )

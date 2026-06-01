@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException, status
 
 from ..repository.renewable_repository import renewable_repository
-from ...repository.serve_table_repository import SupplyTableRepository
+from ..repository.serve_supply_table_repository import SupplyTableRepository
 
 from ...core.config import settings
 
@@ -94,7 +94,7 @@ class RenewableServices:
 
             # Probe for existence (same as v1)
             probe = [{"$match": base_match}, {"$limit": 1}, {"$project": {"_id": 1}}]
-            if not list(self.schedule_repo.aggregate(probe)):
+            if not await self.schedule_repo.aggregate(probe):
                 raise HTTPException(status_code=404, detail=f"No schedule data for {date_str}.")
 
             # Use the exact same aggregation pipeline as v1
@@ -188,7 +188,7 @@ class RenewableServices:
                 {"$project": {"cs_order": 0, "tech_order": 0, "type_order": 0}},
             ]
 
-            docs = list(self.schedule_repo.aggregate(pipeline))
+            docs = await self.schedule_repo.aggregate(pipeline)
             
             # Debug: Log the first few items to see the structure
             if docs and len(docs) > 0 and 'data' in docs[0] and len(docs[0]['data']) > 0:
@@ -246,7 +246,7 @@ class RenewableServices:
                 {"$limit": 1},
                 {"$project": {"_id": 1}}
             ]
-            if not list(self.availability_repo.aggregate(probe)):
+            if not await self.availability_repo.aggregate(probe):
                 raise HTTPException(status_code=404, detail=f"No data for {date_str}.")
 
             # Use the exact same aggregation pipeline as v1
@@ -346,7 +346,7 @@ class RenewableServices:
                 {"$sort": {"time_block": 1}}
             ]
 
-            rows: List[Dict[str, Any]] = list(self.availability_repo.aggregate(pipeline))
+            rows: List[Dict[str, Any]] = await self.availability_repo.aggregate(pipeline)
 
             # Normalize to 96 blocks (same as v1)
             by_tb = {r["time_block"]: r for r in rows}

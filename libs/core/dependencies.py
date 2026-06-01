@@ -3,10 +3,11 @@ FastAPI Dependencies for JWT Validation and Database Connection
 Provides reusable dependencies for JWT authentication and database access across all services
 """
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional, List
 import os
+from datetime import datetime, timedelta
 from .jwt_validator import JWTValidator, TokenPayload
 
 # Security scheme
@@ -74,11 +75,17 @@ def get_sync_db():
     return client[db_name]
 
 
-def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)) -> TokenPayload:
+def get_current_user(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> TokenPayload:
     """
-    Dependency for JWT validation - returns 401 Unauthorized on failure
+    Dependency for JWT validation - returns 401 Unauthorized on failure.
+    Prefers request.state.current_user set by upstream auth middleware to avoid
+    double validation and secret key mismatches across services.
     
     Args:
+        request: FastAPI request object
         credentials: HTTP Bearer token from Authorization header
         
     Returns:
@@ -87,6 +94,20 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     Raises:
         HTTPException: 401 Unauthorized if token is invalid
     """
+    # Prefer middleware-populated user context to avoid double validation
+    middleware_user = getattr(request.state, "current_user", None)
+    if middleware_user:
+        # Convert middleware dict to TokenPayload
+        return TokenPayload(
+            user_id=middleware_user.get("user_id", ""),
+            username=middleware_user.get("username", ""),
+            email=middleware_user.get("email", ""),
+            roles=middleware_user.get("roles", []),
+            permissions=middleware_user.get("permissions", []),
+            token_type=middleware_user.get("token_type", "access"),
+            exp=datetime.now() + timedelta(minutes=30)  # placeholder; middleware already validated
+        )
+    
     payload = jwt_validator.validate_token(credentials.credentials)
     
     if not payload:
@@ -245,7 +266,6 @@ require_any_data_permission = get_current_user_with_any_permission(["read", "wri
 # Export public functions
 __all__ = [
     "get_db",
-    "get_mongo_client", 
     "get_current_user",
     "get_current_user_with_details",
     "get_current_user_with_roles",
