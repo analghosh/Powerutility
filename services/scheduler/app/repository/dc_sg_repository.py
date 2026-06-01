@@ -111,19 +111,9 @@ class DcSgRepository(BaseRepository):
             tomorrow_start = datetime.combine(tomorrow, datetime.min.time())
             day_after_tomorrow_start = datetime.combine(day_after_tomorrow, datetime.min.time())
 
-            query = {}
-            if time(7,55) <= current_time <= time(10, 44):
-                query = {
-                    "$or": [
-                        {"scheduled_at": {"$gte": today_start, "$lt": day_after_tomorrow_start}, "dc_sg": "DC"},
-                        {"scheduled_at": {"$gte": today_start, "$lt": day_after_tomorrow_start}, "dc_sg": "SG"}
-                    ]
-                }
-            else:
-                query = {
-                    "scheduled_at": {"$gte": today_start, "$lt": day_after_tomorrow_start},
-                    "dc_sg": "SG"
-                }
+            query = {
+                "scheduled_at": {"$gte": today_start, "$lt": day_after_tomorrow_start}
+            }
 
             cursor = self.collection.find(query)
             return await cursor.to_list(length=10000)
