@@ -493,6 +493,53 @@ class DemandServeRepository(BaseServeRepository):
             logger.error(f"Error in delete-insert operation with criteria {filter_criteria}: {str(e)}")
             raise
 
+    async def find_idf_demand_for_blocks(
+        self,
+        scheduled_at: datetime,
+        time_blocks: List[int],
+    ) -> List[Dict[str, Any]]:
+        """Fetch IDF demand_serve rows for a calendar day and given time blocks."""
+        if not time_blocks:
+            return []
+
+        start_of_day = datetime.combine(scheduled_at.date(), datetime.min.time())
+        end_of_day = start_of_day + timedelta(days=1)
+        query = {
+            "scheduled_at": {"$gte": start_of_day, "$lt": end_of_day},
+            "type": "IDF",
+            "time_block": {"$in": time_blocks},
+        }
+        cursor = self.serve_collection.find(query)
+        return await cursor.to_list(length=max(len(time_blocks), 1))
+
+    async def bulk_update_dsm_fields(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """
+        Set dsm_rate and net_dsm_amount on existing demand_serve documents (no delete/insert).
+        Each operation: {"filter": {...}, "update": {"dsm_rate", "net_dsm_amount", ...}}
+        """
+        if not operations:
+            return {"matched_count": 0, "modified_count": 0}
+
+        try:
+            from pymongo import UpdateOne
+
+            bulk_ops = [
+                UpdateOne(op["filter"], {"$set": op["update"]})
+                for op in operations
+                if op.get("filter") and op.get("update")
+            ]
+            if not bulk_ops:
+                return {"matched_count": 0, "modified_count": 0}
+
+            result = await self.serve_collection.bulk_write(bulk_ops, ordered=False)
+            return {
+                "matched_count": result.matched_count,
+                "modified_count": result.modified_count,
+            }
+        except Exception as e:
+            logger.error("Error in bulk_update_dsm_fields: %s", e)
+            raise
+
     async def bulk_delete_insert_custom(self, operations: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Execute bulk delete and insert operations efficiently.
