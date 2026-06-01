@@ -348,8 +348,9 @@ async def update_user(
 @router.delete("/{user_id}")
 async def delete_user(
     user_id: str,
+    request: Request,
     current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
+    audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
     """Delete user by ID"""
     try:
@@ -370,6 +371,7 @@ async def delete_user(
         audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
+            client_ip=request.client.host if request.client else None,
             action="delete",
             message=f"Admin {current_user.user_id} deleted user {user.username}",
             target_user_id=user_id,
