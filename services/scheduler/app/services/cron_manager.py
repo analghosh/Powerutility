@@ -51,6 +51,7 @@ from services.scheduler.app.processors.bid_trade_live_sync_processor import BidT
 from services.scheduler.app.processors.supply_tomorrow_sync_processor import SupplyTomorrowSyncProcessor
 from services.scheduler.app.processors.demand_temp_sync_processor import DemandTempSyncProcessor
 from services.scheduler.app.processors.idf_forecast_merge_processor import IdfForecastMergeProcessor
+from services.scheduler.app.processors.demand_serve_pipeline_processor import DemandServePipelineProcessor
 from services.scheduler.app.processors.exchange_dsm_processor import ExchangeDsmProcessor
 from services.scheduler.app.processors.rtm_bid_lapse_processor import RTMBidLapseProcessor
 from services.scheduler.app.processors.dam_bid_capture_processor import DAMBidCaptureProcessor
@@ -111,6 +112,11 @@ class CronManager(BaseCronManager):
         self.supply_tomorrow_sync_processor = SupplyTomorrowSyncProcessor() # Add supply tomorrow sync processor
         self.demand_temp_sync_processor = DemandTempSyncProcessor() # Add demand temp sync processor
         self.idf_forecast_merge_processor = IdfForecastMergeProcessor()
+        self.demand_serve_pipeline_processor = DemandServePipelineProcessor(
+            idf_processor=self.idf_forecast_merge_processor,
+            demand_processor=self.demand_processor,
+            dsm_processor=self.new_dsm_processor,
+        )
         self.exchange_dsm_processor = ExchangeDsmProcessor() # Add Exchange DSM processor
         self.rtm_bid_lapse_processor = RTMBidLapseProcessor() # Add RTM Bid Lapse processor
         self.dam_bid_capture_processor = DAMBidCaptureProcessor()
@@ -225,6 +231,7 @@ class CronManager(BaseCronManager):
 
             # Data Processing Jobs
             "demand_data_processing": self.demand_processor.execute_cron_job,
+            "demand_serve_pipeline": self.demand_serve_pipeline_processor.execute_cron_job,
             "demand_schedule_update": self.demand_schedule_processor.execute_cron_job,
             "raw_data_processing": self._execute_raw_data_processing_job,
             "supply_data_processing": self.supply_processor.execute_cron_job,
@@ -316,7 +323,7 @@ class CronManager(BaseCronManager):
                 "job_type": "demand_data_processing",
                 "name": "Demand Data Processing",
                 "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": True,
+                "enabled": not getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
                 "timezone": settings.CRON_TIMEZONE
             },
             {
@@ -429,7 +436,14 @@ class CronManager(BaseCronManager):
                 "job_type": "idf_forecast_merge",
                 "name": "IDF Forecast Merge",
                 "schedule": "*/15 * * * *",
-                "enabled": True,
+                "enabled": not getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
+                "timezone": settings.CRON_TIMEZONE,
+            },
+            {
+                "job_type": "demand_serve_pipeline",
+                "name": "Demand Serve Pipeline (IDF → Demand → DSM)",
+                "schedule": getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_SCHEDULE", "*/15 * * * *"),
+                "enabled": getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
                 "timezone": settings.CRON_TIMEZONE,
             },
             {
@@ -473,7 +487,7 @@ class CronManager(BaseCronManager):
                 "job_type": "new_dsm_rate_calculation",
                 "name": "New DSM Rate and Net DSM Amount Calculation",
                 "schedule": "*/15 * * * *",
-                "enabled": True,
+                "enabled": not getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
                 "timezone": settings.CRON_TIMEZONE
             },
             {

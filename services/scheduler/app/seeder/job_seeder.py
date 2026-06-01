@@ -4,12 +4,19 @@ Seeds scheduler-specific cron job configurations
 """
 
 import logging
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 from libs.core.job_seeder import BaseJobSeeder
 from libs.core.job_repositories import JobDataRepository
 from services.scheduler.app.core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# Standalone crons superseded by demand_serve_pipeline when pipeline is enabled
+PIPELINE_STANDALONE_JOB_TYPES: Tuple[str, ...] = (
+    "idf_forecast_merge",
+    "demand_data_processing",
+    "new_dsm_rate_calculation",
+)
 
 
 class SchedulerJobSeeder(BaseJobSeeder):
@@ -19,6 +26,47 @@ class SchedulerJobSeeder(BaseJobSeeder):
         """Initialize scheduler job seeder"""
         super().__init__(job_data_repository, "scheduler")
         self.settings = settings
+
+    def _pipeline_enabled(self) -> bool:
+        return getattr(self.settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True)
+
+    def _standalone_step_cron_enabled(self, setting_attr: str, default: bool = True) -> bool:
+        """When pipeline is on, standalone step crons are disabled to avoid races."""
+        if self._pipeline_enabled():
+            return False
+        return getattr(self.settings, setting_attr, default)
+
+    async def seed_default_jobs(self) -> Dict[str, Any]:
+        results = await super().seed_default_jobs()
+        await self._sync_pipeline_job_policy()
+        return results
+
+    async def _sync_pipeline_job_policy(self) -> None:
+        """Align enabled flags in job_data with pipeline on/off."""
+        pipeline_enabled = self._pipeline_enabled()
+        for job_type in PIPELINE_STANDALONE_JOB_TYPES:
+            existing = await self.job_data_repository.get_job(job_type)
+            if not existing:
+                continue
+            desired = not pipeline_enabled
+            if existing.get("enabled", True) != desired:
+                await self.job_data_repository.update_job_enabled_status(job_type, desired)
+                logger.info(
+                    "Pipeline policy: set %s enabled=%s (pipeline_enabled=%s)",
+                    job_type,
+                    desired,
+                    pipeline_enabled,
+                )
+
+        pipeline_job = await self.job_data_repository.get_job("demand_serve_pipeline")
+        if pipeline_job and pipeline_job.get("enabled", True) != pipeline_enabled:
+            await self.job_data_repository.update_job_enabled_status(
+                "demand_serve_pipeline", pipeline_enabled
+            )
+            logger.info(
+                "Pipeline policy: set demand_serve_pipeline enabled=%s",
+                pipeline_enabled,
+            )
     
     def get_default_jobs(self) -> List[Dict[str, Any]]:
         """Get default scheduler jobs"""
@@ -45,7 +93,9 @@ class SchedulerJobSeeder(BaseJobSeeder):
                     'DEMAND_DATA_PROCESSING_CRON',
                     getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_SCHEDULE', '*/15 * * * *')
                 ),
-                "enabled": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_ENABLED', True),
+                "enabled": self._standalone_step_cron_enabled(
+                    "DEMAND_DATA_PROCESSING_CRON_ENABLED", True
+                ),
                 "timezone": getattr(self.settings, 'DEMAND_DATA_PROCESSING_CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Processes demand data from raw data to serve collections",
                 "priority": 4
@@ -79,10 +129,29 @@ class SchedulerJobSeeder(BaseJobSeeder):
                     "IDF_FORECAST_MERGE_CRON_SCHEDULE",
                     "*/15 * * * *",
                 ),
-                "enabled": getattr(self.settings, "IDF_FORECAST_MERGE_CRON_ENABLED", True),
+                "enabled": self._standalone_step_cron_enabled(
+                    "IDF_FORECAST_MERGE_CRON_ENABLED", True
+                ),
                 "timezone": getattr(self.settings, "CRON_TIMEZONE", "Asia/Kolkata"),
                 "description": "Merges forecast_serve (RTM API or CSV) into demand_serve IDF per idf_forecast_switch",
                 "priority": 5,
+            },
+            {
+                "job_type": "demand_serve_pipeline",
+                "name": "Demand Serve Pipeline (IDF → Demand → DSM)",
+                "type": "data_processing",
+                "schedule": getattr(
+                    self.settings,
+                    "DEMAND_SERVE_PIPELINE_CRON_SCHEDULE",
+                    "*/15 * * * *",
+                ),
+                "enabled": getattr(self.settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
+                "timezone": getattr(self.settings, "CRON_TIMEZONE", "Asia/Kolkata"),
+                "description": (
+                    "Runs idf_forecast_merge, demand_data_processing, and new_dsm_rate_calculation "
+                    "sequentially every 15 minutes"
+                ),
+                "priority": 3,
             },
             {
                 "job_type": "supply_data_processing",
@@ -319,7 +388,9 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "name": "New DSM Rate and Net DSM Amount Calculation",
                 "type": "data_processing",
                 "schedule": getattr(self.settings, 'NEW_DSM_RATE_CALCULATION_CRON', "*/15 * * * *"),  # Every 15 minutes
-                "enabled": getattr(self.settings, 'NEW_DSM_RATE_CALCULATION_ENABLED', True),
+                "enabled": self._standalone_step_cron_enabled(
+                    "NEW_DSM_RATE_CALCULATION_ENABLED", True
+                ),
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Calculates DSM rates using new DSM engine with multi-exchange aggregation (IEX, PXIL, HPX) every 15 minutes",
                 "priority": 5
