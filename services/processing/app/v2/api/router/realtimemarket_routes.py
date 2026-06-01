@@ -7,7 +7,7 @@ import logging
 
 import pytz
 
-from ...controller.realtimemarket_controller import realtimemarket_controller
+from services.processing.app.controller.realtimemarket_controller import realtimemarket_controller
 from libs.audit_queue.simple_logger import AuditLogger
 from libs.middleware import get_correlation_id
 from services.processing.app.core.dependencies import get_audit_logger

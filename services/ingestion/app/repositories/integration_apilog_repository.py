@@ -36,8 +36,7 @@ class IntegrationApiLogRepository:
                         "timeField": "timestamp",
                         "metaField": "metadata",
                         "granularity": "seconds"
-                    },
-                    expireAfterSeconds=604800
+                    }
                 )
                 logger.info(f"Created timeseries collection: {collection_name}")
             

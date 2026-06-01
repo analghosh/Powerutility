@@ -6,6 +6,7 @@ from libs.core.job_entities import JobData
 import logging
 from datetime import datetime, date
 from typing import Dict, Any, List
+from pymongo import MongoClient
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +40,11 @@ class LimitValuesProcessor(BaseProcessor):
         """
         job_type = "limit_values_approval_processing"
         job_name = "Limit Values Approval Processing"
-        job_detail = await self.job_data_repository.get_job(job_type)
+        job_detail = self.job_data_repository.get_job(job_type)
         start_time = datetime.now()
         schedule = job_detail.get("schedule", "0 0 * * *")
 
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             return {"status": "error", "message": "Failed to record job start"}
 
@@ -63,11 +64,10 @@ class LimitValuesProcessor(BaseProcessor):
             
             # 1. Fetch Today's Data for Rollover to Tomorrow
             today_existing_query = {"scheduled_at": today, "id":{"$nin":["RTM_forecasted_price", "DAM_forecasted_price"]}}
-            today_existing_data = await self.repository.find_many(self.final_collection_name, today_existing_query, limit=10000)
+            today_existing_data = self.repository.find_many(self.final_collection_name, today_existing_query, limit=10000)
             logger.info(f"[LimitValuesProcessor] Found {len(today_existing_data)} records for today to rollover to tomorrow")
             
             merged_data = {}
-            tomorrow_rollover_data = {}
 
             # Build today's existing keys for per-record skip check
             # Normalize scheduled_at to naive datetime to match Python-computed today/tomorrow
@@ -82,7 +82,7 @@ class LimitValuesProcessor(BaseProcessor):
             }
 
             yesterday = today - timedelta(days=1)
-            yesterday_existing_data = await self.repository.find_many(self.final_collection_name, {"scheduled_at": yesterday, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
+            yesterday_existing_data = self.repository.find_many(self.final_collection_name, {"scheduled_at": yesterday, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
             logger.info(f"[LimitValuesProcessor] Found {len(yesterday_existing_data)} records for yesterday to rollover to today")
             if today_existing_data:
                 logger.info(f"[LimitValuesProcessor] Today ({today_str}) already has {len(today_existing_data)} records; will skip per-record duplicates")
@@ -111,27 +111,19 @@ class LimitValuesProcessor(BaseProcessor):
                 merged_data[unique_key_tuple] = today_record
             
             # Fetch all of tomorrow's existing data to do per-record skip check
-            tomorrow_existing_data = await self.repository.find_many(self.final_collection_name, {"scheduled_at": tomorrow, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
+            tomorrow_existing_data = self.repository.find_many(self.final_collection_name, {"scheduled_at": tomorrow, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
             tomorrow_existing_keys = {
                 (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"))
-                for r in tomorrow_existing_data
-            }
-            # Map (block, market, id) -> source for tomorrow's existing records
-            tomorrow_source_map = {
-                (r.get("block"), r.get("market"), r.get("id")): r.get("source")
                 for r in tomorrow_existing_data
             }
             if tomorrow_existing_data:
                 logger.info(f"[LimitValuesProcessor] Tomorrow ({tomorrow_str}) already has {len(tomorrow_existing_data)} records; will skip per-record duplicates")
 
-            # 1a. Prepare Rollover Data — upsert if tomorrow has stale rollover, skip if manual/approval
+            # 1a. Prepare Rollover Data (Lowest priority) — skip records already present in tomorrow
             for record in today_existing_data:
                 rollover_key = (tomorrow, record.get("block"), record.get("market"), record.get("id"))
                 if rollover_key in tomorrow_existing_keys:
-                    # Only overwrite if tomorrow's value is itself a rollover (not manual/approval)
-                    existing_source = tomorrow_source_map.get((record.get("block"), record.get("market"), record.get("id")))
-                    if existing_source not in ("today_rollover", "yesterday_rollover"):
-                        continue  # tomorrow has manual/approval data, preserve it
+                    continue
                 # Remove _id and other internal fields for fresh upsert
                 record_id = record.get("id")
                 unique_key_tuple = (
@@ -142,7 +134,7 @@ class LimitValuesProcessor(BaseProcessor):
                     record.get("area"),
                     tomorrow # Important: merged for tomorrow
                 )
-
+                
                 # Clone record for tomorrow
                 tomorrow_record = record.copy()
                 tomorrow_record.pop("_id", None)
@@ -150,11 +142,11 @@ class LimitValuesProcessor(BaseProcessor):
                 tomorrow_record["source"] = "today_rollover"
                 tomorrow_record["created_by"] = "system_cron"
                 tomorrow_record["updated_by"] = "system_cron"
-
-                tomorrow_rollover_data[unique_key_tuple] = tomorrow_record
+                
+                merged_data[unique_key_tuple] = tomorrow_record
 
             # 2. Fetch tomorrow's approved entries — these are built separately and always upsert
-            approved_entries_tomorrow = await self.repository.get_approved_tomorrow(tomorrow)
+            approved_entries_tomorrow = self.repository.get_approved_tomorrow(tomorrow)
             logger.info(f"[LimitValuesProcessor] Found {len(approved_entries_tomorrow)} approved entries for tomorrow to merge")
 
             approval_ids_to_delete = []
@@ -193,26 +185,16 @@ class LimitValuesProcessor(BaseProcessor):
             unique_key_fields = ["block", "id", "market", "category", "area", "scheduled_at"]
             audit_logs = []
 
-            # 3a. Rollover docs — yesterday→today insert only, today→tomorrow upsert (to propagate manual edits)
+            # 3a. Rollover docs — insert only, never update existing records
             rollover_documents = list(merged_data.values())
             if rollover_documents:
-                logger.info(f"[LimitValuesProcessor] Bulk insert-only (yesterday rollover) of {len(rollover_documents)} records for {today_str}")
-                insert_result = await self.repository.bulk_insert_only(
+                logger.info(f"[LimitValuesProcessor] Bulk insert-only (rollover) of {len(rollover_documents)} records for {tomorrow_str}")
+                insert_result = self.repository.bulk_insert_only(
                     self.final_collection_name,
                     rollover_documents,
                     unique_key_fields
                 )
-                logger.info(f"[LimitValuesProcessor] Yesterday rollover insert result: {insert_result}")
-
-            tomorrow_rollover_documents = list(tomorrow_rollover_data.values())
-            if tomorrow_rollover_documents:
-                logger.info(f"[LimitValuesProcessor] Bulk upsert (today rollover) of {len(tomorrow_rollover_documents)} records for {tomorrow_str}")
-                insert_result = await self.repository.bulk_upsert_optimized(
-                    self.final_collection_name,
-                    tomorrow_rollover_documents,
-                    unique_key_fields
-                )
-                logger.info(f"[LimitValuesProcessor] Today rollover upsert result: {insert_result}")
+                logger.info(f"[LimitValuesProcessor] Rollover insert result: {insert_result}")
                 for doc in rollover_documents:
                     audit_logs.append({
                         "ts": current_time,
@@ -227,29 +209,14 @@ class LimitValuesProcessor(BaseProcessor):
                         "source": doc.get("source"),
                         "success": True
                     })
-            if tomorrow_rollover_documents:
-                for doc in tomorrow_rollover_documents:
-                    audit_logs.append({
-                        "ts": current_time,
-                        "actor_id": "system_cron",
-                        "actor_username": "limit_values_processor",
-                        "action": "ROLLOVER_UPSERT_LIMIT_VALUES",
-                        "entity_type": "limit_values",
-                        "operation": "UPSERT",
-                        "correlation_id": f"cron_{today_str}",
-                        "key": {field: doc.get(field) for field in unique_key_fields},
-                        "scheduled_at": doc.get("scheduled_at"),
-                        "source": doc.get("source"),
-                        "success": True
-                    })
             else:
-                logger.info("[LimitValuesProcessor] No rollover records to upsert for tomorrow")
+                logger.info("[LimitValuesProcessor] No rollover records to insert for tomorrow")
 
             # 3b. Approval docs — full upsert, can update existing records
             approval_documents = list(approval_docs.values())
             if approval_documents:
                 logger.info(f"[LimitValuesProcessor] Bulk upsert (approvals) of {len(approval_documents)} records for {tomorrow_str}")
-                upsert_result = await self.repository.bulk_upsert_optimized(
+                upsert_result = self.repository.bulk_upsert_optimized(
                     self.final_collection_name,
                     approval_documents,
                     unique_key_fields
@@ -272,15 +239,15 @@ class LimitValuesProcessor(BaseProcessor):
 
             # 4. Batch Audit Logs
             if audit_logs:
-                await self.repository.insert_many(self.audit_collection_name, audit_logs)
+                self.repository.insert_many(self.audit_collection_name, audit_logs)
 
             # 5. Historical Archival (Older than today)
-            archive_result = await self.repository.archive_to_historical(today)
+            archive_result = self.repository.archive_to_historical(today)
             logger.info(f"[LimitValuesProcessor] Archival result: {archive_result}")
 
             # 6. Delete processed approval entries
             if approval_ids_to_delete:
-                delete_res = await self.repository.delete_many(self.approval_collection_name, {"_id": {"$in": approval_ids_to_delete}})
+                delete_res = self.repository.delete_many(self.approval_collection_name, {"_id": {"$in": approval_ids_to_delete}})
                 logger.info(f"[LimitValuesProcessor] Deleted {delete_res.deleted_count} processed approval entries")
             
             result = {
@@ -291,7 +258,7 @@ class LimitValuesProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -315,7 +282,7 @@ class LimitValuesProcessor(BaseProcessor):
                 "job_type": job_type,
                 "correlation_id": execution_id
             }
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -345,7 +312,7 @@ class LimitValuesProcessor(BaseProcessor):
         """
         return True
 
-    async def rename_id_field(self):
+    def rename_id_field(self):
         """
         Renames the 'ID' field to 'id' in both limit_values and limit_approval collections.
         """
@@ -353,11 +320,10 @@ class LimitValuesProcessor(BaseProcessor):
             logger.info("[LimitValuesProcessor] Starting 'ID' to 'id' field rename process")
             
             from libs.database.mongo_client_factory import get_scheduler_client
-            from services.scheduler.app.core.config import settings
             
             # Use centralized MongoDB client (singleton pattern)
-            client = get_scheduler_client(settings.MONGODB_URI)
-            db = client[settings.MONGODB_DATABASE]
+            client = get_scheduler_client(self.mongodb_uri)
+            db = client[self.database_name]
             
             collections_to_migrate = [self.final_collection_name, self.approval_collection_name]
             
@@ -368,8 +334,8 @@ class LimitValuesProcessor(BaseProcessor):
                 query = {"ID": {"$exists": True}, "id": {"$exists": False}}
                 
                 # Rename the field
-                result = await collection.update_many(query, {"$rename": {"ID": "id"}})
-
+                result = collection.update_many(query, {"$rename": {"ID": "id"}})
+                
                 logger.info(f"[LimitValuesProcessor] In collection '{collection_name}', renamed 'ID' to 'id' in {result.modified_count} documents.")
             
             # Note: Client is managed by MongoClientFactory, no need to close

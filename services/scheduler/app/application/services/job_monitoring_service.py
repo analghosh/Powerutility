@@ -40,7 +40,7 @@ class JobMonitoringService(IJobMonitoringService):
     async def get_job_trace(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed trace information for a specific job"""
         try:
-            return await self._job_detail_repository.get_job_execution_trace(job_id)
+            return self._job_detail_repository.get_job_execution_trace(job_id)
         except Exception as e:
             self._logger.error(f"Failed to get job trace for {job_id}: {str(e)}")
             raise
@@ -48,7 +48,7 @@ class JobMonitoringService(IJobMonitoringService):
     async def get_jobs_by_service(self, service_name: str, limit: int = 50) -> List[Dict[str, Any]]:
         """Get jobs for a specific service"""
         try:
-            return await self._job_detail_repository.get_jobs_by_service(service_name, limit)
+            return self._job_detail_repository.get_jobs_by_service(service_name, limit)
         except Exception as e:
             self._logger.error(f"Failed to get jobs for service {service_name}: {str(e)}")
             raise
@@ -56,7 +56,7 @@ class JobMonitoringService(IJobMonitoringService):
     async def get_job_statistics(self, hours: int = 24) -> Dict[str, Any]:
         """Get job statistics for the specified time period"""
         try:
-            return await self._job_detail_repository.get_overall_job_statistics(hours)
+            return self._job_detail_repository.get_overall_job_statistics(hours)
         except Exception as e:
             self._logger.error(f"Failed to get job statistics: {str(e)}")
             raise
@@ -65,7 +65,7 @@ class JobMonitoringService(IJobMonitoringService):
                                 current_step: str, estimated_completion: str) -> bool:
         """Update job progress and current step"""
         try:
-            return await self._job_detail_repository.update_job_progress(
+            return self._job_detail_repository.update_job_progress(
                 job_id, progress, current_step, estimated_completion
             )
         except Exception as e:
@@ -79,11 +79,11 @@ class JobMonitoringService(IJobMonitoringService):
             running_jobs = await self.get_running_jobs()
             
             # Get statistics for different time periods
-            stats_24h = await self._job_detail_repository.get_overall_job_statistics(24, self._job_data_repository)
-            stats_7d = await self._job_detail_repository.get_overall_job_statistics(168, self._job_data_repository)
+            stats_24h = self._job_detail_repository.get_overall_job_statistics(24, self._job_data_repository)
+            stats_7d = self._job_detail_repository.get_overall_job_statistics(168, self._job_data_repository)
             
             # Get recent jobs
-            recent_jobs = await self._job_detail_repository.get_jobs_by_service("scheduler", 50)
+            recent_jobs = self._job_detail_repository.get_jobs_by_service("scheduler", 50)
             
             # Build dashboard data
             dashboard_data = {
@@ -113,7 +113,7 @@ class JobMonitoringService(IJobMonitoringService):
             running_jobs = await self.get_running_jobs()
             
             # Get statistics for last hour
-            stats_1h = await self._job_detail_repository.get_overall_job_statistics(1)
+            stats_1h = self._job_detail_repository.get_overall_job_statistics(1)
             
             # Analyze system health
             health_status = "healthy"
@@ -162,7 +162,7 @@ class JobMonitoringService(IJobMonitoringService):
     async def get_job_execution_details(self, job_id: str) -> Optional[Dict[str, Any]]:
         """Get detailed execution information for a job"""
         try:
-            return await self._job_detail_repository.get_job_execution_details(job_id, self._job_data_repository)
+            return self._job_detail_repository.get_job_execution_details(job_id, self._job_data_repository)
         except Exception as e:
             self._logger.error(f"Failed to get job execution details for {job_id}: {str(e)}")
             raise
@@ -214,7 +214,7 @@ class JobMonitoringService(IJobMonitoringService):
     async def get_jobs_by_service_from_data(self, service: str, enabled_only: bool = True) -> List[Dict[str, Any]]:
         """Get jobs for a specific service from job data collection"""
         try:
-            return await self._job_data_repository.get_jobs_by_service(service, enabled_only)
+            return self._job_data_repository.get_jobs_by_service(service, enabled_only)
         except Exception as e:
             self._logger.error(f"Failed to get jobs for service {service}: {str(e)}")
             raise

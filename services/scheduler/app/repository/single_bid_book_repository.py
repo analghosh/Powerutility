@@ -53,7 +53,7 @@ class SingleBidBookRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error creating indexes for {self.collection_name}: {e}")
 
-    async def upsert_bids(self, bids: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def upsert_bids(self, bids: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Bulk upsert bids using OrderId as unique key.
         Uses optimized bulk_write from BaseRepository.
@@ -77,4 +77,4 @@ class SingleBidBookRepository(BaseRepository):
                     continue
         
         # Use BaseRepository's optimized bulk upsert
-        return await self.bulk_upsert_optimized(validated_bids, unique_key_fields=["OrderId"])
+        return self.bulk_upsert_optimized(validated_bids, unique_key_fields=["OrderId"])

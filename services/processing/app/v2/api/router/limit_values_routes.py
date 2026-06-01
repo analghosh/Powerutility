@@ -49,10 +49,12 @@ class BatchRejectBody(BaseModel):
 @router.get(
     "/latest",
     status_code=status.HTTP_200_OK,
-    summary="Get latest-date limit values with filters"
+    summary="Get latest-date limit values with pagination and filters"
 )
 async def get_latest(
     request: Request,
+    page: int = 1,
+    page_size: Optional[int] = 96,
     schedule_date: Optional[str] = None,
     id_type: Optional[str] = None,
     market: Optional[str] = None,
@@ -64,7 +66,7 @@ async def get_latest(
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")
     correlation_id = user_context.get("correlation_id", "unknown")
-
+    
     # Build filters from query parameters
     filters = {}
     if id_type is not None:
@@ -77,17 +79,22 @@ async def get_latest(
         filters["area"] = area
     if schedule_date is None:
         schedule_date = datetime.now().strftime("%Y-%m-%d")
-
+    
     try:
+        from_block = (page - 1) * page_size + 1
+        to_block = from_block + page_size - 1
+        
         audit_logger.log_system_operation(
             service="processing",
             operation="limit_values_latest_fetch",
-            message=f"Fetch latest limit values for date={schedule_date} and filters={filters}",
+            message=f"Fetch latest limit values with block-based pagination (page={page}, size={page_size}) and filters={filters}",
             correlation_id=correlation_id,
             user_id=user_id
         )
-
-        result = await limit_controller.latest_all(
+        
+        result = await limit_controller.latest_paginated(
+            from_block=from_block,
+            to_block=to_block,
             filters=filters,
             date_filter=schedule_date
         )
@@ -96,7 +103,7 @@ async def get_latest(
             service="processing",
             user_id=user_id,
             action="limit_values_latest_view",
-            message=f"Fetched latest limit values for date={schedule_date}",
+            message="Fetched latest with block-based pagination",
             username=username,
             correlation_id=correlation_id,
             record_count=len(result.get("data", [])),

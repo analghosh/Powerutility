@@ -63,7 +63,7 @@ class SupplyProcessor(BaseProcessor):
         schedule = "*/15 * * * *"  # Default schedule
         start_time = datetime.now()
 
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -112,7 +112,7 @@ class SupplyProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -138,7 +138,7 @@ class SupplyProcessor(BaseProcessor):
                 "cron_job":"supply"
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -167,10 +167,14 @@ class SupplyProcessor(BaseProcessor):
             # 1. Fetch existing records for today from supply_serve and dc_sg
             # We want to skip filling if data exists in either (to avoid overwriting real data or duplicating)
             
-            today_supply_records = await self.supply_repository.find_supply_serve_by_date(
+            today_supply_records = await asyncio.to_thread(
+                self.supply_repository.find_supply_serve_by_date, 
                 datetime.combine(today, datetime.min.time())
             )
-            today_dc_sg_records = await self.dc_sg_repository.get_records_by_date(today)
+            today_dc_sg_records = await asyncio.to_thread(
+                self.dc_sg_repository.get_records_by_date, 
+                today
+            )
             
             existing_keys = set()
             
@@ -191,7 +195,7 @@ class SupplyProcessor(BaseProcessor):
             logger.info(f"Found {len(existing_keys)} existing unique keys (blocks) for today in supply_serve/dc_sg.")
 
             # 2. Fill from plant master and last available data
-            plants = await self.plant_repository.collection.find({}).to_list(length=10000)
+            plants = await asyncio.to_thread(lambda: list(self.plant_repository.collection.find({})))
             
             new_dc_sg_entities = []
             
@@ -200,7 +204,7 @@ class SupplyProcessor(BaseProcessor):
                 if not plant_id: continue
                 
                 # Fetch the latest record for each time block (1-96) for this plant
-                records = await self.dc_sg_repository.get_latest_records_per_timeblock(plant_id)
+                records = await asyncio.to_thread(self.dc_sg_repository.get_latest_records_per_timeblock, plant_id)
                 
                 if not records:
                     logger.debug(f"No historical data found for plant {plant_id}")
@@ -256,7 +260,7 @@ class SupplyProcessor(BaseProcessor):
             # Insert new entities
             processed_count = 0
             for entity in new_dc_sg_entities:
-                res = await self.dc_sg_repository.update_or_insert_record(entity)
+                res = await asyncio.to_thread(self.dc_sg_repository.update_or_insert_record, entity)
                 if res.upserted_id or res.modified_count > 0:
                     processed_count += 1
             
@@ -264,7 +268,7 @@ class SupplyProcessor(BaseProcessor):
                 logger.info(f"Filled {processed_count} missing records into dc_sg for today.")
             
             # Now process to supply_serve
-            provider_configs = await self._get_provider_configurations("supply")
+            provider_configs = self._get_provider_configurations("supply")
             if provider_configs:
                  # Ensure we process both Today and Tomorrow (for whatever exists in dc_sg)
                  return await self._process_dc_sg_to_supply_serve(metadata, provider_configs[0], [today, today + timedelta(days=1)])
@@ -275,7 +279,7 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error in missing supply data check: {str(e)}")
             return False
 
-    async def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get pending raw data for a provider, including FAILED status for retry.
         Overridden for SupplyProcessor to retry failed records.
@@ -299,9 +303,11 @@ class SupplyProcessor(BaseProcessor):
             }
             
             # Use the repository's collection directly for more control
-            pending_status_records = await processing_status_repo.collection.find(
-                pending_status_query
-            ).sort("created_at", 1).limit(3).to_list(length=3)  # Limit to 3 records per batch to prevent OOM
+            pending_status_records = list(
+                processing_status_repo.collection.find(pending_status_query)
+                .sort("created_at", 1)  # Process oldest first
+                .limit(3)  # Limit to 3 records per batch to prevent OOM
+            )
             
             logger.info(f"Found {len(pending_status_records)} pending/failed status records for provider {provider_id}")
             
@@ -333,7 +339,7 @@ class SupplyProcessor(BaseProcessor):
             
             # Query raw data collection with the pending IDs
             raw_data_query = {"_id": {"$in": object_ids}}
-            pending_raw_data = await self.raw_data_repository.find_many(raw_data_query)
+            pending_raw_data = self.raw_data_repository.find_many(raw_data_query)
             
             logger.info(f"Successfully fetched {len(pending_raw_data)} raw data records for provider {provider_id}")
             
@@ -463,7 +469,7 @@ class SupplyProcessor(BaseProcessor):
                      return False
             
             if historical_data:
-                 hist_success = await self._process_direct_to_supply_serve_historical(historical_data, metadata, provider_config)
+                 hist_success = self._process_direct_to_supply_serve_historical(historical_data, metadata, provider_config)
                  if not hist_success:
                       logger.error("Historical data processing failed.")
                       return False
@@ -488,7 +494,7 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error in the main supply processing pipeline: {str(e)}")
             return False
 
-    async def _process_direct_to_supply_serve_historical(
+    def _process_direct_to_supply_serve_historical(
         self,
         raw_data: List[Dict[str, Any]],
         metadata: Dict[str, Any],
@@ -511,7 +517,7 @@ class SupplyProcessor(BaseProcessor):
                 # Reuse the raw parsing logic from dc_sg but mapped to supply directly?
                 # A better approach: Create DCSgEntity to validate, then map to SupplyServeEntity immediately.
                 
-                dc_sg_entity = await self._create_dc_sg_entity_from_raw(raw_record, metadata, provider_config, check_updates=False)
+                dc_sg_entity = self._create_dc_sg_entity_from_raw(raw_record, metadata, provider_config, check_updates=False)
                 if not dc_sg_entity:
                     continue
                 
@@ -559,8 +565,8 @@ class SupplyProcessor(BaseProcessor):
                      if diff >= 1:
                          historical_entities.append(SupplyServeHistoricalEntity(**supply_entity.model_dump(by_alias=True)))
 
-            serve_success = await self._bulk_process_supply_entities(supply_entities, len(raw_data), len(supply_entities), 0)
-            hist_success = await self._bulk_process_historical_entities(historical_entities)
+            serve_success = self._bulk_process_supply_entities(supply_entities, len(raw_data), len(supply_entities), 0)
+            hist_success = self._bulk_process_historical_entities(historical_entities)
             
             return serve_success and hist_success
 
@@ -595,13 +601,17 @@ class SupplyProcessor(BaseProcessor):
             
             # Fetch by approval_no
             if approval_nos:
-                plants_by_app = await self.plant_repository.collection.find({"approval_no": {"$in": list(approval_nos)}}).to_list(length=10000)
+                plants_by_app = await asyncio.to_thread(
+                    lambda: list(self.plant_repository.collection.find({"approval_no": {"$in": list(approval_nos)}}))
+                )
                 for p in plants_by_app:
                     plant_map_by_approval[str(p.get("approval_no")).strip()] = p
             
             # Fetch by plant_id
             if plant_ids:
-                plants_by_id_list = await self.plant_repository.collection.find({"plant_id": {"$in": list(plant_ids)}}).to_list(length=10000)
+                plants_by_id_list = await asyncio.to_thread(
+                    lambda: list(self.plant_repository.collection.find({"plant_id": {"$in": list(plant_ids)}}))
+                )
                 for p in plants_by_id_list:
                     plant_map_by_id[str(p.get("plant_id")).strip()] = p
             
@@ -683,6 +693,12 @@ class SupplyProcessor(BaseProcessor):
                 dc_sg_val = item.get("dc_sg")
                 time_block = item.get("time_block")
                 
+                now_time = datetime.now().time()
+                # Using dt_time to avoid any potential shadowing of top-level from datetime import time
+                from datetime import time as dt_time
+                if (dt_time(7, 45) > now_time or now_time > dt_time(10, 10)) and dc_sg_val == "DC":
+                    continue
+                
                 if final_plant_id and dc_sg_val and time_block:
                     item["_parsed_scheduled_at"] = scheduled_at # Cache parsed date
                     item["_resolved_plant_id"] = final_plant_id
@@ -715,7 +731,7 @@ class SupplyProcessor(BaseProcessor):
                 found_records = []
                 for d in unique_dates:
                     # Fetch full day records for these dates, filtered by plants
-                    day_records = await self.dc_sg_repository.get_records_by_date(d, unique_plant_ids)
+                    day_records = await asyncio.to_thread(self.dc_sg_repository.get_records_by_date, d, unique_plant_ids)
                     if day_records:
                         found_records.extend(day_records)
                 
@@ -834,20 +850,6 @@ class SupplyProcessor(BaseProcessor):
                     if max_mw_dc_value is None and existing_record:
                         max_mw_dc_value = existing_record.get("max_mw_dc")
 
-                    # rtm_max: SG of tomorrow captured at 10:05-10:15 AM (locked once set)
-                    rtm_max_value = None
-                    if (process_type == "tomorrow" and str(item.get("dc_sg")).upper() == "SG"
-                            and raw_timestamp is not None):
-                        raw_time = raw_timestamp.time()
-                        from datetime import time as dt_time
-                        if dt_time(10, 5, 0) <= raw_time <= dt_time(10, 15, 0):
-                            rtm_max_value = self._safe_float(item.get("volume"))
-                            logger.info(f"Setting rtm_max={rtm_max_value} for plant {item['_resolved_plant_id']} block {item.get('time_block')} (tomorrow SG in 10:05-10:15 window)")
-
-                    # Preserve existing rtm_max once it has been set
-                    if rtm_max_value is None and existing_record:
-                        rtm_max_value = existing_record.get("rtm_max")
-
                     # Calculate TM values for DC records (55% of volume)
                     volume_value = self._safe_float(item.get("dc_afterloss", 0.0))
                     volume = self._safe_float(item.get("volume", 0.0))
@@ -900,10 +902,7 @@ class SupplyProcessor(BaseProcessor):
                         process_type=process_type,
                         updated_flag=updated_flag,
                         max_mw_dc=max_mw_dc_value,
-                        eightThirtyValue=eightThirtyValue,
-                        entire_shared_onbar_ent_amount=item.get("entire_shared_onbar_ent_amount"),
-                        entire_shared_offbar_ent_amount=item.get("entire_shared_offbar_ent_amount"),
-                        rtm_max=rtm_max_value
+                        eightThirtyValue=eightThirtyValue
                     )
                     entities_to_upsert.append(entity)
                     
@@ -913,7 +912,7 @@ class SupplyProcessor(BaseProcessor):
             
             # 5. Bulk Upsert
             if entities_to_upsert:
-                result = await self.dc_sg_repository.bulk_upsert_dc_sg(entities_to_upsert)
+                result = await asyncio.to_thread(self.dc_sg_repository.bulk_upsert_dc_sg, entities_to_upsert)
                 logger.info(f"Stage 1 Bulk Result: {result}")
             else:
                 logger.info("Stage 1: No valid entities to upsert after processing.")
@@ -936,7 +935,7 @@ class SupplyProcessor(BaseProcessor):
         return super()._create_dc_sg_entity_from_raw(*args, **kwargs) if hasattr(super(), "_create_dc_sg_entity_from_raw") else None
 
     # Re-implementing _create_dc_sg_entity_from_raw for historical path usage
-    async def _create_dc_sg_entity_from_raw(
+    def _create_dc_sg_entity_from_raw(
         self,
         raw_item: Dict[str, Any],
         metadata: Dict[str, Any],
@@ -954,9 +953,9 @@ class SupplyProcessor(BaseProcessor):
             
             plant_entity = None
             if raw_item.get("approval_no"):
-                plant_entity = await self.plant_repository.find_one({"approval_no": str(raw_item.get("approval_no"))})
+                plant_entity = self.plant_repository.find_one({"approval_no": str(raw_item.get("approval_no"))})
             if not plant_entity and raw_item.get("plant_id"):
-                plant_entity = await self.plant_repository.find_one({"plant_id": str(raw_item.get("plant_id"))})
+                plant_entity = self.plant_repository.find_one({"plant_id": str(raw_item.get("plant_id"))})
             if not plant_entity: return None
             
             plant_id = plant_entity.get("plant_id")
@@ -1012,7 +1011,7 @@ class SupplyProcessor(BaseProcessor):
         """
         logger.info("Stage 2 (Bulk): Processing staged data from dc_sg to supply_serve.")
         
-        staged_records = await self.dc_sg_repository.get_all_records()
+        staged_records = await asyncio.to_thread(self.dc_sg_repository.get_all_records)
             
         count = len(staged_records)
         if count == 0:
@@ -1032,7 +1031,7 @@ class SupplyProcessor(BaseProcessor):
             three_days_ago = today - timedelta(days=3)
             
             # Simple cleanup of really old data
-            await self._cleanup_old_data(three_days_ago)
+            self._cleanup_old_data(three_days_ago)
 
             # Filtering records for current window in memory
             valid_staged_records = []
@@ -1092,7 +1091,9 @@ class SupplyProcessor(BaseProcessor):
                 
                 # Manually run find query in thread
                 filter_query = {"$or": chunk}
-                found = await self.supply_repository.serve_collection.find(filter_query).to_list(length=10000)
+                found = await asyncio.to_thread(
+                    lambda: list(self.supply_repository.serve_collection.find(filter_query))
+                )
                 for frec in found:
                     k = (
                         frec.get("scheduled_at"),
@@ -1185,7 +1186,8 @@ class SupplyProcessor(BaseProcessor):
                 # bulk_insert_supply_serve_with_deduplication uses bulk_upsert_optimized internally.
                 # This prevents duplicate key errors during concurrent cron runs.
                 # Wrap synchronously blocking DB call in thread
-                res = await self.supply_repository.bulk_insert_supply_serve_with_deduplication(
+                res = await asyncio.to_thread(
+                    self.supply_repository.bulk_insert_supply_serve_with_deduplication, 
                     supply_entities
                 )
                 logger.info(f"DEBUG: Supply Serve Write Result: {res}")
@@ -1197,7 +1199,8 @@ class SupplyProcessor(BaseProcessor):
             if historical_entities:
                  # Historical is also time-series, use deduplication insert (Delete-Insert)
                  # Wrap synchronously blocking DB call in thread
-                 res_hist = await self.supply_repository.bulk_insert_supply_historical_with_deduplication(
+                 res_hist = await asyncio.to_thread(
+                     self.supply_repository.bulk_insert_supply_historical_with_deduplication,
                      historical_entities
                  )
                  logger.info(f"DEBUG: Historical Write Result: {res_hist}")
@@ -1211,12 +1214,12 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error in stage 2 bulk processing: {str(e)}")
             return False
 
-    async def _bulk_process_supply_entities(self, entities: List[SupplyServeEntity], total_raw: int, processed: int, skipped: int) -> bool:
+    def _bulk_process_supply_entities(self, entities: List[SupplyServeEntity], total_raw: int, processed: int, skipped: int) -> bool:
         if not entities:
             logger.info("No new or updated supply serve records to process.")
             return True
         
-        result = await self.supply_repository.bulk_insert_supply_serve_with_deduplication(entities)
+        result = self.supply_repository.bulk_insert_supply_serve_with_deduplication(entities)
         logger.info(
             "Processed supply entities - Total: %d, Processed: %d, Skipped: %d, Inserted: %d, Duplicates Removed: %d, Errors: %d",
             total_raw, processed, skipped, result.get("inserted_count", 0),
@@ -1224,13 +1227,13 @@ class SupplyProcessor(BaseProcessor):
         )
         return result.get("error_count", 0) == 0
 
-    async def _bulk_process_historical_entities(self, entities: List[SupplyServeHistoricalEntity]) -> bool:
+    def _bulk_process_historical_entities(self, entities: List[SupplyServeHistoricalEntity]) -> bool:
         if not entities:
             logger.info("No historical supply records to process.")
             return True
         
         try:
-            result = await self.supply_repository.bulk_insert_supply_historical_with_deduplication(entities)
+            result = self.supply_repository.bulk_insert_supply_historical_with_deduplication(entities)
             logger.info("Processed supply historical entities - Total: %d, Inserted: %d, Duplicates Removed: %d, Errors: %d",
                        len(entities), result["inserted_count"], result.get("duplicates_removed", 0), result["error_count"])
             if result["errors"]:
@@ -1277,9 +1280,6 @@ class SupplyProcessor(BaseProcessor):
                 updated_flag=UpdatedFlag.UPDATED,
                 plant_id=staged_item.get("plant_id"),
                 source=staged_item.get("source"),
-                entire_shared_onbar_ent_amount=staged_item.get("entire_shared_onbar_ent_amount"),
-                entire_shared_offbar_ent_amount=staged_item.get("entire_shared_offbar_ent_amount"),
-                rtm_max=staged_item.get("rtm_max"),
                 # Revision tracking
                 source_revision_number=source_revision,
                 system_revision_number=1  # New record starts at 1
@@ -1334,10 +1334,6 @@ class SupplyProcessor(BaseProcessor):
                 updated_at=datetime.now(),
                 timestamp=datetime.now(),
                 source=staged_item.get("source"),
-                entire_shared_onbar_ent_amount=staged_item.get("entire_shared_onbar_ent_amount"),
-                entire_shared_offbar_ent_amount=staged_item.get("entire_shared_offbar_ent_amount"),
-                # Preserve rtm_max once set — never overwrite with None
-                rtm_max=staged_item.get("rtm_max") or existing_record.get("rtm_max"),
                 # Revision tracking
                 source_revision_number=source_revision,
                 system_revision_number=new_system_revision  # Increment on update
@@ -1374,9 +1370,9 @@ class SupplyProcessor(BaseProcessor):
                 "scheduled_at": {"$gte": start_range, "$lt": end_range},
                 "dc_sg": "SG"
             }
-            sg_records = await self.supply_repository.collection.find(
-                sg_filter_all
-            ).to_list(length=10000)
+            sg_records = await asyncio.to_thread(
+                lambda: list(self.supply_repository.collection.find(sg_filter_all))
+            )
             
             # Group SG records by Plant to process plant-wise (cleaner for logs and batching)
             # Map: plant_id -> list of records
@@ -1485,7 +1481,8 @@ class SupplyProcessor(BaseProcessor):
                             "dc_sg": "SG",
                             "plant_id": plant_id
                         }
-                        await self.supply_repository.bulk_insert_supply_serve_with_deduplication(
+                        await asyncio.to_thread(
+                            self.supply_repository.bulk_insert_supply_serve_with_deduplication,
                             updated_sg_entities
                         )
                         logger.info(f"Updated {len(updated_sg_entities)} SG records for {plant_id} with plant-level multiplier: {multiplier}")
@@ -1500,9 +1497,9 @@ class SupplyProcessor(BaseProcessor):
                 "scheduled_at": {"$gte": start_range, "$lt": end_range},
                 "dc_sg": "DC"
             }
-            dc_records = await self.supply_repository.collection.find(
-                dc_filter_all
-            ).to_list(length=10000)
+            dc_records = await asyncio.to_thread(
+                lambda: list(self.supply_repository.collection.find(dc_filter_all))
+            )
             
             # Group DC records by Plant
             dc_by_plant = {}
@@ -1549,16 +1546,13 @@ class SupplyProcessor(BaseProcessor):
                                 px_price=dc_rec.get("px_price"),
                                 vc_price=dc_rec.get("vc_price"),
                                 price_group=dc_rec.get("price_group"),
-                                dam_tm=dam_tm_value,
-                                rtm_tm=dc_rec.get("rtm_tm"),
-                                multiplier=multiplier,  # UPDATED from lookup
+                                dam_tm= dam_tm_value,
+                                rtm_tm= dc_rec.get("rtm_tm"),
+                                multiplier=multiplier, # UPDATED from lookup
                                 ramping=dc_rec.get("ramping", ""),
-                                ramp_up=ramp_val,  # UPDATED
-                                ramp_down=ramp_val,  # UPDATED
-                                dc_afterloss=dc_afterloss,  # UPDATED
-                                entire_shared_onbar_ent_amount=dc_rec.get("entire_shared_onbar_ent_amount"),
-                                entire_shared_offbar_ent_amount=dc_rec.get("entire_shared_offbar_ent_amount"),
-                                rtm_max=dc_rec.get("rtm_max"),
+                                ramp_up=ramp_val, # UPDATED
+                                ramp_down=ramp_val, # UPDATED
+                                dc_afterloss=dc_afterloss, # UPDATED
                                 source=dc_rec.get("source"),
                                 inserted_at=dc_rec.get("inserted_at", datetime.now()),
                                 updated_at=datetime.now(),
@@ -1580,7 +1574,8 @@ class SupplyProcessor(BaseProcessor):
                             "dc_sg": "DC",
                             "plant_id": plant_id
                         }
-                        await self.supply_repository.bulk_insert_supply_serve_with_deduplication(
+                        await asyncio.to_thread(
+                            self.supply_repository.bulk_insert_supply_serve_with_deduplication,
                             updated_dc_entities
                         )
                         
@@ -1615,7 +1610,8 @@ class SupplyProcessor(BaseProcessor):
             end_date = datetime.combine(sorted_dates[-1] + timedelta(days=1), datetime.min.time())
             
             # Aggregate supply schedule
-            aggregated_schedule = await self.supply_repository.aggregate_supply_schedule(
+            aggregated_schedule = await asyncio.to_thread(
+                self.supply_repository.aggregate_supply_schedule,
                 start_date, 
                 end_date
             )
@@ -1649,7 +1645,8 @@ class SupplyProcessor(BaseProcessor):
             # Process each date
             for date_key in schedule_map:
                 # Get existing demand records for this date
-                demand_records = await self.demand_repository.find_demand_serve_by_date(
+                demand_records = await asyncio.to_thread(
+                    self.demand_repository.find_demand_serve_by_date,
                     datetime.combine(date_key, datetime.min.time())
                 )
                 
@@ -1686,7 +1683,7 @@ class SupplyProcessor(BaseProcessor):
                             continue
             
             if updated_entities:
-                result = await self.demand_repository.bulk_insert_demand_serve_with_deduplication(updated_entities)
+                result = await asyncio.to_thread(self.demand_repository.bulk_insert_demand_serve_with_deduplication, updated_entities)
                 logger.info(f"Updated demand schedule: {result}")
             return True
             
@@ -1694,23 +1691,23 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error updating demand schedule: {str(e)}")
             return False
 
-    async def _cleanup_old_data(self, supply_cutoff_date):
+    def _cleanup_old_data(self, supply_cutoff_date):
         """
         Clean up old data from supply_serve collection by moving to historical
         """
         try:
-            await self._move_old_supply_data_to_historical(supply_cutoff_date)
+            self._move_old_supply_data_to_historical(supply_cutoff_date)
         except Exception as e:
             logger.error("Error cleaning up old data: %s", str(e))
 
-    async def _move_old_supply_data_to_historical(self, cutoff_date):
+    def _move_old_supply_data_to_historical(self, cutoff_date):
         """
         Move data older than cutoff_date from supply_serve to supply_serve_historical
         """
         try:
             cutoff_datetime = datetime.combine(cutoff_date, datetime.min.time())
             
-            old_records = await self.supply_repository.find_supply_serve_by_date_range(
+            old_records = self.supply_repository.find_supply_serve_by_date_range(
                 start_date=datetime.min,
                 end_date=cutoff_datetime
             )
@@ -1723,8 +1720,8 @@ class SupplyProcessor(BaseProcessor):
             historical_entities = [SupplyServeHistoricalEntity(**record, archived_at=datetime.now()) for record in old_records]
             
             if historical_entities:
-                await self.supply_repository.bulk_insert_supply_historical_with_deduplication(historical_entities)
-                await self.supply_repository.delete_supply_serve_by_date(cutoff_datetime)
+                self.supply_repository.bulk_insert_supply_historical_with_deduplication(historical_entities)
+                self.supply_repository.delete_supply_serve_by_date(cutoff_datetime)
             
         except Exception as e:
             logger.error("Error moving old supply data to historical: %s", str(e))
@@ -1776,7 +1773,7 @@ class SupplyProcessor(BaseProcessor):
         schedule = "0 2 * * *"
         start_time = datetime.now()
         
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             return {"status": "error", "message": "Failed to record job start"}
         
@@ -1785,7 +1782,7 @@ class SupplyProcessor(BaseProcessor):
         logger.info("=== EXECUTING SUPPLY DATA ARCHIVAL JOB ===")
         
         try:
-            archive_result = await self.supply_repository.archive_old_supply_data()
+            archive_result = self.supply_repository.archive_old_supply_data()
             
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -1800,7 +1797,7 @@ class SupplyProcessor(BaseProcessor):
                 **archive_result
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time,
                 execution_id, "success", True, success_result
             )
@@ -1815,7 +1812,7 @@ class SupplyProcessor(BaseProcessor):
                 "execution_time": execution_time,
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time,
                 execution_id, "error", False, error_result, str(e)
             )

@@ -25,6 +25,7 @@ class JobDetail(BaseModel):
     error_details: Optional[Dict[str, Any]] = Field(None, description="Detailed error information")
     result_data: Optional[Dict[str, Any]] = Field(None, description="Job execution result data")
     metadata: Optional[Dict[str, Any]] = Field(None, description="Additional execution metadata")
+    logs: Optional[list] = Field(default_factory=list, description="Execution logs captured during job run")
     service: str = Field("scheduler", description="Service that executed the job")
     created_at: datetime = Field(default_factory=datetime.utcnow, description="When the log was created")
     

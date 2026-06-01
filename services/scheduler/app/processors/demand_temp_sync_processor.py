@@ -4,12 +4,9 @@ and writes it into demand_serve using the same formulas as the manual demand ser
 Designed to run every 15 minutes via cron.
 """
 
-import asyncio
 import logging
 from datetime import datetime, timedelta, time
 from typing import Dict, Any, List, Optional
-
-from pymongo import DeleteOne, InsertOne, ReplaceOne
 
 from .base_processor import BaseProcessor
 from libs.helpers.demand_calculations import calculate_demand_metrics
@@ -53,7 +50,7 @@ class DemandTempSyncProcessor(BaseProcessor):
         schedule = "*/15 * * * *"
         start_time = datetime.now()
 
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         self.set_correlation_id(execution_id or "")
 
         logger.info("=== EXECUTING DEMAND TEMP SYNC JOB ===")
@@ -74,7 +71,7 @@ class DemandTempSyncProcessor(BaseProcessor):
                 "data_type": "demand_temp_sync",
             }
 
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -100,10 +97,7 @@ class DemandTempSyncProcessor(BaseProcessor):
     async def sync_all_blocks_up_to_current(self):
         """
         Sync every temp demand block from 1 through the current time block.
-
-        Optimised: all data is fetched in 6 parallel batch queries, blocks are
-        processed in-memory, and results are written with two bulk_write calls.
-        This reduces ~10N sequential DB round trips to O(1) parallel round trips.
+        Demand multiplier is fetched once and reused across all blocks.
 
         Returns:
             Tuple[int, int, int]: (synced_count, skipped_count, failed_count)
@@ -111,162 +105,30 @@ class DemandTempSyncProcessor(BaseProcessor):
         current_block = self._get_current_time_block()
         today = datetime.now().date()
         default_scheduled_at = datetime.combine(today, time(0, 0, 0))
-        blocks = list(range(1, current_block + 1))
 
         logger.info(f"Syncing all temp demand blocks 1–{current_block} for {today}")
 
-        # ------------------------------------------------------------------ #
-        # 1. Fetch all required data in parallel (6 queries, 1 round trip)   #
-        # ------------------------------------------------------------------ #
-        (
-            all_plants,
-            temp_records_list,
-            idf_records_list,
-            daf_records_list,
-            supply_records_list,
-            exchange_records_list,
-        ) = await asyncio.gather(
-            self.master_plants_repository.get_all_plants(),
-            self.demand_repository.db[self._temp_collection_name]
-                .find({"time_block": {"$in": blocks}})
-                .to_list(length=current_block),
-            self.demand_repository.serve_collection
-                .find({"scheduled_at": default_scheduled_at, "time_block": {"$in": blocks}, "type": "IDF"})
-                .to_list(length=current_block),
-            self.demand_repository.serve_collection
-                .find({"scheduled_at": default_scheduled_at, "time_block": {"$in": blocks}, "type": "DAF"})
-                .to_list(length=current_block),
-            self.supply_repository.serve_collection
-                .find({"scheduled_at": default_scheduled_at, "time_block": {"$in": blocks}, "dc_sg": "SG", "plant_id": "PPCLGPP"})
-                .to_list(length=current_block),
-            self.exchange_repository.serve_collection
-                .find({"scheduled_at": default_scheduled_at, "time_block": {"$in": blocks}, "market_type": {"$in": ["RTM", "DAM"]}})
-                .to_list(length=current_block * 2),
-        )
-
-        # ------------------------------------------------------------------ #
-        # 2. Build in-memory lookup dicts                                     #
-        # ------------------------------------------------------------------ #
+        # Fetch demand multiplier once for the entire run
+        all_plants = await self.master_plants_repository.get_all_plants()
         demand_multiplier = self._calculate_demand_multiplier(all_plants)
         logger.info(f"Demand multiplier (shared): {demand_multiplier}")
 
-        temp_by_block = {r["time_block"]: r for r in temp_records_list}
-        idf_by_block = {r["time_block"]: r for r in idf_records_list}
-        daf_by_block = {r["time_block"]: r for r in daf_records_list}
-        supply_by_block = {r["time_block"]: r for r in supply_records_list}
-        exchange_by_block_type = {
-            (r["time_block"], r["market_type"]): r for r in exchange_records_list
-        }
-
         synced = skipped = failed = 0
-        now = datetime.now()
-        serve_ops: List = []
-        hist_ops: List = []
 
-        # ------------------------------------------------------------------ #
-        # 3. Process every block in-memory — no DB calls inside the loop     #
-        # ------------------------------------------------------------------ #
-        for block_num in blocks:
+        for block_num in range(1, current_block + 1):
             try:
-                temp_record = temp_by_block.get(block_num)
-                if not temp_record:
+                did_sync = await self._sync_single_block(
+                    block_num=block_num,
+                    default_scheduled_at=default_scheduled_at,
+                    demand_multiplier=demand_multiplier,
+                )
+                if did_sync:
+                    synced += 1
+                else:
                     skipped += 1
-                    continue
-
-                drawal = float(temp_record.get("drawal") or 0)
-                rostering = float(temp_record.get("rostering") or 0)
-                frequency = float(temp_record.get("frequency") or 0)
-
-                scheduled_at = default_scheduled_at
-                if temp_record.get("scheduled_at"):
-                    raw_sa = temp_record["scheduled_at"]
-                    if isinstance(raw_sa, str):
-                        try:
-                            scheduled_at = datetime.fromisoformat(raw_sa.replace("Z", "+00:00"))
-                        except Exception:
-                            pass
-                    elif isinstance(raw_sa, datetime):
-                        scheduled_at = raw_sa
-
-                drawal_before_loss = (drawal / demand_multiplier) if demand_multiplier > 0 else 0.0
-
-                if drawal == 0:
-                    actual = 0.0
-                else:
-                    supply_rec = supply_by_block.get(block_num)
-                    supply_volume = float(supply_rec.get("volume") or 0) if supply_rec else 0.0
-                    actual = drawal + supply_volume
-
-                rtm_record = exchange_by_block_type.get((block_num, "RTM"))
-                dam_record = exchange_by_block_type.get((block_num, "DAM"))
-                rtm_val = float(rtm_record.get("acp") or rtm_record.get("mcp") or 0) if rtm_record else 0.0
-                dam_val = float(dam_record.get("acp") or dam_record.get("mcp") or 0) if dam_record else 0.0
-
-                if rtm_record and (rtm_record.get("acp") or 0) > 0:
-                    acp = float(rtm_record["acp"])
-                elif dam_record and (dam_record.get("acp") or 0) > 0:
-                    acp = float(dam_record["acp"])
-                elif rtm_record and (rtm_record.get("mcp") or 0) > 0:
-                    acp = float(rtm_record["mcp"])
-                elif dam_record and (dam_record.get("mcp") or 0) > 0:
-                    acp = float(dam_record["mcp"])
-                else:
-                    acp = 100.0
-
-                idf_existing = idf_by_block.get(block_num)
-                forecast = float(idf_existing.get("forecast") or 0) if idf_existing else 0.0
-                schedule_val = float(idf_existing.get("schedule") or 0) if idf_existing else 0.0
-
-                metrics = calculate_demand_metrics(
-                    actual=actual, forecast=forecast, frequency=frequency,
-                    time_block=block_num, rostering=rostering,
-                    rtm_data=rtm_val, dam_data=dam_val, acp=acp,
-                    drawal=drawal, schedule=schedule_val,
-                )
-                self._collect_demand_ops(
-                    serve_ops=serve_ops, hist_ops=hist_ops,
-                    scheduled_at=scheduled_at, time_block=block_num, type_val="IDF",
-                    drawal=drawal, actual=actual, rostering=rostering, frequency=frequency,
-                    forecast=forecast, schedule=schedule_val, metrics=metrics,
-                    demand_multiplier=demand_multiplier, drawal_before_loss=drawal_before_loss,
-                    existing_record=idf_existing, now=now,
-                )
-
-                daf_existing = daf_by_block.get(block_num)
-                if daf_existing:
-                    daf_forecast = float(daf_existing.get("forecast") or 0)
-                    daf_schedule = float(daf_existing.get("schedule") or 0)
-                    daf_metrics = calculate_demand_metrics(
-                        actual=actual, forecast=daf_forecast, frequency=frequency,
-                        time_block=block_num, rostering=rostering,
-                        rtm_data=rtm_val, dam_data=dam_val, acp=acp,
-                        drawal=drawal, schedule=daf_schedule,
-                    )
-                    self._collect_demand_ops(
-                        serve_ops=serve_ops, hist_ops=hist_ops,
-                        scheduled_at=scheduled_at, time_block=block_num, type_val="DAF",
-                        drawal=drawal, actual=actual, rostering=rostering, frequency=frequency,
-                        forecast=daf_forecast, schedule=daf_schedule, metrics=daf_metrics,
-                        demand_multiplier=demand_multiplier, drawal_before_loss=drawal_before_loss,
-                        existing_record=daf_existing, now=now,
-                    )
-
-                synced += 1
-
             except Exception as e:
-                logger.error(f"Error processing block {block_num}: {e}", exc_info=True)
+                logger.error(f"Error syncing block {block_num}: {e}", exc_info=True)
                 failed += 1
-
-        # ------------------------------------------------------------------ #
-        # 4. Flush all writes in two bulk operations                         #
-        # ------------------------------------------------------------------ #
-        if serve_ops:
-            await self.demand_repository.serve_collection.bulk_write(serve_ops, ordered=False)
-        if hist_ops:
-            # Delete-then-insert pattern: all deletes first, then all inserts
-            await self.demand_repository.historical_collection.bulk_write(
-                hist_ops, ordered=True
-            )
 
         logger.info(f"Sync complete — synced={synced}, skipped={skipped}, failed={failed}")
         return synced, skipped, failed
@@ -279,7 +141,6 @@ class DemandTempSyncProcessor(BaseProcessor):
     ) -> bool:
         """
         Sync one temp demand block into demand_serve.
-        Parallel fetches are used for independent DB queries within the block.
 
         Args:
             block_num: Time block (1–96).
@@ -289,7 +150,7 @@ class DemandTempSyncProcessor(BaseProcessor):
         Returns:
             True if the block was synced, False if skipped (no temp record).
         """
-        temp_record = await self.demand_repository.db[self._temp_collection_name].find_one(
+        temp_record = self.demand_repository.db[self._temp_collection_name].find_one(
             {"time_block": block_num}
         )
 
@@ -313,25 +174,20 @@ class DemandTempSyncProcessor(BaseProcessor):
 
         drawal_before_loss = (drawal / demand_multiplier) if demand_multiplier > 0 else 0.0
 
-        # Fetch supply, exchange data, and existing demand records in parallel
-        supply_coro = self._get_supply_volume(scheduled_at, block_num) if drawal != 0 else asyncio.sleep(0, result=0.0)
-        exchange_coro = self._get_exchange_data(scheduled_at, block_num)
-        idf_coro = self.demand_repository.serve_collection.find_one(
-            {"scheduled_at": scheduled_at, "time_block": block_num, "type": "IDF"}
-        )
-        daf_coro = self.demand_repository.serve_collection.find_one(
-            {"scheduled_at": scheduled_at, "time_block": block_num, "type": "DAF"}
-        )
+        if drawal == 0:
+            actual = 0.0
+        else:
+            supply_volume = await self._get_supply_volume(scheduled_at, block_num)
+            actual = drawal + supply_volume
 
-        supply_volume, exchange_data, idf_existing, daf_existing = await asyncio.gather(
-            supply_coro, exchange_coro, idf_coro, daf_coro
-        )
-
-        actual = (drawal + supply_volume) if drawal != 0 else 0.0
+        exchange_data = await self._get_exchange_data(scheduled_at, block_num)
         acp = exchange_data["acp"]
         rtm_data_val = exchange_data["rtm_data"]
         dam_data_val = exchange_data["dam_data"]
 
+        idf_existing = self.demand_repository.serve_collection.find_one(
+            {"scheduled_at": scheduled_at, "time_block": block_num, "type": "IDF"}
+        )
         forecast = float(idf_existing.get("forecast") or 0) if idf_existing else 0.0
         schedule_val = float(idf_existing.get("schedule") or 0) if idf_existing else 0.0
 
@@ -364,6 +220,9 @@ class DemandTempSyncProcessor(BaseProcessor):
             existing_record=idf_existing,
         )
 
+        daf_existing = self.demand_repository.serve_collection.find_one(
+            {"scheduled_at": scheduled_at, "time_block": block_num, "type": "DAF"}
+        )
         if daf_existing:
             daf_forecast = float(daf_existing.get("forecast") or 0)
             daf_schedule = float(daf_existing.get("schedule") or 0)
@@ -408,7 +267,7 @@ class DemandTempSyncProcessor(BaseProcessor):
 
             logger.info(f"Syncing temp demand for block {current_block}, date {today}")
 
-            temp_record = await self.demand_repository.db[self._temp_collection_name].find_one(
+            temp_record = self.demand_repository.db[self._temp_collection_name].find_one(
                 {"time_block": current_block}
             )
 
@@ -431,33 +290,31 @@ class DemandTempSyncProcessor(BaseProcessor):
                 elif isinstance(raw_sa, datetime):
                     scheduled_at = raw_sa
 
-            # Fetch multiplier, supply, exchange, and existing records in parallel
-            supply_coro = (
-                self._get_supply_volume(scheduled_at, current_block)
-                if drawal != 0 else asyncio.sleep(0, result=0.0)
-            )
-            all_plants, supply_volume, exchange_data, idf_existing, daf_existing = await asyncio.gather(
-                self.master_plants_repository.get_all_plants(),
-                supply_coro,
-                self._get_exchange_data(scheduled_at, current_block),
-                self.demand_repository.serve_collection.find_one(
-                    {"scheduled_at": scheduled_at, "time_block": current_block, "type": "IDF"}
-                ),
-                self.demand_repository.serve_collection.find_one(
-                    {"scheduled_at": scheduled_at, "time_block": current_block, "type": "DAF"}
-                ),
-            )
-
+            # 1. Demand multiplier
+            all_plants = await self.master_plants_repository.get_all_plants()
             demand_multiplier = self._calculate_demand_multiplier(all_plants)
             logger.info(f"Demand multiplier: {demand_multiplier}")
 
+            # 2. drawal_before_loss
             drawal_before_loss = (drawal / demand_multiplier) if demand_multiplier > 0 else 0.0
-            actual = (drawal + supply_volume) if drawal != 0 else 0.0
 
+            # 3. actual = drawal + supply_volume (0 if drawal == 0)
+            if drawal == 0:
+                actual = 0.0
+            else:
+                supply_volume = await self._get_supply_volume(scheduled_at, current_block)
+                actual = drawal + supply_volume
+
+            # 4. Exchange data
+            exchange_data = await self._get_exchange_data(scheduled_at, current_block)
             acp = exchange_data["acp"]
             rtm_data_val = exchange_data["rtm_data"]
             dam_data_val = exchange_data["dam_data"]
 
+            # 5. IDF record
+            idf_existing = self.demand_repository.serve_collection.find_one(
+                {"scheduled_at": scheduled_at, "time_block": current_block, "type": "IDF"}
+            )
             forecast = float(idf_existing.get("forecast") or 0) if idf_existing else 0.0
             schedule_val = float(idf_existing.get("schedule") or 0) if idf_existing else 0.0
 
@@ -490,6 +347,10 @@ class DemandTempSyncProcessor(BaseProcessor):
                 existing_record=idf_existing,
             )
 
+            # 6. Sync DAF if it exists
+            daf_existing = self.demand_repository.serve_collection.find_one(
+                {"scheduled_at": scheduled_at, "time_block": current_block, "type": "DAF"}
+            )
             if daf_existing:
                 daf_forecast = float(daf_existing.get("forecast") or 0)
                 daf_schedule = float(daf_existing.get("schedule") or 0)
@@ -552,7 +413,7 @@ class DemandTempSyncProcessor(BaseProcessor):
 
     async def _get_supply_volume(self, scheduled_at: datetime, time_block: int) -> float:
         try:
-            record = await self.supply_repository.serve_collection.find_one(
+            record = self.supply_repository.serve_collection.find_one(
                 {
                     "scheduled_at": scheduled_at,
                     "time_block": time_block,
@@ -567,10 +428,10 @@ class DemandTempSyncProcessor(BaseProcessor):
 
     async def _get_exchange_data(self, scheduled_at: datetime, time_block: int) -> Dict[str, float]:
         try:
-            rtm_record = await self.exchange_repository.find_one(
+            rtm_record = self.exchange_repository.find_one(
                 {"scheduled_at": scheduled_at, "time_block": time_block, "market_type": "RTM"}
             )
-            dam_record = await self.exchange_repository.find_one(
+            dam_record = self.exchange_repository.find_one(
                 {"scheduled_at": scheduled_at, "time_block": time_block, "market_type": "DAM"}
             )
 
@@ -593,7 +454,7 @@ class DemandTempSyncProcessor(BaseProcessor):
             logger.error(f"Error fetching exchange data: {e}")
             return {"acp": 100.0, "rtm_data": 0.0, "dam_data": 0.0}
 
-    def _build_demand_document(
+    async def _save_demand_record(
         self,
         scheduled_at: datetime,
         time_block: int,
@@ -608,9 +469,11 @@ class DemandTempSyncProcessor(BaseProcessor):
         demand_multiplier: float,
         drawal_before_loss: float,
         existing_record: Optional[Dict[str, Any]],
-        now: datetime,
-    ) -> Dict[str, Any]:
-        return {
+    ) -> None:
+        filter_query = {"scheduled_at": scheduled_at, "time_block": time_block, "type": type_val}
+        now = datetime.now()
+
+        full_document = {
             "scheduled_at": scheduled_at,
             "time_block": time_block,
             "type": type_val,
@@ -635,74 +498,12 @@ class DemandTempSyncProcessor(BaseProcessor):
             "inserted_at": existing_record.get("inserted_at", now) if existing_record else now,
         }
 
-    def _collect_demand_ops(
-        self,
-        serve_ops: List,
-        hist_ops: List,
-        scheduled_at: datetime,
-        time_block: int,
-        type_val: str,
-        drawal: float,
-        actual: float,
-        rostering: float,
-        frequency: float,
-        forecast: float,
-        schedule: float,
-        metrics: Dict[str, Any],
-        demand_multiplier: float,
-        drawal_before_loss: float,
-        existing_record: Optional[Dict[str, Any]],
-        now: datetime,
-    ) -> None:
-        """Append bulk-write operations for serve and historical collections (no I/O)."""
-        filter_query = {"scheduled_at": scheduled_at, "time_block": time_block, "type": type_val}
-        doc = self._build_demand_document(
-            scheduled_at=scheduled_at, time_block=time_block, type_val=type_val,
-            drawal=drawal, actual=actual, rostering=rostering, frequency=frequency,
-            forecast=forecast, schedule=schedule, metrics=metrics,
-            demand_multiplier=demand_multiplier, drawal_before_loss=drawal_before_loss,
-            existing_record=existing_record, now=now,
-        )
-        serve_ops.append(ReplaceOne(filter_query, doc, upsert=True))
+        self.demand_repository.serve_collection.delete_many(filter_query)
+        self.demand_repository.serve_collection.insert_one(full_document)
 
-        hist_doc = {**doc, "archived_at": now, "archived_timestamp": now}
-        # Delete then insert so historical time-series entries are replaced correctly.
-        hist_ops.append(DeleteOne(filter_query))
-        hist_ops.append(InsertOne(hist_doc))
-
-    async def _save_demand_record(
-        self,
-        scheduled_at: datetime,
-        time_block: int,
-        type_val: str,
-        drawal: float,
-        actual: float,
-        rostering: float,
-        frequency: float,
-        forecast: float,
-        schedule: float,
-        metrics: Dict[str, Any],
-        demand_multiplier: float,
-        drawal_before_loss: float,
-        existing_record: Optional[Dict[str, Any]],
-    ) -> None:
-        filter_query = {"scheduled_at": scheduled_at, "time_block": time_block, "type": type_val}
-        now = datetime.now()
-
-        doc = self._build_demand_document(
-            scheduled_at=scheduled_at, time_block=time_block, type_val=type_val,
-            drawal=drawal, actual=actual, rostering=rostering, frequency=frequency,
-            forecast=forecast, schedule=schedule, metrics=metrics,
-            demand_multiplier=demand_multiplier, drawal_before_loss=drawal_before_loss,
-            existing_record=existing_record, now=now,
-        )
-
-        # Use ReplaceOne(upsert) for serve — single atomic operation vs delete+insert
-        await self.demand_repository.serve_collection.replace_one(filter_query, doc, upsert=True)
-
-        hist_doc = {**doc, "archived_at": now, "archived_timestamp": now}
-        await self.demand_repository.historical_collection.delete_many(filter_query)
-        await self.demand_repository.historical_collection.insert_one(hist_doc)
+        full_document_hist = {**full_document, "archived_at": now, "archived_timestamp": now}
+        self.demand_repository.historical_collection.delete_many(filter_query)
+        self.demand_repository.historical_collection.insert_one(full_document_hist)
 
     async def process_raw_data_to_serve(
         self,

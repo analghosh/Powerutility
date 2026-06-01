@@ -38,7 +38,7 @@ class ExchangeDsmProcessor(BaseProcessor):
         start_time = datetime.now()
 
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
+        execution_id = self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
         if not execution_id:
             logger.error(f"Failed to record job start for {job_type}")
             return {
@@ -79,7 +79,7 @@ class ExchangeDsmProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
 
-            await self._record_job_execution(
+            self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -168,7 +168,7 @@ class ExchangeDsmProcessor(BaseProcessor):
             success = True
             if serve_entities:
                 records = [e.model_dump() for e in serve_entities]
-                upsert_result = await self.repository.bulk_upsert_optimized(
+                upsert_result = self.repository.bulk_upsert_optimized(
                     records=records,
                     unique_key_fields=["scheduled_at", "time_block", "market_type", "px_name"]
                 )
@@ -178,7 +178,7 @@ class ExchangeDsmProcessor(BaseProcessor):
             # Bulk Insert into Historical Collection
             if historical_entities:
                 try:
-                    await self.repository.bulk_insert_historical(historical_entities)
+                    self.repository.bulk_insert_historical(historical_entities)
                     logger.info(f"Inserted {len(historical_entities)} historical records")
                 except Exception as hist_error:
                     logger.error(f"Error inserting historical records: {hist_error}")

@@ -36,7 +36,7 @@ class BlockBidBookRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error creating indexes for {self.collection_name}: {e}")
 
-    async def upsert_bids(self, bids: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def upsert_bids(self, bids: List[Dict[str, Any]]) -> Dict[str, Any]:
         """
         Bulk upsert block bid records using OrderId as the unique key.
         """
@@ -52,4 +52,4 @@ class BlockBidBookRepository(BaseRepository):
                 except (ValueError, TypeError):
                     logger.warning(f"Skipping block bid with invalid OrderId: {bid.get('OrderId')}")
 
-        return await self.bulk_upsert_optimized(validated, unique_key_fields=["OrderId"])
+        return self.bulk_upsert_optimized(validated, unique_key_fields=["OrderId"])

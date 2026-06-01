@@ -39,7 +39,7 @@ async def run_encrypt_bearer_tokens_migration() -> None:
     updated = 0
     failed = 0
 
-    async for doc in cursor:
+    for doc in cursor:
         doc_id = doc["_id"]
         token = doc.get("BearerToken", "")
 
@@ -48,7 +48,7 @@ async def run_encrypt_bearer_tokens_migration() -> None:
 
         try:
             encrypted_token = encrypt_api_key(token)
-            await collection.update_one(
+            collection.update_one(
                 {"_id": doc_id},
                 {
                     "$set": {

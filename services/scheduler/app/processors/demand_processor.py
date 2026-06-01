@@ -11,14 +11,7 @@ from .base_processor import BaseProcessor
 from libs.models.demand_serve_entity import DemandServeEntity, DemandServeHistoricalEntity
 from libs.enum.updated_flag import UpdatedFlag
 from libs.core.job_entities import JobDetail
-from libs.helpers.rtm_forecast_block_filter import (
-    rtm_forecast_run_context,
-    should_write_forecast_block,
-)
-from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV
-from ..core.config import settings
 from ..repository.demand_serve_repository import demand_serve_repository
-from ..repository.forecast_serve_repository import forecast_serve_repository
 from ..repository.supply_serve_repository import supply_serve_repository
 from ..repository.exchange_repository import ExchangeRepository
 from libs.audit_queue.simple_logger import AuditLogger
@@ -38,7 +31,6 @@ class DemandProcessor(BaseProcessor):
         
         # Use the existing demand serve repository
         self.demand_repository = demand_serve_repository
-        self.forecast_repository = forecast_serve_repository
         self.supply_repository = supply_serve_repository
         
         # Initialize exchange repository for fetching area prices
@@ -47,20 +39,6 @@ class DemandProcessor(BaseProcessor):
         # Initialize master plants repository for demand multiplier calculation
         from ..repository.master_plants_repository import MasterPlantsRepository
         self.master_plants_repository = MasterPlantsRepository()
-
-
-
-    def _parse_idf_forecast_from_raw(self, raw_record: Dict[str, Any]) -> Optional[float]:
-        """Parse IDF forecast from CSV row; None if column missing or empty."""
-        if "forecast" not in raw_record:
-            return None
-        val = raw_record.get("forecast")
-        if val is None or val == "":
-            return None
-        try:
-            return self._safe_float(val)
-        except (TypeError, ValueError):
-            return None
 
     def _calculate_demand_multiplier(self, plants: List[Dict[str, Any]]) -> float:
         """
@@ -123,14 +101,14 @@ class DemandProcessor(BaseProcessor):
             logger.debug(f"RTM Query: {rtm_query}")
             
             # Try main exchange collection first
-            rtm_records = await self.exchange_repository.find_one(rtm_query)
+            rtm_records = self.exchange_repository.find_one(rtm_query)
             logger.debug(f"RTM Records Found (main): {rtm_records is not None}")
             
             # If not found in main collection, try historical collection
             if not rtm_records:
                 logger.debug("RTM data not found in main collection, checking historical...")
                 try:
-                    rtm_records = await self.exchange_repository.historical_collection.find_one(rtm_query)
+                    rtm_records = self.exchange_repository.historical_collection.find_one(rtm_query)
                     logger.debug(f"RTM Records Found (historical): {rtm_records is not None}")
                 except Exception as e:
                     logger.debug(f"Error querying historical collection for RTM: {e}")
@@ -148,13 +126,13 @@ class DemandProcessor(BaseProcessor):
                 logger.debug(f"RTM Date Range Query: {rtm_date_query}")
                 
                 # Try date range in main collection first
-                rtm_records = await self.exchange_repository.find_one(rtm_date_query)
+                rtm_records = self.exchange_repository.find_one(rtm_date_query)
                 logger.debug(f"RTM Records Found (main date range): {rtm_records is not None}")
                 
                 # If still not found, try date range in historical collection
                 if not rtm_records:
                     try:
-                        rtm_records = await self.exchange_repository.historical_collection.find_one(rtm_date_query)
+                        rtm_records = self.exchange_repository.historical_collection.find_one(rtm_date_query)
                         logger.debug(f"RTM Records Found (historical date range): {rtm_records is not None}")
                     except Exception as e:
                         logger.debug(f"Error querying historical collection for RTM date range: {e}")
@@ -168,14 +146,14 @@ class DemandProcessor(BaseProcessor):
             logger.debug(f"DAM Query: {dam_query}")
             
             # Try main exchange collection first
-            dam_records = await self.exchange_repository.find_one(dam_query)
+            dam_records = self.exchange_repository.find_one(dam_query)
             logger.debug(f"DAM Records Found (main): {dam_records is not None}")
             
             # If not found in main collection, try historical collection
             if not dam_records:
                 logger.debug("DAM data not found in main collection, checking historical...")
                 try:
-                    dam_records = await self.exchange_repository.historical_collection.find_one(dam_query)
+                    dam_records = self.exchange_repository.historical_collection.find_one(dam_query)
                     logger.debug(f"DAM Records Found (historical): {dam_records is not None}")
                 except Exception as e:
                     logger.debug(f"Error querying historical collection for DAM: {e}")
@@ -193,13 +171,13 @@ class DemandProcessor(BaseProcessor):
                 logger.debug(f"DAM Date Range Query: {dam_date_query}")
                 
                 # Try date range in main collection first
-                dam_records = await self.exchange_repository.find_one(dam_date_query)
+                dam_records = self.exchange_repository.find_one(dam_date_query)
                 logger.debug(f"DAM Records Found (main date range): {dam_records is not None}")
                 
                 # If still not found, try date range in historical collection
                 if not dam_records:
                     try:
-                        dam_records = await self.exchange_repository.historical_collection.find_one(dam_date_query)
+                        dam_records = self.exchange_repository.historical_collection.find_one(dam_date_query)
                         logger.debug(f"DAM Records Found (historical date range): {dam_records is not None}")
                     except Exception as e:
                         logger.debug(f"Error querying historical collection for DAM date range: {e}")
@@ -286,8 +264,7 @@ class DemandProcessor(BaseProcessor):
                 "time_block": {"$in": time_blocks}
             }
             
-            # AWAIT the async find_many cursor builder and resolve to a list
-            all_records = await self.exchange_repository.find_many(query, limit=1000)
+            all_records = self.exchange_repository.find_many(query, limit=1000)
             
             # Index by (time_block, market_type)
             exchange_map = {}
@@ -361,7 +338,7 @@ class DemandProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -405,7 +382,7 @@ class DemandProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -435,7 +412,7 @@ class DemandProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -465,7 +442,7 @@ class DemandProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -482,7 +459,7 @@ class DemandProcessor(BaseProcessor):
         
         try:
             # Archive old demand data based on new 3-day active window (yesterday,today,tomorrow)
-            archive_result = await self.demand_repository.archive_old_demand_data(days_to_keep=2)
+            archive_result = self.demand_repository.archive_old_demand_data(days_to_keep=2)
             
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -496,7 +473,7 @@ class DemandProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -523,7 +500,7 @@ class DemandProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                await self._record_job_completion(
+                self._record_job_completion(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -551,7 +528,7 @@ class DemandProcessor(BaseProcessor):
                 "cron_job":"demand"
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -565,7 +542,7 @@ class DemandProcessor(BaseProcessor):
             )
             
             logger.error("Error executing demand data archival job: %s", str(e))
-    async def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
+    def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
         """Fetch supply schedule data for the dates in raw_data (list of dicts or list of dates)"""
         try:
             unique_dates = set()
@@ -600,7 +577,7 @@ class DemandProcessor(BaseProcessor):
             start_date = datetime.combine(sorted_dates[0], datetime.min.time())
             end_date = datetime.combine(sorted_dates[-1] + timedelta(days=1), datetime.min.time())
             
-            aggregated_schedule = await self.supply_repository.aggregate_supply_schedule(start_date, end_date)
+            aggregated_schedule = self.supply_repository.aggregate_supply_schedule(start_date, end_date)
             
             schedule_map = {}
             if aggregated_schedule:
@@ -649,7 +626,7 @@ class DemandProcessor(BaseProcessor):
             logger.info(f"Demand calculation summary: {get_calculation_summary(raw_data)}")
             
             # Fetch supply schedule map (Bulk)
-            supply_map = await self._get_supply_schedule_map(raw_data)
+            supply_map = self._get_supply_schedule_map(raw_data)
             
             demand_entities = []
             historical_entities = []
@@ -723,7 +700,7 @@ class DemandProcessor(BaseProcessor):
                      try:
                          cursor = self.supply_repository.serve_collection.find(query)
                          try:
-                             found = await cursor.to_list(length=10000)
+                             found = list(cursor)
                          finally:
                              cursor.close()
                          for f in found:
@@ -741,7 +718,7 @@ class DemandProcessor(BaseProcessor):
                      try:
                          cursor = self.demand_repository.serve_collection.find(query)
                          try:
-                             found = await cursor.to_list(length=10000)
+                             found = list(cursor)
                          finally:
                              cursor.close()
                          for f in found:
@@ -753,7 +730,6 @@ class DemandProcessor(BaseProcessor):
             # 3. Process Entities
             demand_entities = []
             historical_entities = []
-            csv_forecast_records: List[Dict[str, Any]] = []
             today_date = datetime.now().date()
             
             for raw_record in valid_items:
@@ -790,41 +766,16 @@ class DemandProcessor(BaseProcessor):
                             else:
                                 raw_record["forecast"] = None
 
-                    # Condition 4: For IDF CSV forecast, same block window as RTM merge (IST, current + min_ahead)
+                    # Condition 4: For IDF, only update current block and future (not past blocks of today or earlier dates)
                     if typ == "IDF":
-                        if tb is None:
+                        now = datetime.now()
+                        current_block = now.hour * 4 + (now.minute // 15) + 1
+                        if sch_at.date() < today_date:
+                            logger.debug(f"Skipping IDF record for past date {sch_at.date()}, block={tb}")
                             continue
-                        tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
-                        min_ahead = max(
-                            0,
-                            int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)),
-                        )
-                        block_ctx = rtm_forecast_run_context(tz_name, min_ahead)
-                        if not should_write_forecast_block(
-                            sch_at.date(),
-                            int(tb),
-                            block_ctx["today_ist"],
-                            block_ctx["current_block"],
-                            after_evening_cutover=block_ctx["after_evening_cutover"],
-                            min_ahead_blocks=block_ctx["min_ahead_blocks"],
-                        ):
-                            logger.debug(
-                                "Skipping IDF CSV forecast outside block window: "
-                                "date=%s block=%s",
-                                sch_at.date(),
-                                tb,
-                            )
+                        if sch_at.date() == today_date and tb is not None and tb < current_block:
+                            logger.debug(f"Skipping IDF record for past block {tb} (current={current_block})")
                             continue
-
-                        csv_forecast = self._parse_idf_forecast_from_raw(raw_record)
-                        csv_forecast_records.append(
-                            {
-                                "scheduled_at": sch_at,
-                                "time_block": tb,
-                                "forecast": csv_forecast,
-                            }
-                        )
-                        raw_record.pop("forecast", None)
 
                     # For DAF records: sync actual, drawal, rostering from existing IDF in system
                     # (IDF holds the real-time actuals; DAF and IDF share the same actual
@@ -901,24 +852,14 @@ class DemandProcessor(BaseProcessor):
                     logger.error(f"Error processing demand record in loop: {entity_error}")
                     continue
 
-            if csv_forecast_records:
-                try:
-                    fs_result = await self.forecast_repository.bulk_upsert_forecasts(
-                        csv_forecast_records,
-                        source=FORECAST_SOURCE_CSV,
-                    )
-                    logger.info(
-                        "Forecast Serve CSV bulk result: upserted=%s modified=%s",
-                        fs_result.get("upserted"),
-                        fs_result.get("modified"),
-                    )
-                except Exception as fs_err:
-                    logger.error("Error bulk upserting forecast_serve (csv): %s", fs_err)
-
             if demand_entities:
                 # Use delete-insert strategy via optimized bulk write
                 # Wrap in to_thread to avoid blocking async loop with synchronous pymongo call
-                res = await self.demand_repository.bulk_insert_demand_serve_with_deduplication(demand_entities)
+                import asyncio
+                res = await asyncio.to_thread(
+                    self.demand_repository.bulk_insert_demand_serve_with_deduplication, 
+                    demand_entities
+                )
                 if res.get("error_count", 0) > 0:
                     logger.warning(f"Demand Serve Bulk Insert had errors: {res.get('errors')}")
                 logger.info(f"Demand Serve Bulk Result: {res}")
@@ -926,7 +867,11 @@ class DemandProcessor(BaseProcessor):
             if historical_entities:
                 # Use delete-insert strategy via optimized bulk write
                 # Wrap in to_thread to avoid blocking async loop
-                res = await self.demand_repository.bulk_insert_demand_historical_with_deduplication(historical_entities)
+                import asyncio
+                res = await asyncio.to_thread(
+                    self.demand_repository.bulk_insert_demand_historical_with_deduplication,
+                    historical_entities
+                )
                 if res.get("error_count", 0) > 0:
                     logger.warning(f"Demand Historical Bulk Insert had errors: {res.get('errors')}")
                     hist_ok = False
@@ -1292,7 +1237,7 @@ class DemandProcessor(BaseProcessor):
             time_block = self._safe_int(idf_raw_item.get("time_block"))
             
             # Find existing DAF record to preserve its fields (like forecast)
-            existing_daf = await self.demand_repository.find_by_unique_key(
+            existing_daf = self.demand_repository.find_by_unique_key(
                 scheduled_at=scheduled_at,
                 time_block=time_block,
                 type="DAF"

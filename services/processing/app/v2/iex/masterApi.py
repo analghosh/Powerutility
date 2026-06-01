@@ -35,10 +35,7 @@ class ExchangeAPIClient:
         self.correlation_id = correlation_id
         self.market_type = market_type.lower()
         self.bid_type = bid_type
-        # Standard timeout for read-only calls (asset details, delivery dates, etc.)
-        self.timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
-        # Longer read timeout for bid submission — IEX exchange API can take >30s to process
-        self.submit_timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)
+        self.timeout = httpx.Timeout(30.0)
         self.bearer_token = bearer_token
         
         # Cache for API responses
@@ -285,10 +282,10 @@ class ExchangeAPIClient:
         
         logger.info(f"Submitting single bid to: {url}")
         logger.debug(f"Bid request: {bid_request}")
-
-        async with httpx.AsyncClient(timeout=self.submit_timeout) as client:
+        
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, json=bid_request, headers=headers)
-
+            
             # Log response regardless of status
             logger.info(f"Single bid response status: {response.status_code}")
             
@@ -332,7 +329,7 @@ class ExchangeAPIClient:
             f"-d '{_json.dumps(bid_request, default=str)}'"
         )
 
-        async with httpx.AsyncClient(timeout=self.submit_timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, json=bid_request, headers=headers)
 
             logger.info(f"Block bid response status: {response.status_code}")
@@ -910,7 +907,7 @@ class ExchangeAPIClient:
             f"-d '{_json.dumps(bid_request, default=str)}'"
         )
 
-        async with httpx.AsyncClient(timeout=self.submit_timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.post(url, json=bid_request, headers=headers)
 
             logger.info(f"DAM block bid response status: {response.status_code}")

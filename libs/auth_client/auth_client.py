@@ -97,37 +97,48 @@ class AuthClient:
             url = urljoin(self.auth_service_url, "/api/v1/token/validate")
             headers = {"Authorization": f"Bearer {token}"}
             
-            # Security: never log token content
-            logger.debug("Validating token with auth service")
+            # Debug logging for token validation
+            logger.info(f"🔍 AUTH DEBUG - Validating token with auth service: {self.auth_service_url}")
+            logger.info(f"🔍 AUTH DEBUG - Token preview: {token[:20]}...")
             
             if not self.session:
-                self.session = httpx.AsyncClient(timeout=self.timeout)
+                self.session = httpx.AsyncClient(
+                    timeout=self.timeout,
+                    verify=False  # Temporarily disable SSL verification for debugging
+                )
             
             start_time = time.time()
             response = await self.session.post(url, headers=headers)
             request_duration = time.time() - start_time
             
-            logger.debug(f"Auth service response: {response.status_code} ({request_duration:.2f}s)")
+            logger.info(f"🔍 AUTH DEBUG - Auth service response: {response.status_code} ({request_duration:.2f}s)")
             
             if response.status_code == 200:
                 data = response.json()
-                logger.debug("Token validation successful")
+                logger.info(f"🔍 AUTH DEBUG - Validation successful for user: {data.get('username', 'unknown')}")
                 return AuthValidationResponse(data)
             else:
-                logger.warning(f"Auth service error: {response.status_code}")
+                logger.error(f"🔍 AUTH DEBUG - Auth service error: {response.status_code}")
+                logger.error(f"🔍 AUTH DEBUG - Response body: {response.text}")
                 return AuthValidationResponse({"valid": False})
                 
         except httpx.TimeoutException as e:
-            logger.error(f"Timeout connecting to auth service: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - Timeout connecting to auth service: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - Timeout value: {self.timeout}s")
             return AuthValidationResponse({"valid": False})
         except httpx.ConnectError as e:
-            logger.error(f"Failed to connect to auth service: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - Failed to connect to auth service: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - Auth service URL: {self.auth_service_url}")
             return AuthValidationResponse({"valid": False})
         except httpx.HTTPStatusError as e:
-            logger.error(f"HTTP status error: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - HTTP status error: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - Response: {e.response.text if hasattr(e, 'response') else 'No response'}")
             return AuthValidationResponse({"valid": False})
         except Exception as e:
-            logger.error(f"Unexpected error validating token: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - Unexpected error validating token: {str(e)}")
+            logger.error(f"🔍 AUTH DEBUG - Error type: {type(e).__name__}")
+            import traceback
+            logger.error(f"🔍 AUTH DEBUG - Traceback: {traceback.format_exc()}")
             return AuthValidationResponse({"valid": False})
     
     async def get_user_info(self, user_id: str, auth_token: str, correlation_id: Optional[str] = None) -> Optional[Dict[str, Any]]:

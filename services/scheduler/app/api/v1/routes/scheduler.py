@@ -4,7 +4,7 @@ Essential endpoints for job management and monitoring
 Clean Architecture Implementation
 """
 
-from fastapi import APIRouter, HTTPException, status, Path, Query, Depends
+from fastapi import APIRouter, HTTPException, status, Path, Query
 from typing import Dict, Any, List, Optional
 import sys
 import os
@@ -24,13 +24,12 @@ from ....infrastructure.di.container import container
 # Import audit logger
 sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "..", "..", ".."))
 from libs.audit_queue.simple_logger import AuditLogger
-from ....core.dependencies import get_audit_logger
 
 router = APIRouter(prefix="/scheduler", tags=["Job Scheduling"])
 
 
 @router.get("/status", response_model=SchedulerStatusResponse)
-async def get_scheduler_status(audit_logger: AuditLogger = Depends(get_audit_logger)):
+async def get_scheduler_status():
     """
     Get scheduler status endpoint
     
@@ -64,7 +63,7 @@ async def get_scheduler_status(audit_logger: AuditLogger = Depends(get_audit_log
 
 
 @router.get("/jobs/all", response_model=AllJobsResponse)
-async def get_all_jobs(audit_logger: AuditLogger = Depends(get_audit_logger)):
+async def get_all_jobs():
     """
     Get all scheduled jobs with their current status
     
@@ -107,8 +106,7 @@ async def get_all_jobs(audit_logger: AuditLogger = Depends(get_audit_logger)):
 
 
 @router.get("/jobs/{job_type}/history", response_model=JobExecutionHistoryResponse)
-async def get_job_execution_history(audit_logger: AuditLogger = Depends(get_audit_logger),
-    
+async def get_job_execution_history(
     job_type: str = Path(..., description="Type of job", min_length=1, max_length=100),
     limit: int = Query(10, ge=1, le=100, description="Maximum number of executions to return")
 ):
@@ -153,8 +151,7 @@ async def get_job_execution_history(audit_logger: AuditLogger = Depends(get_audi
 
 
 @router.post("/jobs/{job_type}/enable", response_model=JobManagementResponse)
-async def enable_job(audit_logger: AuditLogger = Depends(get_audit_logger),
-    job_type: str = Path(..., description="Type of job to enable", min_length=1, max_length=100)):
+async def enable_job(job_type: str = Path(..., description="Type of job to enable", min_length=1, max_length=100)):
     """
     Enable a specific job type
     
@@ -211,8 +208,7 @@ async def enable_job(audit_logger: AuditLogger = Depends(get_audit_logger),
 
 
 @router.post("/jobs/{job_type}/disable", response_model=JobManagementResponse)
-async def disable_job(audit_logger: AuditLogger = Depends(get_audit_logger),
-    job_type: str = Path(..., description="Type of job to disable", min_length=1, max_length=100)):
+async def disable_job(job_type: str = Path(..., description="Type of job to disable", min_length=1, max_length=100)):
     """
     Disable a specific job type
     
@@ -269,8 +265,7 @@ async def disable_job(audit_logger: AuditLogger = Depends(get_audit_logger),
 
 
 @router.post("/jobs/{job_type}/trigger", response_model=JobManagementResponse)
-async def trigger_job(audit_logger: AuditLogger = Depends(get_audit_logger),
-    job_type: str = Path(..., description="Type of job to trigger", min_length=1, max_length=100)):
+async def trigger_job(job_type: str = Path(..., description="Type of job to trigger", min_length=1, max_length=100)):
     """
     Manually trigger a specific job type
     
@@ -327,7 +322,7 @@ async def trigger_job(audit_logger: AuditLogger = Depends(get_audit_logger),
 
 
 @router.post("/jobs/reconcile-and-rerun", response_model=ReconciliationResponse)
-async def reconcile_and_rerun_crons(audit_logger: AuditLogger = Depends(get_audit_logger)):
+async def reconcile_and_rerun_crons():
     """
     Reconcile data gaps and rerun all cron jobs to ensure system consistency
     

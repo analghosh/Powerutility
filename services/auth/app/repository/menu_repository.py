@@ -19,11 +19,11 @@ class MenuRepository(BaseRepository):
     def __init__(self):
         super().__init__("menus", settings.AUTH_DB_NAME)
     
-    async def create_menu(self, menu_data: MenuCreate) -> MenuInDB:
+    def create_menu(self, menu_data: MenuCreate) -> MenuInDB:
         """Create a new menu item"""
         try:
-            # Check if menu already exists (await the async method)
-            if await self.get_menu_by_name(menu_data.name):
+            # Check if menu already exists
+            if self.get_menu_by_name(menu_data.name):
                 raise ValueError(f"Menu '{menu_data.name}' already exists")
             
             # Create menu document
@@ -39,18 +39,18 @@ class MenuRepository(BaseRepository):
                 "updated_at": datetime.now()
             }
             
-            menu_id = await self.create(menu_doc)
+            menu_id = self.create(menu_doc)
             menu_doc["_id"] = str(menu_id)
             
             return MenuInDB(**menu_doc)
         except Exception as e:
             logger.error(f"Error creating menu: {e}")
             raise
-
-    async def get_menu_by_id(self, menu_id: str) -> Optional[MenuInDB]:
+    
+    def get_menu_by_id(self, menu_id: str) -> Optional[MenuInDB]:
         """Get menu by ID"""
         try:
-            menu_doc = await self.find_one({
+            menu_doc = self.find_one({
                 "_id": ObjectId(menu_id),
                 "is_deleted": {"$ne": True}
             })
@@ -58,11 +58,11 @@ class MenuRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error getting menu by ID {menu_id}: {e}")
             return None
-
-    async def get_menu_by_name(self, menu_name: str) -> Optional[MenuInDB]:
+    
+    def get_menu_by_name(self, menu_name: str) -> Optional[MenuInDB]:
         """Get menu by name"""
         try:
-            menu_doc = await self.find_one({
+            menu_doc = self.find_one({
                 "name": menu_name,
                 "is_deleted": {"$ne": True}
             })
@@ -70,8 +70,8 @@ class MenuRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error getting menu by name {menu_name}: {e}")
             return None
-
-    async def get_menus_by_parent_id(self, parent_id: Optional[str] = None) -> List[MenuInDB]:
+    
+    def get_menus_by_parent_id(self, parent_id: Optional[str] = None) -> List[MenuInDB]:
         """Get all menu items by parent ID (None for root level)"""
         try:
             query = {"is_deleted": {"$ne": True}}
@@ -80,16 +80,16 @@ class MenuRepository(BaseRepository):
             else:
                 query["parent_id"] = parent_id
             
-            menu_docs = await self.find_many(query, sort=[("order", 1)])
+            menu_docs = self.find_many(query, sort=[("order", 1)])
             return [MenuInDB(**doc) for doc in menu_docs]
         except Exception as e:
             logger.error(f"Error getting menus by parent_id {parent_id}: {e}")
             return []
-
-    async def get_all_active_menus(self) -> List[MenuInDB]:
+    
+    def get_all_active_menus(self) -> List[MenuInDB]:
         """Get all active menu items"""
         try:
-            menu_docs = await self.find_many({
+            menu_docs = self.find_many({
                 "is_active": True,
                 "is_deleted": {"$ne": True}
             }, sort=[("order", 1)])
@@ -97,16 +97,16 @@ class MenuRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error getting all active menus: {e}")
             return []
-
-    async def get_menu_tree(self) -> List[MenuWithChildren]:
+    
+    def get_menu_tree(self) -> List[MenuWithChildren]:
         """Get complete menu tree with nested children"""
         try:
-            all_menus = await self.get_all_active_menus()
+            all_menus = self.get_all_active_menus()
             return self.build_menu_tree(all_menus)
         except Exception as e:
             logger.error(f"Error getting menu tree: {e}")
             return []
-
+    
     def build_menu_tree(self, menus: List[MenuInDB]) -> List[MenuWithChildren]:
         """Build menu tree from a list of menus"""
         try:
@@ -167,33 +167,33 @@ class MenuRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error building menu tree: {e}")
             return []
-
-    async def update_menu(self, menu_id: str, update_data: MenuUpdate) -> bool:
+    
+    def update_menu(self, menu_id: str, update_data: MenuUpdate) -> bool:
         """Update menu information"""
         try:
-            update_dict = update_data.model_dump(exclude_unset=True)
+            update_dict = update_data.dict(exclude_unset=True)
             update_dict["updated_at"] = datetime.now()
             
-            return await self.update(menu_id, update_dict)
+            return self.update(menu_id, update_dict)
         except Exception as e:
             logger.error(f"Error updating menu {menu_id}: {e}")
             return False
-
-    async def delete_menu(self, menu_id: str) -> bool:
+    
+    def delete_menu(self, menu_id: str) -> bool:
         """Soft delete menu"""
         try:
-            return await self.update(menu_id, {
+            return self.update(menu_id, {
                 "is_deleted": True,
                 "updated_at": datetime.now()
             })
         except Exception as e:
             logger.error(f"Error deleting menu {menu_id}: {e}")
             return False
-
-    async def get_menu_by_path(self, path: str) -> Optional[MenuInDB]:
+    
+    def get_menu_by_path(self, path: str) -> Optional[MenuInDB]:
         """Get menu by path"""
         try:
-            menu_doc = await self.find_one({
+            menu_doc = self.find_one({
                 "path": path,
                 "is_deleted": {"$ne": True}
             })
@@ -201,12 +201,12 @@ class MenuRepository(BaseRepository):
         except Exception as e:
             logger.error(f"Error getting menu by path {path}: {e}")
             return None
-
-    async def get_menus_by_ids(self, menu_ids: List[str]) -> List[MenuInDB]:
+    
+    def get_menus_by_ids(self, menu_ids: List[str]) -> List[MenuInDB]:
         """Get multiple menus by IDs"""
         try:
             object_ids = [ObjectId(menu_id) for menu_id in menu_ids]
-            menu_docs = await self.find_many({
+            menu_docs = self.find_many({
                 "_id": {"$in": object_ids},
                 "is_deleted": {"$ne": True}
             })

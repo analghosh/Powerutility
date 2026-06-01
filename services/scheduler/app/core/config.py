@@ -39,8 +39,7 @@ class Settings(BaseSettings):
     SERVICE_NAME: str = "scheduler-service"
     SERVICE_PORT: int = 8004
     SERVICE_HOST: str = "0.0.0.0"
-    DEBUG: bool = False
-    ENABLE_SWAGGER: bool = False
+    DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     DEDUPLICATION_ONLY: bool = True
@@ -106,27 +105,18 @@ class Settings(BaseSettings):
     
     # Demand Data Processing Management Cron Job
     DEMAND_DATA_PROCESSING_CRON_ENABLED: bool = True
-    DEMAND_DATA_PROCESSING_CRON_SCHEDULE: str = "*/15 * * * *"  # Every 15 minutes
+    DEMAND_DATA_PROCESSING_CRON_SCHEDULE: str = "0 1 * * *"  # Daily at 1 AM
     DEMAND_DATA_PROCESSING_CRON_TIMEZONE: str = "Asia/Kolkata"
     
     # Supply Data Processing Management Cron Job
     SUPPLY_DATA_PROCESSING_CRON_ENABLED: bool = True
-    SUPPLY_DATA_PROCESSING_CRON_SCHEDULE: str = "*/15 * * * *"  # Every 15 minutes
+    SUPPLY_DATA_PROCESSING_CRON_SCHEDULE: str = "0 1 * * *"  # Daily at 1 AM
     SUPPLY_DATA_PROCESSING_CRON_TIMEZONE: str = "Asia/Kolkata"
     
     # MongoDB Collections (Time Series)
     MONGODB_DUMMY_COLLECTION: str = "dummy"
     MONGODB_DEMAND_SERVE_COLLECTION: str = "demand_serve"
     MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "demand_serve_historical"
-    MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
-    MONGODB_FORECAST_SERVE_HISTORICAL_COLLECTION: str = "forecast_serve_historical"
-    # Rolling window in forecast_serve (same as demand_serve: 2 => 4-day window with tomorrow)
-    FORECAST_SERVE_DAYS_TO_KEEP: int = 2
-
-    # IDF forecast merge (forecast_serve -> demand_serve)
-    IDF_FORECAST_MERGE_CRON_ENABLED: bool = True
-    IDF_FORECAST_MERGE_CRON_SCHEDULE: str = "*/15 * * * *"
-    RTM_FORECAST_MIN_AHEAD_BLOCKS: int = 5
     MONGODB_SUPPLY_SERVE_COLLECTION: str = "supply_serve"
     MONGODB_SUPPLY_SERVE_HISTORICAL_COLLECTION: str = "supply_serve_historical"
     MONGODB_DC_SG_COLLECTION: str = "dc_sg"  # 1-day temporary storage for supply data
@@ -174,16 +164,7 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 20
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
-
-    # RabbitMQ Configuration
-    RABBITMQ_HOST: str = "127.0.0.1"
-    RABBITMQ_PORT: int = 5672
-    RABBITMQ_USER: str = "guest"
-    RABBITMQ_PASSWORD: str = "guest"
-    RABBITMQ_VHOST: str = "/"
-    USE_RABBITMQ_JOBS: bool = True
-    USE_RABBITMQ_AUDIT: bool = False
-
+    
     # CORS Configuration
     CORS_ORIGINS: List[str] = ["http://localhost:3000", "http://localhost:8080"]
     CORS_ALLOW_CREDENTIALS: bool = True
@@ -249,8 +230,6 @@ class Settings(BaseSettings):
     TIMESERIES_GRANULARITY: str = "seconds" 
 
     # Processing crons
-    DEMAND_DATA_PROCESSING_CRON: str = "*/15 * * * *"
-
     WEATHER_DATA_PROCESSING_CRON: str = "*/15 * * * *"
     WEATHER_DATA_PROCESSING_ENABLED: bool = True
 

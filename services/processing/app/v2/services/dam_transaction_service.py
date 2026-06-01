@@ -8,7 +8,6 @@ Orchestrates the DAM Single Bid Transaction flow:
 5. Submit to external API
 """
 
-import asyncio
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone, time
@@ -18,7 +17,6 @@ from fastapi import HTTPException
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
 from ..repository.limit_values_repository import LimitValuesRepository
-from ..repository.exchange_bid_detail_repository import exchange_bid_detail_repository
 from ..iex.masterApi import ExchangeAPIClient, block_to_time_period, time_slot_to_block
 
 logger = logging.getLogger(__name__)
@@ -37,7 +35,6 @@ class DAMTransactionService:
         self.limit_values_repo = LimitValuesRepository()
         self.dam_single_bid_repo = DAMSingleBidDataForApprovalRepository()
         self.bid_trade_serve_repo = BidTradeServeRepository()
-        self.exchange_bid_detail_repo = exchange_bid_detail_repository
         self._api_client: Optional[ExchangeAPIClient] = None
 
     async def _get_api_client(self) -> ExchangeAPIClient:
@@ -59,57 +56,66 @@ class DAMTransactionService:
         
         return self._api_client
 
-    async def _get_all_ocf_values(self, delivery_date: int) -> Dict[int, Dict[str, Any]]:
+    async def _get_ocf_values(self, delivery_date: int, block: int) -> Dict[str, Any]:
         """
-        Fetch OCF values for ALL 96 blocks in a single DB query (replaces 96 sequential queries).
-
+        Fetch OCF values from limit_values collection
+        
         Args:
             delivery_date: Unix timestamp of delivery date
-
+            block: Block number (1-96)
+            
         Returns:
-            Dict mapping block number (1-96) → {PremiumDiscountPrice, MaxOCFQty, OCFOpted}
+            Dict with PremiumDiscountPrice and MaxOCFQty values
         """
+        # Convert unix timestamp to UTC datetime with time set to 00:00:00
         dt = datetime.fromtimestamp(delivery_date, tz=timezone.utc)
-        scheduled_at_str = dt.strftime("%Y-%m-%d")
-
-        logger.info(f"Fetching all OCF values for date {scheduled_at_str} in bulk")
-
-        # Single query: fetch all OCF rows for this date (both id types, all blocks)
-        all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
+        scheduled_at = dt.replace(hour=0, minute=0, second=0, microsecond=0)
+        scheduled_at_str = scheduled_at.strftime("%Y-%m-%d")
+        
+        logger.debug(f"Fetching OCF values for block {block}, date {scheduled_at_str}")
+        
+        # Fetch ocfPremiumDiscountPrice
+        premium_filter = {
+            "id": "ocfPremiumDiscountPrice",
+            "block": block,
+            "category": "Limits",
+            "market": "DAM"
+        }
+        premium_result = await self.limit_values_repo.get_all_data_with_filters(
             "limit_values",
-            filters={
-                "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
-                "category": "Limits",
-                "market": "DAM",
-                "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
-            }
+            filters={**premium_filter, "scheduled_at": {"$regex": f"^{scheduled_at_str}"}}
         )
-
-        # Build per-block maps
-        premium_map: Dict[int, float] = {}
-        max_qty_map: Dict[int, float] = {}
-
-        for row in all_ocf_rows:
-            block = row.get("block")
-            val = row.get("values", 0) or 0
-            if row.get("id") == "ocfPremiumDiscountPrice":
-                premium_map[block] = val
-            elif row.get("id") == "ocfMaxOCFQty":
-                max_qty_map[block] = val
-
-        # Build full map for blocks 1-96
-        ocf_map: Dict[int, Dict[str, Any]] = {}
-        for block in range(1, 97):
-            premium = premium_map.get(block, 0)
-            max_qty = max_qty_map.get(block, 0)
-            ocf_map[block] = {
-                "PremiumDiscountPrice": premium,
-                "MaxOCFQty": max_qty,
-                "OCFOpted": "Y" if (premium != 0 or max_qty != 0) else "N"
-            }
-
-        logger.info(f"OCF bulk fetch complete: {len(all_ocf_rows)} rows → 96 blocks mapped")
-        return ocf_map
+        
+        # Fetch ocfMaxOCFQty
+        max_qty_filter = {
+            "id": "ocfMaxOCFQty",
+            "block": block,
+            "category": "Limits",
+            "market": "DAM"
+        }
+        max_qty_result = await self.limit_values_repo.get_all_data_with_filters(
+            "limit_values",
+            filters={**max_qty_filter, "scheduled_at": {"$regex": f"^{scheduled_at_str}"}}
+        )
+        
+        premium_value = 0
+        max_qty_value = 0
+        
+        if premium_result and len(premium_result) > 0:
+            # Values are stored in 'values' field
+            premium_value = premium_result[0].get("values", 0) or 0
+            
+        if max_qty_result and len(max_qty_result) > 0:
+            max_qty_value = max_qty_result[0].get("values", 0) or 0
+        
+        # Determine OCFOpted based on values
+        ocf_opted = "Y" if (premium_value != 0 or max_qty_value != 0) else "N"
+        
+        return {
+            "PremiumDiscountPrice": premium_value,
+            "MaxOCFQty": max_qty_value,
+            "OCFOpted": ocf_opted
+        }
 
     def _validate_round_quantity(self, quantity: float, order_qty_decimal: int) -> int:
         """
@@ -309,28 +315,19 @@ class DAMTransactionService:
             bid_type="single-bid",
         )
         
-        # 3. Fetch asset details and delivery date in parallel (both are independent)
-        try:
-            asset_response, delivery_response = await asyncio.gather(
-                api_client.get_asset_details(bid_type="single-bid"),
-                api_client.get_delivery_dates(bid_type="single-bid"),
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Exchange API timed out fetching asset/delivery info.")
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error: {e.response.text}")
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to reach exchange API: {type(e).__name__}: {e}")
-
+        # 3. Fetch independent external data
+        # Fetch asset details
+        asset_response = await api_client.get_asset_details(bid_type="single-bid")
         asset_details_list = asset_response.get("AssetDetails", [])
         asset_details = asset_details_list[0] if asset_details_list else {}
         asset_id = asset_details.get("AssetId", "INDIA")
         lowerDPR = asset_details.get("LowerDPR", 0)
         upperDPR = asset_details.get("UpperDPR", 10000)
         biddedQtyDecimal = asset_details.get("OrderQtyDecimal", 10)
+        
+        # Fetch delivery date
+        delivery_response = await api_client.get_delivery_dates(bid_type="single-bid")
         delivery_date = delivery_response.get("DeliveryDate", 0)
-        if not delivery_date:
-            raise HTTPException(status_code=502, detail="Exchange API returned no DeliveryDate.")
         
         delivery_dt = datetime.fromtimestamp(delivery_date, tz=timezone.utc)
         delivery_date_str = delivery_dt.strftime("%Y-%m-%d")
@@ -386,14 +383,19 @@ class DAMTransactionService:
             logger.warning(f"Error checking/canceling existing bids: {str(e)}. Proceeding with submission.")
         
         # 5. Prepare OCF values map
+        ocf_values_map = {}
         if ocf_toggle:
-            # Single bulk DB query replaces 96 sequential queries (was ~2-3s, now <100ms)
-            logger.info("OCF toggle is ON, fetching all OCF values in bulk")
-            ocf_values_map = await self._get_all_ocf_values(delivery_date)
+            logger.info("OCF toggle is ON, fetching OCF values from limit_values")
+            for block in range(1, 97):
+                ocf_values_map[block] = await self._get_ocf_values(delivery_date, block)
         else:
-            # Default OCF values when toggle is off — build directly, no DB needed
-            default_ocf = {"PremiumDiscountPrice": 0, "MaxOCFQty": 0, "OCFOpted": "N"}
-            ocf_values_map = {block: default_ocf for block in range(1, 97)}
+            # Default OCF values when toggle is off
+            for block in range(1, 97):
+                ocf_values_map[block] = {
+                    "PremiumDiscountPrice": 0,
+                    "MaxOCFQty": 0,
+                    "OCFOpted": "N"
+                }
         
         # 6. Transform bid data with Quantity validation
         bid_details = self._transform_bid_block_to_api_format(
@@ -421,19 +423,15 @@ class DAMTransactionService:
         logger.info(f"Submitting bid with {len(bid_details)} time blocks")
         
         # 8. Submit to external API
+        # 8. Submit to external API
         try:
             submit_response = await api_client.submit_single_bid(request_body)
-        except httpx.TimeoutException as e:
-            err_msg = f"{type(e).__name__}: Exchange API did not respond within the allowed time"
-            logger.error(f"DAM bid submission timed out — {err_msg}")
-            raise HTTPException(status_code=504, detail="Exchange API timed out during bid submission. Please retry.")
         except httpx.HTTPStatusError as e:
-            logger.error(f"External API submission failed [{e.response.status_code}]: {e.response.text}")
+            logger.error(f"External API submission failed: {e.response.text}")
             raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API Error: {e.response.text}")
         except Exception as e:
-            err_msg = f"{type(e).__name__}: {str(e)}" if str(e) else type(e).__name__
-            logger.error(f"Submission error: {err_msg}")
-            raise HTTPException(status_code=500, detail=f"Submission failed: {err_msg}")
+            logger.error(f"Submission error: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Submission failed: {str(e)}")
         
         transaction_id = submit_response.get("TransactionId")
         if not transaction_id:
@@ -486,8 +484,8 @@ class DAMTransactionService:
         # Execute Aggregation
         aggregated_docs = await self.dam_single_bid_repo.aggregate(pipeline)
         
-        # Mark status to submitted — all docs updated in parallel
-        async def _mark_doc_submitted(doc):
+        # Mark status to submitted
+        for doc in aggregated_docs:
             await self.dam_single_bid_repo.update_one(
                 {"_id": doc["_id"]},
                 {"$set": {"bid_status": "submitted", "exchangeRevisionNo": doc["revision_no"]}},
@@ -495,45 +493,35 @@ class DAMTransactionService:
             data_rev = doc.get("rldc_revision_no")
             if data_rev is not None:
                 try:
-                    # Both capture repos updated concurrently per doc
-                    await asyncio.gather(
-                        dam_bidding_services.capture_serve_repo.update_exchange_submission_flag(
-                            schedule_date=bidding_date,
-                            dc_sg_type="SG",
-                            rldc_revision_no=data_rev,
-                            flag="Y",
-                            bid_block_no=doc.get("block_no"),
-                            bid_revision_no=doc.get("revision_no"),
-                        ),
-                        dam_bidding_services.manual_capture_serve_repo.update_exchange_submission_flag(
-                            schedule_date=bidding_date,
-                            dc_sg_type="SG",
-                            rldc_revision_no=data_rev,
-                            flag="Y",
-                            bid_block_no=doc.get("block_no"),
-                            bid_revision_no=doc.get("revision_no"),
-                        ),
+                    await dam_bidding_services.capture_serve_repo.update_exchange_submission_flag(
+                        schedule_date=bidding_date,
+                        dc_sg_type="SG",
+                        rldc_revision_no=data_rev,
+                        flag="Y",
+                        bid_block_no=doc.get("block_no"),
+                        bid_revision_no=doc.get("revision_no"),
+                    )
+                    await dam_bidding_services.manual_capture_serve_repo.update_exchange_submission_flag(
+                        schedule_date=bidding_date,
+                        dc_sg_type="SG",
+                        rldc_revision_no=data_rev,
+                        flag="Y",
+                        bid_block_no=doc.get("block_no"),
+                        bid_revision_no=doc.get("revision_no"),
                     )
                 except Exception as cap_err:
                     logger.warning(f"Failed to update DAM capture exchange_submission_flag: {cap_err}")
 
-        await asyncio.gather(*[_mark_doc_submitted(doc) for doc in aggregated_docs], return_exceptions=True)
-
         # 9. Get Bid Details
-        try:
-            bid_details_response = await api_client.get_bid_details(transaction_id, delivery_date, bid_type="single-bid")
-        except Exception as e:
-            logger.warning(f"get_bid_details failed after DAM submission (TransactionId={transaction_id}): {e}")
-            bid_details_response = {}
-
-        # Map API response to DB — all detail updates run in parallel
+        bid_details_response = await api_client.get_bid_details(transaction_id, delivery_date, bid_type="single-bid")
+        
+        # Map API response to DB
         single_bid_details = bid_details_response.get("SingleBidDetails", [])
-        updated_at = datetime.now()
-
-        async def _update_bid_detail(detail):
+        for detail in single_bid_details:
             from_period = detail.get("FromPeriodId")
             to_period = detail.get("ToPeriodId")
             user_id = detail.get("UserId")
+            user_id_key = f"EX-{user_id}"
             buy_sell = detail.get("BuySell")
             pq_data = detail.get("pq_data", []) or []
             bidded_qty = 0
@@ -545,6 +533,8 @@ class DAMTransactionService:
                     target_entry = min(pq_data, key=lambda x: x.get("Price", float("inf")))
                     bidded_qty = float(target_entry.get("Quantity", 0)) / biddedQtyDecimal
 
+            
+            # Map API fields to DB fields
             update_data = {
                 "exchangeStatus": detail.get("OrderStatus"),
                 "exchangeOrderId": detail.get("OrderId"),
@@ -552,39 +542,37 @@ class DAMTransactionService:
                 "exchangeError": detail.get("Error"),
                 "exchangeLastUpdatedTime": detail.get("LastUpdatedTime"),
                 "exchangePQData": detail.get("PQData"),
-                "updatedAt": updated_at,
-                "exchangeUserId": user_id,
-                "bidded": bidded_qty,
+                "updatedAt": datetime.now(),
+                "exchangeUserId": user_id, 
+                "bidded": bidded_qty,   
                 "orderId": detail.get("OrderId"),
             }
-
-            db_update = self.dam_single_bid_repo.update_one(
+            
+            # Update specific document based on start_time/end_time in the approved (now submitted) set
+            # We filter by bid_date and time, and ensure it's one of the ones we just processed 
+            # (or generic match for that slot on that day)
+            await self.dam_single_bid_repo.update_one(
                 {
                     "bid_date": bidding_date,
                     "start_time": from_period,
                     "end_time": to_period,
-                    "bid_status": "submitted",
+                    "bid_status": "submitted" 
                 },
-                {"$set": update_data},
+                {"$set": update_data}
             )
-
-            # bid_trade_serve update (independent of db_update)
-            async def _update_bts():
-                try:
-                    tb = BidTradeServeRepository.from_period_to_time_block(from_period)
-                    if tb > 0:
-                        await self.bid_trade_serve_repo.update_bidded_by_block(
-                            delivery_date_ts=delivery_date,
-                            time_block=tb,
-                            bid_type="DAM",
-                            bidded_value=bidded_qty,
-                        )
-                except Exception as bts_err:
-                    logger.warning(f"Failed to update bid_trade_serve for DAM block {from_period}: {bts_err}")
-
-            await asyncio.gather(db_update, _update_bts())
-
-        await asyncio.gather(*[_update_bid_detail(d) for d in single_bid_details], return_exceptions=True)
+            
+            # Update bidded in bid_trade_serve
+            try:
+                tb = BidTradeServeRepository.from_period_to_time_block(from_period)
+                if tb > 0:
+                    await self.bid_trade_serve_repo.update_bidded_by_block(
+                        delivery_date_ts=delivery_date,
+                        time_block=tb,
+                        bid_type="DAM",
+                        bidded_value=bidded_qty
+                    )
+            except Exception as bts_err:
+                logger.warning(f"Failed to update bid_trade_serve for DAM block {from_period}: {bts_err}")
 
         # 10. Store in exchange_biddetail collection
         # Add correlation_id to the document for linking
@@ -594,7 +582,8 @@ class DAMTransactionService:
         bid_details_record["market_type"] = "DAM"
         bid_details_record["created_at"] = datetime.now()
         
-        await self.exchange_bid_detail_repo.create_bid_detail(bid_details_record)
+        from services.processing.app.v2.repository.exchange_bid_detail_repository import exchange_bid_detail_repository
+        await exchange_bid_detail_repository.create_bid_detail(bid_details_record)
         
         # Return exact response from bid details API
         return bid_details_response
@@ -642,72 +631,50 @@ class DAMTransactionService:
             bid_type="single-bid",
         )
         
-        # 3. Get delivery date and asset details in parallel
-        try:
-            delivery_response, asset_response = await asyncio.gather(
-                api_client.get_delivery_dates(bid_type="single-bid"),
-                api_client.get_asset_details(bid_type="single-bid"),
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Exchange API timed out fetching delivery/asset info.")
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error: {e.response.text}")
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to reach exchange API: {type(e).__name__}")
-
+        # 3. Get delivery date
+        delivery_response = await api_client.get_delivery_dates(bid_type="single-bid")
         delivery_date = delivery_response.get("DeliveryDate", 0)
+        
         if not delivery_date:
             raise ValueError("Could not fetch delivery date from exchange")
-
+        
+        # 4. Get asset details
+        asset_response = await api_client.get_asset_details(bid_type="single-bid")
         asset_details_list = asset_response.get("AssetDetails", [])
         asset_details = asset_details_list[0] if asset_details_list else {}
         asset_id = asset_details.get("AssetId", "INDIA")
-
+        
         bid_area_id = config.get("BidAreaId", "S2")
-
+        
         logger.info(f"Checking for existing bids: DeliveryDate={delivery_date}, AssetId={asset_id}, BidAreaId={bid_area_id}")
-
+        
         # 5. Check for existing bids
-        try:
-            existing_bids = await api_client.get_single_bid_dam(
-                delivery_date=delivery_date,
-                product_id="ALL",
-                bid_area_id=bid_area_id,
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Exchange API timed out while checking existing bids.")
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error checking bids: {e.response.text}")
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to check existing bids: {type(e).__name__}")
-
+        existing_bids = await api_client.get_single_bid_dam(
+            delivery_date=delivery_date,
+            product_id="ALL",
+            bid_area_id=bid_area_id
+        )
+        
         total_record = existing_bids.get("TotalRecord", 0)
         single_bid_details = existing_bids.get("SingleBidDetails", [])
-
+        
         if total_record == 0 and len(single_bid_details) == 0:
             logger.info("No existing bids found to cancel")
             return {
                 "success": True,
                 "message": "No existing bids found to cancel",
                 "bids_cancelled": 0,
-                "correlation_id": correlation_id,
+                "correlation_id": correlation_id
             }
-
+        
         # 6. Cancel existing bids
         logger.info(f"Found {total_record} existing bids, proceeding with cancellation")
-
-        try:
-            cancel_result = await api_client.cancel_all_dam_bid(
-                delivery_date=delivery_date,
-                asset_id=asset_id,
-                bid_area_id=bid_area_id,
-            )
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Exchange API timed out during bid cancellation.")
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error cancelling bids: {e.response.text}")
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Bid cancellation request failed: {type(e).__name__}")
+        
+        cancel_result = await api_client.cancel_all_dam_bid(
+            delivery_date=delivery_date,
+            asset_id=asset_id,
+            bid_area_id=bid_area_id
+        )
         
         if cancel_result.get("Status") == "Success":
             delivery_dt = datetime.fromtimestamp(delivery_date, tz=timezone.utc)
@@ -756,35 +723,29 @@ class DAMTransactionService:
                         bid_details_record["created_at"] = datetime.now()
                         await self.exchange_bid_detail_repo.create_bid_detail(bid_details_record)
                         
-                        # Enrich records with exchange details — all updates in parallel
+                        # Enrich records with exchange details
                         exchange_details = bid_details_response.get("SingleBidDetails", [])
-                        enriched_at = datetime.now()
-
-                        async def _enrich_detail(detail):
+                        for detail in exchange_details:
+                            update_data = {
+                                "exchangeStatus": detail.get("OrderStatus"),
+                                "exchangeOrderId": detail.get("OrderId"),
+                                "exchangeOrderTime": detail.get("OrderTime"),
+                                "exchangeError": detail.get("Error"),
+                                "exchangeLastUpdatedTime": detail.get("LastUpdatedTime"),
+                                "exchangePQData": detail.get("PQData"),
+                                "updatedAt": datetime.now(),
+                                "exchangeUserId": detail.get("UserId"),
+                                "orderId": detail.get("OrderId"),
+                                "cancel_transaction_id": cancel_transaction_id
+                            }
                             await self.dam_single_bid_repo.update_one(
                                 {
                                     "bid_date": delivery_date_str,
                                     "start_time": detail.get("FromPeriodId"),
-                                    "end_time": detail.get("ToPeriodId"),
+                                    "end_time": detail.get("ToPeriodId")
                                 },
-                                {"$set": {
-                                    "exchangeStatus": detail.get("OrderStatus"),
-                                    "exchangeOrderId": detail.get("OrderId"),
-                                    "exchangeOrderTime": detail.get("OrderTime"),
-                                    "exchangeError": detail.get("Error"),
-                                    "exchangeLastUpdatedTime": detail.get("LastUpdatedTime"),
-                                    "exchangePQData": detail.get("PQData"),
-                                    "updatedAt": enriched_at,
-                                    "exchangeUserId": detail.get("UserId"),
-                                    "orderId": detail.get("OrderId"),
-                                    "cancel_transaction_id": cancel_transaction_id,
-                                }},
+                                {"$set": update_data}
                             )
-
-                        await asyncio.gather(
-                            *[_enrich_detail(d) for d in exchange_details],
-                            return_exceptions=True,
-                        )
                         logger.info(f"Enriched DAM bid records with exchange details for date {delivery_date_str}")
                     else:
                         logger.warning(f"Unexpected response type from DAM get_bid_details: {type(bid_details_response)}")
@@ -796,6 +757,15 @@ class DAMTransactionService:
                     await self.update_single_bid_dam_in_system(delivery_date, asset_id, bid_area_id)
                 except Exception as sys_upd_err:
                     logger.warning(f"System update fallback failed for DAM: {sys_upd_err}")
+
+            # Reset bidded to 0 for all blocks on this delivery date in bid_trade_serve
+            try:
+                await self.bid_trade_serve_repo.reset_bidded_for_date(
+                    delivery_date_ts=delivery_date,
+                    bid_type="DAM"
+                )
+            except Exception as bts_err:
+                logger.warning(f"Failed to reset bid_trade_serve bidded for DAM date {delivery_date_str}: {bts_err}")
 
             return {
                 "success": True,
@@ -813,10 +783,7 @@ class DAMTransactionService:
                 "exchange_response": cancel_result
             }
 
-    async def update_single_bid_dam_in_system(self, delivery_date: int, asset_id: str, bid_area_id: str, correlation_id: Optional[str] = None) -> Dict[str, Any]:
-        if not correlation_id:
-            import uuid
-            correlation_id = str(uuid.uuid4())
+    async def update_single_bid_dam_in_system(self, delivery_date: int, asset_id: str, bid_area_id: str) -> Dict[str, Any]:
         """
         Fetch DAM Single Bid Book.
         API: /dam/api/v2/singlebid/...

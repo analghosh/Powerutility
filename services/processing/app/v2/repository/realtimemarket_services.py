@@ -15,12 +15,12 @@ from bson import ObjectId
 
 from ..repository.serve_supply_table_repository import serveSupplyTableRepository
 from ..repository.rtm_single_bid_data_for_approval_repository import RTMSingleBidDataForApprovalRepository
-from ..repository.limit_values_repository import LimitValuesRepository
-from ..repository.master_plants_repository import MasterPlantsRepository
+from ..repository.limit_value_repository import limitVallueRepository
+from ..repository.plants_master_repository import PlantsMasterRepository 
 from ..repository.rtm_product_hardcoded_data_repository import RTMProductHardCodedDataRepository
-from ..repository.dashboard_repository import DashboardRepository
-from ..repository.scheduling_requissition_calculation_repository import SchedulingRequisitionCalculationRepository
-# from ..repository.serve_exchange_table_repository import serveExchangeTableRepository
+from ..repository.serve_demand_table_repository import  DashboardRepository
+from ..repository.scheduling_requisition_calculation import  SchedulingRequisitionCalculationRepository
+from ..repository.serve_exchange_table_repository import serveExchangeTableRepository
 from ..repository.rtm_current_bid_data_for_approval_repository import RTMCurrentBidDataForApprovalRepository
 
 
@@ -41,10 +41,10 @@ class RealtimemarketService:
         self.supply_repo = serveSupplyTableRepository()
         self.single_bid_data_for_approval_repo = RTMSingleBidDataForApprovalRepository(collection_name="rtm_single_bid_data_for_approval")
         self.rtm_product_hardCoded_data_repo = RTMProductHardCodedDataRepository(collection_name="rtm_product_hardCoded_data")
-        self.plants_list_repo = MasterPlantsRepository()
-        self.limit_values_repo = LimitValuesRepository()
-        self.serve_demand_repo = DashboardRepository()
-        # self.serve_exchange_repo = serveExchangeTableRepository(collection_name="serve_exchange_table")
+        self.plants_list_repo = PlantsMasterRepository(collection_name="plant_master")
+        self.limit_values_repo = limitVallueRepository(collection_name="limit_values")
+        self.serve_demand_repo = DashboardRepository(collection_name="serve_demand_table")
+        self.serve_exchange_repo = serveExchangeTableRepository(collection_name="serve_exchange_table")
         self.scheduling_requisition_repo = SchedulingRequisitionCalculationRepository(collection_name="scheduling_requisition_calculation_table")
         self.rtm_currect_selected_forecast_log_repo = RTMCurrentBidDataForApprovalRepository(collection_name="RTM_currect_selected_forecast_log")
 
@@ -166,14 +166,14 @@ class RealtimemarketService:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
             raise
 
 
-
+    
     async def rtm_single_bid_table(
         self, 
         schedule_date: Optional[str], 
@@ -203,7 +203,11 @@ class RealtimemarketService:
                 },
                 {"$project": {"_id": 0}}
             ]
-            getplantsData = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            cursor = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            try:
+                getplantsData = list(cursor)
+            finally:
+                cursor.close()
            
             if not getplantsData:
                 return {}
@@ -219,7 +223,11 @@ class RealtimemarketService:
             getsessionNo = await self.rtm_product_hardCoded_data_repo.get_Data()
             
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = await self.plants_list_repo.repository.aggregate('plant_master', plants_list_pipeline)
+            cursor = self.plants_list_repo.repository.aggregate('plant_master', plants_list_pipeline)
+            try:
+                plantData = list(cursor)
+            finally:
+                cursor.close()
             plant_dict = {p['plant_id']: p for p in plantData}
 
             fix_count = getplantsData[0]['time_block']
@@ -254,21 +262,22 @@ class RealtimemarketService:
                 }
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = await self.serve_demand_repo.repository.aggregate(
-                self.serve_demand_repo.demand_serve,
-                [
-                    {"$match": {
-                        "schedule_date": schedule_date,
-                        "type": "IDF",
-                        "time_block": {"$gte": from_block, "$lte": to_block}
-                    }},
-                    {"$project": {"_id": 0}}
-                ]
-            )
+            cursor = self.serve_demand_repo.aggregate([
+                {"$match": {
+                    "schedule_date": schedule_date,
+                    "type": "IDF",
+                    "time_block": {"$gte": from_block, "$lte": to_block}
+                }},
+                {"$project": {"_id": 0}}
+            ])
+            try:
+                getForecastedValue = list(cursor)
+            finally:
+                cursor.close()
 
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             
-            forecastedPrice = await self.limit_values_repo.aggregate([
+            cursor = self.limit_values_repo.aggregate([
                     {"$match": {
                         "schedule_date": schedule_date,
                         "ID": "RTM_forecasted_price",
@@ -277,9 +286,13 @@ class RealtimemarketService:
                     }},
                     {"$project": {"_id": 0}}
                 ])
+            try:
+                forecastedPrice = list(cursor)
+            finally:
+                cursor.close()
             limit_schedule_date = schedule_date
             
-            bufferPrice = await self.limit_values_repo.aggregate([
+            cursor = self.limit_values_repo.aggregate([
                     {"$match": {
                         "schedule_date": limit_schedule_date,
                         "ID": "Buffer",
@@ -288,8 +301,12 @@ class RealtimemarketService:
                     }},
                     {"$project": {"_id": 0}}
                 ])
+            try:
+                bufferPrice = list(cursor)
+            finally:
+                cursor.close()
             
-            ceilingPrice = await self.limit_values_repo.aggregate([
+            cursor = self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "ID": "Ceiling_Price",
@@ -299,9 +316,13 @@ class RealtimemarketService:
                 }},
                 {"$project": {"_id": 0}}
             ])
+            try:
+                ceilingPrice = list(cursor)
+            finally:
+                cursor.close()
             
 
-            n_1Limits = await self.limit_values_repo.aggregate([
+            cursor = self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "ID": "n_1",
@@ -311,8 +332,12 @@ class RealtimemarketService:
                 }},
                 {"$project": {"_id": 0}}
             ])
+            try:
+                n_1Limits = list(cursor)
+            finally:
+                cursor.close()
 
-            noc_buyLimits = await self.limit_values_repo.aggregate([
+            cursor = self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "ID": "noc_buy",
@@ -322,8 +347,12 @@ class RealtimemarketService:
                 }},
                 {"$project": {"_id": 0}}
             ])
+            try:
+                noc_buyLimits = list(cursor)
+            finally:
+                cursor.close()
 
-            noc_sellLimits = await self.limit_values_repo.aggregate([
+            cursor = self.limit_values_repo.aggregate([
                 {"$match": {
                     "schedule_date": limit_schedule_date,
                     "ID": "noc_sell",
@@ -333,6 +362,10 @@ class RealtimemarketService:
                 }},
                 {"$project": {"_id": 0}}
             ])
+            try:
+                noc_sellLimits = list(cursor)
+            finally:
+                cursor.close()
 
             typeofExchangeIEX = "IEX-100"
             typeofExchangePXIL = "PXIL-0"
@@ -716,15 +749,15 @@ class RealtimemarketService:
 
 
 
-            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
-
+            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+           
             # --- Prepare data for TotalAvailability ---
             get_plants_data = []
             get_forecasted_value = []
 
             for plant in result:
                 for blk in plant.get("blocks", []):
-                    px_price = plant.get("PX_price") or 0
+                    px_price = plant.get("PX_price") or 0 
                     get_plants_data.append({
                         "time_block": blk["time_block"],
                         "full_time": blk.get("full_time", ""),
@@ -1017,15 +1050,15 @@ class RealtimemarketService:
 
 
 
-            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
-
+            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+           
             # --- Prepare data for TotalAvailability ---
             get_plants_data = []
             get_forecasted_value = []
 
             for plant in result:
                 for blk in plant.get("blocks", []):
-                    px_price = plant.get("PX_price") or 0
+                    px_price = plant.get("PX_price") or 0 
                     get_plants_data.append({
                         "time_block": blk["time_block"],
                         "full_time": blk.get("full_time", ""),
@@ -1497,7 +1530,7 @@ class RealtimemarketService:
         }
     }
 ]
-            result = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+            result = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
             return {"result": result}
         except Exception as e:
             logger.exception(f"[DashboardService] Failed to fetch demand data: {str(e)}")
@@ -1976,9 +2009,9 @@ class RealtimemarketService:
             allMLTPValues = await self.limit_values_repo.get_data( yesterday, tomorrow, "RTM", "Multiplier", "OB")
             
             
-            getplantsData = await self.get_all_plant_data_for_scheduling(schedule_date, "SG")
+            getplantsData = self.get_all_plant_data_for_scheduling(schedule_date, "SG")
             # return getplantsData
-            getplantsDataDC =  await self.get_all_plant_data_for_scheduling(schedule_date, "DC")
+            getplantsDataDC =  self.get_all_plant_data_for_scheduling(schedule_date, "DC")
             
             # countblockSGData = self.get_last_record_of_sg(getplantsData,0)
             
@@ -1995,7 +2028,7 @@ class RealtimemarketService:
             blk_no_to_run_schedule = 96 
             
             
-            data = await self.SchedulingCalculator(
+            data = self.SchedulingCalculator(
             total_availability=totalAvailability,
             rtm_forecasted_price=rtm_forecasted_price,
             get_plants_data=getplantsData,
@@ -2009,7 +2042,7 @@ class RealtimemarketService:
         except Exception as e:
             return {"status": "error", "message": f"Internal Server Error: {str(e)}"}
     
-    async def SchedulingCalculator(self,
+    def SchedulingCalculator(self,
             total_availability,
             rtm_forecasted_price,
             get_plants_data,
@@ -3070,7 +3103,7 @@ class RealtimemarketService:
                             "scheduling_requisition_type": "NA",
                         }
                         # return insertData
-                        await self.scheduling_requisition_repo.create(insertData)
+                        self.scheduling_requisition_repo.create(insertData)
                         # Replace this with actual DB insert
                         # db.session.add(SchedulingRequisitionCalculation(**insertData))
                         # db.session.commit()
@@ -3138,7 +3171,7 @@ class RealtimemarketService:
                         }
                        
                         # return insertData
-                        await self.scheduling_requisition_repo.create(insertData)
+                        self.scheduling_requisition_repo.create(insertData)
                         
                         plkey += 1
                         
@@ -3158,7 +3191,7 @@ class RealtimemarketService:
         return reviseDataTotalsupply
         
 
-    async def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
+    def get_all_plant_data_for_scheduling(self,schedule_date, dc_sg):
         
 
         # scheduledatetimestamp = yesterday midnight (unix timestamp)
@@ -3224,7 +3257,12 @@ class RealtimemarketService:
             {"$sort": {"schedule_date": 1.0, "time_block": 1.0}}
         ]
 
-        posted_jobs = await self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline)
+        cursor = self.supply_repo.repository.aggregate(self.supply_repo.supply_serve, pipeline) # type: ignore
+        try:
+            posted_jobs = list(cursor)
+        finally:
+            cursor.close()
+        
         return posted_jobs
 
 
@@ -3364,10 +3402,16 @@ class RealtimemarketService:
         },
         
     ]
-            data_list = await self.single_bid_data_for_approval_repo.repository.aggregate(
-                self.single_bid_data_for_approval_repo.collection_name,
+            data_cursor  = self.single_bid_data_for_approval_repo.repository.aggregate(
+                self.single_bid_data_for_approval_repo.collection_name, 
                 pipeline
             )
+            data_list = list(data_cursor)
+            data_list = []
+            for doc in data_cursor:
+                if "_id" in doc and isinstance(doc["_id"], ObjectId):
+                    doc["_id"] = str(doc["_id"])
+                data_list.append(doc)
                 
             if not data_list:
                 return {"message": "No bid data found"}
@@ -3862,7 +3906,7 @@ class RealtimemarketService:
                     "action_by": reference.action_by,
                     "block_no": reference.block_no
                 }
-                await self.updatePlantDataForApproval(ref_dict)
+                self.updatePlantDataForApproval(ref_dict)
                 data_array.append(ref_dict)  # add to the list
 
             return {"result": True, "data": data_array}
@@ -3888,7 +3932,7 @@ class RealtimemarketService:
                 }
             }
 
-            result = await self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
+            result = self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
             return result.modified_count  # returns number of documents updated
 
         except Exception as e:

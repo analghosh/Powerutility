@@ -21,45 +21,42 @@ class BidTradeServeRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "bid_trade_serve"
         logger.info(f"BidTradeServeRepository initialized with collection: {self.collection_name}")
-
-    async def setup(self):
-        """Create collection and indexes. Call once from async startup."""
-        await self._create_collection_if_not_exists()
-        await self._create_indexes()
-
-    async def _create_collection_if_not_exists(self):
+        self._create_collection_if_not_exists()
+        self._create_indexes()
+    
+    def _create_collection_if_not_exists(self):
         """Create collection if it does not exist."""
         try:
             db = self.db
             db_name = self.db_name or "unknown"
-            existing = await db.list_collection_names()
-            if self.collection_name not in existing:
-                await db.create_collection(self.collection_name)
+            
+            if self.collection_name not in db.list_collection_names():
+                db.create_collection(self.collection_name)
                 logger.info(f"Created collection '{self.collection_name}' in database '{db_name}'")
             else:
                 logger.debug(f"Collection '{self.collection_name}' already exists in database '{db_name}'")
         except Exception as e:
             logger.warning(f"Error checking/creating collection '{self.collection_name}': {str(e)}")
-
-    async def _create_indexes(self):
+    
+    def _create_indexes(self):
         """Create necessary indexes for efficient queries."""
         try:
             collection = self.collection
 
             # Index on scheduled_at for date-based queries
-            await collection.create_index([("scheduled_at", 1)])
+            collection.create_index([("scheduled_at", 1)])
 
             # Index on type for filtering by market type
-            await collection.create_index([("type", 1)])
+            collection.create_index([("type", 1)])
 
             # Index on time_block for time block queries
-            await collection.create_index([("time_block", 1)])
+            collection.create_index([("time_block", 1)])
 
             # Index on bid_type (single / block)
-            await collection.create_index([("bid_type", 1)])
+            collection.create_index([("bid_type", 1)])
 
             # Compound index for date, type, time_block, and bid_type queries
-            await collection.create_index([("scheduled_at", 1), ("type", 1), ("time_block", 1), ("bid_type", 1)])
+            collection.create_index([("scheduled_at", 1), ("type", 1), ("time_block", 1), ("bid_type", 1)])
 
             logger.info(f"Created indexes for collection '{self.collection_name}'")
         except Exception as e:
@@ -111,7 +108,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             # Convert to dictionary: time_block -> total_traded
             trade_quantity_map = {}
@@ -156,7 +153,7 @@ class BidTradeServeRepository(GenericRepository):
             }
             
             cursor = self.collection.find(query).sort("time_block", 1)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:
@@ -297,7 +294,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             logger.info(f"Retrieved {len(results)} trade status records with MCP for date {datebid}, type {bid_type}")
             return results
@@ -338,7 +335,7 @@ class BidTradeServeRepository(GenericRepository):
             ]
 
             cursor = self.collection.aggregate(pipeline)
-            result = await cursor.to_list(length=10000)
+            result = list(cursor)
 
             block_map: Dict[int, dict] = {}
 
@@ -407,7 +404,7 @@ class BidTradeServeRepository(GenericRepository):
             }
             update_query = {"$set": {"bidded": bidded_value}}
 
-            result = await self.collection.update_one(filter_query, update_query)
+            result = self.collection.update_one(filter_query, update_query)
             logger.info(
                 f"update_bidded_by_block: type={bid_type}, block={time_block}, "
                 f"date={start_of_day.strftime('%Y-%m-%d')}, bidded={bidded_value}, "
@@ -445,7 +442,7 @@ class BidTradeServeRepository(GenericRepository):
             }
             update_query = {"$set": {"bidded": 0}}
 
-            result = await self.collection.update_many(filter_query, update_query)
+            result = self.collection.update_many(filter_query, update_query)
             logger.info(
                 f"reset_bidded_for_date: type={bid_type}, "
                 f"date={start_of_day.strftime('%Y-%m-%d')}, "

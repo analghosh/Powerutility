@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import HTTPException, status, Request
 from services.auth.app.services.auth_service import auth_service
-from services.auth.app.schemas.auth import LoginRequest, RefreshTokenRequest, ChangePasswordRequest, VerifyLoginRequest
+from services.auth.app.schemas.auth import LoginRequest, RefreshTokenRequest, ChangePasswordRequest
 from services.auth.app.core.dto import AuthUserDTO
 from datetime import datetime
 import sys
@@ -265,15 +265,11 @@ class AuthController:
         try:
             # Extract request info for audit
             request_info = self._extract_request_info(request)
-
-            from services.auth.app.services.jwt_service import jwt_service
-            token_info = jwt_service.get_user_session_info(access_token) or {}
-
+            
             # Attempt logout
             self.audit_logger.log_user_action(
                 service="auth",
-                user_id=token_info.get("user_id") or self._extract_session_id(access_token) or "unknown",
-                username=token_info.get("username"),
+                user_id=self._extract_session_id(access_token),
                 action="Log Out",
                 message="User logged out",
                 client_ip=request_info.get("ip_address"),

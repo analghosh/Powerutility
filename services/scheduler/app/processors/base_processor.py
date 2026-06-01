@@ -4,7 +4,6 @@ This class provides the main processing workflow for different data types.
 """
 
 import asyncio
-import inspect
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
@@ -15,7 +14,6 @@ from libs.repository.provider_repository import ProviderRepository
 from libs.repository.raw_data_repository import RawDataRepository
 from libs.middleware.correlation import set_correlation_id, get_correlation_id
 from libs.core.job_entities import JobDetail
-from libs.core.job_factory import create_job_execution_log_repository
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +53,6 @@ class BaseProcessor(ABC):
             settings.AUDIT_DB_NAME,
             settings.JOB_DETAIL_COLLECTION
         )
-        self.job_execution_log_repository = create_job_execution_log_repository(
-            settings.AUDIT_DB_URI,
-            settings.AUDIT_DB_NAME
-        )
         
         # Cache service is now available via middleware
         self.cache_service = None
@@ -66,7 +60,7 @@ class BaseProcessor(ABC):
         # Current execution_id serves as correlation ID for this processor instance
         self.current_execution_id = None
         
-    async def process_metadata_trigger(self, metadata: Dict[str, Any]) -> Dict[str, Any]:
+    async def process_metadata_trigger(self, metadata: Dict[str, Any]) -> bool:
         """
         Main entry point triggered by cron job.
         Processes metadata and orchestrates the data processing workflow.
@@ -75,7 +69,7 @@ class BaseProcessor(ABC):
             metadata: Metadata containing data_type and other processing info
             
         Returns:
-            Dict[str, Any]: Result dict with 'success' key and details
+            bool: True if processing was successful, False otherwise
         """
         try:
             data_type = metadata.get("data_type")
@@ -94,7 +88,7 @@ class BaseProcessor(ABC):
             )
             
             # Check if there's any provider configuration for this data_type
-            provider_configs = await self._get_provider_configurations(data_type)
+            provider_configs = self._get_provider_configurations(data_type)
             logger.info(f"Found {len(provider_configs)} provider configurations for data_type: {data_type}")
             
             if not provider_configs:
@@ -136,16 +130,16 @@ class BaseProcessor(ABC):
             
         except Exception as e:
             logger.error(f"Error in process_metadata_trigger: {str(e)}")
-            return {"success": False, "error": str(e)}
+            return False
     
-    async def _get_provider_configurations(self, data_type: str) -> List[Dict[str, Any]]:
+    def _get_provider_configurations(self, data_type: str) -> List[Dict[str, Any]]:
         """
         Get provider configurations for the given data_type.
         For exchange data type, this will return all exchange providers regardless of sub_type.
-
+        
         Args:
             data_type: The type of data to process
-
+            
         Returns:
             List of provider configurations
         """
@@ -153,40 +147,38 @@ class BaseProcessor(ABC):
             # Query provider repository for configurations matching the data_type
             # Use 'enabled' field instead of 'is_active' to match provider schema
             query = {"data_type": data_type, "enabled": True}
-            providers = await self.provider_repository.find_many(query)
+            providers = self.provider_repository.find_many(query)            
             return providers
         except Exception as e:
             logger.error(f"Error getting provider configurations: {str(e)}")
             return []
     
-    async def _process_provider_data(self, provider_config: Dict[str, Any], metadata: Dict[str, Any]) -> Dict[str, Any]:
+    async def _process_provider_data(self, provider_config: Dict[str, Any], metadata: Dict[str, Any]) -> bool:
         """
         Process raw data for a specific provider configuration using row-by-row approach.
         Processes each raw data document individually and returns from where it fails.
-
+        
         Args:
             provider_config: Provider configuration document
             metadata: Processing metadata
-
+            
         Returns:
-            Dict[str, Any]: Result dict with 'success' key and details
+            bool: True if all documents processed successfully, False if any document failed
         """
         try:
             provider_id = provider_config.get("_id")
             provider_code = provider_config.get("code", "UNKNOWN")
             logger.info(f"Processing data for provider: {provider_code} (ID: {provider_id})")
             
-            # Ensure provider_id is a non-None string (e.g. ObjectId → str)
-            if not provider_id:
-                logger.error(f"Provider ID not found for provider: {provider_code}")
-                return {"success": False, "error": "Provider ID not found"}
-            provider_id = str(provider_id)
-
+            # Ensure provider_id is a string, not ObjectId
+            if hasattr(provider_id, '__str__'):
+                provider_id = str(provider_id)
+            
             logger.info(f"Provider ID after conversion: {provider_id} (type: {type(provider_id)})")
-
+            
             # Get pending raw data for this provider in ascending order
             data_type = metadata.get("data_type")
-            raw_data_items = await self._get_pending_raw_data(provider_id, data_type)
+            raw_data_items = self._get_pending_raw_data(provider_id, data_type)
             logger.info(f"_get_pending_raw_data returned {len(raw_data_items)} items for provider: {provider_code}")
             
             if not raw_data_items:
@@ -247,7 +239,7 @@ class BaseProcessor(ABC):
                     }
                     data_type = metadata.get("data_type")
                     # Mark this document as processing with execution details
-                    await self._update_raw_data_status_with_execution_details(
+                    self._update_raw_data_status_with_execution_details(
                         [doc_id], 
                         ProcessingStatus.PROCESSING, 
                         metadata.get("execution_id"),
@@ -267,7 +259,7 @@ class BaseProcessor(ABC):
                     
                     if document_result.get("success", False):
                         # Mark this document as completed with execution details
-                        await self._update_raw_data_status_with_execution_details(
+                        self._update_raw_data_status_with_execution_details(
                             [doc_id], 
                             ProcessingStatus.COMPLETED, 
                             metadata.get("execution_id"),
@@ -283,7 +275,7 @@ class BaseProcessor(ABC):
                         # Document processing failed
                         failed_doc_index = i
                         failed_doc_id = doc_id
-                        await self._update_raw_data_status_with_execution_details(
+                        self._update_raw_data_status_with_execution_details(
                             [doc_id], 
                             ProcessingStatus.FAILED, 
                             metadata.get("execution_id"),
@@ -299,7 +291,7 @@ class BaseProcessor(ABC):
                     # Exception during document processing
                     failed_doc_index = i
                     failed_doc_id = doc_id
-                    await self._update_raw_data_status_with_execution_details(
+                    self._update_raw_data_status_with_execution_details(
                         [doc_id], 
                         ProcessingStatus.FAILED, 
                         metadata.get("execution_id"),
@@ -380,8 +372,6 @@ class BaseProcessor(ABC):
                     enhanced_metadata, 
                     provider_config
                 )
-                if inspect.isawaitable(processing_success):
-                    processing_success = await processing_success
             
             if processing_success:
                 records_processed = len(raw_data)
@@ -449,12 +439,11 @@ class BaseProcessor(ABC):
                 "message": f"Exception during processing: {str(e)}"
             }
     
-
-    async def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
+    def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get pending raw data for a provider.
         First fetches pending status records from raw_data_processing_status based on provider_id,
-        then fetches the corresponding raw data records using a single aggregation pipeline.
+        then fetches the corresponding raw data records.
         
         Args:
             provider_id: Provider configuration ID
@@ -475,48 +464,59 @@ class BaseProcessor(ABC):
                 data_type=data_type
             )
             
-            # Determine the raw data collection name dynamically
-            raw_collection_name = self.raw_data_repository.collection.name
-            logger.info(f"Joining against collection: {raw_collection_name}")
+            # Step 1: Get pending processing status records for this provider
+            pending_status_query = {
+                "provider_id": provider_id,
+                "status": {"$in": [RawDataStatus.PENDING.value, RawDataStatus.FAILED.value]}
+            }
             
-            pipeline = [
-                # Stage 1: Filter pending/failed records for this provider
-                {
-                    "$match": {
-                        "provider_id": provider_id,
-                        "status": {"$in": [RawDataStatus.PENDING.value, RawDataStatus.FAILED.value]}
-                    }
-                },
-                # Stage 2: Oldest first, limit batch size
-                {"$sort": {"created_at": 1}},
-                {"$limit": 50},
-                # Stage 3: Convert string raw_data_id to ObjectId before lookup
-                {
-                    "$addFields": {
-                        "raw_data_id_obj": {"$toObjectId": "$raw_data_id"}
-                    }
-                },
-                # Stage 4: Join to raw data collection
-                {
-                    "$lookup": {
-                        "from": raw_collection_name,
-                        "localField": "raw_data_id_obj",
-                        "foreignField": "_id",
-                        "as": "raw_data"
-                    }
-                },
-                # Stage 5: Flatten — each status record has exactly one raw_data doc
-                {"$unwind": "$raw_data"},
-                # Stage 6: Return only the raw data document
-                {"$replaceRoot": {"newRoot": "$raw_data"}}
-            ]
-            
-            pending_raw_data = await processing_status_repo.collection.aggregate(pipeline).to_list(length=10000)
-            
-            logger.info(
-                f"Successfully fetched {len(pending_raw_data)} pending raw data records "
-                f"for provider {provider_id}"
+            # Use the repository's collection directly for more control
+            pending_status_records = list(
+                processing_status_repo.collection.find(pending_status_query)
+                .sort("created_at", 1)  # Process oldest first
+                .limit(40)# Limit to 3 records per batch to prevent OOM
             )
+            
+            logger.info(f"Found {len(pending_status_records)} pending status records for provider {provider_id}")
+            
+            if not pending_status_records:
+                logger.info(f"No pending processing status found for provider: {provider_id}")
+                return []
+            
+            # Step 2: Extract raw_data_ids from pending status records
+            pending_raw_data_ids = [record["raw_data_id"] for record in pending_status_records]
+            logger.info(f"Extracted {len(pending_raw_data_ids)} raw_data_ids from pending status records")
+            
+            # Step 3: Fetch the actual raw data records using the IDs
+            if not pending_raw_data_ids:
+                return []
+            
+            # Convert string IDs to ObjectId for MongoDB query
+            from bson import ObjectId
+            object_ids = []
+            for raw_data_id in pending_raw_data_ids:
+                try:
+                    if isinstance(raw_data_id, str):
+                        object_ids.append(ObjectId(raw_data_id))
+                    else:
+                        object_ids.append(raw_data_id)
+                except Exception as id_error:
+                    logger.warning(f"Invalid raw_data_id format: {raw_data_id}, error: {id_error}")
+                    continue
+            
+            if not object_ids:
+                logger.warning("No valid raw_data_ids found after conversion")
+                return []
+            
+            # Query raw data collection with the pending IDs
+            raw_data_query = {"_id": {"$in": object_ids}}
+            pending_raw_data = self.raw_data_repository.find_many(raw_data_query)
+            
+            logger.info(f"Successfully fetched {len(pending_raw_data)} raw data records with pending status for provider {provider_id}")
+            
+            # Sort by creation time to maintain processing order
+            if pending_raw_data:
+                pending_raw_data.sort(key=lambda x: x.get("created_at", datetime.min))
             
             return pending_raw_data
             
@@ -524,50 +524,57 @@ class BaseProcessor(ABC):
             logger.error(f"Error getting pending raw data for provider {provider_id}: {str(e)}")
             return []
     
-    async def _update_raw_data_status(self, raw_data_ids: List[str], status: ProcessingStatus) -> bool:
+    def _update_raw_data_status(self, raw_data_ids: List[str], status: ProcessingStatus) -> bool:
         """
         Update the processing status of raw data items in the separate status collection.
-
+        
         Args:
             raw_data_ids: List of raw data document IDs
             status: New processing status
-
+            
         Returns:
             bool: True if update was successful
         """
         try:
+            from pymongo import MongoClient
+            from bson import ObjectId
+            from ..core.config import settings
             from ..core.database import get_database
-
+            
             db = get_database()
             status_collection = db["raw_data_processing_status"]
-
+            
             update_data = {
                 "status": status.value,
                 "updated_at": datetime.now()
             }
-
+            
             if status == ProcessingStatus.PROCESSING:
                 update_data["processing_started_at"] = datetime.now()
             elif status in [ProcessingStatus.COMPLETED, ProcessingStatus.FAILED]:
                 update_data["processing_completed_at"] = datetime.now()
-
+            
+            # Bulk update all status records for these raw data IDs
             query = {"raw_data_id": {"$in": raw_data_ids}}
-            result = await status_collection.update_many(query, {"$set": update_data})
+            
+            result = status_collection.update_many(query, {"$set": update_data})
+            
 
+            
             logger.debug(f"Updated {result.modified_count} raw data status records to: {status.value}")
             return result.modified_count > 0
-
+            
         except Exception as e:
             logger.error(f"Error updating raw data status: {str(e)}")
             return False
     
-    async def _update_raw_data_status_with_execution_details(self, raw_data_ids: List[str], status: ProcessingStatus,
-                                                             execution_id: Optional[str], correlation_id: Optional[str],
-                                                             provider_code: str, processing_result: Optional[Dict[str, Any]] = None,
-                                                             data_type: Optional[str] = None) -> bool:
+    def _update_raw_data_status_with_execution_details(self, raw_data_ids: List[str], status: ProcessingStatus,
+                                                      execution_id: Optional[str], correlation_id: Optional[str],
+                                                      provider_code: str, processing_result: Optional[Dict[str, Any]] = None,
+                                                      data_type: Optional[str] = None) -> bool:
         """
         Update the processing status of raw data items with execution details.
-
+        
         Args:
             raw_data_ids: List of raw data document IDs
             status: New processing status
@@ -576,37 +583,42 @@ class BaseProcessor(ABC):
             provider_code: Provider code
             processing_result: Processing result details
             data_type: Data type for dynamic collection
-
+            
         Returns:
             bool: True if update was successful
         """
         try:
+            from pymongo import MongoClient
+            from ..core.config import settings
             from ..core.database import get_database
-
+            
             db = get_database()
-
+            
             collection_name = "raw_data_processing_status"
             if data_type:
                 collection_name = f"{data_type.lower()}_raw_data_processing_status"
-
+                
             status_collection = db[collection_name]
-
+            
             update_data = {
                 "status": status.value,
                 "updated_at": datetime.now(),
                 "provider_code": provider_code
             }
-
+            
+            # Add execution details
             if execution_id:
                 update_data["execution_id"] = execution_id
             if correlation_id:
                 update_data["correlation_id"] = correlation_id
-
+            
+            # Add processing timestamps
             if status == ProcessingStatus.PROCESSING:
                 update_data["processing_started_at"] = datetime.now()
             elif status in [ProcessingStatus.COMPLETED, ProcessingStatus.FAILED]:
                 update_data["processing_completed_at"] = datetime.now()
-
+            
+            # Add processing result details
             if processing_result:
                 update_data["processing_result"] = {
                     "records_processed": processing_result.get("records_processed", 0),
@@ -615,13 +627,16 @@ class BaseProcessor(ABC):
                     "error": processing_result.get("error"),
                     "exception": processing_result.get("exception", False)
                 }
-
+            
+            # Update status records
             query = {"raw_data_id": {"$in": raw_data_ids}}
-            result = await status_collection.update_many(query, {"$set": update_data})
+            result = status_collection.update_many(query, {"$set": update_data})
+            
 
+            
             logger.debug(f"Updated {result.modified_count} raw data status records to: {status.value} with execution details")
             return result.modified_count > 0
-
+            
         except Exception as e:
             logger.error(f"Error updating raw data status with execution details: {str(e)}")
             return False
@@ -635,9 +650,9 @@ class BaseProcessor(ABC):
             # Close any repository connections if they have close methods
             for attr_name in dir(self):
                 attr = getattr(self, attr_name)
+                # DO NOT call .close() on MongoClient instances, as they are shared singletons.
                 # Only close repositories or other objects that might have their own close logic.
-                # Motor clients are shared singletons managed by the factory — do not close them here.
-                if hasattr(attr, 'close') and callable(getattr(attr, 'close')):
+                if hasattr(attr, 'close') and callable(getattr(attr, 'close')) and not isinstance(attr, MongoClient):
                     try:
                         attr.close()
                         logger.debug(f"Closed connection for {attr_name}")
@@ -698,42 +713,47 @@ class BaseProcessor(ABC):
             self.cache_service = get_cache_service()
         return self.cache_service
     
-    async def _get_timeblock_number(self, time_block_str: str) -> int:
+    def _get_timeblock_number(self, time_block_str: str) -> int:
         """
         Get timeblock number using cache service
-
+        
         Args:
             time_block_str: Time block string in format "HH:MM-HH:MM"
-
+            
         Returns:
             Timeblock number (1-96) or 0 if not found/invalid
         """
         if not time_block_str:
             return 0
-
+        
         try:
             cache = self._get_cache_service()
             if not cache:
                 logger.warning("Cache service not available for timeblock lookup")
                 return 0
-
+            
             time_parts = time_block_str.split("-")
             if len(time_parts) != 2:
                 logger.warning(f"Invalid time block format: {time_block_str}. Expected 'HH:MM-HH:MM'")
                 return 0
-
+                
             time_str = time_parts[0].strip()
             end_time = time_parts[1].strip()
             cache_key = f"timeblock_mapping:{time_str}-{end_time}"
-
+            
+            # Try to get timeblock number from cache first
             timeblock_num = cache.get(cache_key)
-
+            
             if timeblock_num is None:
+                # Not in cache, fetch from database
                 logger.debug(f"Timeblock mapping not in cache, fetching from database: {time_str}-{end_time}")
-                timeblock_data = await self.get_timeblock_by_time_range(time_str, end_time)
-
+                timeblock_data = self.get_timeblock_by_time_range(time_str, end_time)
+                
                 if timeblock_data:
+                    # Extract timeblock attribute from the timeblock entity
                     timeblock_num = timeblock_data.get("timeblock", 0)
+                    
+                    # Cache the timeblock number for future lookups
                     if timeblock_num:
                         cache.set(cache_key, timeblock_num, ttl=3600)
                         logger.debug(f"Cached timeblock number: {cache_key} = {timeblock_num}")
@@ -742,18 +762,19 @@ class BaseProcessor(ABC):
                     timeblock_num = 0
             else:
                 logger.debug(f"Retrieved timeblock number from cache: {cache_key} = {timeblock_num}")
-
+            
+            # Validate timeblock number is within valid range (1-96)
             if isinstance(timeblock_num, int) and 1 <= timeblock_num <= 96:
                 return timeblock_num
             else:
                 logger.warning(f"Invalid timeblock number {timeblock_num} for '{time_block_str}' - should be 1-96")
                 return 0
-
+            
         except (ValueError, TypeError, IndexError) as e:
             logger.error(f"Error parsing timeblock {time_block_str}: {str(e)}")
             return 0
     
-    async def fetch_timeblock_data(self, timeblock_number: Optional[int] = None) -> List[Dict[str, Any]]:
+    def fetch_timeblock_data(self, timeblock_number: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Fetch time block data from the timeblock master collection
         
@@ -766,6 +787,7 @@ class BaseProcessor(ABC):
         try:
             logger.info("TESTING LOGS: Entering fetch_timeblock_data")
             from ..core.config import settings
+            from pymongo import MongoClient
             
             # Use cache key for this operation
             cache_key = f"timeblock_data:{timeblock_number if timeblock_number else 'all'}"
@@ -797,7 +819,11 @@ class BaseProcessor(ABC):
             
             # Execute query with sorting
             logger.info(f"TESTING LOGS: Executing query: {query}")
-            timeblock_records = await timeblock_collection.find(query).sort("timeblock", 1).to_list(length=10000)
+            cursor = timeblock_collection.find(query).sort("timeblock", 1)
+            try:
+                timeblock_records = list(cursor)
+            finally:
+                cursor.close()
             
 
             
@@ -819,30 +845,33 @@ class BaseProcessor(ABC):
             logger.error(f"Error fetching timeblock data: {str(e)}")
             return []
     
-    async def get_timeblock_by_time_range(self, start_time: str, end_time: str) -> Optional[Dict[str, Any]]:
+    def get_timeblock_by_time_range(self, start_time: str, end_time: str) -> Optional[Dict[str, Any]]:
         """
         Get specific timeblock data by time range
-
+        
         Args:
             start_time: Start time in format "HH:MM" (e.g., "00:00")
             end_time: End time in format "HH:MM" (e.g., "00:15")
-
+            
         Returns:
             Timeblock document or None if not found
         """
         try:
+            # Use cache key for this specific lookup
             cache_key = f"timeblock_range:{start_time}-{end_time}"
-
+            
+            # Try cache first
             cache = self._get_cache_service()
             if cache:
                 cached_data = cache.get(cache_key)
                 if cached_data:
                     logger.debug(f"Retrieved timeblock by range from cache: {cache_key}")
                     return cached_data
-
+            
             from ..core.config import settings
+            from pymongo import MongoClient
             from ..core.database import get_database
-
+            
             db = get_database()
             timeblock_collection = db[settings.MONGODB_TIMEBLOCK_MASTER_COLLECTION]
             
@@ -852,7 +881,7 @@ class BaseProcessor(ABC):
                 "endtime": end_time
             }
             
-            timeblock_record = await timeblock_collection.find_one(query)
+            timeblock_record = timeblock_collection.find_one(query)
 
             
             if timeblock_record:
@@ -912,7 +941,7 @@ class BaseProcessor(ABC):
             logger.error(f"Error caching timeblock mapping {start_time}-{end_time}: {str(e)}")
             return False
     
-    async def preload_timeblock_mappings(self) -> bool:
+    def preload_timeblock_mappings(self) -> bool:
         """
         Preload all timeblock mappings into cache for better performance
         
@@ -932,7 +961,7 @@ class BaseProcessor(ABC):
                 return True
             
             # Fetch all timeblock data
-            all_timeblocks = await self.fetch_timeblock_data()
+            all_timeblocks = self.fetch_timeblock_data()
             
             if not all_timeblocks:
                 logger.warning("No timeblock data found for preloading")
@@ -958,7 +987,7 @@ class BaseProcessor(ABC):
             logger.error(f"Error preloading timeblock mappings: {str(e)}")
             return False
 
-    async def get_current_timeblock(self) -> Optional[Dict[str, Any]]:
+    def get_current_timeblock(self) -> Optional[Dict[str, Any]]:
         """
         Get the current timeblock based on current time
         
@@ -989,7 +1018,7 @@ class BaseProcessor(ABC):
             end_time = f"{end_hour:02d}:{end_minute:02d}"
             
             logger.debug(f"Looking for current timeblock: {start_time}-{end_time}")
-            return await self.get_timeblock_by_time_range(start_time, end_time)
+            return self.get_timeblock_by_time_range(start_time, end_time)
             
         except Exception as e:
             logger.error(f"Error getting current timeblock: {str(e)}")
@@ -1051,23 +1080,29 @@ class BaseProcessor(ABC):
         set_correlation_id(None)
         logger.debug("Cleared correlation ID")
     
-    async def _record_job_start(self, job_type: str, job_name: str, schedule: str,
+    def with_correlation_id(self, correlation_id: str):
+        """
+        Record job execution methods.
+        """
+        pass
+
+    def _record_job_start(self, job_type: str, job_name: str, schedule: str, 
                          execution_start: datetime, execution_id: Optional[str] = None) -> Optional[str]:
         """Record job start in audit database"""
         try:
-            job_data = await self.job_data_repository.get_job(job_type)
+            job_data = self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return None
-
+            
             job_id = job_data.get("_id")
-
+            
             if not execution_id:
                 execution_id = self.get_correlation_id()
                 if execution_id:
                     logger.info("Reusing existing execution ID from context: %s", execution_id)
                     return execution_id
-
+                
                 execution_id = f"{job_type}_{execution_start.strftime('%Y%m%d_%H%M%S')}"
 
             job_detail = JobDetail(
@@ -1086,17 +1121,17 @@ class BaseProcessor(ABC):
                 metadata=None
             )
 
-            await self.job_detail_repository.log_execution(job_detail)
+            self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (execution_id: %s) in audit database", job_type, execution_id)
             return execution_id
-
+                
         except Exception as e:
             logger.error("Error recording job start for %s: %s", job_type, str(e))
             return None
 
-    async def _record_job_completion(self, job_type: str, job_name: str, schedule: str,
+    def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
                               execution_start: datetime, execution_end: datetime,
-                              execution_id: str, status: str, success: bool,
+                              execution_id: str, status: str, success: bool, 
                               result: Optional[Dict[str, Any]] = None,
                               error_message: Optional[str] = None):
         """Record job completion in audit database"""
@@ -1113,18 +1148,18 @@ class BaseProcessor(ABC):
                 "error_message": error_message,
                 "result_data": result,
             }
-
-            updated = await self.job_detail_repository.update_execution(execution_id, update_data)
-
+            
+            updated = self.job_detail_repository.update_execution(execution_id, update_data)
+            
             if updated:
                 logger.info("Updated job completion for %s (execution_id: %s, status: %s)", job_type, execution_id, status)
             else:
                 logger.warning("Failed to update job execution %s, creating new record", execution_id)
-                job_data = await self.job_data_repository.get_job(job_type)
+                job_data = self.job_data_repository.get_job(job_type)
                 if not job_data:
                     logger.error("Job data not found for job_type: %s", job_type)
                     return
-
+                
                 job_id = job_data.get("_id")
                 job_detail = JobDetail(
                     job_id=str(job_id),
@@ -1141,30 +1176,24 @@ class BaseProcessor(ABC):
                     service="scheduler",
                     metadata=None
                 )
-
-                await self.job_detail_repository.log_execution(job_detail)
+                
+                self.job_detail_repository.log_execution(job_detail)
                 logger.info("Created new job completion record for %s", job_type)
-
+                
         except Exception as e:
             logger.error("Error recording job completion for %s: %s", job_type, str(e))
 
-    async def _record_job_execution(self, job_type: str, job_name: str, schedule: str,
+    def _record_job_execution(self, job_type: str, job_name: str, schedule: str, 
                              execution_start: datetime, execution_end: Optional[datetime] = None,
-                             execution_id: Optional[str] = None, status: Optional[str] = None,
+                             execution_id: Optional[str] = None, status: Optional[str] = None, 
                              success: Optional[bool] = None, result: Optional[Dict[str, Any]] = None,
                              error_message: Optional[str] = None, is_start: bool = True) -> Optional[str]:
         """Unified wrapper for start/completion calls - for backward compatibility/choice"""
         if is_start:
-            return await self._record_job_start(job_type, job_name, schedule, execution_start, execution_id)
+            return self._record_job_start(job_type, job_name, schedule, execution_start, execution_id)
         else:
-            await self._record_job_completion(
-                job_type, job_name, schedule, execution_start,
-                execution_end or execution_start,
-                execution_id or "",
-                status or "unknown",
-                success if success is not None else False,
-                result, error_message
-            )
+            self._record_job_completion(job_type, job_name, schedule, execution_start, execution_end, 
+                                      execution_id, status, success, result, error_message)
             return None
 
     def with_correlation_id(self, correlation_id: str):

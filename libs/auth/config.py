@@ -11,13 +11,7 @@ class AuthConfig:
     
     def __init__(self, jwt_secret_key: str = None, jwt_algorithm: str = None):
         # JWT Settings - can be overridden by service-specific config
-        self.JWT_SECRET_KEY = jwt_secret_key or os.getenv("JWT_SECRET_KEY")
-        if not self.JWT_SECRET_KEY:
-            raise ValueError("JWT_SECRET_KEY must be set via environment variable or parameter")
-        if len(self.JWT_SECRET_KEY) < 32:
-            raise ValueError("JWT_SECRET_KEY must be at least 32 characters long")
-        if "change-in-production" in self.JWT_SECRET_KEY:
-            raise ValueError("JWT_SECRET_KEY contains an insecure default value")
+        self.JWT_SECRET_KEY = jwt_secret_key or os.getenv("JWT_SECRET_KEY", "your-secret-key-change-in-production")
         self.JWT_ALGORITHM = jwt_algorithm or os.getenv("JWT_ALGORITHM", "HS256")
         self.JWT_EXPIRATION_DELTA = int(os.getenv("JWT_EXPIRATION_DELTA", "3600"))  # 1 hour
         

@@ -5,12 +5,14 @@ Aggregates exchange data from IEX, PXIL, and HPX
 """
 
 import logging
-from collections import defaultdict
-from datetime import datetime, timedelta, time
-from typing import Dict, List, Any, Optional, Tuple
+from datetime import datetime, timedelta,time
+from typing import Dict, List, Any, Optional
+from pymongo import MongoClient
+from bson import ObjectId
 
 from .base_processor import BaseProcessor
 from ..core.config import settings
+from libs.core.job_entities import JobDetail
 
 logger = logging.getLogger(__name__)
 
@@ -41,7 +43,7 @@ class NewDSMProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -59,7 +61,7 @@ class NewDSMProcessor(BaseProcessor):
             
             # Step 1: Load time blocks into cache if not already loaded
             if not self.time_blocks_cache:
-                await self._load_time_blocks_cache()
+                self._load_time_blocks_cache()
             
             # Step 2: Determine current time block based on current time
             current_time_block = self._get_current_time_block()
@@ -69,38 +71,35 @@ class NewDSMProcessor(BaseProcessor):
             
             logger.info(f"Current time block: {current_time_block}")
             
-            # Step 3: Blocks to process (grouped by scheduled_at — one batch per date)
+            # Step 3: Calculate time blocks to process (current + future blocks)
             blocks_to_process = self._get_blocks_to_process(current_time_block)
-            grouped = self._group_blocks_by_scheduled_at(blocks_to_process)
-            logger.info(
-                "Processing %s time blocks across %s scheduled date(s) (batched)",
-                len(blocks_to_process),
-                len(grouped),
-            )
-
+            logger.info(f"Processing {len(blocks_to_process)} time blocks")
+            
+            # Step 4: Process each time block
             processed_count = 0
             failed_count = 0
-            updated_count = 0
+            
+            logger.info(f"Starting to process {len(blocks_to_process)} time blocks...")
+            
+            for i, block_info in enumerate(blocks_to_process):
+                timeblock = block_info['timeblock']
+                scheduled_at: datetime = block_info['scheduled_at']
+                date = block_info['date']
 
-            for scheduled_at, time_blocks in grouped.items():
+                logger.debug(f"Processing time block {i+1}/{len(blocks_to_process)}: {timeblock} for date {date}")
+
                 try:
-                    batch_processed, batch_failed, batch_updated = await self._process_scheduled_date_batch(
-                        scheduled_at, time_blocks
-                    )
-                    processed_count += batch_processed
-                    failed_count += batch_failed
-                    updated_count += batch_updated
+                    if self._process_time_block(scheduled_at, timeblock):
+                        processed_count += 1
+                        logger.debug(f"✅ Successfully processed time block {timeblock} for date {date}")
+                    else:
+                        failed_count += 1
+                        logger.warning(f"❌ Failed to process time block {timeblock} for date {date}")
                 except Exception as e:
-                    failed_count += len(time_blocks)
-                    logger.error(
-                        "Batch DSM failed for %s blocks %s..%s: %s",
-                        scheduled_at.date(),
-                        min(time_blocks) if time_blocks else "?",
-                        max(time_blocks) if time_blocks else "?",
-                        e,
-                        exc_info=True,
-                    )
-
+                    failed_count += 1
+                    logger.error(f"💥 Exception processing time block {timeblock} for date {date}: {str(e)}")
+                    continue
+                    
             success = processed_count > 0
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds() if start_time else 0.0
@@ -111,14 +110,10 @@ class NewDSMProcessor(BaseProcessor):
                 "execution_time": execution_time,
                 "data_type": "dsm",
                 "correlation_id": execution_id,
-                "cron_job": "new_dsm",
-                "processed_count": processed_count,
-                "failed_count": failed_count,
-                "updated_count": updated_count,
-                "blocks_total": len(blocks_to_process),
+                "cron_job": "new_dsm"
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -132,7 +127,7 @@ class NewDSMProcessor(BaseProcessor):
             
             logger.info(f"Processing summary: {processed_count} successful, {failed_count} failed out of {len(blocks_to_process)} total")
             
-            return result
+            return processed_count > 0
             
         except Exception as e:
             logger.error(f"Error in New DSM cron job execution: {str(e)}", exc_info=True)
@@ -148,7 +143,7 @@ class NewDSMProcessor(BaseProcessor):
                 "cron_job": "new_dsm"
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -160,12 +155,12 @@ class NewDSMProcessor(BaseProcessor):
                 result=error_result,
                 error_message=str(e)
             )
-            return error_result
+            return False
         finally:
             # Clear correlation ID after job completion
             self.clear_correlation_id()
     
-    async def _load_time_blocks_cache(self):
+    def _load_time_blocks_cache(self):
         """Load all time blocks from database into cache"""
         try:
             from ..core.database import get_database
@@ -175,7 +170,7 @@ class NewDSMProcessor(BaseProcessor):
             # Fetch all time blocks and create cache
             cursor = time_block_collection.find({}).sort("timeblock", 1)
             try:
-                time_blocks = await cursor.to_list(length=10000)
+                time_blocks = list(cursor)
             finally:
                 cursor.close()
             
@@ -342,411 +337,60 @@ class NewDSMProcessor(BaseProcessor):
             return []
     
     
-    @staticmethod
-    def _group_blocks_by_scheduled_at(
-        blocks_to_process: List[Dict[str, Any]],
-    ) -> Dict[datetime, List[int]]:
-        grouped: Dict[datetime, List[int]] = defaultdict(list)
-        for info in blocks_to_process:
-            grouped[info["scheduled_at"]].append(int(info["timeblock"]))
-        return {sa: sorted(set(tbs)) for sa, tbs in grouped.items()}
+    def _process_time_block(
+            self,
+            scheduled_at: datetime,
+            timeblock: int
+        ) -> bool:
+            """Process a single time block and return True on success.
 
-    async def _process_scheduled_date_batch(
-        self,
-        scheduled_at: datetime,
-        time_blocks: List[int],
-    ) -> Tuple[int, int, int]:
-        """
-        Phase-1 batch path: one demand read, one supply agg, one exchange agg per date.
+            Args:
+                scheduled_at: date for which to fetch ACP/demand data
+                timeblock: time block number
 
-        Returns:
-            (processed_blocks, failed_blocks, documents_updated)
-        """
-        if not time_blocks:
-            return 0, 0, 0
+            Returns:
+                bool: whether any demand records were updated
+            """
 
-        logger.info(
-            "Batch DSM for %s: blocks %s..%s (%s blocks)",
-            scheduled_at.date(),
-            time_blocks[0],
-            time_blocks[-1],
-            len(time_blocks),
-        )
+            logger.info(f"Processing DSM for block {timeblock} at {scheduled_at}")
 
-        demand_map = await self._fetch_demand_idf_map(scheduled_at, time_blocks)
-        schedule_map = await self._fetch_schedule_map_for_blocks(scheduled_at, time_blocks)
-        acp_map = await self._fetch_acp_map_for_blocks(scheduled_at, time_blocks)
-
-        from libs.helpers.new_dsm_calculation import DSMEngine
-
-        dsm_engine = DSMEngine()
-        now = datetime.now()
-        bulk_updates: List[Dict[str, Any]] = []
-        processed = 0
-        failed = 0
-
-        for timeblock in time_blocks:
-            demand_record = demand_map.get(timeblock)
-            if not demand_record:
-                failed += 1
-                continue
-
-            record_scheduled_at = demand_record.get("scheduled_at")
-            if isinstance(record_scheduled_at, str):
-                record_scheduled_at = datetime.fromisoformat(
-                    record_scheduled_at.replace("Z", "+00:00")
+            # 1️ Get weighted ACP once (CERC‑compliant pipeline includes fallback)
+            final_wt_acp_dam, final_wt_acp_rtm = \
+                self._fetch_cerc_weighted_acp(
+                    timeblock,
+                    scheduled_at
                 )
-            if not isinstance(record_scheduled_at, datetime):
-                record_scheduled_at = scheduled_at
 
-            schedule_mw = schedule_map.get(timeblock)
-            actual_mw = demand_record.get("drawal")
-            frequency = demand_record.get("frequency")
-            max_dam_mcp, max_rtm_mcp = acp_map.get(timeblock, (0.0, 0.0))
-
-            dsm_rate: Optional[float] = None
-            net_dsm_amount: Optional[float] = None
-
-            if not schedule_mw or schedule_mw == 0:
-                failed += 1
-                continue
-            if not actual_mw or actual_mw == 0:
-                failed += 1
-                continue
-            if not frequency or frequency == 0:
-                failed += 1
-                continue
-
-            try:
-                summary = dsm_engine.get_dsm_summary(
-                    schedule_mw=schedule_mw,
-                    actual_mw=actual_mw,
-                    frequency=frequency,
-                    acp_dam=max_dam_mcp,
-                    acp_rtm=max_rtm_mcp,
-                    rr_or_contract=0,
-                )
-                dsm_rate = summary["dsm_rate"]
-                net_dsm_amount = summary["net_dsm_amount"]
-            except Exception as calc_error:
-                logger.error("DSM calc failed for block %s: %s", timeblock, calc_error)
-                failed += 1
-                continue
-
-            if dsm_rate is None or net_dsm_amount is None:
-                failed += 1
-                continue
-
-            bulk_updates.append(
-                {
-                    "filter": {
-                        "scheduled_at": record_scheduled_at,
-                        "time_block": timeblock,
-                        "type": "IDF",
-                    },
-                    "update": {
-                        "dsm_rate": dsm_rate,
-                        "net_dsm_amount": net_dsm_amount,
-                        "updated_at": now,
-                        "updated_flag": "U",
-                    },
-                }
-            )
-            processed += 1
-
-        updated_docs = 0
-        if bulk_updates:
-            from ..repository.demand_serve_repository import demand_serve_repository
-
-            write_result = await demand_serve_repository.bulk_update_dsm_fields(bulk_updates)
-            updated_docs = write_result.get("modified_count", 0) or write_result.get("matched_count", 0)
-            logger.info(
-                "Batch DSM write for %s: %s updates, modified=%s",
-                scheduled_at.date(),
-                len(bulk_updates),
-                updated_docs,
+            # 2️⃣ Get demand records
+            demand_data = self._fetch_demand_serve_data(
+                timeblock,
+                scheduled_at
             )
 
-        return processed, failed, updated_docs
+            if not demand_data:
+                logger.info("No demand data found")
+                return False
 
-    async def _fetch_demand_idf_map(
-        self,
-        scheduled_at: datetime,
-        time_blocks: List[int],
-    ) -> Dict[int, Dict[str, Any]]:
-        """One query: IDF demand rows for the day and requested blocks."""
-        from ..repository.demand_serve_repository import demand_serve_repository
-
-        records = await demand_serve_repository.find_idf_demand_for_blocks(
-            scheduled_at, time_blocks
-        )
-        result: Dict[int, Dict[str, Any]] = {}
-        for record in records:
-            tb = record.get("time_block")
-            if tb is None:
-                continue
-            # Prefer latest updated_at if duplicates exist
-            existing = result.get(tb)
-            if not existing or (record.get("updated_at") or datetime.min) >= (
-                existing.get("updated_at") or datetime.min
-            ):
-                result[int(tb)] = record
-        logger.debug(
-            "Demand map for %s: %s/%s blocks",
-            scheduled_at.date(),
-            len(result),
-            len(time_blocks),
-        )
-        return result
-
-    async def _fetch_schedule_map_for_blocks(
-        self,
-        scheduled_at: datetime,
-        time_blocks: List[int],
-    ) -> Dict[int, float]:
-        """One aggregation: schedule_mw per time_block from supply_serve."""
-        if not time_blocks:
-            return {}
-
-        try:
-            from ..repository.supply_serve_repository import supply_serve_repository
-
-            pipeline = [
-                {
-                    "$match": {
-                        "scheduled_at": scheduled_at,
-                        "time_block": {"$in": time_blocks},
-                        "dc_sg": "SG",
-                    }
-                },
-                {
-                    "$lookup": {
-                        "from": "plant_master",
-                        "localField": "plant_id",
-                        "foreignField": "plant_id",
-                        "as": "plant_info",
-                    }
-                },
-                {
-                    "$unwind": {
-                        "path": "$plant_info",
-                        "preserveNullAndEmptyArrays": False,
-                    }
-                },
-                {"$match": {"plant_info.c_s": "central"}},
-                {
-                    "$group": {
-                        "_id": "$time_block",
-                        "total_schedule": {"$sum": "$sg_beforelosses"},
-                    }
-                },
-            ]
-
-            rows = await supply_serve_repository.serve_collection.aggregate(
-                pipeline
-            ).to_list(length=100)
-
-            schedule_map = {
-                int(row["_id"]): float(row.get("total_schedule") or 0)
-                for row in rows
-                if row.get("_id") is not None
-            }
-            logger.debug(
-                "Schedule map for %s: %s blocks",
-                scheduled_at.date(),
-                len(schedule_map),
+            # 3️⃣ Calculate schedule from supply collection
+            schedule_mw = self._calculate_schedule_from_supply(
+                scheduled_at,
+                timeblock
             )
-            return schedule_map
-        except Exception as e:
-            logger.error("Error fetching schedule map: %s", e, exc_info=True)
-            return {}
 
-    async def _fetch_acp_map_for_blocks(
-        self,
-        scheduled_at: datetime,
-        time_blocks: List[int],
-    ) -> Dict[int, Tuple[float, float]]:
-        """One aggregation across exchanges; per-block fallback only when ACP is zero."""
-        if not time_blocks:
-            return {}
+            # 4️⃣ Run DSM update
+            updated = self._batch_update_demand_records_with_dsm(
+                demand_data,
+                final_wt_acp_dam,
+                final_wt_acp_rtm,
+                timeblock,
+                scheduled_at
+            )
 
-        from ..core.database import get_database
+            return updated > 0
+    
+    
 
-        db = get_database()
-        pipeline = self._build_batch_acp_pipeline(scheduled_at, time_blocks)
-        cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
-        rows = await cursor.to_list(length=10000)
-        acp_map = self._acp_from_aggregate_rows(rows)
-
-        for timeblock in time_blocks:
-            dam, rtm = acp_map.get(timeblock, (0.0, 0.0))
-            if dam == 0 or rtm == 0:
-                acp_map[timeblock] = await self._fetch_cerc_weighted_acp(timeblock, scheduled_at)
-
-        logger.debug(
-            "ACP map for %s: %s blocks",
-            scheduled_at.date(),
-            len(acp_map),
-        )
-        return acp_map
-
-    def _build_batch_acp_pipeline(
-        self,
-        scheduled_at: datetime,
-        time_blocks: List[int],
-    ) -> List[Dict[str, Any]]:
-        """CERC-weighted ACP pipeline grouped by time_block and market_type."""
-        block_match = {"scheduled_at": scheduled_at, "time_block": {"$in": time_blocks}}
-
-        return [
-            {"$match": block_match},
-            {
-                "$project": {
-                    "time_block": 1,
-                    "market_type": 1,
-                    "value": {
-                        "$multiply": [
-                            "$price",
-                            {
-                                "$add": [
-                                    "$total_buy_cleared_vol",
-                                    "$total_sell_cleared_vol",
-                                ]
-                            },
-                        ]
-                    },
-                    "volume": {
-                        "$add": [
-                            "$total_buy_cleared_vol",
-                            "$total_sell_cleared_vol",
-                        ]
-                    },
-                }
-            },
-            {
-                "$unionWith": {
-                    "coll": "exchange_trade_serve",
-                    "pipeline": [
-                        {"$match": block_match},
-                        {
-                            "$project": {
-                                "time_block": 1,
-                                "market_type": 1,
-                                "value": {
-                                    "$multiply": [
-                                        "$Price",
-                                        {
-                                            "$add": [
-                                                "$Total_Buy_Cleared_Vol",
-                                                "$Total_Sell_Cleared_Vol",
-                                            ]
-                                        },
-                                    ]
-                                },
-                                "volume": {
-                                    "$add": [
-                                        "$Total_Buy_Cleared_Vol",
-                                        "$Total_Sell_Cleared_Vol",
-                                    ]
-                                },
-                            }
-                        },
-                    ],
-                }
-            },
-            {
-                "$unionWith": {
-                    "coll": "bid_trade_serve",
-                    "pipeline": [
-                        {"$match": block_match},
-                        {
-                            "$group": {
-                                "_id": {
-                                    "time_block": "$time_block",
-                                    "market_type": "$type",
-                                },
-                                "value": {
-                                    "$sum": {
-                                        "$multiply": [
-                                            "$value",
-                                            {"$abs": "$traded"},
-                                        ]
-                                    }
-                                },
-                                "volume": {"$sum": {"$abs": "$traded"}},
-                            }
-                        },
-                        {
-                            "$project": {
-                                "time_block": "$_id.time_block",
-                                "market_type": "$_id.market_type",
-                                "value": 1,
-                                "volume": 1,
-                            }
-                        },
-                    ],
-                }
-            },
-            {
-                "$group": {
-                    "_id": {
-                        "time_block": "$time_block",
-                        "market_type": "$market_type",
-                    },
-                    "total_value": {"$sum": "$value"},
-                    "total_volume": {"$sum": "$volume"},
-                }
-            },
-            {
-                "$project": {
-                    "time_block": "$_id.time_block",
-                    "market_type": "$_id.market_type",
-                    "acp": {
-                        "$cond": [
-                            {"$gt": ["$total_volume", 0]},
-                            {"$divide": ["$total_value", "$total_volume"]},
-                            0,
-                        ]
-                    },
-                    "total_volume": 1,
-                }
-            },
-        ]
-
-    @staticmethod
-    def _acp_from_aggregate_rows(
-        rows: List[Dict[str, Any]],
-    ) -> Dict[int, Tuple[float, float]]:
-        """Combine DAM/GDAM/HPDAM and RTM per time_block from aggregation rows."""
-        idam_num: Dict[int, float] = defaultdict(float)
-        idam_den: Dict[int, float] = defaultdict(float)
-        rtm_num: Dict[int, float] = defaultdict(float)
-        rtm_den: Dict[int, float] = defaultdict(float)
-
-        for row in rows:
-            tb = row.get("time_block")
-            if tb is None:
-                continue
-            tb = int(tb)
-            mt = row.get("market_type")
-            acp_val = row.get("acp", 0) or 0
-            vol = row.get("total_volume", 0) or 0
-            if mt in ["DAM", "GDAM", "HPDAM"]:
-                idam_num[tb] += acp_val * vol
-                idam_den[tb] += vol
-            elif mt == "RTM":
-                rtm_num[tb] += acp_val * vol
-                rtm_den[tb] += vol
-
-        all_blocks = set(idam_num) | set(rtm_num) | set(idam_den) | set(rtm_den)
-        result: Dict[int, Tuple[float, float]] = {}
-        for tb in all_blocks:
-            idam = idam_num[tb] / idam_den[tb] if idam_den[tb] > 0 else 0.0
-            rtm = rtm_num[tb] / rtm_den[tb] if rtm_den[tb] > 0 else 0.0
-            result[tb] = (float(idam), float(rtm))
-        return result
-
-    async def _fallback_previous_acp(
+    def _fallback_previous_acp(
         self,
         timeblock: int,
         scheduled_at: datetime
@@ -763,7 +407,7 @@ class NewDSMProcessor(BaseProcessor):
         from ..core.database import get_database
         db = get_database()
 
-        previous = await db.exchange_dsm_serve.find_one(
+        previous = db.exchange_dsm_serve.find_one(
             {
                 "time_block": timeblock,
                 "scheduled_at": {"$lt": scheduled_at}
@@ -775,11 +419,11 @@ class NewDSMProcessor(BaseProcessor):
             prev_date = previous.get("scheduled_at")
             if prev_date:
                 # recursive call will itself fallback further if needed
-                return await self._fetch_cerc_weighted_acp(timeblock, prev_date)
+                return self._fetch_cerc_weighted_acp(timeblock, prev_date)
 
         return 0.0, 0.0
     
-    async def _fetch_cerc_weighted_acp(
+    def _fetch_cerc_weighted_acp(
             self,
             timeblock: int,
             scheduled_at: datetime
@@ -928,8 +572,9 @@ class NewDSMProcessor(BaseProcessor):
                 }
             ]
 
-            cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
-            results = await cursor.to_list(length=10000)
+            results = list(
+                db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
+            )
 
             # combine results: compute weighted average across IDAM subtypes and RTM
             idam_num = 0.0
@@ -953,27 +598,329 @@ class NewDSMProcessor(BaseProcessor):
 
             # Fallback if either is missing
             if idam_acp == 0 or rtm_acp == 0:
-                return await self._fallback_previous_acp(timeblock, scheduled_at)
-            logger.debug(
-                "ACP fallback single block %s @ %s: IDAM=%s RTM=%s",
-                timeblock,
-                scheduled_at,
-                idam_acp,
-                rtm_acp,
-            )
+                return self._fallback_previous_acp(timeblock, scheduled_at)
+            print("========================================================")
+            print(f"Fetched CERC‑compliant weighted ACPs for timeblock {timeblock} at {scheduled_at}: IDAM={idam_acp}, RTM={rtm_acp}")
             return float(idam_acp), float(rtm_acp)
+            
+    def _fetch_demand_serve_data(self, timeblock: int, scheduled_at: datetime) -> List[Dict[str, Any]]:
+        """
+        Fetch demand serve data for the specific date and time block.
+        Only records with type "IDF" are included; type "DAF" is excluded.
+        
+        Args:
+            timeblock: Time block number
+            scheduled_at: Scheduled date
+            
+        Returns:
+            List of demand serve data records (type IDF only)
+        """
+        try:
+            from ..repository.demand_serve_repository import demand_serve_repository
+            
+            # Get records for the specific date
+            start_of_day = datetime.combine(scheduled_at.date(), datetime.min.time())
+            end_of_day = start_of_day + timedelta(days=1)
+            
+            logger.debug(f"Fetching demand data for specific date: {start_of_day} to {end_of_day}")
+            demand_data = demand_serve_repository.find_demand_serve_by_date_range(start_of_day, end_of_day)
+            logger.debug(f"Found {len(demand_data)} serve records for date: {scheduled_at.date()}")
+            
+            # Filter for time blocks >= current timeblock
+            filtered_data = []
+            
+            for record in demand_data:
+                record_timeblock = record.get('time_block')
+                record_scheduled_at = record.get('scheduled_at')
+                record_type = record.get('type', 'IDF')
+                
+                # Fetch only IDF type; skip DAF and any other type
+                if record_type != 'IDF':
+                    continue
+                
+                # Skip if no time block or scheduled_at
+                if record_timeblock is None or not record_scheduled_at:
+                    continue
+                
+                # Convert scheduled_at to date for comparison
+                if isinstance(record_scheduled_at, datetime):
+                    record_date = record_scheduled_at.date()
+                else:
+                    record_date = datetime.fromisoformat(str(record_scheduled_at)).date()
+                
+                scheduled_date = scheduled_at.date() if isinstance(scheduled_at, datetime) else scheduled_at
+                
+                # Include records that match the date and timeblock
+                # Process ALL records for future dates, and records >= current timeblock for today
+                if record_date == scheduled_date and record_timeblock >= timeblock:
+                    filtered_data.append(record)
+                elif record_date > scheduled_date:
+                    filtered_data.append(record)
+            
+            logger.debug(f"Found {len(filtered_data)} demand records (type IDF) needing DSM processing for time block >= {timeblock}")
+            
+            return filtered_data
+            
+        except Exception as e:
+            logger.error(f"Error fetching demand serve data: {str(e)}", exc_info=True)
+            return []
+    
+    def _calculate_schedule_from_supply(self, scheduled_at: datetime, timeblock: int) -> Optional[float]:
+        """
+        Calculate schedule_mw from supply_serve collection
+        Filters for central plants (c_s = 'central') and SG records (dc_sg = 'SG')
+        Aggregates sg_beforelosses field from matching records
+        
+        Args:
+            scheduled_at: Scheduled date
+            timeblock: Time block number
+            
+        Returns:
+            float: Aggregated schedule_mw value or None if no data found
+        """
+        try:
+            from ..repository.supply_serve_repository import supply_serve_repository
+            from ..core.database import get_database
+            
+            db = get_database()
+            
+            # MongoDB aggregation pipeline to calculate schedule
+            pipeline = [
+                {
+                    "$match": {
+                        "scheduled_at": scheduled_at,
+                        "time_block": timeblock,
+                        "dc_sg": "SG"
+                    }
+                },
+                {
+                    "$lookup": {
+                        "from": "plant_master",
+                        "localField": "plant_id",
+                        "foreignField": "plant_id",
+                        "as": "plant_info"
+                    }
+                },
+                {
+                    "$unwind": {
+                        "path": "$plant_info",
+                        "preserveNullAndEmptyArrays": False  # Only include records with plant info
+                    }
+                },
+                {
+                    "$match": {
+                        "plant_info.c_s": "central"
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": None,
+                        "total_schedule": {"$sum": "$sg_beforelosses"}
+                    }
+                }
+            ]
+            
+            cursor = supply_serve_repository.serve_collection.aggregate(pipeline)
+            try:
+                results = list(cursor)
+            finally:
+                cursor.close()
+            
+            if results and len(results) > 0:
+                total_schedule = results[0].get('total_schedule', 0)
+                logger.debug(f"Calculated schedule_mw from supply_serve: {total_schedule} for timeblock {timeblock} on {scheduled_at}")
+                return total_schedule if total_schedule and total_schedule > 0 else None
+            else:
+                logger.warning(f"No supply data found for schedule calculation for timeblock {timeblock} on {scheduled_at}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error calculating schedule from supply: {str(e)}", exc_info=True)
+            return None
+    
+    def _batch_update_demand_records_with_dsm(
+        self, 
+        demand_data: List[Dict[str, Any]], 
+        max_dam_mcp: float, 
+        max_rtm_mcp: float, 
+        timeblock: int, 
+        date
+    ) -> int:
+        """
+        Batch update demand records with DSM rate and net DSM amount using new DSM engine
+        
+        Args:
+            demand_data: List of demand serve records to update
+            max_dam_mcp: Maximum DAM MCP across all exchanges
+            max_rtm_mcp: Maximum RTM MCP across all exchanges
+            timeblock: Time block number for logging
+            date: Date for logging
+            
+        Returns:
+            int: Number of records successfully updated
+        """
+        try:
+            from ..repository.demand_serve_repository import demand_serve_repository
+            from libs.models.demand_serve_entity import DemandServeEntity
+            from libs.helpers.new_dsm_calculation import DSMEngine
+            
+            if not demand_data:
+                return 0
+            
+            # Create DSM engine instance
+            dsm_engine = DSMEngine()
+            
+            # Group records by unique key for batch processing
+            records_by_key = {}
+            
+            for demand_record in demand_data:
+                try:
+                    scheduled_at = demand_record.get('scheduled_at')
+                    record_timeblock = demand_record.get('time_block')
+                    record_type = demand_record.get('type', 'IDF')
+                    
+                    if not scheduled_at or record_timeblock is None:
+                        logger.warning("Skipping record without scheduled_at or time_block")
+                        continue
+                    
+                    # Ensure scheduled_at is datetime
+                    if isinstance(scheduled_at, str):
+                        scheduled_at = datetime.fromisoformat(scheduled_at.replace('Z', '+00:00'))
+                    
+                    # Calculate schedule_mw from supply_serve collection
+                    schedule_mw = self._calculate_schedule_from_supply(scheduled_at, record_timeblock)
+                    
+                    # Extract other required fields for DSM calculation
+                    actual_mw = demand_record.get('drawal')
+                    frequency = demand_record.get('frequency')
+                    rr_or_contract = 0  # Default contract rate
+                    
+                    # Validate all required fields - if any is missing, set DSM to None (null)
+                    if not schedule_mw or schedule_mw == 0 or schedule_mw is None:
+                        logger.warning(f"No schedule available for timeblock {record_timeblock} - setting DSM to None")
+                        dsm_rate = None
+                        net_dsm_amount = None
+                    elif not actual_mw or actual_mw == 0 or actual_mw is None:
+                        logger.warning(f"No drawal available for timeblock {record_timeblock} - setting DSM to None")
+                        dsm_rate = None
+                        net_dsm_amount = None
+                    elif not frequency or frequency == 0 or frequency is None:
+                        logger.warning(f"No frequency available for timeblock {record_timeblock} - setting DSM to None")
+                        dsm_rate = None
+                        net_dsm_amount = None
+                    else:
+                        # Calculate DSM using new engine (all required fields are available)
+                        try:
+                            result = dsm_engine.get_dsm_summary(
+                                schedule_mw=schedule_mw,
+                                actual_mw=actual_mw,
+                                frequency=frequency,
+                                acp_dam=max_dam_mcp,
+                                acp_rtm=max_rtm_mcp,
+                                rr_or_contract=rr_or_contract
+                            )
+                            
+                            dsm_rate = result['dsm_rate']
+                            net_dsm_amount = result['net_dsm_amount']
+                            
+                            logger.debug(f"Calculated DSM for timeblock {record_timeblock}: dsm_rate={dsm_rate}, net_dsm_amount={net_dsm_amount}")
+                        except Exception as calc_error:
+                            logger.error(f"Error calculating DSM: {str(calc_error)}")
+                            dsm_rate = None
+                            net_dsm_amount = None
+                    
+                    # Create updated record with DSM data
+                    # If we could not compute a rate/amount, skip this record entirely
+                    if dsm_rate is None or net_dsm_amount is None:
+                        logger.warning(f"Skipping demand record for timeblock {record_timeblock} due to missing DSM values")
+                        continue
 
+                    updated_record = demand_record.copy()
+                    
+                    # Remove MongoDB _id to let it generate new one
+                    if '_id' in updated_record:
+                        del updated_record['_id']
+                    
+                    # Add DSM data
+                    updated_record.update({
+                        "dsm_rate": dsm_rate,
+                        "net_dsm_amount": net_dsm_amount,
+                        "updated_at": datetime.now(),
+                        "updated_flag": "U"
+                    })
+                    
+                    # Create DemandServeEntity
+                    try:
+                        demand_entity = DemandServeEntity(**updated_record)
+                        
+                        # Group by unique key for batch processing
+                        unique_key = (scheduled_at, record_timeblock, record_type)
+                        if unique_key not in records_by_key:
+                            records_by_key[unique_key] = []
+                        records_by_key[unique_key].append(demand_entity)
+                    except Exception as entity_error:
+                        logger.error(f"Error creating DemandServeEntity: {str(entity_error)}")
+                        continue
+                    
+                except Exception as e:
+                    logger.error(f"Error preparing record for DSM update: {str(e)}")
+                    continue
+            
+            if not records_by_key:
+                logger.warning(f"No valid records to update for time block {timeblock} on {date}")
+                return 0
+            
+            # Prepare bulk operations
+            bulk_operations = []
+            
+            for (scheduled_at, record_timeblock, record_type), entities in records_by_key.items():
+                try:
+                    # Use the most recent entity if there are duplicates
+                    entities.sort(key=lambda x: x.updated_at, reverse=True)
+                    entity_to_insert = entities[0]
+                    
+                    # Create filter criteria for this specific record
+                    filter_criteria = {
+                        "scheduled_at": scheduled_at,
+                        "time_block": record_timeblock,
+                        "type": record_type
+                    }
+                    
+                    bulk_operations.append({
+                        "filter": filter_criteria,
+                        "document": entity_to_insert
+                    })
+                    
+                except Exception as key_error:
+                    logger.error(f"Error preparing bulk op for key {scheduled_at}, {record_timeblock}, {record_type}: {str(key_error)}")
+                    continue
+            
+            if not bulk_operations:
+                return 0
+
+            # Execute bulk operations
+            result = demand_serve_repository.bulk_delete_insert_custom(bulk_operations)
+            
+            inserted_count = result.get("inserted_count", 0)
+            logger.info(f"Successfully batch updated {inserted_count} demand records with new DSM data for time block {timeblock} on {date}")
+            return inserted_count
+            
+        except Exception as e:
+            logger.error(f"Error in batch update of demand records with DSM data: {str(e)}", exc_info=True)
+            return 0
+    
     def process_raw_data_to_serve(self, raw_data: List[Dict[str, Any]], metadata: Dict[str, Any], provider_config: Dict[str, Any]) -> bool:
         """
         Implementation of abstract method from BaseProcessor
         Not used for DSM processor as it doesn't process raw data
+        
+        Returns:
+            bool: Always True as this is not applicable for DSM processor
         """
         logger.info("New DSM processor does not process raw data - this method is not applicable")
         return True
 
 
 if __name__ == "__main__":
-    import asyncio
-
     processor = NewDSMProcessor()
-    asyncio.run(processor.execute_cron_job())
+    processor._fetch_demand_serve_data(timeblock=43, scheduled_at=datetime.now())

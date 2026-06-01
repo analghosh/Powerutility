@@ -59,13 +59,11 @@ API Configuration Options:
 """
 
 import asyncio
-import ipaddress
 import json
 import logging
-import defusedxml.ElementTree as ET
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
-from urllib.parse import urlparse
 import csv
 import io
 import base64
@@ -121,7 +119,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         try:
             # Get all enabled API providers
-            provider_response = await self.provider_service.get_all_providers(
+            provider_response = self.provider_service.get_all_providers(
                 ingestion_type=IngestionType.API, enabled=True
             )
             
@@ -145,7 +143,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         start_time = datetime.now()
 
         # Record job start
-        execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self.record_job_start(job_type, job_name, schedule, start_time)
 
         logger.info("Starting API raw data processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
 
@@ -164,7 +162,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
 
                 # Record job completion
                 if execution_id:
-                    await self.record_job_completion(
+                    self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
                         "success", True, execution_id, result
                     )
@@ -235,7 +233,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             # Record job completion
             if execution_id:
                 error_message = None if overall_success else f"Processed {processed_providers}, failed {failed_providers}"
-                await self.record_job_completion(
+                self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     status, overall_success, execution_id, result, error_message
                 )
@@ -257,7 +255,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
 
             # Record job completion with error
             if execution_id:
-                await self.record_job_completion(
+                self.record_job_completion(
                     job_type, job_name, schedule, start_time, end_time, execution_id,
                     "error", False, execution_id, result, str(e)
                 )
@@ -281,7 +279,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.info("Processing provider: %s, data type: %s", provider_code, data_type)
             
             # Get full provider entity for processing
-            full_provider = await self._get_full_provider_entity(provider_code)
+            full_provider = self._get_full_provider_entity(provider_code)
             if not full_provider:
                 logger.error("Could not retrieve full provider entity for: %s", provider_code)
                 return {'success': False, 'error': 'Provider entity not found'}
@@ -291,38 +289,38 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             if not api_config:
                 logger.warning("No API configuration found for provider: %s", provider_code)
                 return {'success': False, 'error': 'No API configuration found in provider metadata'}
-            
+
             # Fetch data from API
             log_id = None
             try:
                 fetch_result = await self._fetch_api_data(api_config, full_provider)
                 api_data = fetch_result.get("data", [])
                 log_id = fetch_result.get("log_id")
-                
+
                 if not api_data:
                     logger.warning("No data fetched from API for provider: %s", provider_code)
                     return {'success': False, 'error': 'No data fetched from API'}
-                
-                logger.info("Successfully fetched %d records from API for provider: %s", 
+
+                logger.info("Successfully fetched %d records from API for provider: %s",
                            len(api_data), provider_code)
-                        
+
             except Exception as api_error:
                 logger.error("Error fetching from API for provider %s: %s", provider_code, str(api_error))
                 return {'success': False, 'error': f'API fetch error: {str(api_error)}'}
-            
+
             # Special handling for weather data type - transpose the data
             if data_type == DataType.WEATHER:
                 api_data = self._transpose_weather_data(api_data, full_provider)
-                logger.info("Transposed weather data for provider: %s, resulting in %d records", 
+                logger.info("Transposed weather data for provider: %s, resulting in %d records",
                            provider_code, len(api_data))
-            
+
             # Validate and map data using base class methods
             validation_result = self.validate_data_schema(api_data, full_provider)
             if not validation_result["success"]:
-                logger.error("Data validation failed for provider %s: %s", 
+                logger.error("Data validation failed for provider %s: %s",
                            provider_code, "; ".join(validation_result["errors"][:3]))
                 return {'success': False, 'error': 'Data validation failed', 'validation_errors': validation_result["errors"]}
-            
+
             # For weather data, transposition already handled field mapping
             # For other data types, apply field mapping
             if data_type == DataType.WEATHER:
@@ -332,10 +330,10 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             else:
                 # Map data to schema for non-weather data
                 mapped_data = self.map_data_to_schema(validation_result["validated_data"], full_provider)
-            
+
             # Store data using raw data service
-            storage_result = await self._store_api_data(mapped_data, full_provider, [log_id] if log_id else None)
-            
+            storage_result = self._store_api_data(mapped_data, full_provider, [log_id] if log_id else None)
+
             # Handle optimization parser limit_values_data (direct insertion)
             limit_values_stored = 0
             if full_provider.metadata and '_parsed_limit_values_data' in full_provider.metadata:
@@ -343,13 +341,13 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 if limit_values_data:
                     try:
                         limit_values_stored = await self._store_limit_values_direct(limit_values_data, full_provider)
-                        logger.info("Stored %d limit_values records directly for provider %s", 
+                        logger.info("Stored %d limit_values records directly for provider %s",
                                    limit_values_stored, provider_code)
                     except Exception as lv_error:
                         logger.error("Failed to store limit_values for provider %s: %s", provider_code, str(lv_error))
-            
+
             if storage_result["success"]:
-                logger.info("Successfully processed provider %s: %d records stored", 
+                logger.info("Successfully processed provider %s: %d records stored",
                            provider_code, storage_result.get("stored_records", 0))
                 return {
                     'success': True,
@@ -368,7 +366,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Unexpected error processing provider %s: %s", provider.code, str(e))
             return {'success': False, 'error': str(e)}
 
-    async def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
+    def _get_full_provider_entity(self, provider_code: str) -> Optional[ProviderEntity]:
         """
         Get full provider entity by code
         
@@ -380,7 +378,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         try:
             # Use provider service to get full provider entity
-            provider_entity = await self.provider_service.get_provider_by_code(provider_code)
+            provider_entity = self.provider_service.get_provider_by_code(provider_code)
             if provider_entity:
                 return provider_entity
             else:
@@ -390,7 +388,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error retrieving provider entity for code %s: %s", provider_code, str(e))
             return None
 
-    async def _store_api_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
+    def _store_api_data(self, data: List[Dict[str, Any]], provider: ProviderEntity, log_ids: Optional[List[str]] = None) -> Dict[str, Any]:
         """
         Store API data using the raw data service
         
@@ -414,7 +412,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids
             
             # Use raw data service to store the data
-            result = await self.raw_data_service.store_raw_data(
+            result = self.raw_data_service.store_raw_data(
                 raw_data=data,
                 provider=provider,
                 additional_metadata=additional_metadata
@@ -461,7 +459,8 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             limit_values_collection_name = getattr(settings, 'MONGODB_LIMIT_VALUES_COLLECTION', 'limit_values')
             
             client = get_mongo_client(mongo_uri, "ingestion_limit_values_direct")
-            collection = client[database_name][limit_values_collection_name]
+            db = client[database_name]
+            collection = db[limit_values_collection_name]
             
             current_time = datetime.now()
             stored_count = 0
@@ -520,9 +519,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                         update_doc["$set"]["inserted_at"] = record.get("inserted_at")
                     
                     # Upsert the record
-                    result = await asyncio.to_thread(
-                        collection.update_one, filter_doc, update_doc, upsert=True
-                    )
+                    result = collection.update_one(filter_doc, update_doc, upsert=True)
                     
                     if result.upserted_id or result.modified_count > 0:
                         stored_count += 1
@@ -543,10 +540,10 @@ class APIRawDataProcessor(BaseRawDataProcessor):
     def _replace_date_placeholders(self, data: Any) -> Any:
         """
         Recursively replace {today} and {tomorrow} placeholders in data
-        
+
         Args:
             data: Data to process (dict, list, string, or other)
-            
+
         Returns:
             Any: Processed data with replacements
         """
@@ -555,32 +552,32 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             today_str = datetime.now().strftime('%d-%m-%Y')
             tomorrow_str = (datetime.now() + timedelta(days=1)).strftime('%d-%m-%Y')
             data = data.replace('{today}', today_str).replace('{tomorrow}', tomorrow_str)
-            
+
             # Handle custom format specifiers if present (e.g. {today:%Y-%m-%d})
             if '{today:' in data or '{tomorrow:' in data:
                 import re
                 def replace_match(match):
                     tag = match.group(1)  # today or tomorrow
                     fmt = match.group(2)  # format string
-                    
+
                     base_date = datetime.now()
                     if tag == 'tomorrow':
                         base_date += timedelta(days=1)
-                    
+
                     return base_date.strftime(fmt)
-                
+
                 # Pattern to match {today:format} or {tomorrow:format}
                 pattern = r'\{(today|tomorrow):([^}]*)\}'
                 data = re.sub(pattern, replace_match, data)
-            
+
             return data
-            
+
         elif isinstance(data, dict):
             return {k: self._replace_date_placeholders(v) for k, v in data.items()}
-            
+
         elif isinstance(data, list):
             return [self._replace_date_placeholders(item) for item in data]
-            
+
         return data
 
     def _extract_api_config_from_provider(self, provider: ProviderEntity) -> Optional[Dict[str, Any]]:
@@ -599,7 +596,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             if not isinstance(metadata, dict):
                 logger.warning("Provider %s metadata is not a dictionary", provider.code)
                 return None
-            
+
             # Extract basic config
             api_url = metadata.get('api_url')
             method = metadata.get('method', 'GET').upper()
@@ -608,12 +605,12 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             data_path = metadata.get('data_path')
             auth_type = metadata.get('auth_type')
             auth_config = metadata.get('auth_config', {})
-            
+
             # Extract and process params
             raw_params = metadata.get('params', {})
             # Support provider-specific dynamic params (Keep existing logic for backward compatibility if needed)
             # But preferred method is now the placeholder replacement
-            
+
             # Existing logic for optimization/rtm (preserves specific behavior)
             parser_type = metadata.get('parser_type', '')
             if parser_type in ['optimization', 'rtm_optimization']:
@@ -622,19 +619,19 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 tomorrow_dash = (datetime.now() + timedelta(days=1)).strftime('%Y-%m-%d')
                 raw_params['start_date'] = raw_params.get('start_date', today_dash)
                 raw_params['end_date'] = raw_params.get('end_date', tomorrow_dash)
-            
+
             # Apply generic placeholder replacement
             params = self._replace_date_placeholders(raw_params)
-            
+
             # Process body
             # Check for body_type (e.g. 'json' or 'form_urlencoded')
             body_type = metadata.get('body_type', 'json')
-            
+
             # Start with body_params if body is not set directly, or use body
             raw_body = metadata.get('body')
             if raw_body is None and 'body_params' in metadata:
                 raw_body = metadata.get('body_params')
-            
+
             # Existing legacy logic for 'Date' in body
             date_type = metadata.get('dateType', 'today')
             if isinstance(raw_body, dict) and 'Date' in raw_body and '{' not in str(raw_body['Date']):
@@ -688,36 +685,6 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error extracting API configuration from provider %s metadata: %s", provider.code, str(e))
             return None
 
-    def _validate_provider_url(self, url: str) -> None:
-        """Reject URLs that could be used for SSRF attacks."""
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            raise ValueError(f"Malformed URL: {url}")
-
-        if parsed.scheme not in ("http", "https"):
-            raise ValueError(f"Disallowed URL scheme '{parsed.scheme}': only http/https are permitted")
-
-        hostname = parsed.hostname
-        if not hostname:
-            raise ValueError("URL has no hostname")
-
-        # Reject bare IP literals that resolve to private/loopback/link-local ranges
-        try:
-            addr = ipaddress.ip_address(hostname)
-            if addr.is_loopback or addr.is_private or addr.is_link_local or addr.is_reserved:
-                raise ValueError(f"Disallowed IP address '{hostname}': private/loopback/link-local ranges are not permitted")
-        except ValueError as exc:
-            # Re-raise if it came from our own check above
-            if "Disallowed" in str(exc):
-                raise
-            # Otherwise hostname is a domain name — check for obvious localhost aliases
-            pass
-
-        lower = hostname.lower()
-        if lower in ("localhost", "ip6-localhost", "ip6-loopback") or lower.endswith(".localhost"):
-            raise ValueError(f"Disallowed hostname '{hostname}': localhost is not permitted")
-
     async def _fetch_api_data(self, api_config: Dict[str, Any], provider: ProviderEntity) -> Dict[str, Any]:
         """
         Fetch data from API endpoint
@@ -732,14 +699,6 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         try:
             # Prepare request parameters
             url = api_config['url']
-
-            # SSRF protection: reject private/loopback/link-local targets
-            try:
-                self._validate_provider_url(url)
-            except ValueError as e:
-                logger.error("SSRF protection blocked request for provider %s: %s", provider.code, str(e))
-                return {"data": [], "log_id": None}
-
             method = api_config['method']
             timeout = api_config['timeout']
             params = api_config.get('params', {})
@@ -823,7 +782,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                                         "attempt": attempt + 1
                                     }
                                 )
-                                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
+                                log_id = await self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
                             except Exception as e:
                                 logger.error("Failed to integration log API response: %s", e)
                             
@@ -1003,24 +962,18 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Invalid JSON response for provider %s: %s", provider.code, str(e))
             return []
 
-    # 50 MB cap for API response bodies — prevents DoS via huge payloads
-    _MAX_RESPONSE_BYTES = 50 * 1024 * 1024
-
     def _parse_xml_response(self, response_text: str, provider: ProviderEntity) -> List[Dict[str, Any]]:
         """
         Parse XML response
-
+        
         Args:
             response_text: XML response text
             provider: Provider entity for context
-
+            
         Returns:
             List[Dict[str, Any]]: Parsed data records
         """
         try:
-            if len(response_text.encode()) > self._MAX_RESPONSE_BYTES:
-                logger.error("XML response too large for provider %s (> %d MB)", provider.code, self._MAX_RESPONSE_BYTES // (1024 * 1024))
-                return []
             root = ET.fromstring(response_text)
             records = []
             
@@ -1036,10 +989,6 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         except ET.ParseError as e:
             logger.error("Invalid XML response for provider %s: %s", provider.code, str(e))
             return []
-        except Exception as e:
-            # Catches defusedxml.DefusedXmlException and related security violations
-            logger.error("Unsafe or malformed XML response for provider %s: %s", provider.code, type(e).__name__)
-            return []
 
     def _parse_csv_response(self, response_text: str, provider: ProviderEntity) -> List[Dict[str, Any]]:
         """
@@ -1053,9 +1002,6 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             List[Dict[str, Any]]: Parsed data records
         """
         try:
-            if len(response_text.encode()) > self._MAX_RESPONSE_BYTES:
-                logger.error("CSV response too large for provider %s (> %d MB)", provider.code, self._MAX_RESPONSE_BYTES // (1024 * 1024))
-                return []
             # Use pandas to parse CSV
             df = pd.read_csv(io.StringIO(response_text))
             return df.to_dict('records')

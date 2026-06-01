@@ -22,8 +22,8 @@ class ExchangeTradeProcessor(BaseProcessor):
         super().__init__()
         self.repository = ExchangeTradeRepository()
         
-        # Note: preload_timeblock_mappings is async and must be called from an async context.
-        # It will be invoked lazily on first use via get_timeblock_by_time_range.
+        # Preload timeblock mappings for better performance using base processor's caching
+        self.preload_timeblock_mappings()
         
         # Initialize job repositories for execution tracking
         from libs.core.job_factory import create_job_data_repository, create_job_detail_repository
@@ -50,7 +50,7 @@ class ExchangeTradeProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
+        execution_id = self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
         if not execution_id:
             logger.error(f"Failed to record job start for {job_type}")
             return {
@@ -94,7 +94,7 @@ class ExchangeTradeProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
             
-            await self._record_job_execution(
+            self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -125,7 +125,7 @@ class ExchangeTradeProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            await self._record_job_execution(
+            self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -227,7 +227,7 @@ class ExchangeTradeProcessor(BaseProcessor):
             success = True
             if exchange_entities:
                 entity_records = [e.model_dump_for_db() for e in exchange_entities]
-                upsert_result = await self.repository.bulk_upsert_exchange_trade_records(entity_records)
+                upsert_result = self.repository.bulk_upsert_exchange_trade_records(entity_records)
                 success = success and upsert_result.get("success", False)
                 if not success:
                     logger.error(f"Bulk upsert exchange trade serve failed: {upsert_result.get('error')}")
@@ -236,7 +236,7 @@ class ExchangeTradeProcessor(BaseProcessor):
 
             if historical_entities:
                 try:
-                    await self.repository.bulk_insert_historical(historical_entities)
+                    self.repository.bulk_insert_historical(historical_entities)
                     logger.info(f"Successfully inserted {len(historical_entities)} exchange trade historical records")
                 except Exception as e:
                     logger.error(f"Bulk insert exchange trade historical failed: {e}")

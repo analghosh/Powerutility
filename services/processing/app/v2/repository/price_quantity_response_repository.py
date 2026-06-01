@@ -23,6 +23,9 @@ class PriceQuantityResponseRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "price_quantity_response"
         logger.info(f"PriceQuantityResponseRepository initialized with collection: {self.collection_name}")
+        self._create_collection_if_not_exists()
+        self._create_indexes()
+    
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.
@@ -90,7 +93,7 @@ class PriceQuantityResponseRepository(GenericRepository):
         """
         try:
             # Get last record for the date
-            last_record = await self.collection.find_one(
+            last_record = self.collection.find_one(
                 {"inserted_date": datebid},
                 sort=[("_id", -1)]  # descending order
             )
@@ -107,7 +110,7 @@ class PriceQuantityResponseRepository(GenericRepository):
                 "cronJob_time": cron_job_time
             }
             cursor = self.collection.find(query)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -182,7 +185,7 @@ class PriceQuantityResponseRepository(GenericRepository):
             ]
             
             cursor = exchange_collection.aggregate(pipeline)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             if not results:
                 logger.info(f"No RTM MCP data found in exchange_serve for date {datebid}, exchange {exchange}")
@@ -222,7 +225,7 @@ class PriceQuantityResponseRepository(GenericRepository):
         """
         try:
             # Get last record for the date
-            last_record = await self.collection.find_one(
+            last_record = self.collection.find_one(
                 {"inserted_date": datebid},
                 sort=[("_id", -1)]  # descending order
             )
@@ -239,7 +242,7 @@ class PriceQuantityResponseRepository(GenericRepository):
                 "cronJob_time": cron_job_time
             }
             cursor = self.collection.find(query)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             # Convert to dictionary keyed by from_period_code
             result_dict = {}
@@ -314,7 +317,7 @@ class PriceQuantityResponseRepository(GenericRepository):
             ]
             
             cursor = exchange_collection.aggregate(pipeline)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             if not results:
                 logger.info(f"No DAM MCP data found in exchange_serve for date {datebid}, exchange {exchange}")

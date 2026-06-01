@@ -68,7 +68,7 @@ class DateUpdate:
         start_time = datetime.now()
         
         # Get job data to retrieve payload and other configuration
-        job_data = await job_data_repository.get_job(job_type)
+        job_data = job_data_repository.get_job(job_type)
         if not job_data:
             logger.error("Job data not found for job_type: %s", job_type)
             return
@@ -83,7 +83,7 @@ class DateUpdate:
             logger.info("Job payload: %s", payload)
         
         # Record job start - pass job_data to avoid redundant DB call
-        execution_id = await self._record_job_start(job_data, start_time)
+        execution_id = self._record_job_start(job_data, start_time)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return
@@ -108,7 +108,7 @@ class DateUpdate:
             logger.info("   - Execution time: %.2f seconds", execution_time)
             
             success = result.get('status') == 'success'
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -129,7 +129,7 @@ class DateUpdate:
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
             error_result = {'error': str(e), 'execution_time': execution_time}
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -148,16 +148,16 @@ class DateUpdate:
 
     async def executeUpdateJob(self, payload: Optional[Dict[str, Any]] = None, manual: bool = False) -> Dict[str, Any]:
         try:
-            await self.update_demand_date()
-            await self.update_supply_date()
-            await self.update_px_bid_table()
-            await self.update_exchange_table()
+            self.update_demand_date()
+            self.update_supply_date()
+            self.update_px_bid_table()
+            self.update_exchange_table()
             return {'status': 'success', 'details': 'All date updates completed successfully'}
         except Exception as e:
             logger.error("Error in executeUpdateJob: %s", str(e))
             return {'status': 'error', 'details': str(e)}
 
-    async def _record_job_start(self, job_data: Dict[str, Any], execution_start: datetime) -> Optional[str]:
+    def _record_job_start(self, job_data: Dict[str, Any], execution_start: datetime) -> Optional[str]:
         """Record job start in audit database and return execution_id"""
         try:        
             # Extract details from the already-fetched job_data
@@ -190,7 +190,7 @@ class DateUpdate:
                 }
             )
             
-            await job_detail_repository.log_execution(job_detail)
+            job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (job_type: %s, execution_id: %s) in audit database", 
                        job_id, job_type, execution_id)
             return execution_id
@@ -199,7 +199,7 @@ class DateUpdate:
             logger.error("Failed to record job start for %s: %s", job_data.get('job_type', 'unknown'), str(e))
             return None
 
-    async def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
+    def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
                               execution_start: datetime, execution_end: datetime,
                               execution_id: str, status: str, success: bool, 
                               result: Optional[Dict[str, Any]] = None,
@@ -210,7 +210,7 @@ class DateUpdate:
             
             # Get the job_id (ObjectId) from job_data collection using job_type
             
-            job_data = await job_data_repository.get_job(job_type)
+            job_data = job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return
@@ -239,36 +239,36 @@ class DateUpdate:
                 }
             )
             
-            await job_detail_repository.log_execution(job_detail)
+            job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job completion for %s (job_type: %s, execution_id: %s, status: %s) in audit database", 
                        job_id, job_type, execution_id, status)
                 
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Failed to record job completion for %s: %s", job_type, str(e))
 
-    async def update_demand_date(self):
+    def update_demand_date(self):
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
 
-        existing_data_count = await self.demand_repo.count({})
+        existing_data_count = self.demand_repo.count({})
 
         create_data = []
 
-        tommorow_data = await self.demand_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tommorow_data = self.demand_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
 
         if tommorow_data:
             logger.info(f"Found {tommorow_data} documents already scheduled for {tommorow.isoformat()}")
         
         else:
-            existing_data = await self.demand_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = self.demand_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             if len(existing_data) > 0:
                 create_data = existing_data
                 for data in create_data:
                     data["schedule_date"] = tommorow.isoformat()
 
-                await self.demand_repo.bulk_upsert(
+                self.demand_repo.bulk_upsert(
                     create_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )
@@ -283,24 +283,24 @@ class DateUpdate:
                     doc_copy.pop('_id', None)  # Remove _id field
                     historical_data.append(doc_copy)
 
-                await self.demand_historical_repo.collection.insert_many(historical_data)
+                self.demand_historical_repo.collection.insert_many(historical_data)
                 logger.info(f"Inserted {len(historical_data)} documents into demand historical collection")
             else:
                 logger.info("No demand documents found to archive")
 
-    async def update_supply_date(self):
+    def update_supply_date(self):
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
-        existing_data_count = await self.supply_repo.count({})
+        existing_data_count = self.supply_repo.count({})
 
-        tommorow_data = await self.supply_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tommorow_data = self.supply_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tommorow_data :
             logger.info(f"Found {tommorow_data} documents already scheduled for {tommorow.isoformat()}")
 
         else:
-            existing_data = await self.supply_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = self.supply_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             logger.info(f"Found {len(existing_data)} documents matching the filter")
 
             if len(existing_data) > 0:
@@ -309,7 +309,7 @@ class DateUpdate:
                 for data in create_data:
                     data["schedule_date"] = tommorow.isoformat()
 
-                await self.supply_repo.bulk_upsert(
+                self.supply_repo.bulk_upsert(
                     create_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )
@@ -324,54 +324,54 @@ class DateUpdate:
                     doc_copy.pop('_id', None)  # Remove _id field
                     historical_data.append(doc_copy)
 
-                await self.supply_historical_repo.collection.insert_many(historical_data)
+                self.supply_historical_repo.collection.insert_many(historical_data)
                 logger.info(f"Inserted {len(historical_data)} documents into supply historical collection")
             else:
                 logger.info("No supply documents found to archive")
 
-    async def update_px_bid_table(self):
+    def update_px_bid_table(self):
         
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
-        existing_data_count = await self.px_bid_table_repo.count({})
+        existing_data_count = self.px_bid_table_repo.count({})
 
-        tomorrow_data = await self.px_bid_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tomorrow_data = self.px_bid_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tomorrow_data:
             logger.info(f"Found {tomorrow_data} documents already scheduled for {tommorow.isoformat()}")
         else:
-            existing_data = await self.px_bid_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = self.px_bid_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             if len(existing_data) > 0:
                 for data in existing_data:
                     data["schedule_date"] = tommorow.isoformat()
 
-                await self.px_bid_table_repo.bulk_upsert(
+                self.px_bid_table_repo.bulk_upsert(
                     existing_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )
             else:
                 logger.info("No px_bid_table documents found to update")
 
-    async def update_exchange_table(self):
+    def update_exchange_table(self):
         
         today = datetime.now().date()
         tommorow = today + timedelta(days=1)
         day_before_yesterday = today - timedelta(days=2)
         day_before_yesterday_str = day_before_yesterday.isoformat()
 
-        existing_data_count = await self.exchange_table_repo.count({})
+        existing_data_count = self.exchange_table_repo.count({})
 
-        tomorrow_data = await self.exchange_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
+        tomorrow_data = self.exchange_table_repo.find_one(filter={"schedule_date": tommorow.isoformat()})
         if tomorrow_data:
             logger.info(f"Found {tomorrow_data} documents already scheduled for {tommorow.isoformat()}")
         else:
-            existing_data = await self.exchange_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
+            existing_data = self.exchange_table_repo.find_many(filter={"schedule_date": {"$lt": day_before_yesterday_str}}, limit=existing_data_count)
             if len(existing_data) > 0:
                 for data in existing_data:
                     data["schedule_date"] = tommorow.isoformat()
     
-                await self.exchange_table_repo.bulk_upsert(
+                self.exchange_table_repo.bulk_upsert(
                     existing_data,
                     filter_criteria=lambda doc: {"_id": doc["_id"]}
                 )

@@ -21,6 +21,9 @@ class RTMSingleBidResponseRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "iex_rtm_single_bid_response"
         logger.info(f"RTMSingleBidResponseRepository initialized with collection: {self.collection_name}")
+        self._create_collection_if_not_exists()
+        self._create_indexes()
+    
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.
@@ -131,7 +134,7 @@ class RTMSingleBidResponseRepository(GenericRepository):
             ]
             
             cursor = self.collection.aggregate(pipeline)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             if not results:
                 logger.info(f"No RTM single bid response found for date {datebid}")

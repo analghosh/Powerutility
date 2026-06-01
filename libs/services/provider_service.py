@@ -84,10 +84,10 @@ class ProviderService:
         """Get the serve collection columns for a data type"""
         return sorted(list(self.serve_collection_columns.get(data_type, set())))
     
-    async def get_provider_by_id(self, provider_id: str) -> Optional[ProviderResponse]:
+    def get_provider_by_id(self, provider_id: str) -> Optional[ProviderResponse]:
         """Get provider by ID"""
         try:
-            provider = await self.repository.get_provider_by_id(provider_id)
+            provider = self.repository.get_provider_by_id(provider_id)
             if not provider:
                 return None
             return self._entity_to_response(provider)
@@ -95,23 +95,23 @@ class ProviderService:
             logger.error("Error getting provider by ID: %s", e)
             raise
     
-    async def get_provider_by_code(self, code: str) -> Optional[ProviderEntity]:
+    def get_provider_by_code(self, code: str) -> Optional[ProviderEntity]:
         """Get provider by code (returns entity for internal use)"""
         try:
-            return await self.repository.get_provider_by_code(code)
+            return self.repository.get_provider_by_code(code)
         except Exception as e:
             logger.error("Error getting provider by code: %s", e)
             raise
     
-    async def get_provider_by_code_and_data_type(self, code: str, data_type: str) -> Optional[ProviderEntity]:
+    def get_provider_by_code_and_data_type(self, code: str, data_type: str) -> Optional[ProviderEntity]:
         """Get provider by code and data type (returns entity for internal use)"""
         try:
-            return await self.repository.get_provider_by_code_and_data_type(code, data_type)
+            return self.repository.get_provider_by_code_and_data_type(code, data_type)
         except Exception as e:
             logger.error("Error getting provider by code and data type: %s", e)
             raise
     
-    async def get_all_providers(
+    def get_all_providers(
         self,
         ingestion_type: Optional[IngestionType] = None,
         data_type: Optional[DataType] = None,
@@ -121,7 +121,7 @@ class ProviderService:
     ) -> ProviderListResponse:
         """Get all providers with optional filters"""
         try:
-            providers = await self.repository.get_all_providers(
+            providers = self.repository.get_all_providers(
                 ingestion_type=ingestion_type,
                 data_type=data_type,
                 enabled=enabled,
@@ -129,7 +129,7 @@ class ProviderService:
                 limit=limit
             )
             
-            total = await self.repository.count_providers(
+            total = self.repository.count_providers(
                 ingestion_type=ingestion_type,
                 data_type=data_type,
                 enabled=enabled
@@ -145,10 +145,10 @@ class ProviderService:
             logger.error("Error getting all providers: %s", e)
             raise
     
-    async def get_enabled_providers(self) -> List[ProviderEntity]:
+    def get_enabled_providers(self) -> List[ProviderEntity]:
         """Get all enabled providers (returns entities for internal use)"""
         try:
-            return await self.repository.get_enabled_providers()
+            return self.repository.get_enabled_providers()
         except Exception as e:
             logger.error("Error getting enabled providers: %s", e)
             raise

@@ -11,7 +11,6 @@ from bson import ObjectId
 from libs.database.base_repository import BaseRepository
 from libs.enum.raw_data_status import RawDataStatus
 from libs.models.raw_data_processing_status_entity import RawDataProcessingStatusEntity
-from libs.repository.raw_data_repository import _safe_match_str
 
 logger = logging.getLogger(__name__)
 
@@ -38,41 +37,41 @@ class RawDataProcessingStatusRepository(BaseRepository):
             self.collection_name = "raw_data_processing_status"
             
         super().__init__(self.collection_name, mongodb_uri, database_name)
-        # Async initialization deferred — indexes created lazily on first async operation
+        self._create_collection_if_not_exists()
+        self._create_indexes()
     
     def _create_indexes(self):
         """Create necessary indexes for efficient querying"""
-        import asyncio
-        async def _do_create():
-            try:
-                # Index for status-based queries (most common for cron jobs)
-                await self.collection.create_index([("status", 1), ("created_at", 1)])
-                
-                # Index for raw_data_id lookups
-                await self.collection.create_index("raw_data_id")
-                
-                # Index for upload_id tracking
-                await self.collection.create_index("upload_id", sparse=True)
-                
-                # Compound index for data_type and provider filtering
-                await self.collection.create_index([("data_type", 1), ("provider_type", 1), ("status", 1)])
-
-                # Compound index on provider_id and status for created_at in ascending order for efficient retrieval of pending records by provider
-                await self.collection.create_index([("provider_id", 1), ("status", 1), ("created_at", 1)])
-                
-                # Index for retry logic
-                await self.collection.create_index([("status", 1), ("retry_count", 1)])
-                
-                logger.info("Raw data processing status indexes created successfully")
-                
-            except Exception as e:
-                logger.error("Error creating processing status indexes: %s", e, exc_info=True)
         try:
-            asyncio.get_running_loop().create_task(_do_create())
-        except RuntimeError:
-            pass
+            # Index for status-based queries (most common for cron jobs)
+            self.collection.create_index([("status", 1), ("created_at", 1)])
+            
+            # Index for raw_data_id lookups
+            self.collection.create_index("raw_data_id")
+            
+            # Index for upload_id tracking
+            self.collection.create_index("upload_id", sparse=True)
+            
+            # Compound index for data_type and provider filtering
+            self.collection.create_index([("data_type", 1), ("provider_type", 1), ("status", 1)])
+
+            # Compound index on provider_id and status for created_at in ascending order for efficient retrieval of pending records by provider
+            self.collection.create_index([("provider_id", 1), ("status", 1), ("created_at", 1)])
+            
+            # Index for retry logic
+            self.collection.create_index([("status", 1), ("retry_count", 1)])
+            
+            self.collection.create_index(
+                [("provider_id", 1), ("status", 1), ("created_at", 1)],
+                name="idx_provider_id_status_created"
+            )
+            
+            logger.info("Raw data processing status indexes created successfully")
+            
+        except Exception as e:
+            logger.error("Error creating processing status indexes: %s", e, exc_info=True)
     
-    async def create_processing_status(self, entity: RawDataProcessingStatusEntity) -> str:
+    def create_processing_status(self, entity: RawDataProcessingStatusEntity) -> str:
         """
         Create processing status record
         
@@ -91,7 +90,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 raise ValueError("raw_data_id is required")
             
             # Insert document
-            result = await self.collection.insert_one(data)
+            result = self.collection.insert_one(data)
             
             logger.info("Created processing status record: %s (raw_data_id: %s, status: %s)", 
                        result.inserted_id, data.get("raw_data_id"), data.get("status"))
@@ -102,7 +101,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error creating processing status record: %s", e, exc_info=True)
             raise
     
-    async def update_status(self, status_id: str, status: RawDataStatus, **kwargs) -> bool:
+    def update_status(self, status_id: str, status: RawDataStatus, **kwargs) -> bool:
         """
         Update processing status
         
@@ -133,7 +132,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             # Add any additional fields
             update_data.update(kwargs)
             
-            result = await self.collection.update_one(
+            result = self.collection.update_one(
                 {"_id": ObjectId(status_id)},
                 {"$set": update_data}
             )
@@ -150,7 +149,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error updating processing status for %s: %s", status_id, e, exc_info=True)
             return False
     
-    async def get_pending_processing(self, data_type: Optional[str] = None, provider_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
+    def get_pending_processing(self, data_type: Optional[str] = None, provider_type: Optional[str] = None, limit: int = 100) -> List[Dict[str, Any]]:
         """
         Get pending processing records for cron jobs
         
@@ -170,12 +169,14 @@ class RawDataProcessingStatusRepository(BaseRepository):
             
             if provider_type:
                 query["provider_type"] = provider_type
-
-            records = await self.collection.find(query).sort("created_at", 1).limit(limit).to_list(length=10000)
-
-            for record in records:
+            
+            cursor = self.collection.find(query).sort("created_at", 1).limit(limit)
+            
+            records = []
+            for record in cursor:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
+                records.append(record)
             
             logger.info("Found %d pending processing records (type: %s, provider: %s)", 
                        len(records), data_type or "all", provider_type or "all")
@@ -186,7 +187,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching pending processing records: %s", e, exc_info=True)
             return []
     
-    async def get_by_raw_data_id(self, raw_data_id: str) -> Optional[Dict[str, Any]]:
+    def get_by_raw_data_id(self, raw_data_id: str) -> Optional[Dict[str, Any]]:
         """
         Get processing status by raw data ID
         
@@ -198,7 +199,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
         """
         try:
             # Note: raw_data_id is stored as a string in this collection
-            record = await self.collection.find_one({"raw_data_id": raw_data_id})
+            record = self.collection.find_one({"raw_data_id": raw_data_id})
             if record:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
@@ -208,7 +209,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching processing status by raw_data_id %s: %s", raw_data_id, e, exc_info=True)
             return None
     
-    async def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
+    def get_by_upload_id(self, upload_id: str) -> Optional[Dict[str, Any]]:
         """
         Get processing status by upload ID
         
@@ -219,7 +220,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             Dict[str, Any]: Processing status record or None
         """
         try:
-            record = await self.collection.find_one({"upload_id": upload_id})
+            record = self.collection.find_one({"upload_id": upload_id})
             if record:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
@@ -229,7 +230,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching processing status by upload_id %s: %s", upload_id, e, exc_info=True)
             return None
     
-    async def get_failed_for_retry(self, max_retries: int = 3, limit: int = 50) -> List[Dict[str, Any]]:
+    def get_failed_for_retry(self, max_retries: int = 3, limit: int = 50) -> List[Dict[str, Any]]:
         """
         Get failed processing records that can be retried
         
@@ -245,12 +246,14 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 "status": RawDataStatus.FAILED.value,
                 "retry_count": {"$lt": max_retries}
             }
-
-            records = await self.collection.find(query).sort("updated_at", 1).limit(limit).to_list(length=10000)
-
-            for record in records:
+            
+            cursor = self.collection.find(query).sort("updated_at", 1).limit(limit)
+            
+            records = []
+            for record in cursor:
                 record["_id"] = str(record["_id"])
                 record["raw_data_id"] = str(record["raw_data_id"])
+                records.append(record)
             
             logger.info("Found %d failed records eligible for retry", len(records))
             return records
@@ -259,7 +262,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error fetching failed records for retry: %s", e, exc_info=True)
             return []
     
-    async def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
+    def get_statistics(self, data_type: Optional[str] = None, provider_type: Optional[str] = None) -> Dict[str, Any]:
         """
         Get processing status statistics
         
@@ -271,15 +274,12 @@ class RawDataProcessingStatusRepository(BaseRepository):
             Dict[str, Any]: Statistics
         """
         try:
-            safe_data_type = _safe_match_str(data_type, "data_type")
-            safe_provider_type = _safe_match_str(provider_type, "provider_type")
-
             match_filter = {}
-            if safe_data_type:
-                match_filter["data_type"] = safe_data_type
-            if safe_provider_type:
-                match_filter["provider_type"] = safe_provider_type
-
+            if data_type:
+                match_filter["data_type"] = data_type
+            if provider_type:
+                match_filter["provider_type"] = provider_type
+            
             pipeline = [
                 {"$match": match_filter},
                 {"$group": {
@@ -287,9 +287,9 @@ class RawDataProcessingStatusRepository(BaseRepository):
                     "count": {"$sum": 1}
                 }}
             ]
-
-            results = await self.collection.aggregate(pipeline).to_list(length=10000)
-
+            
+            results = list(self.collection.aggregate(pipeline))
+            
             stats = {
                 "total": 0,
                 "pending": 0,
@@ -311,7 +311,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
             logger.error("Error getting processing status statistics: %s", e, exc_info=True)
             return {"error": str(e)}
     
-    async def cleanup_old_completed(self, older_than_days: int = 30) -> int:
+    def cleanup_old_completed(self, older_than_days: int = 30) -> int:
         """
         Clean up old completed processing status records
         
@@ -329,7 +329,7 @@ class RawDataProcessingStatusRepository(BaseRepository):
                 "processing_completed_at": {"$lt": cutoff_date}
             }
             
-            result = await self.collection.delete_many(query)
+            result = self.collection.delete_many(query)
             
             logger.info("Cleaned up %d old completed processing status records (older than %d days)", 
                        result.deleted_count, older_than_days)

@@ -6,8 +6,6 @@ Repository for logging API integration calls (request/response)
 import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
-from pymongo import ASCENDING
-from pymongo.errors import OperationFailure
 from .base_repository import GenericRepository
 
 logger = logging.getLogger(__name__)
@@ -18,33 +16,9 @@ class IntegrationApiLogRepository(GenericRepository):
     def __init__(self):
         super().__init__()
         self.collection_name = "iex_integration_apilog"
-        self._indexes_ensured = False
-
-    async def _ensure_indexes(self):
-        if self._indexes_ensured:
-            return
-        try:
-            collection = self.db[self.collection_name]
-            await collection.create_index(
-                [("timestamp", ASCENDING)],
-                expireAfterSeconds=604800,
-                name="ttl_timestamp_7d",
-                background=True
-            )
-            self._indexes_ensured = True
-            logger.info("Created TTL index on %s", self.collection_name)
-        except OperationFailure as e:
-            if e.code == 86:
-                logger.debug("TTL index already exists on %s", self.collection_name)
-                self._indexes_ensured = True
-            else:
-                logger.error("Error creating TTL index on %s: %s", self.collection_name, e)
-        except Exception as e:
-            logger.error("Error ensuring indexes on %s: %s", self.collection_name, e)
 
     async def log_api_call(self, url: str, request_body: Any, headers: Any, response_body: Any, correlation_id: Optional[str] = None, market_type: Optional[str] = None, bid_type: Optional[str] = None, method: Optional[str] = None, delivery_date: Optional[int] = None) -> Any:
         """Log API call details"""
-        await self._ensure_indexes()
         log_entry = {
             "url": url,
             "requestBody": request_body,

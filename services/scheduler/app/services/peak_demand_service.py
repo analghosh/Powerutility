@@ -8,8 +8,8 @@ Includes today's data (up to current block) and archives records older than 31 d
 import logging
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, Optional, Tuple
+from pymongo.collection import Collection
 from pymongo import DESCENDING
-from motor.motor_asyncio import AsyncIOMotorCollection
 
 from services.scheduler.app.repository.demand_serve_repository import DemandServeRepository
 from services.scheduler.app.repository.peak_demand_repository import PeakDemandRepository
@@ -31,7 +31,7 @@ class PeakDemandService:
         now = datetime.now()
         return (now.hour * 4) + (now.minute // 15) + 1
 
-    async def compute_and_store_peak(self) -> Dict[str, Any]:
+    def compute_and_store_peak(self) -> Dict[str, Any]:
         """
         Computes and stores peak demand, backfilling from the last known date
         up to and including today (using current block for today).
@@ -40,11 +40,11 @@ class PeakDemandService:
         today = datetime.now().date()
 
         # Step 1: Archive old records (older than 31 days)
-        archival_result = await self.peak_repo.archive_old_records(RETENTION_DAYS)
+        archival_result = self.peak_repo.archive_old_records(RETENTION_DAYS)
         logger.info("Archival result: %s", archival_result)
 
         # Step 2: Determine start date
-        start_date = await self._get_start_date()
+        start_date = self._get_start_date()
         if not start_date:
             logger.info("No start date found for peak demand computation. Nothing to do.")
             return {"status": "skipped", "message": "No data to process."}
@@ -73,7 +73,7 @@ class PeakDemandService:
                 else self.demand_repo.historical_collection
             )
 
-            processed_for_date, skipped_for_date = await self._compute_and_store_for_date(
+            processed_for_date, skipped_for_date = self._compute_and_store_for_date(
                 current_date, collection_to_use, is_today
             )
 
@@ -94,10 +94,10 @@ class PeakDemandService:
             "archival": archival_result,
         }
 
-    async def _get_start_date(self) -> Optional[date]:
+    def _get_start_date(self) -> Optional[date]:
         """Determines the start date for backfilling peak demand data."""
         # 1. Find the last entry in peak_demand_serve
-        last_peak_record = await self.peak_repo.serve_collection.find_one(
+        last_peak_record = self.peak_repo.serve_collection.find_one(
             sort=[("scheduled_at", DESCENDING)]
         )
 
@@ -108,7 +108,7 @@ class PeakDemandService:
 
         # 2. If peak_demand_serve is empty, check demand_serve_historical
         logger.info("No peak demand records found. Checking historical demand data.")
-        first_historical_record = await self.demand_repo.historical_collection.find_one(
+        first_historical_record = self.demand_repo.historical_collection.find_one(
             {"type": "IDF"}, sort=[("scheduled_at", 1)]
         )
 
@@ -119,7 +119,7 @@ class PeakDemandService:
 
         # 3. If historical is also empty, check live demand_serve
         logger.info("No historical demand records. Checking live demand data.")
-        first_live_record = await self.demand_repo.serve_collection.find_one(
+        first_live_record = self.demand_repo.serve_collection.find_one(
             {"type": "IDF"}, sort=[("scheduled_at", 1)]
         )
         if first_live_record and "scheduled_at" in first_live_record:
@@ -129,8 +129,8 @@ class PeakDemandService:
 
         return None
 
-    async def _compute_and_store_for_date(
-        self, target_date: date, source_collection: AsyncIOMotorCollection, is_today: bool = False
+    def _compute_and_store_for_date(
+        self, target_date: date, source_collection: Collection, is_today: bool = False
     ) -> Tuple[int, int]:
         """
         Computes and stores peak and average demand for a single date,
@@ -185,7 +185,7 @@ class PeakDemandService:
         try:
             cursor = source_collection.aggregate(pipeline)
             try:
-                results = await cursor.to_list(length=10000)
+                results = list(cursor)
             finally:
                 cursor.close()
         except Exception as e:
@@ -227,7 +227,7 @@ class PeakDemandService:
                 min_demand=float(min_value) if min_value is not None else None,
                 total_energy_mu=float(total_energy_mu) if total_energy_mu is not None else None,
             )
-            await self.peak_repo.upsert_by_date(target_date, entity)
+            self.peak_repo.upsert_by_date(target_date, entity)
             logger.info(
                 "Upserted peak for %s: peak=%.2f MW at block %d, avg=%.2f MW",
                 target_date.isoformat(), peak_value, time_block, average_value

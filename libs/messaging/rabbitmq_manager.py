@@ -47,28 +47,19 @@ class RabbitMQManager:
         
     def connect(self) -> bool:
         """Establish connection to RabbitMQ"""
-        # Fail fast if credentials are explicitly blanked out in .env
-        if not config.RABBITMQ_USER or not config.RABBITMQ_PASSWORD:
-            logger.warning(
-                "RabbitMQ credentials are blank. "
-                "Defaults are guest/guest — set RABBITMQ_USER and RABBITMQ_PASSWORD in .env, "
-                "or set USE_RABBITMQ_JOBS=false to disable."
-            )
-            return False
-
         with self._connection_lock:
             if self.is_connected and self.connection and self.connection.is_open:
                 return True
-
+                
             try:
                 logger.info(f"Connecting to RabbitMQ at {config.RABBITMQ_HOST}:{config.RABBITMQ_PORT}...")
                 self.connection = pika.BlockingConnection(self.parameters)
                 self.channel = self.connection.channel()
                 self.is_connected = True
-
+                
                 # Setup exchanges and queues
                 self.setup_topology_on_channel(self.channel)
-
+                
                 logger.info("Successfully connected to RabbitMQ")
                 return True
             except Exception as e:
@@ -78,12 +69,6 @@ class RabbitMQManager:
     
     def create_connection(self):
         """Create a NEW connection (safe for use in threads)"""
-        # Guard: don't attempt if credentials are explicitly blank
-        if not config.RABBITMQ_USER or not config.RABBITMQ_PASSWORD:
-            raise pika.exceptions.ProbableAuthenticationError(
-                "RabbitMQ credentials are blank. Set RABBITMQ_USER/RABBITMQ_PASSWORD in .env "
-                "or USE_RABBITMQ_JOBS=false to disable."
-            )
         return pika.BlockingConnection(self.parameters)
     
     def setup_topology_on_channel(self, channel):

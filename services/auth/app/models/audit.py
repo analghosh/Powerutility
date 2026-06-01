@@ -24,49 +24,43 @@ class AuditLog:
     
     def _ensure_indexes(self):
         """Ensure database indexes for optimal performance"""
-        import asyncio
-        async def _do_create():
-            try:
-                # Index for timestamp-based queries (most common)
-                await self.collection.create_index([("timestamp", -1)], background=True)
-                
-                # Index for user audit lookups
-                await self.collection.create_index("user_id", background=True)
-                
-                # Index for event type filtering
-                await self.collection.create_index("event_type", background=True)
-                
-                # Index for service filtering
-                await self.collection.create_index("service", background=True)
-                
-                # Compound index for user + timestamp queries (very common)
-                await self.collection.create_index([
-                    ("user_id", 1),
-                    ("timestamp", -1)
-                ], background=True)
-                
-                # Compound index for event type + timestamp
-                await self.collection.create_index([
-                    ("event_type", 1),
-                    ("timestamp", -1)
-                ], background=True)
-                
-                # Index for success/failure analysis
-                await self.collection.create_index("success", background=True)
-                
-                # TTL index for audit log retention (optional - 90 days)
-                # await self.collection.create_index("timestamp", expireAfterSeconds=7776000, background=True)
-                
-                logger.debug("✅ Audit collection indexes ensured")
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to create audit indexes: {e}")
         try:
-            asyncio.get_running_loop().create_task(_do_create())
-        except RuntimeError:
-            pass
+            # Index for timestamp-based queries (most common)
+            self.collection.create_index([("timestamp", -1)], background=True)
+            
+            # Index for user audit lookups
+            self.collection.create_index("user_id", background=True)
+            
+            # Index for event type filtering
+            self.collection.create_index("event_type", background=True)
+            
+            # Index for service filtering
+            self.collection.create_index("service", background=True)
+            
+            # Compound index for user + timestamp queries (very common)
+            self.collection.create_index([
+                ("user_id", 1),
+                ("timestamp", -1)
+            ], background=True)
+            
+            # Compound index for event type + timestamp
+            self.collection.create_index([
+                ("event_type", 1),
+                ("timestamp", -1)
+            ], background=True)
+            
+            # Index for success/failure analysis
+            self.collection.create_index("success", background=True)
+            
+            # TTL index for audit log retention (optional - 90 days)
+            # self.collection.create_index("timestamp", expireAfterSeconds=7776000, background=True)
+            
+            logger.debug("✅ Audit collection indexes ensured")
+            
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to create audit indexes: {e}")
     
-    async def log_event(self, 
+    def log_event(self, 
                   event_type: str, 
                   user_id: Optional[str] = None,
                   username: Optional[str] = None,
@@ -108,7 +102,7 @@ class AuditLog:
             # Remove None values
             audit_entry = {k: v for k, v in audit_entry.items() if v is not None}
             
-            result = await self.collection.insert_one(audit_entry)
+            result = self.collection.insert_one(audit_entry)
             return result.inserted_id is not None
             
         except Exception as e:
@@ -116,18 +110,19 @@ class AuditLog:
             print(f"Audit log failed: {e}")
             return False
     
-    async def get_user_audit_logs(self, user_id: str, limit: int = 100) -> list:
+    def get_user_audit_logs(self, user_id: str, limit: int = 100) -> list:
         """Get audit logs for a specific user"""
         try:
-            logs = await self.collection.find(
+            cursor = self.collection.find(
                 {"user_id": user_id},
                 {"_id": 0}  # Exclude _id field
-            ).sort("timestamp", -1).limit(limit).to_list(length=10000)
-            return logs
+            ).sort("timestamp", -1).limit(limit)
+            
+            return list(cursor)
         except Exception:
             return []
     
-    async def get_audit_logs(self, 
+    def get_audit_logs(self, 
                        event_type: Optional[str] = None,
                        start_date: Optional[datetime] = None,
                        end_date: Optional[datetime] = None,
@@ -146,31 +141,33 @@ class AuditLog:
                 if end_date:
                     query["timestamp"]["$lte"] = end_date
             
-            logs = await self.collection.find(
+            cursor = self.collection.find(
                 query,
                 {"_id": 0}  # Exclude _id field
-            ).sort("timestamp", -1).limit(limit).to_list(length=10000)
-            return logs
+            ).sort("timestamp", -1).limit(limit)
+            
+            return list(cursor)
         except Exception:
             return []
     
-    async def get_failed_attempts(self, user_id: str, hours: int = 24) -> list:
+    def get_failed_attempts(self, user_id: str, hours: int = 24) -> list:
         """Get failed login attempts for a user in the last N hours"""
         try:
             from datetime import timedelta
             cutoff_time = datetime.now() - timedelta(hours=hours)
             
-            logs = await self.collection.find({
+            cursor = self.collection.find({
                 "user_id": user_id,
                 "event_type": "login",
                 "success": False,
                 "timestamp": {"$gte": cutoff_time}
-            }).sort("timestamp", -1).to_list(length=10000)
-            return logs
+            }).sort("timestamp", -1)
+            
+            return list(cursor)
         except Exception:
             return []
     
-    async def close(self):
+    def close(self):
         """Close database connection"""
         self.client.close()
 

@@ -498,7 +498,7 @@ class BaseCronManager(ABC):
                         job_id, self.service_name, str(e))
             return False
     
-    async def enable_job(self, job_id: str) -> bool:
+    def enable_job(self, job_id: str) -> bool:
         """Enable a job"""
         try:
             if job_id in self._registered_jobs:
@@ -512,7 +512,7 @@ class BaseCronManager(ABC):
                 # Update database if repository is available
                 if self.job_data_repository:
                     try:
-                        await self.job_data_repository.update_job_enabled_status(job_id, True)
+                        self.job_data_repository.update_job_enabled_status(job_id, True)
                         logger.info("Updated job %s enabled status to True in database", job_id)
                     except Exception as db_error:
                         logger.warning("Failed to update job %s in database: %s", job_id, db_error)
@@ -525,7 +525,7 @@ class BaseCronManager(ABC):
                         job_id, self.service_name, str(e))
             return False
     
-    async def disable_job(self, job_id: str) -> bool:
+    def disable_job(self, job_id: str) -> bool:
         """Disable a job"""
         try:
             if job_id in self._registered_jobs:
@@ -539,7 +539,7 @@ class BaseCronManager(ABC):
                 # Update database if repository is available
                 if self.job_data_repository:
                     try:
-                        await self.job_data_repository.update_job_enabled_status(job_id, False)
+                        self.job_data_repository.update_job_enabled_status(job_id, False)
                         logger.info("Updated job %s enabled status to False in database", job_id)
                     except Exception as db_error:
                         logger.warning("Failed to update job %s in database: %s", job_id, db_error)

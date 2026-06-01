@@ -38,7 +38,7 @@ class DemandScheduleProcessor(BaseProcessor):
         schedule = "*/5 * * * *"  # Every 5 minutes
         start_time = datetime.now()
         
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
             return {"status": "error", "message": "Failed to record job start"}
         
@@ -63,7 +63,7 @@ class DemandScheduleProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id,
                 result["status"], success, result
             )
@@ -73,7 +73,7 @@ class DemandScheduleProcessor(BaseProcessor):
         except Exception as e:
             end_time = datetime.now()
             logger.error(f"Error in demand schedule update job: {e}")
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id,
                 "error", False, {"message": str(e)}, str(e)
             )
@@ -86,7 +86,7 @@ class DemandScheduleProcessor(BaseProcessor):
         Logic to update demand schedule based on aggregated supply data.
         """
         try:
-            supply_map = await self._get_supply_schedule_map(target_dates)
+            supply_map = self._get_supply_schedule_map(target_dates)
             if not supply_map:
                 logger.info("No supply schedule data found for update.")
                 return True
@@ -154,7 +154,7 @@ class DemandScheduleProcessor(BaseProcessor):
             logger.error(f"Error updating demand schedule logic: {e}")
             return False
     
-    async def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
+    def _get_supply_schedule_map(self, raw_data: Any) -> Dict[Any, Dict[int, Dict[str, float]]]:
         """Fetch supply schedule data for the dates in raw_data (list of dicts or list of dates)"""
         try:
             unique_dates = set()
@@ -189,7 +189,7 @@ class DemandScheduleProcessor(BaseProcessor):
             start_date = datetime.combine(sorted_dates[0], datetime.min.time())
             end_date = datetime.combine(sorted_dates[-1] + timedelta(days=1), datetime.min.time())
             
-            aggregated_schedule = await self.supply_repository.aggregate_supply_schedule(start_date, end_date)
+            aggregated_schedule = self.supply_repository.aggregate_supply_schedule(start_date, end_date)
             
             schedule_map = {}
             for item in aggregated_schedule:

@@ -56,7 +56,6 @@ class UserResponse(BaseModel):
     email: Optional[str] = Field(None, description="Email address")
     is_active: bool = Field(..., description="Account active status")
     is_verified: bool = Field(..., description="Email verification status")
-    is_mfa_enabled: bool = Field(False, description="Whether MFA is enabled for this account")
     roles: List[str] = Field(default=[], description="User roles")
     permissions: List[str] = Field(default=[], description="User permissions")
     created_at: datetime = Field(..., description="Account creation time")

@@ -5,29 +5,15 @@ try:
 except ImportError:
     from pydantic import BaseSettings
 
-from pydantic import model_validator
-
-
 class RabbitMQConfig(BaseSettings):
     """Configuration settings for RabbitMQ connection and features"""
-
-    # Connection details — defaults to RabbitMQ's built-in guest/guest user.
-    # Override in .env: RABBITMQ_USER=myuser, RABBITMQ_PASSWORD=mypass
-    # If left blank in .env they fall back to guest/guest automatically.
-    RABBITMQ_HOST: str = "127.0.0.1"
-    RABBITMQ_PORT: int = 5672
-    RABBITMQ_USER: str = "guest"
-    RABBITMQ_PASSWORD: str = "guest"
-    RABBITMQ_VHOST: str = "/"
-
-    @model_validator(mode="after")
-    def _coerce_blank_credentials(self) -> "RabbitMQConfig":
-        """Fall back to guest/guest if credentials are blank in .env"""
-        if not self.RABBITMQ_USER or not self.RABBITMQ_USER.strip():
-            self.RABBITMQ_USER = "guest"
-        if not self.RABBITMQ_PASSWORD or not self.RABBITMQ_PASSWORD.strip():
-            self.RABBITMQ_PASSWORD = "guest"
-        return self
+    
+    # Connection details
+    RABBITMQ_HOST: str = os.getenv("RABBITMQ_HOST", "127.0.0.1")
+    RABBITMQ_PORT: int = int(os.getenv("RABBITMQ_PORT", "5672"))
+    RABBITMQ_USER: str = os.getenv("RABBITMQ_USER", "guest")
+    RABBITMQ_PASSWORD: str = os.getenv("RABBITMQ_PASSWORD", "guest")
+    RABBITMQ_VHOST: str = os.getenv("RABBITMQ_VHOST", "/")
     
     # Feature flags
     USE_RABBITMQ_AUDIT: bool = os.getenv("USE_RABBITMQ_AUDIT", "false").lower() == "true"

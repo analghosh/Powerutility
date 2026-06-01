@@ -70,7 +70,7 @@ async def list_users(
         user_repo = UserRepository()
         
         # Get users with filters
-        users = await user_repo.get_users_with_pagination(skip=skip, limit=limit, role_filter=role, is_active_filter=is_active)
+        users = user_repo.get_users_with_pagination(skip=skip, limit=limit, role_filter=role, is_active_filter=is_active)
         
         # Log user list access with secure audit logging
         client_ip = request.client.host if request.client else None
@@ -137,13 +137,13 @@ async def create_user(
         user_repo = UserRepository()
         
         # Check if user already exists
-        existing_user = await user_repo.get_user_by_username(user_data.username)
+        existing_user = user_repo.get_user_by_username(user_data.username)
         if existing_user:
             raise HTTPException(status_code=400, detail="Username already exists")
         
         # Check email uniqueness only if email is provided
         if user_data.email:
-            existing_email = await user_repo.get_user_by_email(user_data.email)
+            existing_email = user_repo.get_user_by_email(user_data.email)
             if existing_email:
                 raise HTTPException(status_code=400, detail="Email already exists")
         
@@ -154,7 +154,7 @@ async def create_user(
             first_name = user_data.profile.get("first_name", "")
             last_name = user_data.profile.get("last_name", "")
         # Create user with simple defaults
-        user = await user_repo.create_user(
+        user = user_repo.create_user(
             username=user_data.username,
             email=user_data.email or "",  # Empty string if no email provided
             password=user_data.password,
@@ -230,7 +230,7 @@ async def get_user(
         from ....repository.user_repository import UserRepository
         user_repo = UserRepository()
         
-        user: Optional[UserDTO] = await user_repo.get_user_by_id(user_id)
+        user: Optional[UserDTO] = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
@@ -266,34 +266,25 @@ async def update_user(
         current_user_id = current_user.user_id
         # Check if user exists
         user = user_repo.get_user_by_id(user_id)
-        if not await user_repo.get_user_by_id(user_id): # Await the call
-            raise HTTPException(status_code=404, detail="User not found")
-        user = await user_repo.get_user_by_id(user_id) # Re-fetch after check
-        if not user: # Should not happen if previous check passed, but for type safety
+        if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Determine whether this is a self-update
-        is_self_update = (user_id == current_user_id)
-
         # Update user
         update_data = {}
         if user_data.username is not None:
             update_data['username'] = user_data.username
         if user_data.email is not None:
             update_data['email'] = user_data.email
+        if user_data.roles is not None:
+            update_data['roles'] = user_data.roles
+        if user_data.permissions is not None:
+            update_data['permissions'] = user_data.permissions
         if user_data.profile is not None:
             update_data['profile'] = user_data.profile
-
-        # Privileged fields: only allow if caller is NOT updating their own account
-        if not is_self_update:
-            if user_data.roles is not None:
-                update_data['roles'] = user_data.roles
-            if user_data.permissions is not None:
-                update_data['permissions'] = user_data.permissions
-            if user_data.is_active is not None:
-                update_data['is_active'] = user_data.is_active
-            if user_data.is_verified is not None:
-                update_data['is_verified'] = user_data.is_verified
+        if user_data.is_active is not None:
+            update_data['is_active'] = user_data.is_active
+        if user_data.is_verified is not None:
+            update_data['is_verified'] = user_data.is_verified
 
         # Track role changes for logging
         user_roles = set(user.roles)
@@ -322,11 +313,11 @@ async def update_user(
                 )
         
         success = user_repo.update_user(user_id, update_data, modified_by=current_user_id)
-        if not await user_repo.update_user(user_id, update_data, modified_by=current_user_id): # Await the call
+        if not success:
             raise HTTPException(status_code=500, detail="Failed to update user")
         
         # Get updated user
-        updated_user = await user_repo.get_user_by_id(user_id)
+        updated_user = user_repo.get_user_by_id(user_id)
         
         return UserResponse(
             id=str(updated_user.id),
@@ -348,9 +339,8 @@ async def update_user(
 @router.delete("/{user_id}")
 async def delete_user(
     user_id: str,
-    request: Request,
     current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
 ):
     """Delete user by ID"""
     try:
@@ -358,10 +348,10 @@ async def delete_user(
         user_repo = UserRepository()
         
         # Check if user exists
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
-
+        
         # Delete user
         success = user_repo.delete_user(user_id)
         
@@ -371,7 +361,6 @@ async def delete_user(
         audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
-            client_ip=request.client.host if request.client else None,
             action="delete",
             message=f"Admin {current_user.user_id} deleted user {user.username}",
             target_user_id=user_id,
@@ -390,7 +379,6 @@ async def delete_user(
 async def assign_roles_to_user(
     user_id: str,
     role_data: RoleAssignmentRequest,
-    request: Request,
     current_user: UserPrincipal = Depends(get_current_user),
     audit_logger: AuditLogger = Depends(get_audit_logger)
 ):
@@ -400,17 +388,16 @@ async def assign_roles_to_user(
         user_repo = UserRepository()
         
         # Check if user exists
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
 
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
-        # Update user roles (now async)
-        success = await user_repo.update_user(user_id, {"roles": role_data.roles})
-        audit_logger.log_user_action( # audit_logger methods are sync (do not await)
+        # Update user roles
+        success = user_repo.update_user(user_id, {"roles": role_data.roles})
+        audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
-            client_ip=request.client.host if request.client else None,
             action="assign_roles",
             message=f"Admin {current_user.user_id} updated roles for user {user.username}",
             target_user_id=user_id,
@@ -441,14 +428,14 @@ async def get_user_roles(
         user_repo = UserRepository()
         role_repo = RoleRepository()
         
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Get detailed role information
         role_details = []
         for role_name in user.roles:
-            role = await role_repo.get_role_by_name(role_name)
+            role = role_repo.get_role_by_name(role_name)
             if role:
                 role_details.append({
                     "id": role.id,
@@ -490,26 +477,26 @@ async def get_user_accessible_menus(
         menu_repo = MenuRepository()
         role_repo = RoleRepository()
         
-        user = await user_repo.get_user_by_id(user_id)
+        user = user_repo.get_user_by_id(user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Get all accessible menus based on user roles
         accessible_menus = []
         menu_permissions_map = {}
-
+        
         # Get role IDs
         role_ids = []
         for role_name in user.roles:
-            role = await role_repo.get_role_by_name(role_name)
+            role = role_repo.get_role_by_name(role_name)
             if role:
                 role_ids.append(role.id)
         
         # Get menu permissions for all roles
         for role_id in role_ids:
-            menu_roles = await menu_role_repo.get_menu_roles_by_role_id(role_id)
+            menu_roles = menu_role_repo.get_menu_roles_by_role_id(role_id)
             for menu_role in menu_roles:
-                menu = await menu_repo.get_menu_by_id(menu_role.menu_id)
+                menu = menu_repo.get_menu_by_id(menu_role.menu_id)
                 if menu:
                     if menu.id not in menu_permissions_map:
                         menu_permissions_map[menu.id] = {
@@ -551,3 +538,4 @@ async def get_user_accessible_menus(
 # - GET /roles/{role_id}/menus → See what menus are assigned to specific roles
 #
 # Permissions are automatically calculated and don't need a separate endpoint.
+

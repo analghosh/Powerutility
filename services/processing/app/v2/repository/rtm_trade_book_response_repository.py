@@ -21,6 +21,9 @@ class RTMTradeBookResponseRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "rtm_trade_book_response"
         logger.info(f"RTMTradeBookResponseRepository initialized with collection: {self.collection_name}")
+        self._create_collection_if_not_exists()
+        self._create_indexes()
+    
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.
@@ -87,7 +90,7 @@ class RTMTradeBookResponseRepository(GenericRepository):
         try:
             query = {"schedule_date": datebid}
             cursor = self.collection.find(query)
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:

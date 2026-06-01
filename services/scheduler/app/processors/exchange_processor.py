@@ -5,7 +5,7 @@ Exchange data processor for handling exchange data processing logic.
 import logging
 import uuid
 from datetime import datetime, timedelta, date
-from typing import Dict, List, Any, Optional, Tuple
+from typing import Dict, List, Any, Optional
 from enum import Enum
 
 from .base_processor import BaseProcessor
@@ -34,6 +34,9 @@ class ExchangeProcessor(BaseProcessor):
         super().__init__()
         self.repository = ExchangeRepository()
         
+        # Preload timeblock mappings for better performance using base processor's caching
+        self.preload_timeblock_mappings()
+        
         # Initialize job repositories for execution tracking
         from libs.core.job_factory import create_job_data_repository, create_job_detail_repository
         from ..core.config import settings
@@ -59,7 +62,7 @@ class ExchangeProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
+        execution_id = self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -103,7 +106,7 @@ class ExchangeProcessor(BaseProcessor):
                 "trigger_details": trigger_res
             }
             
-            await self._record_job_execution(
+            self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -134,7 +137,7 @@ class ExchangeProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            await self._record_job_execution(
+            self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,
@@ -182,7 +185,7 @@ class ExchangeProcessor(BaseProcessor):
                 if self._is_summary_record(item): continue
 
                 time_block_val = item.get("Time Block") or item.get("time_block") or item.get("timeblock") or ""
-                tb = await self._process_timeblock(time_block_val) # cached
+                tb = self._process_timeblock(time_block_val) # cached
                 
                 date_val = item.get("Date") or item.get("date") or item.get("scheduled_at")
                 if isinstance(date_val, str):
@@ -218,9 +221,9 @@ class ExchangeProcessor(BaseProcessor):
                     try:
                         cursor = self.repository.serve_collection.find(query)
                         try:
-                            found = await cursor.to_list(length=10000)
+                            found = list(cursor)
                         finally:
-                            await cursor.close()
+                            cursor.close()
                         total_found += len(found)
                         for rec in found:
                              s_at = rec.get("scheduled_at")
@@ -232,12 +235,12 @@ class ExchangeProcessor(BaseProcessor):
                 logger.info(f"Bulk fetched {total_found} existing exchange records.")
 
             # Process raw data into exchange entities
-            exchange_entities, historical_entities = await self._build_exchange_entities_with_mapping_and_routing(
+            exchange_entities, historical_entities = self._build_exchange_entities_with_mapping_and_routing(
                 raw_data, metadata, provider_config, market_type, px_name, existing_records_map
             )
             
             # Persist entities
-            return await self._persist_exchange_entities_with_routing(exchange_entities, historical_entities, provider_config)
+            return self._persist_exchange_entities_with_routing(exchange_entities, historical_entities, provider_config)
 
         except Exception as e:
             logger.error("Error processing raw data to serve: %s", str(e), exc_info=True)
@@ -305,7 +308,7 @@ class ExchangeProcessor(BaseProcessor):
         
         return px_name
     
-    async def _build_exchange_entities_with_mapping(self, raw_data: List[Dict[str, Any]], metadata: Dict[str, Any],
+    def _build_exchange_entities_with_mapping(self, raw_data: List[Dict[str, Any]], metadata: Dict[str, Any], 
                                              provider_config: Dict[str, Any], market_type: str) -> List[ExchangeServeEntity]:
         """Build exchange entities using provider mapping configuration"""
         exchange_entities = []
@@ -330,7 +333,7 @@ class ExchangeProcessor(BaseProcessor):
                     continue
                 
                 # Process time block with enhanced validation
-                time_block = await self._process_timeblock(item.get("Time Block", ""))
+                time_block = self._process_timeblock(item.get("Time Block", ""))
                 if time_block is None:
                     continue
 
@@ -340,20 +343,17 @@ class ExchangeProcessor(BaseProcessor):
                     continue
 
                 # Determine updated flag based on existing record and data changes
-                updated_flag = await self._determine_updated_flag_with_mapping(
-                    scheduled_date, time_block, market_type, item, mapping_config
-                )
+                updated_flag = self._determine_updated_flag_with_mapping(scheduled_date, time_block, market_type, item, mapping_config)
                 
                 # Only create entity if we need to upsert (skip if no changes needed)
                 if updated_flag is not None:
-                    exchange_entity = await self._build_exchange_record_with_mapping(
+                    exchange_entity = self._build_exchange_record_with_mapping(
                         raw_data=item,
                         time_block=time_block,
                         metadata=metadata,
                         provider_config=provider_config,
                         mapping_config=mapping_config,
-                        updated_flag=updated_flag,
-                        market_type=market_type
+                        updated_flag=updated_flag
                     )
                     exchange_entities.append(exchange_entity)
 
@@ -364,14 +364,14 @@ class ExchangeProcessor(BaseProcessor):
 
         return exchange_entities
     
-    async def _build_exchange_entities_with_mapping_and_routing(
+    def _build_exchange_entities_with_mapping_and_routing(
         self, 
         raw_data: List[Dict[str, Any]], 
         metadata: Dict[str, Any], 
         provider_config: Dict[str, Any], 
         market_type: str,
         px_name: str,
-        existing_records_map: Optional[Dict[Tuple[Any, ...], Any]] = None
+        existing_records_map: Dict[tuple, Any] = None
     ) -> tuple[List[ExchangeServeEntity], List[ExchangeHistoricalEntity]]:
         """Build exchange entities using provider mapping configuration with date-based routing"""
         exchange_entities = []
@@ -399,7 +399,7 @@ class ExchangeProcessor(BaseProcessor):
                 # Process time block with enhanced validation
                 # Support both "Time Block" and "time_block" (and "timeblock") keys
                 time_block_val = item.get("Time Block") or item.get("time_block") or item.get("timeblock") or ""
-                time_block = await self._process_timeblock(time_block_val)
+                time_block = self._process_timeblock(time_block_val)
                 if time_block is None:
                     continue
 
@@ -453,11 +453,9 @@ class ExchangeProcessor(BaseProcessor):
                     # Yesterday - both serve and historical
                     logger.debug(f"Routing exchange record to both serve and historical: {record_date}")
                     # Process for serve
-                    updated_flag = await self._determine_updated_flag_with_mapping(
-                        scheduled_date, time_block, market_type, item, mapping_config, existing_record
-                    )
+                    updated_flag = self._determine_updated_flag_with_mapping(scheduled_date, time_block, market_type, item, mapping_config, existing_record)
                     if updated_flag is not None:
-                        exchange_entity = await self._build_exchange_record_with_mapping(
+                        exchange_entity = self._build_exchange_record_with_mapping(
                             raw_data=item,
                             time_block=time_block,
                             metadata=metadata,
@@ -484,11 +482,9 @@ class ExchangeProcessor(BaseProcessor):
                 else:
                     # Today or tomorrow - serve only
                     logger.debug(f"Routing exchange record to serve only: {record_date}")
-                    updated_flag = await self._determine_updated_flag_with_mapping(
-                        scheduled_date, time_block, market_type, item, mapping_config, existing_record
-                    )
+                    updated_flag = self._determine_updated_flag_with_mapping(scheduled_date, time_block, market_type, item, mapping_config, existing_record)
                     if updated_flag is not None:
-                        exchange_entity = await self._build_exchange_record_with_mapping(
+                        exchange_entity = self._build_exchange_record_with_mapping(
                             raw_data=item,
                             time_block=time_block,
                             metadata=metadata,
@@ -582,48 +578,54 @@ class ExchangeProcessor(BaseProcessor):
 
         return False
     
-    async def _process_timeblock(self, time_block_input: Any) -> Optional[int]:
+    def _process_timeblock(self, time_block_input: Any) -> Optional[int]:
         """Process timeblock with comprehensive validation and error handling"""
+        # Handle integer input directly
         if isinstance(time_block_input, int):
             if self._is_valid_timeblock(time_block_input):
                 return time_block_input
             logger.error("Invalid integer timeblock: %d", time_block_input)
             return None
 
+        # Handle string input
         if not time_block_input or not isinstance(time_block_input, str):
             logger.error("Invalid timeblock input: %s (type: %s)", time_block_input, type(time_block_input))
             return None
-
+        
+        # Clean the input
         time_block_str = time_block_input.strip()
-
+        
         if not time_block_str:
             logger.warning("Empty timeblock string")
             return None
-
-        time_block = await self._get_timeblock_number(time_block_str)
-
+        
+        # Try primary lookup first
+        time_block = self._get_timeblock_number(time_block_str)
+        
+        # If primary fails, try alternative parsing
         if time_block == 0:
-            time_block = await self._parse_timeblock_alternative(time_block_str)
-
+            time_block = self._parse_timeblock_alternative(time_block_str)
+        
+        # Final validation
         if not self._is_valid_timeblock(time_block):
-            logger.error("Invalid timeblock '%s' -> %d (must be %d-%d)",
-                         time_block_str, time_block, MIN_TIMEBLOCK, MAX_TIMEBLOCK)
+            logger.error("Invalid timeblock '%s' -> %d (must be %d-%d)", 
+                        time_block_str, time_block, MIN_TIMEBLOCK, MAX_TIMEBLOCK)
             return None
-
+        
         return time_block
-
-    async def _parse_timeblock_alternative(self, time_block_str: str) -> int:
+    
+    def _parse_timeblock_alternative(self, time_block_str: str) -> int:
         """Alternative parsing for time ranges like '00:00-00:15'"""
         if "-" not in time_block_str:
             return 0
-
+        
         try:
             time_parts = time_block_str.split("-", 1)
             if len(time_parts) != 2:
                 return 0
-
+            
             start_time, end_time = time_parts[0].strip(), time_parts[1].strip()
-            timeblock_data = await self.get_timeblock_by_time_range(start_time, end_time)
+            timeblock_data = self.get_timeblock_by_time_range(start_time, end_time)
             return timeblock_data.get("timeblock", 0) if timeblock_data else 0
         except Exception as e:
             logger.error("Error parsing timeblock range '%s': %s", time_block_str, str(e))
@@ -633,7 +635,7 @@ class ExchangeProcessor(BaseProcessor):
         """Validate timeblock is within valid range"""
         return isinstance(time_block, int) and MIN_TIMEBLOCK <= time_block <= MAX_TIMEBLOCK
     
-    async def _determine_updated_flag_with_mapping(
+    def _determine_updated_flag_with_mapping(
         self, 
         scheduled_date: datetime, 
         time_block: int, 
@@ -647,9 +649,7 @@ class ExchangeProcessor(BaseProcessor):
         """
         # Fallback query if not provided provided (e.g. legacy calls)
         if existing_record is None:
-            existing_record = await self.repository.find_by_schedule_timeblock_market(
-                scheduled_date, time_block, market_type
-            )
+             existing_record = self.repository.find_by_schedule_timeblock_market(scheduled_date, time_block, market_type)
         
         if existing_record:
             # Check if data has changed using provider mapping
@@ -699,7 +699,7 @@ class ExchangeProcessor(BaseProcessor):
             new_value = self._convert_value_by_type(new_raw_value, field_type)
             
             # Compare values with appropriate tolerance
-            if not self._compare_values_with_tolerance(existing_value, new_value, field_type, serve_field):
+            if not self._compare_values_with_tolerance(existing_value, new_value, field_type):
                 logger.debug("Field '%s' changed: %s -> %s (provider_field: %s)", 
                            serve_field, existing_value, new_value, provider_field)
                 return True
@@ -725,14 +725,14 @@ class ExchangeProcessor(BaseProcessor):
         else:
             return value
     
-    def _compare_values_with_tolerance(self, existing_value: Any, new_value: Any, field_type: str, serve_field: str = "") -> bool:
+    def _compare_values_with_tolerance(self, existing_value: Any, new_value: Any, field_type: str) -> bool:
         """Compare values with appropriate tolerance based on field type"""
         try:
             if field_type == "float":
                 existing_float = float(existing_value or 0)
                 new_float = float(new_value or 0)
                 # Use different tolerances for price vs volume fields
-                if "price" in serve_field.lower() or "mcp" in serve_field.lower() or "acp" in serve_field.lower():
+                if "price" in str(existing_value).lower() or "mcp" in str(existing_value).lower() or "acp" in str(existing_value).lower():
                     tolerance = PRICE_COMPARISON_TOLERANCE
                 else:
                     tolerance = FLOAT_COMPARISON_TOLERANCE
@@ -760,7 +760,7 @@ class ExchangeProcessor(BaseProcessor):
             logger.warning("Error comparing values: %s", str(e))
             return False
     
-    async def _persist_exchange_entities(self, exchange_entities: List[ExchangeServeEntity], 
+    def _persist_exchange_entities(self, exchange_entities: List[ExchangeServeEntity], 
                                   provider_config: Dict[str, Any]) -> bool:
         """Persist exchange entities with atomic upsert operations"""
         if not exchange_entities:
@@ -775,7 +775,7 @@ class ExchangeProcessor(BaseProcessor):
                 return False
             
             # Perform atomic upsert with transaction safety
-            upsert_result = await self.repository.bulk_upsert_exchange_records(entity_records)
+            upsert_result = self.repository.bulk_upsert_exchange_records(entity_records)
             
             if upsert_result.get("success"):
                 self._log_upsert_results(upsert_result)
@@ -823,10 +823,10 @@ class ExchangeProcessor(BaseProcessor):
         logger.info("Atomically processed %d exchange serve entities (%d inserted, %d replaced)", 
                    total_operations, result.get("inserted_count", 0), result.get("replaced_count", 0))
     
-    async def _build_exchange_record_with_mapping(self, raw_data: Dict[str, Any], time_block: int, 
+    def _build_exchange_record_with_mapping(self, raw_data: Dict[str, Any], time_block: int, 
                                            metadata: Dict[str, Any], provider_config: Dict[str, Any],
                                            mapping_config: Dict[str, Dict[str, Any]], updated_flag: UpdatedFlag,
-                                           market_type: Optional[str] = None, px_name: Optional[str] = None) -> ExchangeServeEntity:
+                                           market_type: str = None, px_name: str = None) -> ExchangeServeEntity:
         """
         Build exchange record entity using provider mapping configuration
         
@@ -864,12 +864,10 @@ class ExchangeProcessor(BaseProcessor):
         # If updating, fetch existing record and increment (handles migration: 0 -> 1 for old records)
         if updated_flag in [UpdatedFlag.UPDATED, UpdatedFlag.OLD, UpdatedFlag.REPLACED]:
             scheduled_date = raw_data.get("Date")
-            if not isinstance(scheduled_date, datetime):
-                raise ValueError("Invalid or missing Date in raw_data")
             # market_type is passed as argument now
             if not market_type:
                 market_type = self._extract_market_type(provider_config)
-            existing_record = await self.repository.find_by_schedule_timeblock_market(
+            existing_record = self.repository.find_by_schedule_timeblock_market(
                 scheduled_date, time_block, market_type
             )
             if existing_record:
@@ -975,7 +973,7 @@ class ExchangeProcessor(BaseProcessor):
     def _build_exchange_historical_entity_with_mapping(self, raw_data: Dict[str, Any], time_block: int, 
                                                       metadata: Dict[str, Any], provider_config: Dict[str, Any],
                                                       mapping_config: Dict[str, Dict[str, Any]],
-                                                      market_type: Optional[str] = None, px_name: Optional[str] = None) -> Optional[ExchangeHistoricalEntity]:
+                                                      market_type: str = None, px_name: str = None) -> Optional[ExchangeHistoricalEntity]:
         """
         Build exchange historical entity using provider mapping configuration
         
@@ -1019,15 +1017,7 @@ class ExchangeProcessor(BaseProcessor):
             mapped_raw_data["updated_at"] = current_time
             mapped_raw_data["created_at"] = current_time
             mapped_raw_data["timestamp"] = current_time
-
-            # Ensure scheduled_at is present (raw data uses "Date" or "date")
-            if "scheduled_at" not in mapped_raw_data:
-                date_val = raw_data.get("Date") or raw_data.get("date") or raw_data.get("scheduled_at")
-                if isinstance(date_val, datetime):
-                    mapped_raw_data["scheduled_at"] = date_val.date()
-                elif isinstance(date_val, date):
-                    mapped_raw_data["scheduled_at"] = date_val
-
+            
             # Create historical entity from mapped data
             historical_entity = ExchangeHistoricalEntity(**mapped_raw_data)
             
@@ -1042,7 +1032,7 @@ class ExchangeProcessor(BaseProcessor):
             logger.error("Error building exchange historical entity: %s", str(e))
             return None
     
-    async def _persist_exchange_entities_with_routing(self, exchange_entities: List[ExchangeServeEntity], 
+    def _persist_exchange_entities_with_routing(self, exchange_entities: List[ExchangeServeEntity], 
                                                historical_entities: List[ExchangeHistoricalEntity], 
                                                provider_config: Dict[str, Any]) -> bool:
         """Persist exchange entities with atomic upsert operations and historical routing"""
@@ -1056,7 +1046,7 @@ class ExchangeProcessor(BaseProcessor):
                 entity_records = self._prepare_entity_records(exchange_entities, provider_config)
                 if entity_records:
                     # Perform atomic upsert with transaction safety
-                    upsert_result = await self.repository.bulk_upsert_exchange_records(entity_records)
+                    upsert_result = self.repository.bulk_upsert_exchange_records(entity_records)
                     
                     if upsert_result.get("success"):
                         self._log_upsert_results(upsert_result)
@@ -1093,7 +1083,7 @@ class ExchangeProcessor(BaseProcessor):
                     # Insert into historical collection with robust error handling
                     try:
                         # Use ordered=False to continue processing remaining records on error
-                        await self.repository.historical_collection.insert_many(historical_records, ordered=False)
+                        self.repository.historical_collection.insert_many(historical_records, ordered=False)
                         logger.info("Processed and stored %d exchange historical entities", len(historical_records))
                     except Exception as e:
                         # Handle specific errors without failing the whole batch
@@ -1130,7 +1120,7 @@ class ExchangeProcessor(BaseProcessor):
         start_time = datetime.now()
         
         # Generate and record job start to get execution_id (correlation ID)
-        execution_id = await self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
+        execution_id = self._record_job_execution(job_type, job_name, schedule, start_time, is_start=True)
         if not execution_id:
             logger.error("Failed to record job start for %s", job_type)
             return {
@@ -1147,7 +1137,7 @@ class ExchangeProcessor(BaseProcessor):
         
         try:
             # Archive old exchange data to keep a 4-day active window (day<=D-3 archived)
-            archive_result = await self.repository.archive_old_exchange_data()
+            archive_result = self.repository.archive_old_exchange_data()
             
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -1161,7 +1151,7 @@ class ExchangeProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                await self._record_job_execution(
+                self._record_job_execution(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -1189,7 +1179,7 @@ class ExchangeProcessor(BaseProcessor):
                     "correlation_id": execution_id
                 }
                 
-                await self._record_job_execution(
+                self._record_job_execution(
                     job_type=job_type,
                     job_name=job_name,
                     schedule=schedule,
@@ -1217,7 +1207,7 @@ class ExchangeProcessor(BaseProcessor):
                 "correlation_id": execution_id
             }
             
-            await self._record_job_execution(
+            self._record_job_execution(
                 job_type=job_type,
                 job_name=job_name,
                 schedule=schedule,

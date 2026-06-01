@@ -38,7 +38,7 @@ class RTMSchedulingController:
         try:
             logger.info(f"[RTMSchedulingController] Starting getAllPlantDataForScheduling - Correlation ID: {correlation_id}")
             
-            data = await self.rtm_scheduling_services.getAllPlantDataForScheduling()
+            data = self.rtm_scheduling_services.getAllPlantDataForScheduling()
             
             logger.info(f"[RTMSchedulingController] Retrieved {len(data) if isinstance(data, list) else 0} records from getAllPlantDataForScheduling - Correlation ID: {correlation_id}")
             
@@ -216,7 +216,7 @@ class RTMSchedulingController:
         try:
             logger.info(f"[RTMSchedulingController] Starting get_revision_no - Schedule Date: {schedule_date}, Correlation ID: {correlation_id}")
             
-            result = await self.rtm_scheduling_services.get_revision_no(schedule_date)
+            result = self.rtm_scheduling_services.get_revision_no(schedule_date)
             
             logger.info(f"[RTMSchedulingController] Completed get_revision_no - Schedule Date: {schedule_date}, Correlation ID: {correlation_id}")
             
@@ -266,7 +266,7 @@ class RTMSchedulingController:
         try:
             logger.info(f"[RTMSchedulingController] Starting get_scheduling_graph_data - Schedule Date: {schedule_date}, Correlation ID: {correlation_id}")
             
-            result = await self.rtm_scheduling_services.get_scheduling_graph_data(
+            result = self.rtm_scheduling_services.get_scheduling_graph_data(
                 schedule_date, from_block, to_block
             )
             
@@ -318,7 +318,7 @@ class RTMSchedulingController:
         try:
             logger.info(f"[RTMSchedulingController] Starting get_realtime_scheduling_tb_data - Schedule Date: {schedule_date}, From Block: {from_block}, To Block: {to_block}, Correlation ID: {correlation_id}")
             
-            result = await self.rtm_scheduling_services.get_realtime_scheduling_tb_data(
+            result = self.rtm_scheduling_services.get_realtime_scheduling_tb_data(
                 schedule_date=schedule_date,
                 from_block=from_block,
                 to_block=to_block
@@ -369,7 +369,7 @@ class RTMSchedulingController:
         try:
             logger.info(f"[RTMSchedulingController] Starting get_all_scheduling_data - Exclude Date Type: {exclude_date_type}, Correlation ID: {correlation_id}")
             
-            result = await self.rtm_scheduling_services.get_all_scheduling_data(exclude_date_type)
+            result = self.rtm_scheduling_services.get_all_scheduling_data(exclude_date_type)
             
             logger.info(f"[RTMSchedulingController] Completed get_all_scheduling_data - Exclude Date Type: {exclude_date_type}, Correlation ID: {correlation_id}")
             

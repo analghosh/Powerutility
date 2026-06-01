@@ -15,7 +15,6 @@ from .api.router.graph_routes import router as graph_router
 from .api.router.demand_forecast_routes import router as demand_forecast_router
 from .api.router.dashboard_routes import router as dashboard_router
 from .api.router.management_snapshot_routes import router as management_snapshot_router
-from .api.router.rtm_scheduling_snapshot_routes import router as rtm_scheduling_snapshot_router
 from .api.router.realtimemarket_routes import router as realtimemarket_routes
 from .api.router.new_rtm_bidding_routes import (
     router as new_rtm_bidding_router,
@@ -156,7 +155,6 @@ v2_app.include_router(graph_router)
 v2_app.include_router(demand_forecast_router)
 v2_app.include_router(dashboard_router) 
 v2_app.include_router(management_snapshot_router)
-v2_app.include_router(rtm_scheduling_snapshot_router)
 v2_app.include_router(realtimemarket_routes)
 v2_app.include_router(new_rtm_bidding_router)
 v2_app.include_router(new_rtm_bidding_public_router)

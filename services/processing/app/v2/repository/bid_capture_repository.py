@@ -50,7 +50,7 @@ class CaptureServeTableDataRepository(GenericRepository):
         rldc_revision_no: Any,
     ) -> Optional[Dict[str, Any]]:
         try:
-            result = await self.collection.find_one(
+            result = self.collection.find_one(
                 {
                     "schedule_date": schedule_date,
                     "dc_sg_type": dc_sg_type,
@@ -76,7 +76,7 @@ class CaptureServeTableDataRepository(GenericRepository):
         bid_revision_no: int,
     ) -> Optional[Dict[str, Any]]:
         try:
-            result = await self.collection.find_one(
+            result = self.collection.find_one(
                 {
                     "schedule_date": schedule_date,
                     "dc_sg_type": dc_sg_type,
@@ -103,7 +103,7 @@ class CaptureServeTableDataRepository(GenericRepository):
             clean = [doc for doc in documents if isinstance(doc, dict)]
             if not clean:
                 raise ValueError("No valid dict documents to insert")
-            result = await self.collection.insert_many(clean, ordered=False)
+            result = self.collection.insert_many(clean, ordered=False)
             inserted_ids = [str(oid) for oid in result.inserted_ids]
             logger.info(
                 f"CaptureServeTableDataRepository: inserted {len(inserted_ids)} documents"
@@ -135,7 +135,7 @@ class CaptureServeTableDataRepository(GenericRepository):
                 filter_query["bid_block_no"] = bid_block_no
             if bid_revision_no is not None:
                 filter_query["bid_revision_no"] = bid_revision_no
-            result = await self.collection.update_many(
+            result = self.collection.update_many(
                 filter_query,
                 {"$set": {"exchange_submission_flag": flag}},
             )

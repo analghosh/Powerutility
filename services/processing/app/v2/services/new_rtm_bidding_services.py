@@ -2,9 +2,8 @@ import logging
 from functools import partial
 from services.processing.app.core.config import settings
 from services.processing.app.v2.repository.base_repository import GenericRepository
-from typing import List, Optional, Dict, Any, Tuple
+from typing import List, Optional, Dict, Any
 import asyncio
-import re
 from datetime import datetime, date, timedelta
 import time
 from math import isnan, isfinite
@@ -42,7 +41,6 @@ from ..repository.bid_capture_repository import CaptureServeTableDataRepository
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
 from libs.messaging.job_publisher import JobPublisher
-from libs.models.forecast_serve_entity import map_forecast_source_display
 
 logger = logging.getLogger(__name__)
 
@@ -226,8 +224,7 @@ class RTMBiddingServices:
                                 {
                                     "$group": {
                                         "_id": None,
-                                        "forecast": {"$sum": "$forecast"},
-                                        "source_forecast": {"$first": "$source_forecast"},
+                                        "forecast": {"$sum": "$forecast"}
                                     }
                                 }
                             ],
@@ -245,7 +242,6 @@ class RTMBiddingServices:
                             "time_block": "$_id",
                             "supply_total": 1,
                             "forecast": "$demand.forecast",
-                            "_source_forecast": "$demand.source_forecast",
                             "block_bid_submitted_volume": {"$literal": "0"},
                             "block_bid_approved_volume": {"$literal": "0"},
                             "single_bid_submitted_volume": {"$literal": "0"},
@@ -259,17 +255,7 @@ class RTMBiddingServices:
                     },
                     {"$sort": {"time_block": 1}}
                 ]
-            result = await self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline)
-            for row in result:
-                source_forecast = row.pop("_source_forecast", None)
-                forecast_source = map_forecast_source_display(source_forecast)
-                ordered = OrderedDict()
-                for key, value in row.items():
-                    ordered[key] = value
-                    if key == "forecast":
-                        ordered["forecast_source"] = forecast_source
-                row.clear()
-                row.update(ordered)
+            result = await self.supply_repo.aggregate_async(pipeline)
             return {"data": result}
         except Exception as e:
             logger.exception(f"[RTMBiddingServices] Failed to fetch demand data: {str(e)}")
@@ -322,8 +308,8 @@ class RTMBiddingServices:
             ]
 
             # Fetch plants data from supply_serve collection
-            getplantsData = await self.supply_repo.aggregate(self.supply_repo.collection_name, pipeline)
-
+            getplantsData = list(self.supply_repo.aggregate(pipeline))
+           
             if not getplantsData:
                 return {}
 
@@ -336,7 +322,7 @@ class RTMBiddingServices:
                 }},
                 {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "rtm_tm": 1}}
             ]
-            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
+            dc_data = list(self.supply_repo.aggregate(dc_pipeline))
             # Build lookup: {(plant_id, time_block): rtm_tm}
             dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("rtm_tm", 0) for d in dc_data}
             
@@ -355,13 +341,15 @@ class RTMBiddingServices:
                 {"$project": {"_id": 0}}
             ]
             # Fetch session data from rtm_product_hardcoded_data collection
-            getsessionNo = await self.rtm_product_hardcoded_data_repo.aggregate(
-                self.rtm_product_hardcoded_data_repo.collection_name,
-                product_hardCoded_pipeline,
+            getsessionNo = list(
+                self.rtm_product_hardcoded_data_repo.aggregate(
+                    self.rtm_product_hardcoded_data_repo.collection_name,
+                    product_hardCoded_pipeline,
+                )
             )
-
+            
             plants_list_pipeline = [{"$project": {"_id": 0}}]
-            plantData = await self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline)
+            plantData = list(self.plants_list_repo.aggregate(collection_name="plant_master", pipeline=plants_list_pipeline)) 
             plant_dict = {p['plant_id']: p for p in plantData}
 
             fix_count = getplantsData[0]['time_block']
@@ -397,7 +385,7 @@ class RTMBiddingServices:
                 }
             # return availability_data_array
             # Fetch forecast, limits, and exchange data
-            getForecastedValue = await self.demand_repo.aggregate(
+            getForecastedValue = list(self.demand_repo.aggregate(
                 self.demand_repo.collection_name,
                 [
                     {
@@ -410,7 +398,7 @@ class RTMBiddingServices:
                     {"$sort": {"time_block": 1}},
                     {"$project": {"_id": 0}},
                 ],
-            )
+            ))
            
             TotalAvailability = self.total_availability_new(availability_data_array, getForecastedValue, from_block, to_block)
             
@@ -418,9 +406,6 @@ class RTMBiddingServices:
             formatted_date = target_date_dt.strftime("%Y-%m-%d") if schedule_date else datetime.now().strftime("%Y-%m-%d")
             approved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_block_bid_quantities_by_time_block(
                 formatted_date, market_type="RTM"
-            )
-            reserved_block_bid_quantities = await self.block_bid_current_data_repo.get_approved_reserved_block_bid_quantities_by_time_block(
-                formatted_date
             )
 
             # Bid Trade Serve data for calculating NOC sell / buy limits based on trade quantities
@@ -474,8 +459,10 @@ class RTMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = await self.limit_values_repo.aggregate(
-                [
+            forecastedPrice = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
@@ -494,12 +481,15 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},  # Replace root with the latest document
                         {"$sort": {"block": 1}},  # Sort by block for consistent ordering
                         {"$project": {"_id": 0}},
-                ],
+                    ],
+                )
             )
             limit_schedule_date = target_date
             
-            bufferPrice = await self.limit_values_repo.aggregate(
-                [
+            bufferPrice = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -518,11 +508,14 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                ],
+                    ],
+                )
             )
             
-            ceilingPrice = await self.limit_values_repo.aggregate(
-                [
+            ceilingPrice = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -544,34 +537,40 @@ class RTMBiddingServices:
                         {"$project": {"_id": 0}},
                     ],
                 )
+            )
             
 
-            n_1Limits = await self.limit_values_repo.aggregate(
-                [
-                    {
-                        "$match": {
-                            "scheduled_at": {"$lte": target_date_end},
-                            "id": "n_1",
-                            "market": "RTM",
-                            "category": "Limits",
-                            "block": {"$gte": from_block, "$lte": to_block},
-                        }
-                    },
-                    {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
-                    {
-                        "$group": {
-                            "_id": "$block",
-                            "latest_doc": {"$first": "$$ROOT"}
-                        }
-                    },
-                    {"$replaceRoot": {"newRoot": "$latest_doc"}},
-                    {"$sort": {"block": 1}},
-                    {"$project": {"_id": 0}},
-                ],
+            n_1Limits = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
+                        {
+                            "$match": {
+                                "scheduled_at": {"$lte": target_date_end},
+                                "id": "n_1",
+                                "market": "RTM",
+                                "category": "Limits",
+                                "block": {"$gte": from_block, "$lte": to_block},
+                            }
+                        },
+                        {"$sort": {"scheduled_at": -1, "block": 1}},  # Sort by date descending, then block
+                        {
+                            "$group": {
+                                "_id": "$block",
+                                "latest_doc": {"$first": "$$ROOT"}
+                            }
+                        },
+                        {"$replaceRoot": {"newRoot": "$latest_doc"}},
+                        {"$sort": {"block": 1}},
+                        {"$project": {"_id": 0}},
+                    ],
+                )
             )
 
-            noc_buyLimits = await self.limit_values_repo.aggregate(
-                [
+            noc_buyLimits = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -591,11 +590,14 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                ],
+                    ],
+                )
             )
 
-            noc_sellLimits = await self.limit_values_repo.aggregate(
-                [
+            noc_sellLimits = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -615,11 +617,14 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                ],
+                    ],
+                )
             )
 
-            typeofExchangeIEX = await self.limit_values_repo.aggregate(
-                [
+            typeofExchangeIEX = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -639,11 +644,14 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                ],
+                    ],
+                )
             )
 
-            typeofExchangePXIL = await self.limit_values_repo.aggregate(
-                [
+            typeofExchangePXIL = list(
+                self.limit_values_repo.repository.aggregate(
+                    "limit_values",
+                    [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},
@@ -663,7 +671,8 @@ class RTMBiddingServices:
                         {"$replaceRoot": {"newRoot": "$latest_doc"}},
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
-                ],
+                    ],
+                )
             )
 
             
@@ -750,7 +759,6 @@ class RTMBiddingServices:
                 # Convert block number to time_block format (HH:MM-HH:MM) to match with block bid data
                 time_block_str = get_fifteen_full_time_block_id(actual_block_no)
                 totalBlockBid = float(approved_block_bid_quantities.get(time_block_str, 0))
-                total_reserved_bid = float(reserved_block_bid_quantities.get(time_block_str, 0))
                 # totalBlockBid = 0
                 
                 tptal = 0       
@@ -776,7 +784,6 @@ class RTMBiddingServices:
                         'time_block': TotalblkwiseData['BlockNo'],  
                         'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],   
                         'forecast': round(TotalblkwiseData['forecast_value']),
-                        'forecast_source': TotalblkwiseData['forecast_source'],
                         'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                         'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                         'price': mustplantPrice,
@@ -787,7 +794,6 @@ class RTMBiddingServices:
                         'rtm_noc_buy_value': noc_buyLimitsInner,
                         'rtm_noc_sell_value': noc_sellLimitsInner,
                         'totalBlockBid': totalBlockBid,
-                        'total_reserved_bid': total_reserved_bid,
                         'remaining_volume': remaining_volume,   # Calculate remaining volume for must plants
                         'sell_volume': remaining_volume,   # Calculate sell volume for must plants
                         'actual_volume': remaining_volume,   # Calculate actual volume for must plants
@@ -812,7 +818,6 @@ class RTMBiddingServices:
                         'time_block': TotalblkwiseData['BlockNo'],
                         'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],
                         'forecast': round(TotalblkwiseData['forecast_value']),
-                        'forecast_source': TotalblkwiseData['forecast_source'],
                         'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                         'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                         'price': mustplantPrice,
@@ -823,7 +828,6 @@ class RTMBiddingServices:
                         'rtm_noc_buy_value': noc_buyLimitsInner,
                         'rtm_noc_sell_value': noc_sellLimitsInner,
                         'totalBlockBid': totalBlockBid,
-                        'total_reserved_bid': total_reserved_bid,
                         'remaining_volume': 0,
                         'sell_volume': 0,
                         'actual_volume': 0,
@@ -924,7 +928,6 @@ class RTMBiddingServices:
                                     'time_block': TotalblkwiseData['BlockNo'],  
                                     'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],   # Fetch session number from rtm_product_hardcoded_data collection
                                     'forecast': round(TotalblkwiseData['forecast_value']),
-                                    'forecast_source': TotalblkwiseData['forecast_source'],
                                     'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                                     'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                                     'price': px_price,
@@ -934,8 +937,7 @@ class RTMBiddingServices:
                                     'rtm_nminusone_quantum': n_1LimitsInner,
                                     'rtm_noc_buy_value': noc_buyLimitsInner,
                                     'rtm_noc_sell_value': noc_sellLimitsInner, 
-                                    'totalBlockBid': totalBlockBid,
-                                    'total_reserved_bid': total_reserved_bid,
+                                    'totalBlockBid': totalBlockBid, 
                                     'remaining_volume': float(total_diff),
                                     'sell_volume': round(sell_volume),
                                     'actual_volume': float(round(plnt_100_volume)),
@@ -971,7 +973,6 @@ class RTMBiddingServices:
                             'time_block': TotalblkwiseData['BlockNo'],
                             'session_number': getsessionNo[int(TotalblkwiseData['BlockNo'])-1]["Session_Id"],
                             'forecast': round(TotalblkwiseData['forecast_value']),
-                            'forecast_source': TotalblkwiseData['forecast_source'],
                             'supply_availablity': round(TotalblkwiseData['bltotalvolume']),
                             'surplus_deficit': round(TotalblkwiseData['surplus_deficit']),
                             'price': px_price,
@@ -982,7 +983,6 @@ class RTMBiddingServices:
                             'rtm_noc_buy_value': noc_buyLimitsInner,
                             'rtm_noc_sell_value': noc_sellLimitsInner,
                             'totalBlockBid': totalBlockBid,
-                            'total_reserved_bid': total_reserved_bid,
                             'remaining_volume': float(total_diff),
                             'sell_volume': 0,
                             'actual_volume': float(round(plant_volume)),
@@ -1012,12 +1012,7 @@ class RTMBiddingServices:
         """
         data_ar = []
         getplantsData = [v for k, v in raw_data.items()]
-        forecast_by_block = {
-            doc["time_block"]: doc
-            for doc in (getForecastedValue or [])
-            if doc.get("time_block") is not None
-        }
-
+        
         for i, getplantsDataaa in enumerate(getplantsData):
             if not isinstance(getplantsDataaa, dict):
                 # skip invalid entries
@@ -1055,17 +1050,19 @@ class RTMBiddingServices:
                 must_merit_fiftyfive_volume_bl_sum = blk_volume_sum_fiftyfive + blk_volume_sum_must
             
             
-            block_no = getplantsData[i]["time_block"]
-            forecast_doc = forecast_by_block.get(block_no, {})
-            forecast_val = forecast_doc.get("forecast", 0)
-            forecast_source = map_forecast_source_display(
-                forecast_doc.get("source_forecast")
-            )
-
+            if i < len(getForecastedValue):
+                forecast_val = getForecastedValue[i].get('forecast', 0)
+            else:
+                forecast_val = 0
+            # block_no = getplantsData[i]["time_block"]
+            # forecast_val = forecast_map.get(block_no, 0)
+            
+            # print()
+            
             data_ar.append({
                 'bltotalvolume': bltotalvolume,
                 # 'full_time': getplantsDataaa.get("full_time"),
-                'BlockNo': block_no,
+                'BlockNo': getplantsData[i]["time_block"],
                 'volume_for_bid_submision': volume_for_bid_submision,
                 'total_volume_mritbl': total_volume_mritbl, 
                 'total_volume_mritbl_45': total_volume_mritbl * 0.45,
@@ -1073,7 +1070,6 @@ class RTMBiddingServices:
                 'blk_volume_sum_must': blk_volume_sum_must,
                 'must_merit_fiftyfive_volume_bl_sum': must_merit_fiftyfive_volume_bl_sum,
                 'forecast_value': forecast_val,
-                'forecast_source': forecast_source,
                 'diff_for_bid_cal': forecast_val - must_merit_fiftyfive_volume_bl_sum,
                 'surplus_deficit': bltotalvolume - forecast_val
             })
@@ -1548,8 +1544,7 @@ class RTMBiddingServices:
 
             
             # Insert final data into model
-                documents_to_insert = list(dbarray.values())
-                response = await self.single_bid_data_for_approval_repo.insert_many(documents_to_insert) # type: ignore
+            response = await self.single_bid_data_for_approval_repo.insert_many(dbarray) # type: ignore
             if response:
                 if capture_tasks:
                     loop = asyncio.get_running_loop()
@@ -3459,7 +3454,7 @@ class RTMBiddingServices:
             # ---------------------------------------------------------
             # 3. Fetch book data ONLY for other users
             # ---------------------------------------------------------
-            book_details = await self.generic_repo.find_many(
+            book_details = self.generic_repo.find_many(
                 self.rtm_book_collection,
                 {
                     "scheduled_at": scheduled_at,
@@ -3482,7 +3477,7 @@ class RTMBiddingServices:
             # 5. Fetch time blocks once
             # ---------------------------------------------------------
             if all_time_pairs:
-                time_blocks = await self.generic_repo.find_many(
+                time_blocks = self.generic_repo.find_many(
                     self.time_block_collection,
                     {
                         "$or": [

@@ -17,8 +17,7 @@ class Settings(BaseSettings):
     SERVICE_HOST: str = "0.0.0.0"
     HOST: str = "0.0.0.0"  # Alias for SERVICE_HOST
     PORT: str = "8001"  # Alias for SERVICE_PORT
-    DEBUG: bool = False  # Default to False for security; set to True explicitly for development
-    ENABLE_SWAGGER: bool = False
+    DEBUG: bool = True
     LOG_LEVEL: str = "INFO"
     LOG_FORMAT: str = "colored"
     
@@ -29,7 +28,7 @@ class Settings(BaseSettings):
 
     MONGODB_URI: str = "mongodb://localhost:27017"
     MONGODB_URL: str = "mongodb://localhost:27017"  # Alias for MONGODB_URI
-    AUTH_DB_NAME: str = "dev_auth_db"
+    AUTH_DB_NAME: str = "auth"
     AUDIT_DB_NAME: str = "dev_audit_db"
     MONGODB_AUTH_COLLECTION: str = "users"
     MONGODB_SESSIONS_COLLECTION: str = "sessions"
@@ -51,15 +50,15 @@ class Settings(BaseSettings):
     REDIS_BLACKLIST_DB: int = 1
     REDIS_BLACKLIST_TTL: int = 7  # Days (same as refresh token expiry)
     
-    # JWT Configuration - must be set via env var; no insecure fallback
-    JWT_SECRET_KEY: str = os.getenv("JWT_SECRET_KEY", "")
+    # JWT Configuration
+    JWT_SECRET_KEY: str = "your-super-secret-jwt-key-change-in-production"
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ACCESS_TOKEN_EXPIRE_MINUTES: str = "30"  # Alias for JWT_ACCESS_TOKEN_EXPIRE_MINUTES
     JWT_REFRESH_TOKEN_EXPIRE_DAYS: float = 7
     
-    # Security Configuration - must be set via env var; no insecure fallback
-    SECRET_KEY: str = os.getenv("SECRET_KEY", "")
+    # Security Configuration
+    SECRET_KEY: str = "your-super-secret-key-change-in-production"
     BCRYPT_ROUNDS: int = 12
     PASSWORD_MIN_LENGTH: int = 8
     PASSWORD_MAX_LENGTH: int = 128
@@ -82,16 +81,7 @@ class Settings(BaseSettings):
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 100
     RATE_LIMIT_WINDOW_SECONDS: int = 3600
-
-    # RabbitMQ Configuration
-    RABBITMQ_HOST: str = "127.0.0.1"
-    RABBITMQ_PORT: int = 5672
-    RABBITMQ_USER: str = "guest"
-    RABBITMQ_PASSWORD: str = "guest"
-    RABBITMQ_VHOST: str = "/"
-    USE_RABBITMQ_JOBS: bool = False   # auth service does not publish jobs
-    USE_RABBITMQ_AUDIT: bool = False
-
+    
     # MFA Configuration
     MFA_ENABLED: bool = True
     MFA_ISSUER: str = "EPMS"  # Can be overridden by APP_NAME env var
@@ -107,15 +97,10 @@ class Settings(BaseSettings):
     SESSION_TIMEOUT_HOURS: int = 24
     MAX_SESSIONS_PER_USER: int = 5
     
-    # Proxy Configuration
-    # Comma-separated list of trusted reverse-proxy IPs (e.g. "127.0.0.1,10.0.0.1").
-    # When set, X-Forwarded-For / X-Real-IP are only honoured for requests whose
-    # direct socket peer matches one of these IPs.  Leave empty in local dev.
-    TRUSTED_PROXIES: str = os.getenv("TRUSTED_PROXIES", "127.0.0.1")
-
     # CORS Configuration
     CORS_ORIGINS: List[str] = [
-        "http://localhost:3000",
+        "*",  # Allow all origins for development
+        "http://localhost:3000", 
         "http://localhost:8080",
         "http://localhost:8002",  # Scheduler service (dashboard)
         "http://localhost:8003",  # Processing service
@@ -131,10 +116,10 @@ class Settings(BaseSettings):
     HEALTH_CHECK_ENABLED: bool = True
     HEALTH_CHECK_INTERVAL_SECONDS: int = 30
     
-    # Default Admin Configuration - must be set via env var; no insecure fallback
-    ADMIN_USERNAME: str = os.getenv("ADMIN_USERNAME", "admin")
-    ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@epms.com")
-    ADMIN_INITIAL_PASSWORD: str = os.getenv("ADMIN_INITIAL_PASSWORD", "")
+    # Default Admin Configuration
+    ADMIN_USERNAME: str = "admin"
+    ADMIN_EMAIL: str = "admin@epms.com"
+    ADMIN_INITIAL_PASSWORD: str = "Infi@7983"
     
     @model_validator(mode='after')
     def set_environment_config(self):
@@ -154,32 +139,6 @@ class Settings(BaseSettings):
         
         return self
     
-    def check_security_warnings(self):
-        """Log warnings for insecure security configuration at startup."""
-        import logging
-        logger = logging.getLogger(__name__)
-
-        if not self.JWT_SECRET_KEY or len(self.JWT_SECRET_KEY) < 32 or \
-                "your-super-secret-jwt-key-change-in-production" in self.JWT_SECRET_KEY:
-            logger.critical(
-                "SECURITY WARNING: JWT_SECRET_KEY is not set or uses insecure default. "
-                "Set JWT_SECRET_KEY to a secure random string (>=32 chars) via environment variable."
-            )
-
-        if not self.SECRET_KEY or len(self.SECRET_KEY) < 32 or \
-                "your-super-secret-key-change-in-production" in self.SECRET_KEY:
-            logger.critical(
-                "SECURITY WARNING: SECRET_KEY is not set or uses insecure default. "
-                "Set SECRET_KEY to a secure random string (>=32 chars) via environment variable."
-            )
-
-        if not self.ADMIN_INITIAL_PASSWORD or len(self.ADMIN_INITIAL_PASSWORD) < 8 or \
-                "Infi@7983" in self.ADMIN_INITIAL_PASSWORD:
-            logger.critical(
-                "SECURITY WARNING: ADMIN_INITIAL_PASSWORD is not set or uses insecure default. "
-                "Set ADMIN_INITIAL_PASSWORD via environment variable before first startup."
-            )
-    
     @property
     def BASE_PATH(self) -> str:
         """Get base path for current environment (computed dynamically)"""
@@ -194,11 +153,11 @@ class Settings(BaseSettings):
             "example": {
                 "SERVICE_NAME": "auth-service",
                 "SERVICE_PORT": 8001,
-                "JWT_SECRET_KEY": "<set-via-env-var>",
+                "JWT_SECRET_KEY": "your-super-secret-jwt-key-change-in-production",
                 "MONGODB_URI": "mongodb://localhost:27017",
                 "ADMIN_USERNAME": "admin",
                 "ADMIN_EMAIL": "admin@epms.com",
-                "ADMIN_INITIAL_PASSWORD": "<set-via-env-var>"
+                "ADMIN_INITIAL_PASSWORD": "Admin@123"
             }
         }
 

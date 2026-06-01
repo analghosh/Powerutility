@@ -15,7 +15,6 @@ from ..models.roles import RoleInDB
 from ..models.page_role import PageRoleCreate
 from ..models.menu import MenuCreate
 from ..core.config import settings
-from ..repository.user_repository import UserRepository # Import UserRepository
 
 logger = logging.getLogger(__name__)
 
@@ -108,28 +107,28 @@ class DatabaseSeeder:
         self.menu_repository = MenuRepository()
         self.user_repository = UserRepository()
     
-    async def seed_pages(self, force_reload: bool = False) -> bool:
+    def seed_pages(self, force_reload: bool = False) -> bool:
         """Seed default pages into the database"""
         try:
             logger.info("Seeding default pages...")
             
             for page_data in DEFAULT_PAGES:
-                existing_page = await self.page_repository.get_page_by_name(page_data["name"])
+                existing_page = self.page_repository.get_page_by_name(page_data["name"])
                 if existing_page and not force_reload:
                     logger.info(f"Page {page_data['name']} already exists, skipping...")
                     continue
                 
                 if existing_page and force_reload:
                     logger.info(f"Force reloading page: {page_data['name']}")
-                    await self.page_repository.delete_page(existing_page.id)
+                    self.page_repository.delete_page(existing_page.id)
                 
                 # Create page without role_ids (separate relationship table)
                 page_create = PageCreate(
                     name=page_data["name"],
                     module_id=page_data["module_id"]
                 )
-
-                created_page = await self.page_repository.create_page(page_create)
+                
+                created_page = self.page_repository.create_page(page_create)
                 logger.info(f"Created page: {created_page.name}")
             
             logger.info("Page seeding completed successfully!")
@@ -138,20 +137,20 @@ class DatabaseSeeder:
         except Exception as e:
             logger.error(f"Error seeding pages: {e}")
             return False
-
-    async def seed_page_roles(self, force_reload: bool = False) -> bool:
+    
+    def seed_page_roles(self, force_reload: bool = False) -> bool:
         """Seed page-role relationships"""
         try:
             logger.info("Seeding page-role relationships...")
             
             # Get admin role
-            admin_role = await self.role_repository.get_role_by_name("admin")
+            admin_role = self.role_repository.get_role_by_name("admin")
             if not admin_role:
                 logger.error("Admin role not found - cannot create page-role relationships")
                 return False
             
             # Get all pages
-            all_pages = await self.page_repository.get_all_active_pages()
+            all_pages = self.page_repository.get_all_active_pages()
             
             for page in all_pages:
                 # Grant admin access to all pages with full permissions
@@ -173,13 +172,13 @@ class DatabaseSeeder:
             logger.error(f"Error seeding page-role relationships: {e}")
             return False
     
-    async def seed_menus(self, force_reload: bool = False) -> bool:
-        """Seed default menus into the database asynchronously"""
+    def seed_menus(self, force_reload: bool = False) -> bool:
+        """Seed default menus into the database"""
         try:
             logger.info("Seeding default menus...")
             
             # Check if menus already exist
-            existing_menus = await self.menu_repository.get_all_active_menus()
+            existing_menus = self.menu_repository.get_all_active_menus()
             if existing_menus and not force_reload:
                 logger.info(f"Found {len(existing_menus)} existing menus, skipping menu seeding...")
                 return True
@@ -187,12 +186,13 @@ class DatabaseSeeder:
             if existing_menus and force_reload:
                 logger.info("Force reloading menus - deleting all existing menus...")
                 for menu in existing_menus:
-                    await self.menu_repository.delete_menu(menu.id)
+                    self.menu_repository.delete_menu(menu.id)
             
             # First pass: Create all root menus and store their IDs
             menu_name_to_id = {}
             
             for menu_data in DEFAULT_MENUS:
+                # Handle parent_id - convert name to actual ID
                 parent_id = None
                 if menu_data["parent_id"]:
                     parent_id = menu_name_to_id.get(menu_data["parent_id"])
@@ -207,7 +207,7 @@ class DatabaseSeeder:
                     order=menu_data["order"]
                 )
                 
-                created_menu = await self.menu_repository.create_menu(menu_create)
+                created_menu = self.menu_repository.create_menu(menu_create)
                 menu_name_to_id[menu_data["name"]] = created_menu.id
                 logger.info(f"Created menu: {created_menu.name}")
             
@@ -217,23 +217,23 @@ class DatabaseSeeder:
         except Exception as e:
             logger.error(f"Error seeding menus: {e}")
             return False
-
-    async def seed_roles(self, force_reload: bool = False) -> bool:
+    
+    def seed_roles(self, force_reload: bool = False) -> bool:
         """Seed default roles into the database"""
         try:
             logger.info("Seeding default roles...")
             
             for role_data in DEFAULT_ROLES:
-                existing_role = await self.role_repository.get_role_by_name(role_data["name"])
+                existing_role = self.role_repository.get_role_by_name(role_data["name"])
                 if existing_role and not force_reload:
                     logger.info(f"Role {role_data['name']} already exists, skipping...")
                     continue
                 
                 if existing_role and force_reload:
                     logger.info(f"Force reloading role: {role_data['name']}")
-                    await self.role_repository.delete_role(existing_role.id)
+                    self.role_repository.delete_role(existing_role.id)
                 
-                created_role = await self.role_repository.create_role(
+                created_role = self.role_repository.create_role(
                     name=role_data["name"],
                     description=role_data["description"]
                 )
@@ -245,8 +245,8 @@ class DatabaseSeeder:
         except Exception as e:
             logger.error(f"Error seeding roles: {e}")
             return False
-
-    async def seed_all(self, force_reload: bool = False) -> bool:
+    
+    def seed_all(self, force_reload: bool = False) -> bool:
         """
         Seed all default data
 
@@ -257,27 +257,27 @@ class DatabaseSeeder:
             logger.info("Starting database seeding...")
             
             # Seed roles first (needed for page access assignment and admin user)
-            if not await self.seed_roles(force_reload=force_reload):
+            if not self.seed_roles(force_reload=force_reload):
                 logger.error("Failed to seed roles")
                 return False
             
             # Ensure admin user exists (only admin user, no other users)
-            if not await self.ensure_admin_user():
+            if not self.ensure_admin_user():
                 logger.error("Failed to ensure admin user")
                 return False
             
             # Seed pages (separate from roles)
-            if not await self.seed_pages(force_reload=force_reload):
+            if not self.seed_pages(force_reload=force_reload):
                 logger.error("Failed to seed pages")
                 return False
             
-            # Seed page-role relationships (now async)
-            if not await self.seed_page_roles(force_reload=force_reload):
+            # Seed page-role relationships
+            if not self.seed_page_roles(force_reload=force_reload):
                 logger.error("Failed to seed page-role relationships")
                 return False
             
             # Seed menus (static, seeded once)
-            if not await self.seed_menus(force_reload=force_reload):
+            if not self.seed_menus(force_reload=force_reload):
                 logger.error("Failed to seed menus")
                 return False
             
@@ -287,12 +287,12 @@ class DatabaseSeeder:
         except Exception as e:
             logger.error(f"Error during database seeding: {e}")
             return False
-
-    async def get_seed_status(self) -> Dict[str, Any]:
+    
+    def get_seed_status(self) -> Dict[str, Any]:
         """Get the current seeding status"""
         try:
-            all_pages = await self.page_repository.get_all_active_pages()
-            all_roles = await self.role_repository.get_all_active_roles()
+            all_pages = self.page_repository.get_all_active_pages()
+            all_roles = self.role_repository.get_all_active_roles()
             
             # Check which default pages are seeded
             seeded_pages = [page.name for page in all_pages]
@@ -325,26 +325,26 @@ class DatabaseSeeder:
             logger.error(f"Error getting seed status: {e}")
             return {
                 "error": str(e),
-                "is_complete": False # type: ignore
+                "is_complete": False
             }
-
-    async def reset_database(self) -> bool:
+    
+    def reset_database(self) -> bool:
         """Reset database by removing all pages and roles (admin only)"""
         try:
             logger.warning("Resetting database - this will remove all pages and roles!")
             
             # Get all pages and roles
-            all_pages = await self.page_repository.get_all_active_pages()
-            all_roles = await self.role_repository.get_all_active_roles()
+            all_pages = self.page_repository.get_all_active_pages()
+            all_roles = self.role_repository.get_all_active_roles()
             
             # Delete all pages
             for page in all_pages:
-                await self.page_repository.delete_page(page.id)
+                self.page_repository.delete_page(page.id)
                 logger.info(f"Deleted page: {page.name}")
             
             # Delete all roles
             for role in all_roles:
-                await self.role_repository.delete_role(role.id)
+                self.role_repository.delete_role(role.id)
                 logger.info(f"Deleted role: {role.name}")
             
             logger.info("Database reset completed!")
@@ -353,42 +353,42 @@ class DatabaseSeeder:
         except Exception as e:
             logger.error(f"Error resetting database: {e}")
             return False
-
-    async def reload_pages(self) -> bool:
+    
+    def reload_pages(self) -> bool:
         """Reload pages (admin only - will overwrite existing pages)"""
         try:
             logger.warning("Reloading pages - this will overwrite existing pages!")
-            return await self.seed_pages(force_reload=True)
+            return self.seed_pages(force_reload=True)
         except Exception as e:
             logger.error(f"Error reloading pages: {e}")
             return False
-
-    async def reload_roles(self) -> bool:
+    
+    def reload_roles(self) -> bool:
         """Reload roles (admin only - will overwrite existing roles)"""
         try:
             logger.warning("Reloading roles - this will overwrite existing roles!")
-            return await self.seed_roles(force_reload=True)
+            return self.seed_roles(force_reload=True)
         except Exception as e:
             logger.error(f"Error reloading roles: {e}")
             return False
-
-    async def grant_admin_page_access(self) -> bool:
+    
+    def grant_admin_page_access(self) -> bool:
         """Grant admin role access to all existing pages"""
         try:
             logger.info("Granting admin access to all pages...")
             
             # Get admin role
-            admin_role = await self.role_repository.get_role_by_name("admin")
+            admin_role = self.role_repository.get_role_by_name("admin")
             if not admin_role:
                 logger.error("Admin role not found - cannot grant page access")
                 return False
             
             # Get all pages
-            all_pages = await self.page_repository.get_all_active_pages()
+            all_pages = self.page_repository.get_all_active_pages()
             
             for page in all_pages:
                 # Check if admin already has access
-                existing_relationship = await self.page_role_repository.get_page_role(page.id, admin_role.id)
+                existing_relationship = self.page_role_repository.get_page_role(page.id, admin_role.id)
                 
                 if not existing_relationship:
                     # Grant admin access to page with full permissions
@@ -396,7 +396,7 @@ class DatabaseSeeder:
                         role_id=admin_role.id,
                         page_id=page.id,
                         permissions=["read", "write", "create", "delete"]
-                    ) # This method is async, so it needs await
+                    )
                     
                     if success:
                         logger.info(f"Granted admin access to page: {page.name}")
@@ -412,14 +412,14 @@ class DatabaseSeeder:
             logger.error(f"Error granting admin page access: {e}")
             return False
 
-    async def ensure_admin_user(self) -> bool:
+    def ensure_admin_user(self) -> bool:
         """
         Ensures the admin user exists and updates it if necessary.
         Only creates/updates the admin user, no other users.
         """
         try:
             logger.info("Ensuring admin user exists...")
-            admin_user = await self.user_repository.get_user_by_username(settings.ADMIN_USERNAME)
+            admin_user = self.user_repository.get_user_by_username(settings.ADMIN_USERNAME)
 
             if admin_user:
                 logger.info(f"Admin user '{settings.ADMIN_USERNAME}' already exists.")
@@ -427,14 +427,14 @@ class DatabaseSeeder:
             else:
                 logger.info(f"Admin user '{settings.ADMIN_USERNAME}' not found. Creating...")
                 
-                # Get admin role (now async)
-                admin_role = await self.role_repository.get_role_by_name("admin")
+                # Get admin role
+                admin_role = self.role_repository.get_role_by_name("admin")
                 if not admin_role:
                     logger.error("Admin role not found - cannot create admin user")
                     return False
                 
                 # Create admin user
-                created_user = await self.user_repository.create_user(
+                created_user = self.user_repository.create_user(
                     username=settings.ADMIN_USERNAME,
                     email=settings.ADMIN_EMAIL,
                     password=settings.ADMIN_INITIAL_PASSWORD,
@@ -450,64 +450,52 @@ class DatabaseSeeder:
             logger.error(f"Error ensuring admin user: {e}")
             return False
 
-def seed_database(): # Deprecated synchronous wrapper - now raises NotImplementedError
-    """Convenience function to seed the database (synchronous wrapper)"""
-    raise NotImplementedError("Synchronous seed_database is deprecated. Use async_seed_database instead.")
+def seed_database():
+    """Convenience function to seed the database"""
+    seeder = DatabaseSeeder()
+    return seeder.seed_all()
 
-def seed_database_force(): # Deprecated synchronous wrapper - now raises NotImplementedError
-    """Convenience function to force seed the database (admin only) (synchronous wrapper)"""
-    raise NotImplementedError("Synchronous seed_database_force is deprecated. Use async_seed_database_force instead.")
+def seed_database_force():
+    """Convenience function to force seed the database (admin only)"""
+    seeder = DatabaseSeeder()
+    return seeder.seed_all(force_reload=True)
 
-async def reset_database():
+def reset_database():
     """Convenience function to reset the database (admin only)"""
     seeder = DatabaseSeeder()
-    return await seeder.reset_database()
+    return seeder.reset_database()
 
-async def get_seed_status():
+def get_seed_status():
     """Convenience function to get seeding status"""
     seeder = DatabaseSeeder()
-    return await seeder.get_seed_status()
+    return seeder.get_seed_status()
 
-async def reload_pages():
+def reload_pages():
     """Convenience function to reload pages (admin only)"""
     seeder = DatabaseSeeder()
-    return await seeder.reload_pages()
+    return seeder.reload_pages()
 
-async def reload_roles():
+def reload_roles():
     """Convenience function to reload roles (admin only)"""
     seeder = DatabaseSeeder()
-    return await seeder.reload_roles()
+    return seeder.reload_roles()
 
-async def grant_admin_page_access():
+def grant_admin_page_access():
     """Convenience function to grant admin access to all pages"""
     seeder = DatabaseSeeder()
-    return await seeder.grant_admin_page_access()
+    return seeder.grant_admin_page_access()
 
-async def ensure_admin_user():
+def ensure_admin_user():
     """Convenience function to ensure admin user exists"""
     seeder = DatabaseSeeder()
-    return await seeder.ensure_admin_user()
+    return seeder.ensure_admin_user()
 
-async def async_seed_database():
-    """Convenience function to seed the database asynchronously"""
+def reload_menus():
+    """Convenience function to reload menus (admin only)"""
     seeder = DatabaseSeeder()
-    return await seeder.seed_all()
+    return seeder.seed_menus(force_reload=True)
 
-async def async_seed_database_force():
-    """Convenience function to force seed the database (admin only) asynchronously"""
+def get_menu_tree():
+    """Convenience function to get menu tree"""
     seeder = DatabaseSeeder()
-    return await seeder.seed_all(force_reload=True)
-
-async def async_reload_menus():
-    """Convenience function to reload menus (admin only) asynchronously"""
-    seeder = DatabaseSeeder()
-    return await seeder.reload_menus()
-
-def get_menu_tree(): # Deprecated synchronous wrapper
-    """Convenience function to get menu tree (synchronous wrapper)"""
-    raise NotImplementedError("Synchronous get_menu_tree is deprecated. Use async_get_menu_tree instead.")
-
-async def async_get_menu_tree():
-    """Convenience function to get menu tree asynchronously"""
-    seeder = DatabaseSeeder()
-    return await seeder.menu_repository.get_menu_tree()
+    return seeder.menu_repository.get_menu_tree() 

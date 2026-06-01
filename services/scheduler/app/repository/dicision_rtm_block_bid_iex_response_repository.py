@@ -30,7 +30,7 @@ class DicisionRtmBlockBidIexResponseRepository(BaseRepository):
     ) -> List[Dict[str, Any]]:
         try:
             cursor = self.collection.find(filters, projection or {})
-            return await cursor.to_list(length=10000)
+            return list(cursor)
         except Exception as e:
             logger.error(f"[DicisionRtmBlockBidRepo] find_by_filters failed: {str(e)}")
             return []
@@ -41,7 +41,7 @@ class DicisionRtmBlockBidIexResponseRepository(BaseRepository):
         update_query: Dict[str, Any]
     ) -> Dict[str, Any]:
         try:
-            result = await self.collection.update_many(filter_query, update_query)
+            result = self.collection.update_many(filter_query, update_query)
             return {"modified_count": result.modified_count}
         except Exception as e:
             logger.error(f"[DicisionRtmBlockBidRepo] update_many failed: {str(e)}")

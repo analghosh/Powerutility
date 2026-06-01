@@ -7,7 +7,6 @@ Tests all components including repositories and data migration service
 import sys
 import os
 import logging
-import asyncio
 from datetime import datetime, timedelta
 
 # Add the project root to Python path
@@ -26,7 +25,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-async def test_job_detail_repository():
+def test_job_detail_repository():
     """Test JobDetailRepository functionality"""
     logger.info("Testing JobDetailRepository...")
     
@@ -55,7 +54,7 @@ async def test_job_detail_repository():
         )
         
         # Log execution
-        execution_id = await job_detail_repository.log_execution(job_detail)
+        execution_id = job_detail_repository.log_execution(job_detail)
         logger.info("Created execution log with ID: %s", execution_id)
         
         # Test updating execution
@@ -67,19 +66,19 @@ async def test_job_detail_repository():
             "error_message": "Test execution completed successfully"
         }
         
-        update_success = await job_detail_repository.update_execution(job_detail.execution_id, update_data)
+        update_success = job_detail_repository.update_execution(job_detail.execution_id, update_data)
         logger.info("Updated execution: %s", update_success)
         
         # Test getting execution by ID
-        execution = await job_detail_repository.get_execution_by_id(job_detail.execution_id)
+        execution = job_detail_repository.get_execution_by_id(job_detail.execution_id)
         logger.info("Retrieved execution: %s", execution is not None)
         
         # Test getting job statistics
-        stats = await job_detail_repository.get_job_statistics("test_job_001", days=1)
+        stats = job_detail_repository.get_job_statistics("test_job_001", days=1)
         logger.info("Job statistics: %s", stats)
         
         # Test getting execution count
-        count = await job_detail_repository.get_execution_count(job_id="test_job_001")
+        count = job_detail_repository.get_execution_count(job_id="test_job_001")
         logger.info("Execution count: %s", count)
         
         logger.info("✅ JobDetailRepository tests passed")
@@ -89,7 +88,7 @@ async def test_job_detail_repository():
         logger.error("❌ JobDetailRepository tests failed: %s", str(e))
         return False
 
-async def test_job_detail_historical_repository():
+def test_job_detail_historical_repository():
     """Test JobDetailHistoricalRepository functionality"""
     logger.info("Testing JobDetailHistoricalRepository...")
     
@@ -118,11 +117,11 @@ async def test_job_detail_historical_repository():
         )
         
         # Migrate to historical
-        historical_id = await job_detail_historical_repository.migrate_execution(job_detail)
+        historical_id = job_detail_historical_repository.migrate_execution(job_detail)
         logger.info("Migrated to historical with ID: %s", historical_id)
         
         # Test getting historical execution
-        historical_execution = await job_detail_historical_repository.get_execution_by_id(job_detail.execution_id)
+        historical_execution = job_detail_historical_repository.get_execution_by_id(job_detail.execution_id)
         logger.info("Retrieved historical execution: %s", historical_execution is not None)
         
         # Test getting historical statistics
@@ -144,26 +143,26 @@ async def test_job_detail_historical_repository():
         logger.error("❌ JobDetailHistoricalRepository tests failed: %s", str(e))
         return False
 
-async def test_data_migration_service():
+def test_data_migration_service():
     """Test DataMigrationService functionality"""
     logger.info("Testing DataMigrationService...")
     
     try:
         
         # Test getting migration status
-        status = await data_migration_service.get_migration_status()
+        status = data_migration_service.get_migration_status()
         logger.info("Migration status: %s", status)
         
         # Test migration (should be empty since we don't have old data)
-        migration_result = await data_migration_service.migrate_old_executions_to_historical()
+        migration_result = data_migration_service.migrate_old_executions_to_historical()
         logger.info("Migration result: %s", migration_result)
         
         # Test cleanup (should be empty since we don't have old historical data)
-        cleanup_result = await data_migration_service.cleanup_old_historical_data()
+        cleanup_result = data_migration_service.cleanup_old_historical_data()
         logger.info("Cleanup result: %s", cleanup_result)
         
         # Test full lifecycle
-        lifecycle_result = await data_migration_service.run_full_data_lifecycle()
+        lifecycle_result = data_migration_service.run_full_data_lifecycle()
         logger.info("Full lifecycle result: %s", lifecycle_result)
         
         logger.info("✅ DataMigrationService tests passed")
@@ -173,7 +172,7 @@ async def test_data_migration_service():
         logger.error("❌ DataMigrationService tests failed: %s", str(e))
         return False
 
-async def test_query_functionality():
+def test_query_functionality():
     """Test query functionality with JobDetailQuery"""
     logger.info("Testing query functionality...")
     
@@ -194,19 +193,19 @@ async def test_query_functionality():
             limit=10
         )
         
-        logs = await job_detail_repository.get_execution_logs(query)
+        logs = job_detail_repository.get_execution_logs(query)
         logger.info("Query logs count: %s", len(logs))
         
         # Test getting job execution history
-        history = await job_detail_repository.get_job_execution_history("test_job_001", limit=5)
+        history = job_detail_repository.get_job_execution_history("test_job_001", limit=5)
         logger.info("Job history count: %s", len(history))
         
         # Test getting recent executions
-        recent = await job_detail_repository.get_recent_executions("test_job_001")
+        recent = job_detail_repository.get_recent_executions("test_job_001")
         logger.info("Recent executions result: %s", recent)
         
         # Test getting failed executions
-        failed = await job_detail_repository.get_failed_executions(days=7)
+        failed = job_detail_repository.get_failed_executions(days=7)
         logger.info("Failed executions result: %s", failed)
         
         logger.info("✅ Query functionality tests passed")
@@ -236,7 +235,7 @@ def main():
         logger.info("=" * 60)
         
         try:
-            if asyncio.run(test_func()):
+            if test_func():
                 passed += 1
                 logger.info("✅ %s: PASSED", test_name)
             else:

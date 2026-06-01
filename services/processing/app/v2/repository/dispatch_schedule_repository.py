@@ -21,6 +21,9 @@ class DispatchScheduleRepository(GenericRepository):
         super().__init__()
         self.collection_name = collection_name or "rtm_market_integrate_data_backup_list"
         logger.info(f"DispatchScheduleRepository initialized with collection: {self.collection_name}")
+        self._create_collection_if_not_exists()
+        self._create_indexes()
+    
     def _create_collection_if_not_exists(self):
         """
         Create collection if it does not exist.
@@ -90,7 +93,7 @@ class DispatchScheduleRepository(GenericRepository):
             
             query = {"schedule_date": schedule_date}
             cursor = self.collection.find(query).sort("_id", 1)  # ascending order
-            results = await cursor.to_list(length=10000)
+            results = list(cursor)
             
             # Convert ObjectId to string for JSON serialization
             for result in results:

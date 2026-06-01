@@ -35,31 +35,19 @@ def get_request_correlation_id(request: Request) -> str:
 
 def get_user_context(request: Request) -> Dict[str, Any]:
     """
-    Dependency to get user context with correlation ID from request state.
-    Returns anonymous context when no auth is present (safe for public routes).
+    Dependency to get user context with correlation ID from request state
     
     Returns:
         Dictionary containing user info and correlation ID
     """
-    user = getattr(request.state, "current_user", None)
+    user = get_authenticated_user(request)
     correlation_id = get_request_correlation_id(request)
     
-    if user:
-        return {
-            "user": user,
-            "correlation_id": correlation_id,
-            "user_id": user.get("id") or user.get("user_id"),
-            "username": user.get("username"),
-            "roles": user.get("roles", []),
-            "permissions": user.get("permissions", [])
-        }
-    
-    # Anonymous context for public routes
     return {
-        "user": None,
+        "user": user,
         "correlation_id": correlation_id,
-        "user_id": "anonymous",
-        "username": "anonymous",
-        "roles": [],
-        "permissions": []
+        "user_id": user.get("id") or user.get("user_id"),
+        "username": user.get("username"),
+        "roles": user.get("roles", []),
+        "permissions": user.get("permissions", [])
     }

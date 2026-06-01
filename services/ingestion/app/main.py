@@ -2,16 +2,31 @@
 EPMS Ingestion Service
 Handles data ingestion and validation
 """
+import sys
+import subprocess
+from pathlib import Path
+
+# Auto-install libs package if not available
+try:
+    import libs.core.cron_manager
+except ImportError:
+    print("📦 Installing dependencies...")
+    project_root = Path(__file__).parent.parent.parent.parent
+    subprocess.check_call([
+        sys.executable, "-m", "pip", "install", "-e", str(project_root)
+    ])
+    print("✅ Dependencies installed")
+
 from datetime import datetime
 
 from pydantic import BaseModel
 
 from .core.config import settings
 from .services.cron_manager import CronManager
-from .core.dependencies import get_audit_logger, cleanup_audit_resources
+from .core.dependencies import get_audit_logger
 
 # Configure logging with correlation ID support
-from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware, SecurityHeadersMiddleware
+from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware
 
 # Configure logging based on settings
 configure_logging(
@@ -48,7 +63,6 @@ class HealthResponse(BaseModel):
 async def lifespan(_: FastAPI):
     """Lifespan context manager for startup/shutdown events"""
     # Startup
-    settings.check_security_warnings()
     logger.info("Starting EPMS Ingestion Service...")
     logger.info("   Service: %s", settings.SERVICE_NAME if hasattr(settings, 'SERVICE_NAME') else 'ingestion-service')
     logger.info("   Host: %s:%s", settings.SERVICE_HOST, settings.SERVICE_PORT)
@@ -58,16 +72,7 @@ async def lifespan(_: FastAPI):
     # Create audit logger and cron manager
     audit_logger = get_audit_logger()
     cron_manager = CronManager(audit_logger)
-    await cron_manager.initialize_jobs()
     app.state.cron_manager = cron_manager
-
-    # Ensure provider indexes
-    try:
-        from libs.repository.provider_repository import ProviderRepository
-        _provider_repo = ProviderRepository(settings.MONGODB_URI, settings.MONGODB_DATABASE)
-        await _provider_repo.ensure_indexes()
-    except Exception as idx_error:
-        logger.warning("Failed to ensure provider indexes: %s", idx_error)
 
     # Seed default providers (e.g., forecast_api_provider)
     try:
@@ -114,17 +119,14 @@ async def lifespan(_: FastAPI):
     except (RuntimeError, OSError, AttributeError) as e:
         logger.error("Failed to stop cron scheduler: %s", str(e))
 
-    cleanup_audit_resources()
-
 
 # Create FastAPI app
 app = FastAPI(
     title="EPMS Ingestion Service",
     description="Data ingestion service for EPMS",
     version="1.0.0",
-    docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
-    redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
-    openapi_url="/openapi.json" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
+    docs_url="/docs",
+    redoc_url="/redoc",
     lifespan=lifespan,
     openapi_tags=[
         {
@@ -140,8 +142,8 @@ app = FastAPI(
             "description": "Provider CRUD operations and management",
         },
     ],
+    root_path=settings.BASE_PATH
 )
-
 
 # Configure security scheme for Bearer token authentication
 security = HTTPBearer(auto_error=False)
@@ -162,7 +164,22 @@ def custom_openapi():
     # Add server URLs with base path for proper OpenAPI documentation
     base_path = settings.BASE_PATH
     environment = settings.ENVIRONMENT
-    openapi_schema["servers"] = [{"url": "/", "description": "API"}]
+    servers = []
+    
+    # For server environments, add the full server URL with base path
+    if base_path:
+        servers.append({
+            "url": f"{base_path}/api/v1", 
+            "description": f"Server environment ({environment}) - Use this for server deployment"
+        })
+    
+    # Always add local development URL
+    servers.append({
+        "url": "/api/v1", 
+        "description": "Local development - Use this for local testing"
+    })
+    
+    openapi_schema["servers"] = servers
 
     # Add security scheme
     openapi_schema["components"]["securitySchemes"] = {
@@ -214,7 +231,6 @@ if settings.BASE_PATH:
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
-app.add_middleware(SecurityHeadersMiddleware)
 # Add cache middleware third (executes third to last)
 app.add_middleware(
     CacheMiddleware,
@@ -252,7 +268,7 @@ async def cron_status():
     return {
         "service": "ingestion-service",
         "cron_scheduler_running": cron_manager.is_running(),
-        "jobs": await cron_manager.get_all_jobs()
+        "jobs": cron_manager.get_all_jobs()
     }
 
 

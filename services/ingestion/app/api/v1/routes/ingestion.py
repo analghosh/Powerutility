@@ -219,5 +219,5 @@ async def get_ingestion_status(
         
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to get ingestion status"
+            detail=f"Failed to get ingestion status: {str(e)}"
         ) from e 

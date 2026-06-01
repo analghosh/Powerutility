@@ -739,7 +739,7 @@ class ProviderSeeder:
         self.db = self.client[settings.MONGODB_DATABASE]
         self.collection = self.db.providers
 
-    async def seed(self):
+    def seed(self):
         """Seed default providers if they don't exist"""
         logger.info("Checking for default provider configurations...")
         
@@ -763,7 +763,7 @@ class ProviderSeeder:
             # If provider already exists, preserve its metadata values.
             # This prevents overwriting user-configured values like api_url/api_key on service restarts,
             # while still allowing newly introduced default keys to be added.
-            existing = await self.collection.find_one({"code": code}) or {}
+            existing = self.collection.find_one({"code": code}) or {}
             existing_metadata = existing.get("metadata") if isinstance(existing.get("metadata"), dict) else {}
             new_metadata = provider_data.get("metadata") if isinstance(provider_data.get("metadata"), dict) else {}
             merged_metadata = {**new_metadata, **existing_metadata}  # existing wins
@@ -781,7 +781,7 @@ class ProviderSeeder:
             if "created_at" in update_data["$set"]:
                 del update_data["$set"]["created_at"]
 
-            await self.collection.update_one(
+            self.collection.update_one(
                 {"code": code},
                 update_data,
                 upsert=True

@@ -7,10 +7,10 @@ Updated: Added missing methods to libs JobDetailRepository
 import logging
 import asyncio
 import time
-import re
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List
 from collections import defaultdict
+from pymongo import MongoClient
 import sys
 import os
 
@@ -50,8 +50,6 @@ from services.scheduler.app.processors.block_bid_book_processor import BlockBidB
 from services.scheduler.app.processors.bid_trade_live_sync_processor import BidTradeLiveSyncProcessor
 from services.scheduler.app.processors.supply_tomorrow_sync_processor import SupplyTomorrowSyncProcessor
 from services.scheduler.app.processors.demand_temp_sync_processor import DemandTempSyncProcessor
-from services.scheduler.app.processors.idf_forecast_merge_processor import IdfForecastMergeProcessor
-from services.scheduler.app.processors.demand_serve_pipeline_processor import DemandServePipelineProcessor
 from services.scheduler.app.processors.exchange_dsm_processor import ExchangeDsmProcessor
 from services.scheduler.app.processors.rtm_bid_lapse_processor import RTMBidLapseProcessor
 from services.scheduler.app.processors.dam_bid_capture_processor import DAMBidCaptureProcessor
@@ -111,12 +109,6 @@ class CronManager(BaseCronManager):
         self.bid_trade_live_sync_processor = BidTradeLiveSyncProcessor() # Add live sync processor
         self.supply_tomorrow_sync_processor = SupplyTomorrowSyncProcessor() # Add supply tomorrow sync processor
         self.demand_temp_sync_processor = DemandTempSyncProcessor() # Add demand temp sync processor
-        self.idf_forecast_merge_processor = IdfForecastMergeProcessor()
-        self.demand_serve_pipeline_processor = DemandServePipelineProcessor(
-            idf_processor=self.idf_forecast_merge_processor,
-            demand_processor=self.demand_processor,
-            dsm_processor=self.new_dsm_processor,
-        )
         self.exchange_dsm_processor = ExchangeDsmProcessor() # Add Exchange DSM processor
         self.rtm_bid_lapse_processor = RTMBidLapseProcessor() # Add RTM Bid Lapse processor
         self.dam_bid_capture_processor = DAMBidCaptureProcessor()
@@ -159,9 +151,6 @@ class CronManager(BaseCronManager):
                 logger.error("Failed to create job seeder: %s", e)
                 self.cron_job_seeder = None
         
-        # Reference to the FastAPI event loop — set in _run_all_jobs_on_startup
-        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
-
         # Initialize the parent BaseCronManager with audit logger
         super().__init__(
             service_name="scheduler",
@@ -190,11 +179,11 @@ class CronManager(BaseCronManager):
                 
             # First, ensure jobs are seeded
             logger.info("Seeding default jobs...")
-            seeding_result = self._safe_run_async(self.cron_job_seeder.seed_default_jobs())
+            seeding_result = self.cron_job_seeder.seed_default_jobs()
             logger.info("Job seeding result: %s", seeding_result)
             
             # Get all enabled jobs from database
-            jobs = self._safe_run_async(self.job_data_repository.get_all_jobs(enabled_only=True))
+            jobs = self.job_data_repository.get_all_jobs(enabled_only=True)
             
             registered_count = 0
             for job_config in jobs:
@@ -231,7 +220,6 @@ class CronManager(BaseCronManager):
 
             # Data Processing Jobs
             "demand_data_processing": self.demand_processor.execute_cron_job,
-            "demand_serve_pipeline": self.demand_serve_pipeline_processor.execute_cron_job,
             "demand_schedule_update": self.demand_schedule_processor.execute_cron_job,
             "raw_data_processing": self._execute_raw_data_processing_job,
             "supply_data_processing": self.supply_processor.execute_cron_job,
@@ -253,7 +241,6 @@ class CronManager(BaseCronManager):
             # Data Scraping Jobs (disabled due to import issues)
             "exchange_serve_archival": self._execute_exchange_serve_archival_job,
             "demand_serve_archival": self._execute_demand_serve_archival_job,
-            "forecast_serve_archival": self._execute_forecast_serve_archival_job,
             "supply_serve_archival": self._execute_supply_serve_archival_job,
             "weather_serve_archival": self._execute_weather_serve_archival_job,
             "bid_serve_archival": self._execute_bid_serve_archival_job,
@@ -261,8 +248,6 @@ class CronManager(BaseCronManager):
             "peak_demand_compute": self.peak_demand_service.compute_and_store_peak,
             # System Maintenance Jobs
             "system_cleanup": self._execute_system_cleanup_job,
-            "integration_apilog_cleanup": self._execute_integration_apilog_cleanup_job,
-            "scheduling_history_cleanup": self._execute_scheduling_history_cleanup_job,
             "retry_failed_jobs": self._execute_retry_failed_jobs,
             "data_migration": self._execute_data_migration_job,
             "job_logs_cleanup": self._execute_job_logs_cleanup_job,
@@ -287,7 +272,6 @@ class CronManager(BaseCronManager):
 
             # Demand Temp Sync
             "demand_temp_sync": self.demand_temp_sync_processor.execute_cron_job,
-            "idf_forecast_merge": self.idf_forecast_merge_processor.execute_cron_job,
 
             # RTM Bid Lapse
             "rtm_bid_lapse_processing": self.rtm_bid_lapse_processor.execute_cron_job,
@@ -322,8 +306,8 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "demand_data_processing",
                 "name": "Demand Data Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": not getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
+                "schedule": "* */15 * * *",  # Every 15 minutes
+                "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
@@ -336,7 +320,7 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "supply_data_processing",
                 "name": "Supply Data Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
+                "schedule": "* */15 * * *",  # Every 15 minutes
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
@@ -360,268 +344,7 @@ class CronManager(BaseCronManager):
                 "schedule": "0 0 * * *", # Every day at midnight
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "exchange_data_processing",
-                "name": "Exchange Data Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "exchange_trade_processing",
-                "name": "Exchange Trade Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "exchange_dsm_processing",
-                "name": "Exchange DSM Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "weather_data_processing",
-                "name": "Weather Data Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "bid_data_processing",
-                "name": "Bid Data Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "renewable_data_processing",
-                "name": "Renewable Data Processing",
-                "schedule": "*/15 * * * *",  # Every 15 minutes
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "supply_data_midnight_fill",
-                "name": "Supply Data Midnight Fill",
-                "schedule": "0 0 * * *",  # Every day at midnight
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "peak_demand_compute",
-                "name": "Peak Demand Compute",
-                "schedule": "0 */6 * * *",  # Every 6 hours
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "exchange_serve_archival",
-                "name": "Exchange Serve Archival",
-                "schedule": "0 2 * * *",  # Every day at 2 AM
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Demand/Supply Sync Jobs
-            {
-                "job_type": "demand_temp_sync",
-                "name": "Demand Temp Sync",
-                "schedule": "*/15 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "idf_forecast_merge",
-                "name": "IDF Forecast Merge",
-                "schedule": "*/15 * * * *",
-                "enabled": not getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
-                "timezone": settings.CRON_TIMEZONE,
-            },
-            {
-                "job_type": "demand_serve_pipeline",
-                "name": "Demand Serve Pipeline (IDF → Demand → DSM)",
-                "schedule": getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_SCHEDULE", "*/15 * * * *"),
-                "enabled": getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
-                "timezone": settings.CRON_TIMEZONE,
-            },
-            {
-                "job_type": "supply_tomorrow_sync",
-                "name": "Supply Tomorrow Sync",
-                "schedule": "*/15 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Live Sync Jobs
-            {
-                "job_type": "bid_trade_live_sync",
-                "name": "Bid Trade Live Sync",
-                "schedule": "*/30 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "rtm_single_bid_book_sync",
-                "name": "RTM Single Bid Book Sync",
-                "schedule": "*/30 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "dam_single_bid_book_sync",
-                "name": "DAM Single Bid Book Sync",
-                "schedule": "0,30 14-16 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # DSM and RTM Calculation Jobs
-            {
-                "job_type": "dsm_rate_calculation",
-                "name": "DSM Rate and Net DSM Amount Calculation",
-                "schedule": "*/15 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "new_dsm_rate_calculation",
-                "name": "New DSM Rate and Net DSM Amount Calculation",
-                "schedule": "*/15 * * * *",
-                "enabled": not getattr(settings, "DEMAND_SERVE_PIPELINE_CRON_ENABLED", True),
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "rtm_scheduling_calculation",
-                "name": "RTM Scheduling Calculation",
-                "schedule": "*/30 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Bid Lapse Processing Jobs
-            {
-                "job_type": "rtm_bid_lapse_processing",
-                "name": "RTM Bid Lapse Processing",
-                "schedule": "*/15 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "rtm_block_bid_lapse_processing",
-                "name": "RTM Block Bid Lapse Processing",
-                "schedule": "*/15 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "rtm_block_bid_book_sync",
-                "name": "RTM Block Bid Book Sync",
-                "schedule": "*/15 * * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Bid Capture Jobs
-            {
-                "job_type": "dam_bid_capture_snapshot",
-                "name": "DAM Bid Capture Snapshot",
-                "schedule": "59 10 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Limit Values Job
-            {
-                "job_type": "limit_values_approval_processing",
-                "name": "Limit Values Approval Processing",
-                "schedule": "0 0 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Data Archival Jobs (missing from original fallback)
-            {
-                "job_type": "demand_serve_archival",
-                "name": "Demand Serve Data Archival",
-                "schedule": "0 0 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "forecast_serve_archival",
-                "name": "Forecast Serve Data Archival",
-                "schedule": "0 0 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "supply_serve_archival",
-                "name": "Supply Serve Data Archival",
-                "schedule": "0 0 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "weather_serve_archival",
-                "name": "Weather Serve Data Archival",
-                "schedule": "0 0 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "bid_serve_archival",
-                "name": "Bid Serve Data Archival",
-                "schedule": "0 0 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "renewable_serve_archival",
-                "name": "Renewable Serve Data Archival",
-                "schedule": "0 0 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Additional Maintenance Jobs (missing from original fallback)
-            {
-                "job_type": "scheduling_history_cleanup",
-                "name": "Scheduling History Cleanup",
-                "schedule": "0 1 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "integration_apilog_cleanup",
-                "name": "Integration API Log Cleanup",
-                "schedule": "0 2 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "job_logs_cleanup",
-                "name": "Job Logs Cleanup",
-                "schedule": "0 4 * * *",
-                "enabled": True,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            # Disabled by default
-            {
-                "job_type": "dam_bid_status_sync",
-                "name": "DAM Bid Status Sync",
-                "schedule": "0,30 14-15 * * *",
-                "enabled": False,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "rtm_bid_status_sync",
-                "name": "RTM Bid Status Sync",
-                "schedule": "*/30 * * * *",
-                "enabled": False,
-                "timezone": settings.CRON_TIMEZONE
-            },
-            {
-                "job_type": "data_migration",
-                "name": "Data Migration to Historical",
-                "schedule": "0 3 * * *",
-                "enabled": False,
-                "timezone": settings.CRON_TIMEZONE
-            },
+            }
         ]
         
         registered_count = 0
@@ -657,7 +380,7 @@ class CronManager(BaseCronManager):
                 if settings.RUN_ALL_JOBS_ON_STARTUP:
                     try:
                         # Try to get the current event loop
-                        loop = asyncio.get_running_loop()
+                        loop = asyncio.get_event_loop()
                         if loop.is_running():
                             # If loop is running, create a task
                             asyncio.create_task(self._run_all_jobs_on_startup())
@@ -675,12 +398,12 @@ class CronManager(BaseCronManager):
     async def _run_all_jobs_on_startup(self):
         """Run all enabled jobs immediately on startup according to priority with parallel execution for same priority"""
         try:
-            self._main_loop = asyncio.get_running_loop()
+            
             logger.info("Running all enabled jobs on startup...")
             logger.info("   Startup delay: %s seconds", settings.STARTUP_JOB_DELAY_SECONDS)
             
-            # Wait for the configured delay without blocking the FastAPI event loop
-            await asyncio.sleep(settings.STARTUP_JOB_DELAY_SECONDS)
+            # Wait for the configured delay
+            time.sleep(settings.STARTUP_JOB_DELAY_SECONDS)
             
             # Get all enabled jobs with their priorities from database
             enabled_jobs_with_priority = []
@@ -688,7 +411,7 @@ class CronManager(BaseCronManager):
             for job_type, cron_job in self._registered_jobs.items():
                 if cron_job.enabled:
                     # Get job data from database to get priority
-                    job_data = await self.job_data_repository.get_job(job_type)
+                    job_data = self.job_data_repository.get_job(job_type)
                     priority = job_data.get('priority', 999) if job_data else 999  # Default to low priority
                     
                     enabled_jobs_with_priority.append({
@@ -729,7 +452,7 @@ class CronManager(BaseCronManager):
                 # Add delay between priority groups (except for the last priority group)
                 if priority != max(jobs_by_priority.keys()):
                     logger.info("   Waiting %s seconds before next priority group...", settings.STARTUP_JOB_INTERVAL_SECONDS)
-                    await asyncio.sleep(settings.STARTUP_JOB_INTERVAL_SECONDS)
+                    time.sleep(settings.STARTUP_JOB_INTERVAL_SECONDS)
             
             logger.info("Completed startup job execution")
             
@@ -776,7 +499,7 @@ class CronManager(BaseCronManager):
             try:
                 # Record job start and get job detail ID for correlation
                 execution_start = datetime.now()
-                job_detail_id = await self._record_job_start(job_type, cron_job.name, "parallel", execution_start)
+                job_detail_id = self._record_job_start(job_type, cron_job.name, "parallel", execution_start)
                 
                 logger.info("     Starting parallel job: %s (Type: %s, Priority: %s)", 
                           cron_job.name, job_type, priority)
@@ -862,7 +585,7 @@ class CronManager(BaseCronManager):
                   len(successful_jobs), len(failed_jobs))
     
     # Enhanced job status methods with audit database integration
-    async def get_all_jobs(self) -> Dict[str, Any]:
+    def get_all_jobs(self) -> Dict[str, Any]:
         """Get status of all jobs with scheduler-specific enhancements"""
         base_result = super().get_all_jobs()
         
@@ -870,7 +593,7 @@ class CronManager(BaseCronManager):
         if base_result.get('jobs'):
             for job in base_result['jobs']:
                 try:
-                    job_stats = await self.job_detail_repository.get_job_statistics(job['job_id'], days=1)
+                    job_stats = self.job_detail_repository.get_job_statistics(job['job_id'], days=1)
                     if job_stats:
                         job.update({
                             'total_executions': job_stats.get('total_executions', 0),
@@ -882,12 +605,12 @@ class CronManager(BaseCronManager):
         
         return base_result
     
-    async def _record_job_start(self, job_type: str, job_name: str, schedule: str, 
+    def _record_job_start(self, job_type: str, job_name: str, schedule: str, 
                          execution_start: datetime) -> Optional[str]:
         """Record job start in audit database and return execution_id"""
         try:
-            # Get the job_id (ObjectId) from job_data collection using job_type (now async)
-            job_data = await self.job_data_repository.get_job(job_type)
+            # Get the job_id (ObjectId) from job_data collection using job_type
+            job_data = self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return None
@@ -918,7 +641,7 @@ class CronManager(BaseCronManager):
                 }
             )
             
-            await self.job_detail_repository.log_execution(job_detail)
+            self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job start for %s (job_type: %s, execution_id: %s) in audit database", 
                        job_id, job_type, execution_id)
             return execution_id
@@ -927,7 +650,7 @@ class CronManager(BaseCronManager):
             logger.error("Failed to record job start for %s: %s", job_type, str(e))
             return None
 
-    async def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
+    def _record_job_completion(self, job_type: str, job_name: str, schedule: str, 
                               execution_start: datetime, execution_end: datetime,
                               execution_id: str, status: str, success: bool, 
                               result: Optional[Dict[str, Any]] = None,
@@ -936,8 +659,8 @@ class CronManager(BaseCronManager):
         try:
             duration_seconds = (execution_end - execution_start).total_seconds()
             
-            # Get the job_id (ObjectId) from job_data collection using job_type (now async)
-            job_data = await self.job_data_repository.get_job(job_type)
+            # Get the job_id (ObjectId) from job_data collection using job_type
+            job_data = self.job_data_repository.get_job(job_type)
             if not job_data:
                 logger.error("Job data not found for job_type: %s", job_type)
                 return
@@ -966,22 +689,22 @@ class CronManager(BaseCronManager):
                 }
             )
             
-            await self.job_detail_repository.log_execution(job_detail)
+            self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job completion for %s (job_type: %s, execution_id: %s, status: %s) in audit database", 
                        job_id, job_type, execution_id, status)
                 
         except Exception as e:  # pylint: disable=broad-except
             logger.error("Failed to record job completion for %s: %s", job_type, str(e))
     
-    async def _record_job_completion_with_logs(self, job_type: str, job_name: str, execution_id: str, 
+    def _record_job_completion_with_logs(self, job_type: str, job_name: str, execution_id: str, 
                                        status: str, duration_seconds: float, logs: list, 
                                        result_data: Optional[Dict[str, Any]] = None, error_message: Optional[str] = None):
         """Record job completion with captured execution logs"""
         try:
             # Try to get job data, but proceed even if not found
             job_id = job_type  # Default to job_type as job_id
-            if hasattr(self, 'job_data_repository') and self.job_data_repository: # job_data_repository.get_job is async
-                job_data = await self.job_data_repository.get_job(job_type)
+            if hasattr(self, 'job_data_repository') and self.job_data_repository:
+                job_data = self.job_data_repository.get_job(job_type)
                 if job_data:
                     job_id = job_data.get("_id", job_type)
                 else:
@@ -1014,7 +737,7 @@ class CronManager(BaseCronManager):
                 metadata={"logs": logs}  # Store the captured logs in metadata
             )
             
-            await self.job_detail_repository.log_execution(job_detail)
+            self.job_detail_repository.log_execution(job_detail)
             logger.info("Recorded job completion with logs for %s (job_type: %s, execution_id: %s, status: %s, logs: %d)", 
                        job_name, job_type, execution_id, status, len(logs))
                 
@@ -1061,8 +784,8 @@ class CronManager(BaseCronManager):
             from libs.audit_queue.simple_logger import AuditLogger
             
             # Record job start in job detail repository if available
-            if hasattr(self, '_record_job_start'): # _record_job_start is async
-                execution_id = await self._record_job_start(job_type, job_name, "scheduled", start_time)
+            if hasattr(self, '_record_job_start'):
+                execution_id = self._record_job_start(job_type, job_name, "scheduled", start_time)
                 
                 # Set correlation ID so processors can reuse it
                 from services.scheduler.app.processors.base_processor import set_correlation_id as set_proc_correlation_id
@@ -1098,7 +821,7 @@ class CronManager(BaseCronManager):
             duration_ms = int((time.time() - execution_start_timestamp) * 1000)
             
             # Log successful completion
-            if self.audit_logger: # audit_logger methods are sync (do not await)
+            if self.audit_logger:
                 self.audit_logger.log_scheduled_job(
                     service=self.service_name,
                     job_id=execution_id or job_type,
@@ -1115,8 +838,8 @@ class CronManager(BaseCronManager):
             # Update job completion record with captured logs
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
                 # Ensure result_data is a dict or None
-                result_data = result if isinstance(result, dict) else None # _record_job_completion_with_logs is async
-                await self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "success", 
+                result_data = result if isinstance(result, dict) else None
+                self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "success", 
                                                     duration_ms / 1000, log_capture.get_logs(), result_data)
             
             return result
@@ -1149,7 +872,7 @@ class CronManager(BaseCronManager):
             
             # Update job completion record with captured logs (including error logs)
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
-                await self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "error", 
+                self._record_job_completion_with_logs(job_type, job_name, execution_id or job_type, "error", 
                                                     duration_ms / 1000, log_capture.get_logs(), None, str(e))
             
             raise
@@ -1177,15 +900,15 @@ class CronManager(BaseCronManager):
         job_type = "supply_data_management"
         job_name = "Supply Data Management"
         schedule = settings.DEMAND_DATA_CRON_SCHEDULE
-        start_time = datetime.now() # _record_job_start is async
+        start_time = datetime.now()
         
         # Record job start
-        execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
+        execution_id = self._record_job_start(job_type, job_name, schedule, start_time)
         
         # Log job start with audit logging
         if execution_id and self.audit_logger:
             self.audit_logger.log_system_operation(
-                service="scheduler", # audit_logger methods are sync (do not await)
+                service="scheduler",
                 operation="cron_job_started",
                 message=f"Cron job started: {job_name}",
                 job_detail_id=execution_id,
@@ -1222,7 +945,7 @@ class CronManager(BaseCronManager):
                 )
             
             # Record job completion
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id or job_type,
                 "success" if success else "error", success, result
             )
@@ -1250,7 +973,7 @@ class CronManager(BaseCronManager):
                 )
             
             # Record job failure
-            await self._record_job_completion(
+            self._record_job_completion(
                 job_type, job_name, schedule, start_time, end_time, execution_id or job_type,
                 "error", False, error_message=str(e)
             )
@@ -1258,12 +981,12 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
 
     # Missing job execution methods
-    async def _execute_demand_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
+    def _execute_demand_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute demand data management job"""
         # Log job execution
         if self.audit_logger:
-            self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
-                service="scheduler", # type: ignore
+            self.audit_logger.log_system_operation(
+                service="scheduler",
                 operation="cron_job_started",
             message=f"Cron job started: _execute_demand_data_management_job",
             job_type="_execute_demand_data_management_job",
@@ -1271,13 +994,13 @@ class CronManager(BaseCronManager):
         )
         
         try:
-            # Await the async delegate
-            return await self._execute_demand_data_job_delegate(payload)
+            # Use sync wrapper for async delegate
+            return self._run_async_job(self._execute_demand_data_job_delegate(payload))
         except Exception as e:
             logger.error("Error delegating demand data management job: %s", str(e))
             return {'status': 'error', 'error': str(e)}
-
-    async def _execute_supply_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
+    
+    def _execute_supply_data_management_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute supply data management job"""
         method_name = "_execute_supply_data_management_job"
         try:
@@ -1288,7 +1011,7 @@ class CronManager(BaseCronManager):
             
             # Log successful completion
             if self.audit_logger:
-                self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
+                self.audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_completed",
                 message=f"Cron job completed: {method_name}",
@@ -1302,7 +1025,7 @@ class CronManager(BaseCronManager):
         except Exception as e:
             # Log job failure
             if self.audit_logger:
-                self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
+                self.audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_failed",
                     message=f"Cron job failed: {method_name} - {str(e)}",
@@ -1314,15 +1037,15 @@ class CronManager(BaseCronManager):
             logger.error("Error in %s: %s", method_name, str(e))
             return {'status': 'error', 'error': str(e)}
     
-    async def _execute_serve_data_reconciliation_job(self, payload: Optional[Dict[str, Any]] = None):
+    def _execute_serve_data_reconciliation_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute serve data reconciliation job"""
         method_name = "_execute_serve_data_reconciliation_job"
         try:
             logger.info(f"Starting {method_name}")
             
             # Execute reconciliation logic
-            from ..services.dummy_data_service import dummy_data_service # dummy_data_service methods are async
-            result = await dummy_data_service.reconcile_and_rerun_crons()
+            from ..services.dummy_data_service import dummy_data_service
+            result = dummy_data_service.reconcile_and_rerun_crons()
             
             # Log successful completion
             if self.audit_logger:
@@ -1340,7 +1063,7 @@ class CronManager(BaseCronManager):
         except Exception as e:
             # Log job failure
             if self.audit_logger:
-                self.audit_logger.log_system_operation( # audit_logger methods are sync (do not await)
+                self.audit_logger.log_system_operation(
                     service="scheduler",
                     operation="cron_job_failed",
                 message=f"Cron job failed: {method_name} - {str(e)}",
@@ -1352,12 +1075,12 @@ class CronManager(BaseCronManager):
             logger.error("Error in %s: %s", method_name, str(e))
             return {'status': 'error', 'error': str(e)}
     
-    async def _execute_demand_data_processing_job(self, payload: Optional[Dict[str, Any]] = None):
+    def _execute_demand_data_processing_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute demand data processing job"""
         logger.info("Executing demand data processing job")
         try:
             # Import and use demand data processing service
-            from ..services.demand_data_processing import DemandDataProcessor # process_demand_data is async
+            from ..services.demand_data_processing import DemandDataProcessor
             processor = DemandDataProcessor()
             return processor.process_demand_data(payload)
         except Exception as e:
@@ -1365,12 +1088,12 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
     
     def _execute_supply_data_processing_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute supply data processing job""" # process_supply_data is async
+        """Execute supply data processing job"""
         logger.info("Executing supply data processing job")
         try:
             # Import and use supply data processing service
             from ..services.supply_data_processing import SupplyDataProcessing
-            processor = SupplyDataProcessing() # process_supply_data is async
+            processor = SupplyDataProcessing()
             return processor.process_supply_data(payload)
         except Exception as e:
             logger.error("Error in supply data processing job: %s", str(e))
@@ -1457,31 +1180,19 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
     
     def _safe_run_async(self, coro):
-        """Safely run an async coroutine from a sync (executor thread) context.
-
-        When called from run_in_executor threads, submits to the FastAPI event loop
-        via run_coroutine_threadsafe so Motor clients (bound to that loop) work correctly.
-        """
+        """Safely run an async coroutine, handling existing event loops"""
         import asyncio
         try:
-            asyncio.get_running_loop()
-            # Called from within the event loop thread — cannot block synchronously
-            coro.close()
-            raise RuntimeError(
-                "_safe_run_async cannot synchronously wait while an event loop is running; "
-                "await the coroutine or schedule it with asyncio.create_task instead"
-            )
-        except RuntimeError as exc:
-            if "cannot synchronously wait" in str(exc):
-                raise
-            # No running loop in this thread (called from executor) — proceed below
-
-        # Prefer the captured FastAPI loop so Motor clients work across the boundary
-        if self._main_loop is not None and self._main_loop.is_running():
-            return asyncio.run_coroutine_threadsafe(coro, self._main_loop).result()
-
-        # Fallback: create a new event loop (safe only before the FastAPI loop starts)
-        return asyncio.run(coro)
+            # Check if we're already in an event loop
+            loop = asyncio.get_running_loop()
+            # If we are, create a task and run it in a thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                future = executor.submit(asyncio.run, coro)
+                return future.result()
+        except RuntimeError:
+            # No event loop running, safe to use asyncio.run
+            return asyncio.run(coro)
 
     def _cleanup_job_connections(self):
         """
@@ -1525,7 +1236,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_demand_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute demand serve archival job""" # execute_archival_job is async
+        """Execute demand serve archival job"""
         logger.info("Executing demand serve archival job")
         try:
             # Use the demand processor's archival method
@@ -1536,23 +1247,9 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
         finally:
             self._cleanup_job_connections()
-
-    def _execute_forecast_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute forecast_serve archival job."""
-        logger.info("Executing forecast serve archival job")
-        try:
-            result = self._safe_run_async(
-                self.idf_forecast_merge_processor.execute_forecast_serve_archival_job()
-            )
-            return result
-        except Exception as e:
-            logger.error("Error in forecast serve archival job: %s", str(e))
-            return {"status": "error", "error": str(e)}
-        finally:
-            self._cleanup_job_connections()
     
     def _execute_supply_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute supply serve archival job""" # execute_archival_job is async
+        """Execute supply serve archival job"""
         logger.info("Executing supply serve archival job")
         try:
             # Use the supply processor's archival method
@@ -1565,7 +1262,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_weather_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute weather serve archival job""" # execute_archival_job is async
+        """Execute weather serve archival job"""
         logger.info("Executing weather serve archival job")
         try:
             # Use the weather processor's archival method
@@ -1578,7 +1275,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_bid_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute bid serve archival job""" # execute_archival_job is async
+        """Execute bid serve archival job"""
         logger.info("Executing bid serve archival job")
         try:
             # Use the bid processor's archival method
@@ -1591,7 +1288,7 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_renewable_serve_archival_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute renewable serve archival job""" # execute_archival_job is async
+        """Execute renewable serve archival job"""
         logger.info("Executing renewable serve archival job")
         try:
             # Use the renewable processor's archival method
@@ -1605,92 +1302,19 @@ class CronManager(BaseCronManager):
             self._cleanup_job_connections()
     
     def _execute_system_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute system cleanup job — dynamically cleans all *_integration_apilog collections."""
+        """Execute system cleanup job"""
         logger.info("Executing system cleanup job")
         try:
-            return self._safe_run_async(self._run_integration_apilog_cleanup())
+            # Placeholder for system cleanup logic
+            result = {
+                'status': 'success',
+                'message': 'System cleanup job placeholder - implementation pending',
+                'cleaned_files': 0
+            }
+            return result
         except Exception as e:
             logger.error("Error in system cleanup job: %s", str(e))
             return {'status': 'error', 'error': str(e)}
-
-    async def _run_integration_apilog_cleanup(self):
-        """Async helper to delete old integration apilog docs across all DBs."""
-        from libs.database.mongo_client_factory import get_motor_client, get_scheduler_client
-        cutoff = datetime.now() - timedelta(days=7)
-        total_deleted = 0
-        cleaned_collections = []
-
-        # Databases to scan — use Motor async clients, not sync pymongo
-        dbs = []
-        try:
-            dbs.append(("ingestion", get_motor_client(settings.MONGODB_URI, "ingestion_service")[settings.MONGODB_DATABASE]))
-        except Exception as e:
-            logger.warning("Could not get ingestion DB for cleanup: %s", e)
-        try:
-            dbs.append(("scheduler", get_scheduler_client(settings.MONGODB_URI)[settings.MONGODB_DATABASE]))
-        except Exception as e:
-            logger.warning("Could not get scheduler DB for cleanup: %s", e)
-
-        apilog_pattern = re.compile(r".*_integration_apilog$", re.IGNORECASE)
-
-        for db_name, db in dbs:
-            try:
-                collection_names = await db.list_collection_names()
-                for coll_name in collection_names:
-                    if apilog_pattern.match(coll_name):
-                        collection = db[coll_name]
-                        # Try both lowercase and capitalized timestamp fields
-                        delete_result = await collection.delete_many({
-                            "$or": [
-                                {"timestamp": {"$lt": cutoff}},
-                                {"Timestamp": {"$lt": cutoff}}
-                            ]
-                        })
-                        if delete_result.deleted_count > 0:
-                            total_deleted += delete_result.deleted_count
-                            cleaned_collections.append(f"{db_name}.{coll_name}:{delete_result.deleted_count}")
-                            logger.info("Cleaned %d docs from %s.%s", delete_result.deleted_count, db_name, coll_name)
-            except Exception as e:
-                logger.error("Error cleaning integration apilog in %s: %s", db_name, e)
-
-        return {
-            'status': 'success',
-            'message': f'Cleaned {total_deleted} integration apilog docs',
-            'total_deleted': total_deleted,
-            'collections': cleaned_collections
-        }
-
-    def _execute_integration_apilog_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Dedicated integration apilog cleanup cron job."""
-        return self._execute_system_cleanup_job(payload)
-
-    def _execute_scheduling_history_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute scheduling requisition calculation history cleanup"""
-        logger.info("Executing scheduling history cleanup job")
-        try:
-            return self._safe_run_async(self._run_scheduling_history_cleanup())
-        except Exception as e:
-            logger.error("Error in scheduling history cleanup job: %s", str(e))
-            return {'status': 'error', 'error': str(e)}
-
-    async def _run_scheduling_history_cleanup(self):
-        """Async helper to delete old scheduling history records."""
-        from libs.database.mongo_client_factory import get_scheduler_client
-        cutoff = datetime.now() - timedelta(days=90)
-        total_deleted = 0
-        try:
-            db = get_scheduler_client(settings.MONGODB_URI)[settings.MONGODB_DATABASE]
-            collection = db["scheduling_requisition_calculation_history"]
-            result = await collection.delete_many({"archived_at": {"$lt": cutoff}})
-            total_deleted = result.deleted_count
-            logger.info("Deleted %d old scheduling history records", total_deleted)
-        except Exception as e:
-            logger.error("Error deleting old scheduling history: %s", e)
-        return {
-            'status': 'success',
-            'message': f'Deleted {total_deleted} old scheduling history records',
-            'total_deleted': total_deleted
-        }
     
     def _execute_retry_failed_jobs(self, payload: Optional[Dict[str, Any]] = None):
         """Execute retry failed jobs"""
@@ -1723,59 +1347,39 @@ class CronManager(BaseCronManager):
             return {'status': 'error', 'error': str(e)}
     
     def _execute_job_logs_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute job logs cleanup — deletes old job_detail and job_execution_logs records."""
+        """Execute job logs cleanup"""
         logger.info("Executing job logs cleanup")
         try:
-            if not self.job_detail_repository:
-                return {'status': 'error', 'error': 'job_detail_repository not available'}
-
-            deleted_job_detail = self._safe_run_async(
-                self.job_detail_repository.delete_old_executions(days_old=60)
-            )
-
-            # Also clean up execution logs if repository available
-            from libs.core.job_repositories import JobExecutionLogRepository
-            deleted_exec_logs = 0
-            try:
-                exec_log_repo = JobExecutionLogRepository(
-                    settings.AUDIT_DB_URI,
-                    settings.AUDIT_DB_NAME
-                )
-                deleted_exec_logs = self._safe_run_async(
-                    exec_log_repo.delete_old_logs(days_old=60)
-                )
-            except Exception as exec_err:
-                logger.warning("Could not clean job_execution_logs: %s", exec_err)
-
-            return {
+            # Placeholder for logs cleanup logic
+            result = {
                 'status': 'success',
-                'message': f'Deleted {deleted_job_detail} job_detail and {deleted_exec_logs} job_execution_logs records',
-                'deleted_job_detail': deleted_job_detail,
-                'deleted_exec_logs': deleted_exec_logs
+                'message': 'Job logs cleanup placeholder - implementation pending',
+                'cleaned_logs': 0
             }
+            return result
         except Exception as e:
             logger.error("Error in job logs cleanup: %s", str(e))
             return {'status': 'error', 'error': str(e)}
     
-    async def get_job_execution_history(self, job_type: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_job_execution_history(self, job_type: str, limit: int = 10) -> List[Dict[str, Any]]:
         """Get execution history for a specific job type"""
         try:
             # Get job execution history from the job detail repository
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
                 # The repository method expects job_id, which is the same as job_type in our case
-                return await self.job_detail_repository.get_job_execution_history(job_type, limit)
+                return self.job_detail_repository.get_job_execution_history(job_type, limit)
             else:
                 logger.warning("Job detail repository not available for history retrieval")
                 return []
         except Exception as e:
             logger.error("Failed to get job execution history for %s: %s", job_type, str(e))
             return []
-
-    async def get_all_job_executions(self, limit: int = 50) -> List[Dict[str, Any]]:
+    
+    def get_all_job_executions(self, limit: int = 50) -> List[Dict[str, Any]]:
         """Get all job executions across all job types"""
         try:
             if hasattr(self, 'job_detail_repository') and self.job_detail_repository:
-                return await self.job_detail_repository.get_recent_job_executions(limit)
+                return self.job_detail_repository.get_recent_job_executions(limit)
             else:
                 logger.warning("Job detail repository not available for execution retrieval")
                 return []

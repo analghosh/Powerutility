@@ -635,7 +635,7 @@ class RTMTransactionService:
                                             },
                                             {"$set": { "exchangeOrderId": order_id}}
                                         )
-                                        await self.update_single_bid_rtm_in_system(delivery_date_timestamp, asset_id, bid_area_id)
+                                        await self.update_single_bid_rtm_in_system(delivery_date, asset_id, bid_area_id)
                                         logger.info(f"Updated DB status to 'cancelled' for OrderId {order_id}")
                                     except Exception as db_err:
                                         logger.warning(f"Failed to update DB status to cancelled for {req_from_period}: {db_err}")

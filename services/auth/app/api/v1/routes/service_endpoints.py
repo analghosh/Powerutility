@@ -17,7 +17,6 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..'))
 from libs.audit_queue.simple_logger import AuditLogger
-from ....core.dependencies import get_audit_logger
 
 router = APIRouter(prefix="/auth", tags=["user-management"])
 security = HTTPBearer()
@@ -68,8 +67,7 @@ class PermissionValidationResponse(BaseModel):
 async def get_user_info(
     user_id: str,
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
+    current_user: UserPrincipal = Depends(get_current_user)
 ) -> UserInfoResponse:
     """
     Get user information by ID for service-to-service communication
@@ -159,8 +157,7 @@ async def get_user_info(
 )
 async def validate_token_and_get_user(
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
+    current_user: UserPrincipal = Depends(get_current_user)
 ) -> Dict[str, Any]:
     """
     Validate JWT token and return user information
@@ -233,8 +230,7 @@ async def validate_token_and_get_user(
 )
 async def get_available_roles(
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
+    current_user: UserPrincipal = Depends(get_current_user)
 ) -> List[RoleResponse]:
     """
     Get all available roles in the system
@@ -258,7 +254,7 @@ async def get_available_roles(
         from ....repository.role_repository import RoleRepository
         role_repo = RoleRepository()
         
-        roles = await role_repo.get_all_active_roles()
+        roles = role_repo.get_all_roles()
         
         # Log successful roles retrieval
         client_ip = request.client.host if request.client else None
@@ -311,8 +307,7 @@ async def get_available_roles(
 )
 async def get_available_permissions(
     request: Request,
-    current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
+    current_user: UserPrincipal = Depends(get_current_user)
 ) -> List[PermissionResponse]:
     """
     Get all available permissions in the system
@@ -390,8 +385,7 @@ async def validate_user_permissions(
     user_id: str = Query(..., description="User ID to validate permissions for"),
     permission_request: PermissionValidationRequest = ...,
     request: Request = ...,
-    current_user: UserPrincipal = Depends(get_current_user),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
+    current_user: UserPrincipal = Depends(get_current_user)
 ) -> PermissionValidationResponse:
     """
     Validate if a user has specific permissions

@@ -117,13 +117,35 @@ class MongoAuditQueue:
             logger.warning("Could not create indexes: %s", e)
     
     def _create_audit_logs_ttl_indexes(self):
-        """Create regular indexes for audit_logs collection (TTL removed)"""
+        """Create TTL indexes for audit_logs collection based on priority levels"""
         try:
             audit_collection = self.db[self.audit_collection_name]
             
-            # NOTE: TTL indexes removed because auth service inserts into the same
-            # collection without ttl_expiry_date/priority, causing confusion and
-            # leaving auth audit logs unbounded. Use manual cleanup if needed.
+            # TTL index for HIGH priority logs (1 year)
+            audit_collection.create_index(
+                [("ttl_expiry_date", 1)],
+                partialFilterExpression={"priority": "high"},
+                expireAfterSeconds=0,  # MongoDB will use the ttl_expiry_date field
+                name="ttl_high_priority"
+            )
+            
+            # TTL index for MEDIUM priority logs (6 months)
+            audit_collection.create_index(
+                [("ttl_expiry_date", 1)],
+                partialFilterExpression={"priority": "medium"},
+                expireAfterSeconds=0,
+                name="ttl_medium_priority"
+            )
+            
+            # TTL index for LOW priority logs (3 months)
+            audit_collection.create_index(
+                [("ttl_expiry_date", 1)],
+                partialFilterExpression={"priority": "low"},
+                expireAfterSeconds=0,
+                name="ttl_low_priority"
+            )
+            
+            # No TTL index for CRITICAL priority logs (no expiry)
             
             # Regular indexes for audit_logs
             audit_collection.create_index([("timestamp", -1)])
@@ -131,10 +153,10 @@ class MongoAuditQueue:
             audit_collection.create_index([("record_type", 1)])
             audit_collection.create_index([("priority", 1)])
             
-            logger.info("Regular indexes created for audit_logs collection (TTL skipped)")
+            logger.info("TTL indexes created for audit_logs collection")
             
         except Exception as e:
-            logger.warning("Could not create audit_logs indexes: %s", e)
+            logger.warning("Could not create audit_logs TTL indexes: %s", e)
     
     
     def add_to_queue(self, log_data: Dict[str, Any], source_service: str, 
@@ -446,8 +468,9 @@ class MongoAuditQueue:
             return []
         try:
             return list(self.jobs_collection.find(
-                {"status": {"$in": [JobStatus.SAVED, JobStatus.PROCESSING]}}
-            ).sort("created_at", 1).limit(limit))
+                {"status": {"$in": [JobStatus.SAVED, JobStatus.PROCESSING]}},
+                limit=limit
+            ).sort("created_at", 1))
         except Exception as e:
             logger.error("Failed to get pending jobs: %s", e)
             return []

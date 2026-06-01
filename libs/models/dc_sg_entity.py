@@ -66,10 +66,7 @@ class DCSgEntity(BaseModel):
     ramp_up: Optional[float] = Field(None, description="Ramp up value")
     ramp_down: Optional[float] = Field(None, description="Ramp down value")
     dc_afterloss: Optional[float] = Field(None, description="DC after loss value")
-    entire_shared_onbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Onbar Entitlement Amount")
-    entire_shared_offbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Offbar Entitlement Amount")
-    rtm_max: Optional[float] = Field(None, description="RTM Max value (SG of tomorrow at 10:10 AM, locked once set)")
-
+    
     # Process flags
     process_type: Optional[str] = Field(None, description="Process type (today/tomorrow)")
     updated_flag: Optional[str] = Field(None, description="Updated flag (UPDATED/REPLACED/OLD)")
