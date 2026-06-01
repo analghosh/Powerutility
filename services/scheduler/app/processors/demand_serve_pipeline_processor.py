@@ -37,6 +37,24 @@ class DemandServePipelineProcessor(BaseProcessor):
         self.demand_processor = demand_processor or DemandProcessor()
         self.dsm_processor = dsm_processor or NewDSMProcessor()
 
+    def process_raw_data_to_serve(
+        self,
+        raw_data: List[Dict[str, Any]],
+        metadata: Dict[str, Any],
+        provider_config: Dict[str, Any],
+    ) -> bool:
+        """
+        Satisfy BaseProcessor abstract contract.
+        This processor is orchestration-only and does not process raw records directly.
+        """
+        logger.debug(
+            "DemandServePipelineProcessor.process_raw_data_to_serve called (no-op): "
+            "raw_data=%s provider=%s",
+            len(raw_data or []),
+            provider_config.get("code") if isinstance(provider_config, dict) else None,
+        )
+        return True
+
     async def execute_cron_job(self) -> Dict[str, Any]:
         job_type = "demand_serve_pipeline"
         job_name = "Demand Serve Pipeline (IDF → Demand → DSM)"
