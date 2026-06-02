@@ -53,32 +53,32 @@ class CronOrchestratorService:
             return {"job_id": job_id, "success": False, "detail": str(e)}
 
     async def _get_scheduler_jobs(self, client: httpx.AsyncClient) -> List[str]:
-        """Fetch registered job types from the scheduler service."""
+        """Fetch registered job IDs from the scheduler service."""
         try:
             resp = await client.get(
-                f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/jobs/all",
+                f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/scheduler/jobs/all",
                 timeout=SCHEDULER_TIMEOUT
             )
             resp.raise_for_status()
             data = resp.json()
             jobs = data.get("jobs", [])
-            return [j.get("job_type") for j in jobs if j.get("job_type")]
+            return [j.get("job_id") for j in jobs if j.get("job_id")]
         except Exception as e:
             logger.error(f"Failed to fetch scheduler jobs: {e}")
             return []
 
-    async def _trigger_scheduler_job(self, client: httpx.AsyncClient, job_type: str) -> Dict[str, Any]:
+    async def _trigger_scheduler_job(self, client: httpx.AsyncClient, job_id: str) -> Dict[str, Any]:
         """Trigger a single scheduler job."""
         try:
             resp = await client.post(
-                f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/jobs/{job_type}/trigger",
+                f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/scheduler/jobs/{job_id}/trigger",
                 timeout=SCHEDULER_TIMEOUT
             )
             resp.raise_for_status()
-            return {"job_type": job_type, "success": True, "detail": resp.json()}
+            return {"job_id": job_id, "success": True, "detail": resp.json()}
         except Exception as e:
-            logger.error(f"Failed to trigger scheduler job '{job_type}': {e}")
-            return {"job_type": job_type, "success": False, "detail": str(e)}
+            logger.error(f"Failed to trigger scheduler job '{job_id}': {e}")
+            return {"job_id": job_id, "success": False, "detail": str(e)}
 
     async def trigger_all(self) -> Dict[str, Any]:
         """
@@ -96,11 +96,11 @@ class CronOrchestratorService:
             )
 
             # ── 2. Scheduler ──────────────────────────────────────────────
-            scheduler_job_types = await self._get_scheduler_jobs(client)
-            logger.info(f"Triggering {len(scheduler_job_types)} scheduler jobs: {scheduler_job_types}")
+            scheduler_job_ids = await self._get_scheduler_jobs(client)
+            logger.info(f"Triggering {len(scheduler_job_ids)} scheduler jobs: {scheduler_job_ids}")
 
             scheduler_results = await asyncio.gather(
-                *[self._trigger_scheduler_job(client, jt) for jt in scheduler_job_types],
+                *[self._trigger_scheduler_job(client, jid) for jid in scheduler_job_ids],
                 return_exceptions=False
             )
 
@@ -114,12 +114,12 @@ class CronOrchestratorService:
                 "results": list(ingestion_results)
             },
             "scheduler": {
-                "total": len(scheduler_job_types),
+                "total": len(scheduler_job_ids),
                 "triggered": scheduler_triggered,
                 "results": list(scheduler_results)
             },
             "summary": {
-                "total_jobs": len(ingestion_job_ids) + len(scheduler_job_types),
+                "total_jobs": len(ingestion_job_ids) + len(scheduler_job_ids),
                 "total_triggered": ingestion_triggered + scheduler_triggered
             }
         }
