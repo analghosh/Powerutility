@@ -83,6 +83,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure dam_scheduling indexes: {e}")
 
+    # Ensure TTL index on dc_sg.scheduled_at (auto-deletes records older than 1 day)
+    try:
+        from .v2.repository.supply_manual_repository import supply_manual_repository
+        await supply_manual_repository.ensure_indexes()
+    except Exception as e:
+        logger.error(f"Failed to ensure dc_sg TTL index: {e}")
+
     # One-time migration: encrypt plaintext BearerTokens in exchange_config
     try:
         from .v2.migrations.encrypt_bearer_tokens import run_encrypt_bearer_tokens_migration
