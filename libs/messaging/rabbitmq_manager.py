@@ -36,12 +36,15 @@ class RabbitMQManager:
         
         # Connection parameters
         self.credentials = pika.PlainCredentials(config.RABBITMQ_USER, config.RABBITMQ_PASSWORD)
+        # heartbeat=600: consumers run start_consuming() which drives the event
+        # loop and handles heartbeats fine; 600s gives plenty of headroom for
+        # slow message processing without the broker dropping the connection.
         self.parameters = pika.ConnectionParameters(
             host=config.RABBITMQ_HOST,
             port=config.RABBITMQ_PORT,
             virtual_host=config.RABBITMQ_VHOST,
             credentials=self.credentials,
-            heartbeat=60,
+            heartbeat=600,
             blocked_connection_timeout=300
         )
         
