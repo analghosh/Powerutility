@@ -145,6 +145,7 @@ from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
 from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
 from .v2.api.router.exchange_config_routes import router as exchange_config_router
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
+from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -314,6 +315,7 @@ v2_app.include_router(exchange_trade_router)
 v2_app.include_router(exchange_dsm_router)
 v2_app.include_router(exchange_config_router)
 v2_app.include_router(realtimemarket_router)
+v2_app.include_router(cron_orchestrator_router)
 
 
 
