@@ -1,6 +1,11 @@
 """
 RTM session helpers for IDF forecast merge (2 time blocks per 30-minute session).
 Aligned with rtm_transaction_service / rtm_bidding block indexing.
+
+IST merge session ranges (see merge_session_ids_for_delivery_date):
+- 00:00-11:59: today only, active session -> 48
+- 12:00-22:29: today active -> 48; tomorrow sessions 1 -> 48 (blocks 1-96)
+- >= 22:30: tomorrow only, active session -> 48
 """
 
 from datetime import date, datetime
@@ -46,6 +51,31 @@ def session_ids_from_block_through_96(first_block: int) -> List[int]:
 def session_ids_from_active_session_through_96(now_local: datetime) -> List[int]:
     """Session IDs from RTM active session (IST session + offset) through session 48."""
     return list(range(active_session_id(now_local), 49))
+
+
+def merge_session_ids_for_delivery_date(
+    scheduled_date: date,
+    today_ist: date,
+    after_evening_cutover: bool,
+    now_local: datetime,
+) -> List[int]:
+    """
+    Session IDs to iterate when merging forecast into demand_serve for one delivery date.
+
+    - Past dates: none
+    - Today: active RTM session through 48
+    - Tomorrow before 22:30 IST: sessions 1 through 48 (blocks 1-96)
+    - Tomorrow from 22:30 IST: active session through 48
+    """
+    if scheduled_date < today_ist:
+        return []
+    if scheduled_date == today_ist:
+        return session_ids_from_active_session_through_96(now_local)
+    if scheduled_date > today_ist:
+        if after_evening_cutover:
+            return session_ids_from_active_session_through_96(now_local)
+        return session_ids_from_block_through_96(1)
+    return []
 
 
 def session_has_csv_forecast_present(
