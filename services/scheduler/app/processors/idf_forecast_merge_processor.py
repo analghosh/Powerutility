@@ -22,10 +22,10 @@ from libs.helpers.idf_forecast_switch_validation import active_session_csv_requi
 from libs.helpers.idf_forecast_session import (
     first_writable_block,
     index_forecast_docs,
+    merge_session_ids_for_delivery_date,
     resolve_session_merge_ops_api_only,
     resolve_session_merge_ops_csv_manual,
     session_has_csv_forecast_present,
-    session_ids_from_active_session_through_96,
     session_to_time_blocks,
     time_block_to_session_id,
     writable_blocks_for_date,
@@ -459,7 +459,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         now = datetime.now()
         bulk_ops: List[UpdateOne] = []
 
-        for session_id in session_ids_from_active_session_through_96(ctx["now_local"]):
+        for session_id in merge_session_ids_for_delivery_date(
+            scheduled_date,
+            ctx["today_ist"],
+            ctx["after_evening_cutover"],
+            ctx["now_local"],
+        ):
             if not session_has_csv_forecast_present(session_id, csv_by_block):
                 b1, b2 = session_to_time_blocks(session_id)
                 for block in (b1, b2):
@@ -518,7 +523,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         now = datetime.now()
         bulk_ops: List[UpdateOne] = []
 
-        for session_id in session_ids_from_active_session_through_96(ctx["now_local"]):
+        for session_id in merge_session_ids_for_delivery_date(
+            scheduled_date,
+            ctx["today_ist"],
+            ctx["after_evening_cutover"],
+            ctx["now_local"],
+        ):
             ops = resolve_session_merge_ops_api_only(
                 session_id,
                 api_by_block,
