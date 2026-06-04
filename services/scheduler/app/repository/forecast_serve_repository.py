@@ -49,7 +49,7 @@ class ForecastServeRepository(LibForecastServeRepository):
                     "Created time-series collection: %s",
                     self.historical_collection_name,
                 )
-            ensure_forecast_serve_historical_indexes(self.historical_collection)
+            await ensure_forecast_serve_historical_indexes(self.historical_collection)
         except Exception as e:
             logger.warning(
                 "Failed to ensure forecast_serve_historical collection: %s", e
