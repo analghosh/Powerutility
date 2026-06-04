@@ -33,7 +33,14 @@ def _ingestion_base_url() -> str:
 class CronOrchestratorService:
 
     async def _get_ingestion_jobs(self, client: httpx.AsyncClient) -> List[str]:
-        """Fetch registered job IDs from the ingestion service."""
+        """Fetch registered job IDs from the ingestion service.
+
+        /cron/status returns:
+          { "jobs": <get_all_jobs() result> }
+        get_all_jobs() itself returns a dict:
+          { "jobs": [ {"job_id": "...", ...}, ... ] }
+        So the actual list is at data["jobs"]["jobs"].
+        """
         try:
             resp = await client.get(
                 f"{_ingestion_base_url()}/cron/status",
@@ -41,12 +48,14 @@ class CronOrchestratorService:
             )
             resp.raise_for_status()
             data = resp.json()
-            jobs = data.get("jobs", {})
-            if isinstance(jobs, dict):
-                return list(jobs.keys())
-            if isinstance(jobs, list):
-                return [j.get("job_id") or j.get("id") for j in jobs if j.get("job_id") or j.get("id")]
-            return []
+            jobs_wrapper = data.get("jobs", {})
+            if isinstance(jobs_wrapper, dict):
+                job_list = jobs_wrapper.get("jobs", [])
+            elif isinstance(jobs_wrapper, list):
+                job_list = jobs_wrapper
+            else:
+                job_list = []
+            return [j.get("job_id") for j in job_list if j.get("job_id")]
         except Exception as e:
             logger.error(f"Failed to fetch ingestion jobs: {e}")
             return []
