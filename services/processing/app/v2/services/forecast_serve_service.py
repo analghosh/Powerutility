@@ -30,6 +30,7 @@ class ForecastServeService:
             "type": doc.get("type"),
             "forecast": doc.get("forecast"),
             "forecasted_frequency": doc.get("forecasted_frequency"),
+            "forecast_revision": doc.get("forecast_revision"),
             "created_at": doc.get("created_at"),
             "updated_at": doc.get("updated_at"),
         }

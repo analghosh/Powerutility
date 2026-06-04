@@ -73,6 +73,10 @@ class DemandServeEntity(BaseModel):
     source_actual: str = Field(default="", description="Source of actual data")
     source_forecast: str = Field(default="", description="Source of forecast data")
     source_rostering: str = Field(default="", description="Source of rostering data")
+    forecast_revision: Optional[int] = Field(
+        None,
+        description="forecast_serve ingest revision published into demand_serve",
+    )
     
     # Zone and area
     zone: Optional[str] = Field(None, description="Zone/area identifier")
@@ -164,6 +168,10 @@ class DemandServeHistoricalEntity(BaseModel):
     source_actual: str = Field(default="", description="Source of actual data")
     source_forecast: str = Field(default="", description="Source of forecast data")
     source_rostering: str = Field(default="", description="Source of rostering data")
+    forecast_revision: Optional[int] = Field(
+        None,
+        description="forecast_serve ingest revision published into demand_serve",
+    )
     
     # Zone and area
     zone: Optional[str] = Field(None, description="Zone/area identifier")
