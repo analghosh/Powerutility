@@ -349,6 +349,27 @@ class IdfForecastMergeProcessor(BaseProcessor):
         }
 
     @staticmethod
+    def _forecast_revision_for_block(
+        time_block: int,
+        source_forecast: str,
+        csv_by_block: Dict[int, Dict[str, Any]],
+        api_by_block: Dict[int, Dict[str, Any]],
+    ) -> Optional[int]:
+        block_map = csv_by_block if source_forecast == FORECAST_SOURCE_CSV else api_by_block
+        doc = block_map.get(int(time_block)) or {}
+        rev = doc.get("forecast_revision")
+        if rev is not None:
+            return int(rev)
+        b1, b2 = session_to_time_blocks(time_block_to_session_id(int(time_block)))
+        for partner in (b1, b2):
+            if partner == int(time_block):
+                continue
+            partner_rev = (block_map.get(partner) or {}).get("forecast_revision")
+            if partner_rev is not None:
+                return int(partner_rev)
+        return None
+
+    @staticmethod
     def _build_merge_update_op(
         scheduled_at: datetime,
         time_block: int,
@@ -357,6 +378,7 @@ class IdfForecastMergeProcessor(BaseProcessor):
         source_forecast: str,
         demand_by_block: Dict[int, Dict[str, Any]],
         now: datetime,
+        forecast_revision: Optional[int] = None,
     ) -> UpdateOne:
         rostering = float(
             (demand_by_block.get(time_block) or {}).get("rostering") or 0.0
@@ -367,21 +389,24 @@ class IdfForecastMergeProcessor(BaseProcessor):
             "time_block": int(time_block),
             "type": "IDF",
         }
+        set_fields: Dict[str, Any] = {
+            "scheduled_at": scheduled_at,
+            "time_block": int(time_block),
+            "type": "IDF",
+            "forecast": forecast_mw,
+            "forecasted_frequency": forecasted_frequency,
+            "comp_act_demand": comp_act_demand,
+            "comp_udm": forecast_mw,
+            "source_forecast": source_forecast,
+            "updated_at": now,
+            "timestamp": now,
+        }
+        if forecast_revision is not None:
+            set_fields["forecast_revision"] = forecast_revision
         return UpdateOne(
             filter_doc,
             {
-                "$set": {
-                    "scheduled_at": scheduled_at,
-                    "time_block": int(time_block),
-                    "type": "IDF",
-                    "forecast": forecast_mw,
-                    "forecasted_frequency": forecasted_frequency,
-                    "comp_act_demand": comp_act_demand,
-                    "comp_udm": forecast_mw,
-                    "source_forecast": source_forecast,
-                    "updated_at": now,
-                    "timestamp": now,
-                },
+                "$set": set_fields,
                 "$setOnInsert": {
                     "inserted_at": now,
                     "created_at": now,
@@ -492,6 +517,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
                             source_label,
                             demand_by_block,
                             now,
+                            forecast_revision=self._forecast_revision_for_block(
+                                time_block,
+                                source_label,
+                                csv_by_block,
+                                api_by_block,
+                            ),
                         )
                     )
                 except Exception as block_err:
@@ -554,6 +585,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
                             source_label,
                             demand_by_block,
                             now,
+                            forecast_revision=self._forecast_revision_for_block(
+                                time_block,
+                                source_label,
+                                {},
+                                api_by_block,
+                            ),
                         )
                     )
                 except Exception as block_err:
