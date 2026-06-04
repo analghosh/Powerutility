@@ -3,6 +3,7 @@ Demand data processor for handling demand data processing logic.
 """
 
 import logging
+from collections import defaultdict
 from datetime import datetime, timedelta, date, time
 from zoneinfo import ZoneInfo
 from typing import Dict, List, Any, Optional
@@ -11,10 +12,6 @@ from .base_processor import BaseProcessor
 from libs.models.demand_serve_entity import DemandServeEntity, DemandServeHistoricalEntity
 from libs.enum.updated_flag import UpdatedFlag
 from libs.core.job_entities import JobDetail
-from libs.helpers.rtm_forecast_block_filter import (
-    rtm_forecast_run_context,
-    should_write_forecast_block,
-)
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV
 from ..core.config import settings
 from ..repository.demand_serve_repository import demand_serve_repository
@@ -790,30 +787,9 @@ class DemandProcessor(BaseProcessor):
                             else:
                                 raw_record["forecast"] = None
 
-                    # Condition 4: For IDF CSV forecast, same block window as RTM merge (IST, current + min_ahead)
+                    # IDF CSV forecast -> forecast_serve (all rows in upload; revision per delivery date)
                     if typ == "IDF":
                         if tb is None:
-                            continue
-                        tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
-                        min_ahead = max(
-                            0,
-                            int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)),
-                        )
-                        block_ctx = rtm_forecast_run_context(tz_name, min_ahead)
-                        if not should_write_forecast_block(
-                            sch_at.date(),
-                            int(tb),
-                            block_ctx["today_ist"],
-                            block_ctx["current_block"],
-                            after_evening_cutover=block_ctx["after_evening_cutover"],
-                            min_ahead_blocks=block_ctx["min_ahead_blocks"],
-                        ):
-                            logger.debug(
-                                "Skipping IDF CSV forecast outside block window: "
-                                "date=%s block=%s",
-                                sch_at.date(),
-                                tb,
-                            )
                             continue
 
                         csv_forecast = self._parse_idf_forecast_from_raw(raw_record)
@@ -903,14 +879,34 @@ class DemandProcessor(BaseProcessor):
 
             if csv_forecast_records:
                 try:
-                    fs_result = await self.forecast_repository.bulk_upsert_forecasts(
-                        csv_forecast_records,
-                        source=FORECAST_SOURCE_CSV,
-                    )
+                    by_scheduled_at: Dict[datetime, List[Dict[str, Any]]] = defaultdict(list)
+                    for rec in csv_forecast_records:
+                        by_scheduled_at[rec["scheduled_at"]].append(rec)
+
+                    total_upserted = total_modified = 0
+                    for scheduled_at, group in by_scheduled_at.items():
+                        revision = await self.forecast_repository.next_forecast_revision(
+                            scheduled_at, FORECAST_SOURCE_CSV
+                        )
+                        for rec in group:
+                            rec["forecast_revision"] = revision
+                        fs_result = await self.forecast_repository.bulk_upsert_forecasts(
+                            group,
+                            source=FORECAST_SOURCE_CSV,
+                        )
+                        total_upserted += fs_result.get("upserted", 0)
+                        total_modified += fs_result.get("modified", 0)
+                        logger.info(
+                            "Forecast Serve CSV for %s: revision=%d upserted=%s modified=%s",
+                            scheduled_at.strftime("%Y-%m-%d"),
+                            revision,
+                            fs_result.get("upserted"),
+                            fs_result.get("modified"),
+                        )
                     logger.info(
-                        "Forecast Serve CSV bulk result: upserted=%s modified=%s",
-                        fs_result.get("upserted"),
-                        fs_result.get("modified"),
+                        "Forecast Serve CSV bulk total: upserted=%s modified=%s",
+                        total_upserted,
+                        total_modified,
                     )
                 except Exception as fs_err:
                     logger.error("Error bulk upserting forecast_serve (csv): %s", fs_err)

@@ -36,6 +36,10 @@ class ForecastServeBlockRecord(BaseModel):
     type: Optional[str] = None
     forecast: Optional[float] = None
     forecasted_frequency: Optional[float] = None
+    forecast_revision: Optional[int] = Field(
+        None,
+        description="Per delivery-day ingest revision for this source",
+    )
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -71,8 +75,18 @@ class ForecastServeResponse(BaseModel):
                         "forecast_source": FORECAST_SOURCE_DISPLAY_AUTO,
                         "count": 2,
                         "records": [
-                            {"time_block": 1, "type": "IDF", "forecast": 1200.5},
-                            {"time_block": 2, "type": "IDF", "forecast": 1210.0},
+                            {
+                                "time_block": 1,
+                                "type": "IDF",
+                                "forecast": 1200.5,
+                                "forecast_revision": 3,
+                            },
+                            {
+                                "time_block": 2,
+                                "type": "IDF",
+                                "forecast": 1210.0,
+                                "forecast_revision": 3,
+                            },
                         ],
                     },
                     "manual": {
@@ -126,6 +140,9 @@ async def get_forecast_serve(
 ):
     """
     Fetch IDF forecast rows from **forecast_serve** for the given date and block range.
+
+    Only rows at the **latest** ``forecast_revision`` per source (Auto/Manual) are returned
+    (filtered in MongoDB via ``idx_forecast_serve_day_source_revision``).
 
     Response is split into two objects:
 
