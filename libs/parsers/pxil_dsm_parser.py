@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 from .base_parser import BaseParser
 
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ class PXILDsmParser(BaseParser):
             try:
                 # 1. Parse Delivery Date
                 delivery_date_str = record.get("delivery_date")
-                scheduled_at = datetime.strptime(delivery_date_str, "%d-%b-%Y")
+                scheduled_at = parse_ingestion_date(delivery_date_str)
 
                 # 2. Parse Time Block
                 # "00:00-00:15" -> 1, "00:15-00:30" -> 2, ..., "23:45-24:00" -> 96

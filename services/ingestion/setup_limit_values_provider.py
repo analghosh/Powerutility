@@ -45,7 +45,7 @@ async def create_limit_values_provider():
                 "field_name": "scheduled_at",
                 "field_type": "string",
                 "is_required": True,
-                "description": "Date in YYYY-MM-DD format"
+                "description": "Date as DD-MM-YYYY (04-06-2026) or YYYY-MM-DD (2026-06-04)"
             },
             {
                 "field_name": "block",

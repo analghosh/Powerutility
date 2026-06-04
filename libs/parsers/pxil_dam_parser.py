@@ -5,6 +5,7 @@ from datetime import datetime
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -84,7 +85,7 @@ class PXILDAMParser(BaseParser):
 
                     # Parse Date
                     try:
-                        scheduled_date = datetime.strptime(date_str, "%d-%m-%Y")
+                        scheduled_date = parse_ingestion_date(date_str)
                     except ValueError:
                          logger.warning(f"Invalid date format: {date_str}")
                          continue

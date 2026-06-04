@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ class OptimizationParser(BaseParser):
 
                 # Parse date to datetime
                 try:
-                    scheduled_at = datetime.strptime(date_str, "%Y-%m-%d")
+                    scheduled_at = parse_ingestion_date(date_str)
                 except ValueError:
                     logger.warning("Could not parse date: %s", date_str)
                     continue
