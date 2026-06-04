@@ -42,7 +42,7 @@ class ForecastServeRepository(BaseRepository):
 
     async def create_indexes(self) -> None:
         await self._create_collection_if_not_exists()
-        ensure_forecast_serve_indexes(self.collection)
+        await ensure_forecast_serve_indexes(self.collection)
 
     @staticmethod
     def _build_insert_document(

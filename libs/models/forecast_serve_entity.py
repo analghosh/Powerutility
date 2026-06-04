@@ -65,7 +65,7 @@ class ForecastServeHistoricalEntity(ForecastServeEntity):
     )
 
 
-def ensure_forecast_serve_indexes(collection) -> None:
+async def ensure_forecast_serve_indexes(collection) -> None:
     """Ensure indexes for forecast_serve collection (append-only per revision)."""
     import logging
 
@@ -73,10 +73,10 @@ def ensure_forecast_serve_indexes(collection) -> None:
     try:
         for old_name in ("idx_unique_forecast_serve_key",):
             try:
-                collection.drop_index(old_name)
+                await collection.drop_index(old_name)
             except Exception:
                 pass
-        collection.create_index(
+        await collection.create_index(
             [
                 ("type", 1),
                 ("scheduled_at", 1),
@@ -88,37 +88,37 @@ def ensure_forecast_serve_indexes(collection) -> None:
             name="idx_unique_forecast_serve_revision_key",
             background=True,
         )
-        collection.create_index(
+        await collection.create_index(
             [("scheduled_at", 1), ("time_block", 1), ("type", 1)],
             name="idx_forecast_serve_block_lookup",
             background=True,
         )
-        collection.create_index(
+        await collection.create_index(
             [("type", 1), ("scheduled_at", 1), ("source", 1), ("forecast_revision", -1)],
             name="idx_forecast_serve_day_source_revision",
             background=True,
         )
-        logger.debug("forecast_serve collection indexes ensured")
+        logger.info("forecast_serve collection indexes ensured")
     except Exception as e:
         logger.warning("Failed to create forecast_serve indexes: %s", e)
 
 
-def ensure_forecast_serve_historical_indexes(collection) -> None:
+async def ensure_forecast_serve_historical_indexes(collection) -> None:
     """Ensure indexes for forecast_serve_historical collection."""
     import logging
 
     logger = logging.getLogger(__name__)
     try:
-        collection.create_index([("scheduled_at", 1)], background=True)
-        collection.create_index([("archived_at", -1)], background=True)
-        collection.create_index([("archived_timestamp", -1)], background=True)
-        collection.create_index("source", background=True)
-        collection.create_index(
+        await collection.create_index([("scheduled_at", 1)], background=True)
+        await collection.create_index([("archived_at", -1)], background=True)
+        await collection.create_index([("archived_timestamp", -1)], background=True)
+        await collection.create_index("source", background=True)
+        await collection.create_index(
             [("scheduled_at", 1), ("type", 1), ("source", 1)],
             background=True,
         )
-        collection.create_index("time_block", background=True)
-        collection.create_index(
+        await collection.create_index("time_block", background=True)
+        await collection.create_index(
             [
                 ("type", 1),
                 ("scheduled_at", 1),
@@ -130,11 +130,11 @@ def ensure_forecast_serve_historical_indexes(collection) -> None:
             name="idx_unique_forecast_serve_historical_revision_key",
             background=True,
         )
-        collection.create_index(
+        await collection.create_index(
             [("scheduled_at", 1), ("source", 1), ("forecast_revision", -1)],
             name="idx_forecast_serve_historical_day_source_revision",
             background=True,
         )
-        logger.debug("forecast_serve_historical collection indexes ensured")
+        logger.info("forecast_serve_historical collection indexes ensured")
     except Exception as e:
         logger.warning("Failed to create forecast_serve_historical indexes: %s", e)
