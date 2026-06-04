@@ -6,6 +6,7 @@ import logging
 from typing import List, Dict, Any, Optional
 
 from .base_repository import GenericRepository
+from libs.utils.csv_date_parse import parse_schedule_date_filter, scheduled_at_day_range_filter
 
 from pymongo.results import UpdateResult
 from bson import ObjectId
@@ -299,16 +300,18 @@ class LimitWorkflowRepository:
             
             # Add date filtering if provided
             if date_filter:
-                from datetime import datetime, timedelta
-                filter_date_dt = datetime.strptime(date_filter, "%Y-%m-%d")
+                from datetime import timedelta
+                filter_date_dt = parse_schedule_date_filter(date_filter)
+                day_end = filter_date_dt + timedelta(days=1)
                 match_stage["$or"] = [
+                    scheduled_at_day_range_filter(filter_date_dt),
                     {"schedule_date": date_filter},
                     {
                         "created_at": {
                             "$gte": filter_date_dt,
-                            "$lt": filter_date_dt + timedelta(days=1)
+                            "$lt": day_end,
                         }
-                    }
+                    },
                 ]
             
             # Add filters for the unique key fields

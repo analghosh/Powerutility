@@ -7,6 +7,7 @@ import logging
 from ...controller.limit_values_controller import limit_controller
 from ...dependencies import get_user_context
 from libs.audit_queue.simple_logger import AuditLogger
+from libs.utils.csv_date_parse import parse_csv_scheduled_at
 from ....core.dependencies import get_audit_logger
 
 router = APIRouter(
@@ -33,7 +34,7 @@ class StageEditItem(BaseModel):
 
     @validator("scheduled_at")
     def _validate_date(cls, v):
-        datetime.strptime(v, "%Y-%m-%d")
+        parse_csv_scheduled_at(v)
         return v
 
 class BatchEditItem(StageEditItem):
@@ -436,7 +437,7 @@ class SingleUpdateItem(BaseModel):
 
     @validator("scheduled_at")
     def _validate_date(cls, v):
-        datetime.strptime(v, "%Y-%m-%d")
+        parse_csv_scheduled_at(v)
         return v
 
 @router.post(
