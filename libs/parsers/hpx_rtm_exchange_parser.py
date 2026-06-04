@@ -5,6 +5,7 @@ import json
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -78,9 +79,8 @@ class HPXRTMExchangeParser(BaseParser):
                 
                 # Parse Date
                 try:
-                    # Input date format: DD/MM/YYYY
-                    scheduled_date = datetime.strptime(date_str, "%d/%m/%Y")
-                except (ValueError, TypeError):
+                    scheduled_date = parse_ingestion_date(date_str)
+                except ValueError:
                     logger.warning("Invalid date format: %s", date_str)
                     continue
 

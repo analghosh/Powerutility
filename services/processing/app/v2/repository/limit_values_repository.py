@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 
 from .base_repository import GenericRepository
 from ...core.config import settings
+from libs.utils.csv_date_parse import parse_schedule_date_filter, scheduled_at_day_range_filter
 
 logger = logging.getLogger(__name__)
 
@@ -75,17 +76,10 @@ class LimitValuesRepository:
             
             # 1. Date matching stage
             if date_filter:
-                filter_date_dt = datetime.strptime(date_filter, "%Y-%m-%d")
-                
+                filter_date_dt = parse_schedule_date_filter(date_filter)
+                day_match = scheduled_at_day_range_filter(filter_date_dt)
                 pipeline.append({
-                    "$match": 
-                            {
-                                "scheduled_at": {
-                                    "$gte": filter_date_dt,
-                                    "$lt": filter_date_dt + timedelta(days=1)
-                                },
-                                "category": "Limits"
-                            }
+                    "$match": {**day_match, "category": "Limits"}
                 })
             else:
                 today = datetime.now()
@@ -191,17 +185,13 @@ class LimitValuesRepository:
                     return { "data": [], "page": 1, "page_size": to_block - from_block + 1, "total": 0, "total_pages": 0, "has_next": False, "has_prev": False }
 
             # 2. Date matching stage
-            target_date_dt = datetime.strptime(target_date_str, "%Y-%m-%d")
+            target_date_dt = parse_schedule_date_filter(target_date_str)
             market_id = filters.get("market", "RTM")
             
-            # The heart of optimization: match exactly what we need using indexes
             match_filter = {
-                "scheduled_at": {
-                    "$gte": target_date_dt,
-                    "$lt": target_date_dt + timedelta(days=1)
-                },
+                **scheduled_at_day_range_filter(target_date_dt),
                 "market": market_id,
-                "category": "Limits"
+                "category": "Limits",
             }
 
             # 3. Add other filters
@@ -452,15 +442,10 @@ class LimitValuesRepository:
         Get limit values for a specific schedule date, ID, category, market and area.
         """
         try:
-            if isinstance(schedule_date, str):
-                target_date = datetime.strptime(schedule_date, "%Y-%m-%d")
-            elif isinstance(schedule_date, datetime):
-                target_date = schedule_date.replace(hour=0, minute=0, second=0, microsecond=0)
-            else:
-                target_date = schedule_date
+            target_date = parse_schedule_date_filter(schedule_date)
 
             filter_query = {
-                "scheduled_at": target_date,
+                **scheduled_at_day_range_filter(target_date),
                 "id": ID,
                 "market": market,
             }

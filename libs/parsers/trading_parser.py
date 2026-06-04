@@ -8,11 +8,12 @@ import numpy as np
 import csv
 import re
 import io
-from typing import List, Dict, Union, Any, Optional
 import logging
+from typing import List, Dict, Union, Any, Optional
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_csv_scheduled_at
 
 logger = logging.getLogger(__name__)
 
@@ -99,8 +100,9 @@ class TradingParser(BaseParser):
             lines = content.strip().split('\n')
             if len(lines) > 3:
                 first_row = lines[0]
-                # Count date patterns like 9/1/2025, 9/2/2025, etc. (M/D/YYYY format)
                 date_patterns = re.findall(r'\d{1,2}/\d{1,2}/\d{4}', first_row)
+                date_patterns += re.findall(r'\d{2}-\d{2}-\d{4}', first_row)
+                date_patterns += re.findall(r'\d{4}-\d{2}-\d{2}', first_row)
                 # Validate that these are actually valid dates
                 valid_dates = [d for d in date_patterns if self._validate_date_format(d)]
                 date_count = len(valid_dates)
@@ -134,12 +136,10 @@ class TradingParser(BaseParser):
             date_positions = []
             
             for i, cell in enumerate(df.iloc[0]):
-                if pd.notna(cell) and '/' in str(cell):
-                    # Validate and normalize date format (M/D/YYYY)
+                if pd.notna(cell):
                     date_str = str(cell).strip()
                     if self._validate_date_format(date_str):
-                        normalized_date = self._normalize_date_format(date_str)
-                        dates.append(normalized_date)
+                        dates.append(self._parse_date_to_iso(date_str))
                         date_positions.append(i)
             
             # Extract time periods from columns 1 and 2
@@ -186,7 +186,6 @@ class TradingParser(BaseParser):
                         values.append(0)
                     values = values[:8]
                     
-                    # Convert date to ISO format (YYYY-MM-DD)
                     iso_date = self._parse_date_to_iso(date)
                     
                     # Create separate records for each market type
@@ -215,16 +214,18 @@ class TradingParser(BaseParser):
     def parse_raw_string(self, content: str) -> List[Dict[str, Any]]:
         """Parse raw string format like the original data"""
         try:
-            # Extract and validate date (M/D/YYYY format)
-            date_match = re.match(r'^(\d{1,2}/\d{1,2}/\d{4})', content)
+            date_match = re.match(
+                r'^(\d{1,2}/\d{1,2}/\d{4}|\d{2}-\d{2}-\d{4}|\d{4}-\d{2}-\d{2})',
+                content.strip(),
+            )
             if date_match:
                 raw_date = date_match.group(1)
                 if self._validate_date_format(raw_date):
-                    date_str = self._normalize_date_format(raw_date)
+                    date_str = self._parse_date_to_iso(raw_date)
                     logger.info("Parsed date from raw string: %s -> %s", raw_date, date_str)
                 else:
                     logger.warning("Invalid date format in raw string: %s", raw_date)
-                    date_str = raw_date  # Use as-is if validation fails
+                    date_str = raw_date
             else:
                 logger.warning("No date found in raw string content")
                 date_str = "Unknown"
@@ -298,99 +299,30 @@ class TradingParser(BaseParser):
             return time_str # Return original on error
 
     def _validate_date_format(self, date_str: str) -> bool:
-        """
-        Validate date format M/D/YYYY where M=month, D=day, YYYY=year
-        
-        Args:
-            date_str: Date string to validate
-            
-        Returns:
-            bool: True if valid date format
-        """
+        """Validate date: DD-MM-YYYY, YYYY-MM-DD, or DD/MM/YYYY."""
         try:
-            # Check pattern: M/D/YYYY or MM/DD/YYYY
-            if not re.match(r'^\d{1,2}/\d{1,2}/\d{4}$', date_str):
-                return False
-            
-            # Parse components
-            parts = date_str.split('/')
-            if len(parts) != 3:
-                return False
-            
-            month, day, year = int(parts[0]), int(parts[1]), int(parts[2])
-            
-            # Validate ranges
-            if not (1 <= month <= 12):
-                logger.warning("Invalid month in date: %s (month=%d)", date_str, month)
-                return False
-            
-            if not (1 <= day <= 31):
-                logger.warning("Invalid day in date: %s (day=%d)", date_str, day)
-                return False
-            
-            if not (1900 <= year <= 2100):
-                logger.warning("Invalid year in date: %s (year=%d)", date_str, year)
-                return False
-            
-            # Additional validation for days per month
-            days_in_month = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]  # Max days (leap year Feb)
-            if day > days_in_month[month - 1]:
-                logger.warning("Invalid day for month in date: %s (month=%d, day=%d)", date_str, month, day)
-                return False
-            
+            parse_csv_scheduled_at(str(date_str).strip())
             return True
-            
-        except (ValueError, IndexError) as e:
+        except ValueError as e:
             logger.warning("Error validating date format '%s': %s", date_str, e)
             return False
     
     def _normalize_date_format(self, date_str: str) -> str:
         """
-        Normalize date format to MM/DD/YYYY for consistency
-        
-        Args:
-            date_str: Date string in M/D/YYYY format
-            
-        Returns:
-            str: Normalized date string in MM/DD/YYYY format
+        Normalize date format to DD/MM/YYYY for consistency.
         """
         try:
-            parts = date_str.split('/')
-            month, day, year = int(parts[0]), int(parts[1]), int(parts[2])
-            
-            # Format as MM/DD/YYYY
-            normalized = f"{month:02d}/{day:02d}/{year}"
-            
+            dt = parse_csv_scheduled_at(date_str)
+            normalized = dt.strftime("%d/%m/%Y")
             logger.debug("Normalized date: %s -> %s", date_str, normalized)
             return normalized
-            
-        except (ValueError, IndexError) as e:
+        except ValueError as e:
             logger.warning("Error normalizing date '%s': %s", date_str, e)
-            return date_str  # Return original if normalization fails
-    
+            return date_str
+
     def _parse_date_to_iso(self, date_str: str) -> str:
-        """
-        Convert M/D/YYYY format to ISO format YYYY-MM-DD
-        
-        Args:
-            date_str: Date string in M/D/YYYY format
-            
-        Returns:
-            str: ISO format date string YYYY-MM-DD
-        """
-        try:
-            parts = date_str.split('/')
-            month, day, year = int(parts[0]), int(parts[1]), int(parts[2])
-            
-            # Format as ISO date
-            iso_date = f"{year}-{month:02d}-{day:02d}"
-            
-            logger.debug("Converted to ISO date: %s -> %s", date_str, iso_date)
-            return iso_date
-            
-        except (ValueError, IndexError) as e:
-            logger.warning("Error converting date to ISO '%s': %s", date_str, e)
-            return date_str  # Return original if conversion fails
+        """Convert supported date string to ISO format YYYY-MM-DD."""
+        return parse_csv_scheduled_at(str(date_str).strip()).strftime("%Y-%m-%d")
     
     def get_supported_date_format(self) -> str:
         """
@@ -399,7 +331,10 @@ class TradingParser(BaseParser):
         Returns:
             str: Description of supported date format
         """
-        return "Input: M/D/YYYY format where M=month (1-12), D=day (1-31), YYYY=year (1900-2100). Example: 9/1/2025 = September 1st, 2025. Output: ISO format YYYY-MM-DD"
+        return (
+            "Input: DD-MM-YYYY (04-06-2026), YYYY-MM-DD (2026-06-04), "
+            "or DD/MM/YYYY (04/06/2026). Output: ISO YYYY-MM-DD."
+        )
     
     def get_output_schema(self) -> Dict[str, str]:
         """
@@ -426,7 +361,7 @@ class TradingParser(BaseParser):
         """
         return """
         INPUT (Wide Format):
-        Date: 9/1/2025, Time: 10:00-10:15
+        Date: 04/06/2026, Time: 10:00-10:15
         DAM_Bidded: -4, DAM_Traded: -4, RTM_Bidded: -24, RTM_Traded: -24, ...
         
         OUTPUT (Normalized Format):

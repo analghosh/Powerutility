@@ -19,6 +19,7 @@ from ..repository.limit_workflow_repository import limit_workflow_repository
 from ...core.config import settings
 
 from libs.audit_queue.simple_logger import AuditLogger
+from libs.utils.csv_date_parse import parse_csv_scheduled_at, parse_schedule_date_filter
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +43,6 @@ CSV_TO_DB_MAP = {
 
 # Internal ID -> CSV Header partial map
 DB_TO_CSV_MAP = {v: k for k, v in CSV_TO_DB_MAP.items()}
-
-def _parse_date_yyyy_mm_dd(s: str) -> datetime:
-    return datetime.strptime(s, "%Y-%m-%d")
 
 def _normalize_item(row: Dict[str, Any]) -> Dict[str, Any]:
     """
@@ -87,30 +85,12 @@ def _normalize_item(row: Dict[str, Any]) -> Dict[str, Any]:
         raw_date_value = row.get("scheduled_at") or row.get("schedule_date")
 
         if not raw_date_value:
-             raise ValueError("scheduled_at is required")
+            raise ValueError("scheduled_at is required")
 
         try:
-            # Parse the date string
-            schedule_date_str = str(raw_date_value).strip()
-            
-            # Convert to datetime object (MongoDB compatible)
-            # Try parsing ISO format first (e.g. 2025-12-28T00:00:00.000Z)
-            try:
-                if "T" in schedule_date_str:
-                        date_part = schedule_date_str.split("T")[0]
-                        schedule_date_parsed = datetime.strptime(date_part, "%Y-%m-%d")
-                else:
-                        schedule_date_parsed = datetime.strptime(schedule_date_str, "%Y-%m-%d")
-            except ValueError:
-                    # Fallback or try other formats if necessary
-                    schedule_date_parsed = datetime.strptime(schedule_date_str, "%Y-%m-%d")
-            
-            # Always assign to the standardized key 'scheduled_at' in the output item
-            item["scheduled_at"] = schedule_date_parsed
-
-        except (ValueError, TypeError) as e:
-            # Log the error with the value found
-            raise ValueError(f"Invalid date format in CSV: {raw_date_value}. Allowed: YYYY-MM-DD")
+            item["scheduled_at"] = parse_csv_scheduled_at(raw_date_value)
+        except ValueError:
+            raise
     
         return item
     
@@ -168,7 +148,7 @@ def _is_rtm_forecast_past_block(item: Dict[str, Any]) -> bool:
 
 def _values_doc(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "scheduled_at": _parse_date_yyyy_mm_dd(item["scheduled_at"]),
+        "scheduled_at": parse_csv_scheduled_at(item["scheduled_at"]),
         "block": item["block"],
         "id": item["id"],
         "market": item["market"],
@@ -277,7 +257,7 @@ class LimitService:
             
             # Use provided schedule_date or default to today
             if schedule_date:
-                today = datetime.strptime(schedule_date, "%Y-%m-%d")
+                today = parse_schedule_date_filter(schedule_date)
             else:
                 today = datetime.now()
                 
@@ -817,23 +797,10 @@ class LimitService:
 
             # 2. Get the 5-field business key from the approval doc
             try:
-                # Parse the schedule_date to compare with today
-                scheduled_at_str = approval.get("scheduled_at")
-                if isinstance(scheduled_at_str, str):
-                    try:
-                        scheduled_at = datetime.strptime(scheduled_at_str, "%Y-%m-%dT%H:%M:%S")
-                    except ValueError:
-                        try:
-                            # Try date only
-                            scheduled_at = datetime.strptime(scheduled_at_str, "%Y-%m-%d")
-                        except ValueError:
-                             # Try standardized ISO (handle potential Z)
-                             if scheduled_at_str.endswith('Z'):
-                                  scheduled_at = datetime.fromisoformat(scheduled_at_str.replace('Z', '+00:00'))
-                             else:
-                                  scheduled_at = datetime.fromisoformat(scheduled_at_str)
-                else:
-                    scheduled_at = scheduled_at_str
+                scheduled_at_raw = approval.get("scheduled_at")
+                if scheduled_at_raw is None:
+                    raise ValueError("Approval document is missing scheduled_at")
+                scheduled_at = parse_csv_scheduled_at(scheduled_at_raw)
 
                 key = {
                     "block": approval["block"],
@@ -1502,7 +1469,7 @@ class LimitService:
 
             # ✅ Date handling (UTC safe)
             if schedule_date:
-                today = datetime.strptime(schedule_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+                today = parse_schedule_date_filter(schedule_date).replace(tzinfo=timezone.utc)
             else:
                 today = datetime.now(timezone.utc)
 

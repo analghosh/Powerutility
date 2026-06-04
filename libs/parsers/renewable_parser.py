@@ -10,6 +10,7 @@ from typing import Dict, Any, List, Optional
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,7 @@ class RenewableParser(BaseParser):
             # Format date to ISO
             try:
                 if date_str:
-                    date_obj = datetime.datetime.strptime(date_str, "%d-%m-%Y")
-                    date_str = date_obj.isoformat()
+                    date_str = parse_ingestion_date(date_str).date().isoformat()
             except ValueError:
                 logger.warning("Could not parse date: %s", date_str)
 

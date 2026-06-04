@@ -6,10 +6,10 @@ Handles wide format supply data where plant IDs are columns
 import csv
 import io
 import logging
-from datetime import datetime
 from typing import Dict, Any, List, Optional
 
 from libs.parsers.base_parser import BaseParser
+from libs.utils.csv_date_parse import parse_csv_scheduled_at
 from libs.models.provider_models import ProviderEntity
 
 logger = logging.getLogger(__name__)
@@ -82,17 +82,7 @@ class SupplyCSVParser(BaseParser):
                     # STRICT VALIDATION: Raise error immediately if date is missing
                     raise ValueError(f"Missing date/scheduled_at in row: {row}")
 
-                # STRICT VALIDATION: Validate date format immediately
-                date_str = str(date_val).strip()
-                try:
-                    # Support ISO format (YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS)
-                    # This check ensures we fail FAST on invalid dates like '26-Jan-26'
-                    # We utilize fromisoformat for robust parsing
-                    parsed_date = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    # Ensure it's a valid date object (though fromisoformat guarantees this or raises)
-                except ValueError as e:
-                    # Catch and re-raise with clear message for user
-                     raise ValueError(f"Invalid date format in row: '{date_str}'. Expected ISO format (YYYY-MM-DD). Error: {e}")
+                parsed_date = parse_csv_scheduled_at(date_val)
                 
                 # Identify plant columns (those that are not date, time_block, or type)
                 special_consumed_cols = set()
@@ -108,7 +98,7 @@ class SupplyCSVParser(BaseParser):
                     # Create a flattened record
                     # We use 'scheduled_at' as the primary key for the date
                     record = {
-                        "scheduled_at": date_str,
+                        "scheduled_at": parsed_date,
                         "time_block": time_block_val,
                         "dc_sg": type_val,
                         "plant_id": plant_id,
