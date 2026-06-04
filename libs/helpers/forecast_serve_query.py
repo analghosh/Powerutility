@@ -7,6 +7,22 @@ from typing import Any, Dict, List, Optional
 
 IDF_TYPE = "IDF"
 
+
+def forecast_serve_revision_key(doc: Dict[str, Any]) -> tuple:
+    """Dedup/archival key including forecast_revision (None treated as 0 for legacy rows)."""
+    rev = doc.get("forecast_revision")
+    try:
+        rev_i = int(rev) if rev is not None else 0
+    except (TypeError, ValueError):
+        rev_i = 0
+    return (
+        doc.get("scheduled_at"),
+        doc.get("time_block"),
+        doc.get("type"),
+        doc.get("source"),
+        rev_i,
+    )
+
 # Fields needed for merge / read API (avoid loading full documents).
 FORECAST_SERVE_READ_PROJECTION: Dict[str, int] = {
     "_id": 1,
