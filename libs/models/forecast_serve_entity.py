@@ -47,6 +47,10 @@ class ForecastServeEntity(BaseModel):
         None, description="Forecasted frequency (RTM API source only)"
     )
     source: ForecastSource = Field(..., description="Data source identifier")
+    forecast_revision: Optional[int] = Field(
+        None,
+        description="Per delivery-day ingest revision (1 on first API/CSV batch, then increments)",
+    )
     created_at: datetime = Field(default_factory=datetime.now)
     updated_at: datetime = Field(default_factory=datetime.now)
 
@@ -76,6 +80,11 @@ def ensure_forecast_serve_indexes(collection) -> None:
         collection.create_index(
             [("scheduled_at", 1), ("time_block", 1), ("type", 1)],
             name="idx_forecast_serve_block_lookup",
+            background=True,
+        )
+        collection.create_index(
+            [("type", 1), ("scheduled_at", 1), ("source", 1), ("forecast_revision", -1)],
+            name="idx_forecast_serve_day_source_revision",
             background=True,
         )
         logger.debug("forecast_serve collection indexes ensured")
