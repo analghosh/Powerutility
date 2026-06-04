@@ -3,7 +3,10 @@ Forecast Serve service — query forecast_serve by date and time block range.
 """
 
 import logging
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from bson import ObjectId
 
 from libs.models.forecast_serve_entity import (
     FORECAST_SOURCE_CSV,
@@ -21,18 +24,38 @@ class ForecastServeService:
         self.repository = forecast_serve_repository
 
     @staticmethod
+    def _serialize_api_value(value: Any) -> Optional[str]:
+        """Convert Mongo BSON types to JSON-safe strings for API responses."""
+        if value is None:
+            return None
+        if isinstance(value, ObjectId):
+            return str(value)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    @staticmethod
     def _format_block_record(doc: Dict[str, Any]) -> Dict[str, Any]:
         """Block-level fields only (source label lives on auto/manual parent)."""
+        raw_id = doc.get("_id") or doc.get("id")
         return {
-            "id": doc.get("_id") or doc.get("id"),
-            "scheduled_at": doc.get("scheduled_at"),
+            "id": ForecastServeService._serialize_api_value(raw_id),
+            "scheduled_at": ForecastServeService._serialize_api_value(
+                doc.get("scheduled_at")
+            ),
             "time_block": doc.get("time_block"),
             "type": doc.get("type"),
             "forecast": doc.get("forecast"),
             "forecasted_frequency": doc.get("forecasted_frequency"),
             "forecast_revision": doc.get("forecast_revision"),
-            "created_at": doc.get("created_at"),
-            "updated_at": doc.get("updated_at"),
+            "created_at": ForecastServeService._serialize_api_value(
+                doc.get("created_at")
+            ),
+            "updated_at": ForecastServeService._serialize_api_value(
+                doc.get("updated_at")
+            ),
         }
 
     async def get_forecast_serve_by_blocks(

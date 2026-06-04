@@ -127,6 +127,15 @@ async def lifespan(app: FastAPI):
     # Validate configuration on startup
     validate_database_configuration()
 
+    # Ensure forecast_serve indexes (migrate off legacy unique key; CSV + merge reads)
+    try:
+        from .repository.forecast_serve_repository import forecast_serve_repository
+
+        await forecast_serve_repository.create_indexes()
+        await forecast_serve_repository.ensure_historical_collection()
+    except Exception as idx_error:
+        logger.warning("Failed to ensure forecast_serve indexes: %s", idx_error)
+
     # Run timeblock seeder
     run_timeblock_seeder()
     
