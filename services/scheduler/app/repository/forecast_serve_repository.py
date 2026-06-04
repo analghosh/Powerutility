@@ -7,6 +7,7 @@ import logging
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 
+from libs.helpers.forecast_serve_query import forecast_serve_revision_key
 from libs.models.forecast_serve_entity import ensure_forecast_serve_historical_indexes
 from libs.repository.forecast_serve_repository import (
     ForecastServeRepository as LibForecastServeRepository,
@@ -106,26 +107,21 @@ class ForecastServeRepository(LibForecastServeRepository):
             existing_keys = set()
             existing_hist_cursor = self.historical_collection.find(
                 {"scheduled_at": {"$gte": min_date, "$lte": max_date}},
-                {"scheduled_at": 1, "time_block": 1, "type": 1, "source": 1, "_id": 0},
+                {
+                    "scheduled_at": 1,
+                    "time_block": 1,
+                    "type": 1,
+                    "source": 1,
+                    "forecast_revision": 1,
+                    "_id": 0,
+                },
             )
             async for doc in existing_hist_cursor:
-                existing_keys.add(
-                    (
-                        doc.get("scheduled_at"),
-                        doc.get("time_block"),
-                        doc.get("type"),
-                        doc.get("source"),
-                    )
-                )
+                existing_keys.add(forecast_serve_revision_key(doc))
 
             historical_inserts: List[Dict[str, Any]] = []
             for doc in archival_candidates:
-                key = (
-                    doc.get("scheduled_at"),
-                    doc.get("time_block"),
-                    doc.get("type"),
-                    doc.get("source"),
-                )
+                key = forecast_serve_revision_key(doc)
                 if key in existing_keys:
                     continue
                 hist_doc = dict(doc)
@@ -150,7 +146,9 @@ class ForecastServeRepository(LibForecastServeRepository):
                         archived_count = e.details.get("nInserted", 0)
 
             logger.info(
-                "Archived %d new forecast_serve records to historical", archived_count
+                "Archived %d of %d forecast_serve records to historical (all revisions)",
+                archived_count,
+                len(archival_candidates),
             )
 
             delete_query = {
