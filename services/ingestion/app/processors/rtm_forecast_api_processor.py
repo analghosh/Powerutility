@@ -446,11 +446,11 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
             if not bulk_records:
                 return 0
 
-            result = await self.forecast_repository.bulk_upsert_forecasts(
+            result = await self.forecast_repository.bulk_insert_forecasts(
                 bulk_records,
                 source=FORECAST_SOURCE_RTM_API,
             )
-            stored_count = result.get("modified", 0) + result.get("upserted", 0)
+            stored_count = result.get("inserted", 0) or result.get("upserted", 0)
             logger.info(
                 "Stored %d forecast_serve records (rtm_forecast_api) for date %s "
                 "forecast_revision=%d",

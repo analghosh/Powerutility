@@ -890,17 +890,20 @@ class DemandProcessor(BaseProcessor):
                         )
                         for rec in group:
                             rec["forecast_revision"] = revision
-                        fs_result = await self.forecast_repository.bulk_upsert_forecasts(
+                        fs_result = await self.forecast_repository.bulk_insert_forecasts(
                             group,
                             source=FORECAST_SOURCE_CSV,
                         )
-                        total_upserted += fs_result.get("upserted", 0)
+                        inserted = fs_result.get("inserted", 0) or fs_result.get(
+                            "upserted", 0
+                        )
+                        total_upserted += inserted
                         total_modified += fs_result.get("modified", 0)
                         logger.info(
                             "Forecast Serve CSV for %s: revision=%d upserted=%s modified=%s",
                             scheduled_at.strftime("%Y-%m-%d"),
                             revision,
-                            fs_result.get("upserted"),
+                            inserted,
                             fs_result.get("modified"),
                         )
                     logger.info(

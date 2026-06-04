@@ -27,7 +27,7 @@ def map_forecast_source_display(source_forecast: Optional[str]) -> Optional[str]
 
 
 class ForecastServeEntity(BaseModel):
-    """One forecast document per (scheduled_at, time_block, type, source)."""
+    """One forecast document per (scheduled_at, time_block, type, source, forecast_revision)."""
 
     model_config = ConfigDict(
         validate_by_name=True,
@@ -56,7 +56,7 @@ class ForecastServeEntity(BaseModel):
 
 
 class ForecastServeHistoricalEntity(ForecastServeEntity):
-    """Archived forecast_serve row (forecast_serve_historical)."""
+    """Archived copy of a forecast_serve row (all fields including forecast_revision)."""
 
     archived_at: datetime = Field(default_factory=datetime.now)
     archived_timestamp: datetime = Field(
@@ -66,15 +66,26 @@ class ForecastServeHistoricalEntity(ForecastServeEntity):
 
 
 def ensure_forecast_serve_indexes(collection) -> None:
-    """Ensure indexes for forecast_serve collection."""
+    """Ensure indexes for forecast_serve collection (append-only per revision)."""
     import logging
 
     logger = logging.getLogger(__name__)
     try:
+        for old_name in ("idx_unique_forecast_serve_key",):
+            try:
+                collection.drop_index(old_name)
+            except Exception:
+                pass
         collection.create_index(
-            [("type", 1), ("scheduled_at", 1), ("time_block", 1), ("source", 1)],
+            [
+                ("type", 1),
+                ("scheduled_at", 1),
+                ("time_block", 1),
+                ("source", 1),
+                ("forecast_revision", 1),
+            ],
             unique=True,
-            name="idx_unique_forecast_serve_key",
+            name="idx_unique_forecast_serve_revision_key",
             background=True,
         )
         collection.create_index(
@@ -107,6 +118,23 @@ def ensure_forecast_serve_historical_indexes(collection) -> None:
             background=True,
         )
         collection.create_index("time_block", background=True)
+        collection.create_index(
+            [
+                ("type", 1),
+                ("scheduled_at", 1),
+                ("time_block", 1),
+                ("source", 1),
+                ("forecast_revision", 1),
+            ],
+            unique=True,
+            name="idx_unique_forecast_serve_historical_revision_key",
+            background=True,
+        )
+        collection.create_index(
+            [("scheduled_at", 1), ("source", 1), ("forecast_revision", -1)],
+            name="idx_forecast_serve_historical_day_source_revision",
+            background=True,
+        )
         logger.debug("forecast_serve_historical collection indexes ensured")
     except Exception as e:
         logger.warning("Failed to create forecast_serve_historical indexes: %s", e)
