@@ -69,6 +69,14 @@ async def lifespan(_: FastAPI):
     except Exception as idx_error:
         logger.warning("Failed to ensure provider indexes: %s", idx_error)
 
+    # Ensure forecast_serve indexes (revision-aware unique key for append-only ingest)
+    try:
+        from .repository.forecast_serve_repository import forecast_serve_repository
+
+        await forecast_serve_repository.create_indexes()
+    except Exception as idx_error:
+        logger.warning("Failed to ensure forecast_serve indexes: %s", idx_error)
+
     # Seed default providers (e.g., forecast_api_provider)
     try:
         from .seeders.provider_seeder import seed_providers
