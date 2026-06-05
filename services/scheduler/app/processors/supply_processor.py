@@ -301,7 +301,7 @@ class SupplyProcessor(BaseProcessor):
             # Use the repository's collection directly for more control
             pending_status_records = await processing_status_repo.collection.find(
                 pending_status_query
-            ).sort("created_at", 1).limit(3).to_list(length=3)  # Limit to 3 records per batch to prevent OOM
+            ).sort("created_at", 1).limit(20).to_list(length=20)  # Limit to 3 records per batch to prevent OOM
             
             logger.info(f"Found {len(pending_status_records)} pending/failed status records for provider {provider_id}")
             
