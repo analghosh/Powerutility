@@ -170,6 +170,40 @@ async def validate_data(
         ) from e
 
 
+@router.post("/trigger-supply-demand")
+async def trigger_supply_demand_ingestion(
+    _current_user: Dict[str, Any] = Depends(require_page_access("Data Ingestion"))
+):
+    """
+    Trigger API data ingestion for supply and demand providers only.
+
+    Replicates the api_raw_data_processor pipeline but restricts execution to
+    providers whose data_type is SUPPLY or DEMAND.  After each provider is
+    successfully processed the job trigger message is pushed to RabbitMQ so the
+    downstream scheduler can pick it up and run the data-processing job.
+    """
+    from ....processors.api_raw_data_processor import APIRawDataProcessor
+
+    processor = APIRawDataProcessor(audit_logger)
+    result = await processor.process_supply_demand_api_data()
+
+    result_status = result.get('status')
+
+    if result_status == 'conflict':
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=result.get('message', 'API cron job is currently running')
+        )
+
+    if result_status == 'error':
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=result.get('error', 'Supply/demand ingestion failed')
+        )
+
+    return result
+
+
 @router.get("/status", response_model=StatusResponse)
 async def get_ingestion_status(
     _current_user: Dict[str, Any] = Depends(require_page_access("Data Ingestion"))

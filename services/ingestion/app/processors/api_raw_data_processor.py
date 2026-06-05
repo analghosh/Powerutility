@@ -85,6 +85,10 @@ from services.ingestion.app.repositories.integration_apilog_repository import In
 
 logger = logging.getLogger("api_raw_data_processor")
 
+# Module-level flag so the manual API can detect a running cron execution.
+# Guarded by the single event-loop; no threading issue.
+_api_cron_running: bool = False
+
 
 class APIRawDataProcessor(BaseRawDataProcessor):
     """
@@ -104,6 +108,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
+        self._is_manual: bool = False
 
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
@@ -111,6 +116,101 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         # Process API providers for all data types
         return await self.process_all_api_data()
+
+    async def process_supply_demand_api_data(self) -> Dict[str, Any]:
+        """
+        Fetch and process API data exclusively for SUPPLY and DEMAND providers,
+        then publish a job trigger to RabbitMQ for each successful provider.
+        """
+        if _api_cron_running:
+            logger.warning("API cron job is currently running; rejecting manual supply/demand trigger")
+            return {
+                'status': 'conflict',
+                'message': 'API cron job is currently running. Please try again after it completes.'
+            }
+
+        self._is_manual = True
+        target_types = {DataType.SUPPLY, DataType.DEMAND}
+
+        all_providers = await self._get_all_api_providers()
+        if all_providers is None:
+            return {'status': 'error', 'error': 'Failed to fetch providers'}
+
+        providers = [p for p in all_providers if p.data_type in target_types]
+
+        if not providers:
+            return {
+                'status': 'success',
+                'processed_providers': 0,
+                'failed_providers': 0,
+                'total_providers': 0,
+                'message': 'No enabled supply/demand API providers found',
+                'results': []
+            }
+
+        logger.info("Found %d supply/demand API providers to process", len(providers))
+
+        processed_providers = 0
+        failed_providers = 0
+        results = []
+
+        for provider in providers:
+            provider_code = getattr(provider, 'code', 'unknown')
+            data_type = provider.data_type
+            try:
+                result = await self._process_provider_data(provider)
+
+                if result and result.get('success', False):
+                    processed_providers += 1
+                    dt_value = str(data_type.value if hasattr(data_type, 'value') else data_type).lower()
+                    trigger_job_type = f"{dt_value}_data_processing"
+                    logger.info("Publishing job trigger '%s' for provider %s", trigger_job_type, provider_code)
+                    self.job_publisher.publish_job_trigger(
+                        job_type=trigger_job_type,
+                        source_service="ingestion",
+                        payload={
+                            "provider_code": provider_code,
+                            "data_type": dt_value,
+                            "record_count": result.get('stored_records', 0)
+                        }
+                    )
+                    results.append({
+                        'provider_code': provider_code,
+                        'data_type': dt_value,
+                        'status': 'success',
+                        'stored_records': result.get('stored_records', 0)
+                    })
+                else:
+                    failed_providers += 1
+                    error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
+                    logger.error("Failed to process provider %s: %s", provider_code, error_msg)
+                    results.append({
+                        'provider_code': provider_code,
+                        'data_type': str(data_type.value if hasattr(data_type, 'value') else data_type),
+                        'status': 'failed',
+                        'error': error_msg
+                    })
+
+            except (ValueError, OSError, RuntimeError) as provider_error:
+                failed_providers += 1
+                logger.error("Exception processing provider %s: %s", provider_code, str(provider_error))
+                results.append({
+                    'provider_code': provider_code,
+                    'data_type': str(data_type.value if hasattr(data_type, 'value') else data_type),
+                    'status': 'error',
+                    'error': str(provider_error)
+                })
+
+        overall_success = processed_providers > 0 and failed_providers == 0
+        status_val = "success" if overall_success else ("partial_success" if processed_providers > 0 else "error")
+
+        return {
+            'status': status_val,
+            'processed_providers': processed_providers,
+            'failed_providers': failed_providers,
+            'total_providers': len(providers),
+            'results': results
+        }
 
     async def _get_all_api_providers(self) -> Optional[List[ProviderSummary]]:
         """
@@ -139,6 +239,8 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         Execute API raw data processing for all data types
         """
+        global _api_cron_running
+        _api_cron_running = True
         job_type = "api_raw_data_processor"
         job_name = "API Raw Data Processor"
         schedule = "*/15 * * * *"  # Every 15 minutes
@@ -263,6 +365,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 )
 
             return result
+
+        finally:
+            _api_cron_running = False
 
     async def _process_provider_data(self, provider: ProviderSummary) -> Dict[str, Any]:
         """
@@ -412,6 +517,8 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids[0]
                 else:
                     additional_metadata["integration_apilog_id"] = log_ids
+            if self._is_manual:
+                additional_metadata["manual"] = True
             
             # Use raw data service to store the data
             result = await self.raw_data_service.store_raw_data(
