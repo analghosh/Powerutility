@@ -5,6 +5,7 @@ from datetime import datetime
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,9 @@ class HPXGreenDayAheadParser(BaseParser):
             return float(val)
         except (ValueError, TypeError):
             return 0.0
+
+    def _parse_date_str(self, date_str: str) -> str:
+        return parse_ingestion_date(date_str).date().isoformat()
 
     def parse(self, content: str, provider: Optional[ProviderEntity] = None, **kwargs) -> List[Dict[str, Any]]:
         """
@@ -55,6 +59,11 @@ class HPXGreenDayAheadParser(BaseParser):
             # Iterate through dates
             for date_str, hours_data in data.items():
                 if not isinstance(hours_data, dict):
+                    continue
+                try:
+                    normalized_date = self._parse_date_str(date_str)
+                except ValueError:
+                    logger.warning("Invalid date key in HPX GDAM response: %s", date_str)
                     continue
                     
                 # Iterate through hours
@@ -95,7 +104,7 @@ class HPXGreenDayAheadParser(BaseParser):
                             mcp = self._safe_float_conversion(block.get("mcp", 0))
                             
                             block_obj = {
-                                "date": block.get("date"),
+                                "date": normalized_date,
                                 "time_block": block.get("time_block"),
                                 "buy_bid": buy_bid,
                                 "sell_bid": sell_bid,

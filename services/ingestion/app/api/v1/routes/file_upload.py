@@ -775,7 +775,7 @@ async def get_uploads_paginated(
             "description": "CSV template file downloaded successfully",
             "content": {
                 "text/csv": {
-                    "example": "scheduled_at,time_block,type,forecast,actual\n2024-01-15,1,IDF,1250.5,1200.0\n2024-01-15,2,IDF,1300.0,1250.0"
+                    "example": "scheduled_at,time_block,type,forecast,actual\n04-06-2026,1,IDF,1250.5,1200.0\n2026-06-04,2,IDF,1300.0,1250.0"
                 }
             }
         },
