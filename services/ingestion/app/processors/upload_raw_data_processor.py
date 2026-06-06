@@ -22,6 +22,7 @@ from services.ingestion.app.services.file_storage_service import file_storage_se
 from services.ingestion.app.processors.base_raw_data_processor import BaseRawDataProcessor
 from services.ingestion.app.processors.plants_processor import PlantsProcessor
 from services.ingestion.app.processors.limit_values_processor import LimitValuesProcessor
+from libs.utils.csv_date_parse import parse_csv_scheduled_at
 import logging
 
 
@@ -32,6 +33,10 @@ class UploadRawDataProcessor(BaseRawDataProcessor):
     """
     Service for managing upload raw data processing tasks with job detail recording
     """
+
+    def _parse_scheduled_at_datetime(self, value):
+        """Manual CSV uploads: DD-MM-YYYY only by default (CSV_DATE_* env flags)."""
+        return parse_csv_scheduled_at(value)
 
     def __init__(self, audit_logger: AuditLogger):
         """Initialize upload raw data processor"""
