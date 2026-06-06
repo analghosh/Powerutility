@@ -93,6 +93,7 @@ _api_cron_running: bool = False
 class RateLimitExceededError(Exception):
     """Raised when an API keeps returning HTTP 429 after the rate-limit retry budget is exhausted."""
 
+
 class APIRawDataProcessor(BaseRawDataProcessor):
     """
     Service for managing API raw data processing tasks with job detail recording
@@ -102,6 +103,11 @@ class APIRawDataProcessor(BaseRawDataProcessor):
     # are fetched + published FIRST (and in parallel) so their scheduler triggers
     # fire without waiting behind slower feeds like exchange/weather.
     _HIGH_PRIORITY_DATA_TYPES = {DataType.DEMAND.value, DataType.SUPPLY.value}
+
+    # Extra provider codes (matched case-insensitively) that the manual
+    # supply/demand trigger must also process, regardless of their data_type.
+    # The RTM optimization provider feeds demand/limit_values used downstream.
+    _MANUAL_EXTRA_PROVIDER_CODES = {"rtm_optimization_api_provider"}
 
     def __init__(self, audit_logger: AuditLogger):
         """Initialize API raw data processor"""
@@ -127,8 +133,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
 
     async def process_supply_demand_api_data(self) -> Dict[str, Any]:
         """
-        Fetch and process API data exclusively for SUPPLY and DEMAND providers,
-        then publish a job trigger to RabbitMQ for each successful provider.
+        Fetch and process API data for SUPPLY and DEMAND providers, plus the
+        RTM optimization provider, then publish a job trigger to RabbitMQ for
+        each successful provider.
 
         Returns HTTP 409-style conflict dict if the cron job is currently running,
         because the cron already handles the data update — no manual run needed.
@@ -147,7 +154,11 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         if all_providers is None:
             return {'status': 'error', 'error': 'Failed to fetch providers'}
 
-        providers = [p for p in all_providers if p.data_type in target_types]
+        providers = [
+            p for p in all_providers
+            if p.data_type in target_types
+            or str(getattr(p, 'code', '') or '').lower() in self._MANUAL_EXTRA_PROVIDER_CODES
+        ]
 
         if not providers:
             return {
@@ -155,11 +166,11 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 'processed_providers': 0,
                 'failed_providers': 0,
                 'total_providers': 0,
-                'message': 'No enabled supply/demand API providers found',
+                'message': 'No enabled supply/demand/rtm-optimization API providers found',
                 'results': []
             }
 
-        logger.info("Manual trigger: found %d supply/demand API providers to process", len(providers))
+        logger.info("Manual trigger: found %d supply/demand/rtm-optimization API providers to process", len(providers))
 
         tier_bools = await self._process_provider_tier(providers)
 
