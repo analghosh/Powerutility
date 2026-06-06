@@ -48,7 +48,11 @@ class RenewableParser(BaseParser):
                 return []
 
             response_body = data["ResponseBody"]
-            
+
+            if response_body is None:
+                logger.warning("ResponseBody is null — no data available from API")
+                return []
+
             # Extract root level metadata
             date_str = response_body.get("Date")
             full_schd_revision_no = response_body.get("FullSchdRevisionNo")

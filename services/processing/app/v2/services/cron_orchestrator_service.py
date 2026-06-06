@@ -7,6 +7,7 @@ waiting for every trigger call to complete before returning.
 import asyncio
 import logging
 from typing import Dict, Any, List
+from urllib.parse import urlparse
 
 import httpx
 
@@ -16,6 +17,17 @@ logger = logging.getLogger(__name__)
 
 INGESTION_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
 SCHEDULER_TIMEOUT = httpx.Timeout(connect=10.0, read=60.0, write=10.0, pool=10.0)
+
+
+def _ingestion_base_url() -> str:
+    """
+    Return just scheme+host+port from INGESTION_SERVICE_URL.
+    The cron endpoints (/cron/status, /cron/trigger/...) are mounted at the
+    ingestion app root, not under /api/v1, so we must strip any path suffix
+    that may be present in the config value (e.g. http://host:8002/api/v1).
+    """
+    parsed = urlparse(settings.INGESTION_SERVICE_URL)
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 class CronOrchestratorService:
@@ -31,7 +43,7 @@ class CronOrchestratorService:
         """
         try:
             resp = await client.get(
-                f"{settings.INGESTION_SERVICE_URL}/cron/status",
+                f"{_ingestion_base_url()}/cron/status",
                 timeout=INGESTION_TIMEOUT
             )
             resp.raise_for_status()
@@ -52,7 +64,7 @@ class CronOrchestratorService:
         """Trigger a single ingestion job."""
         try:
             resp = await client.post(
-                f"{settings.INGESTION_SERVICE_URL}/cron/trigger/{job_id}",
+                f"{_ingestion_base_url()}/cron/trigger/{job_id}",
                 timeout=INGESTION_TIMEOUT
             )
             resp.raise_for_status()

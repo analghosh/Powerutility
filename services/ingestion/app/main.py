@@ -260,7 +260,37 @@ async def cron_status():
     return {
         "service": "ingestion-service",
         "cron_scheduler_running": cron_manager.is_running(),
-        "jobs": await cron_manager.get_all_jobs()
+        "jobs": cron_manager.get_all_jobs()
+    }
+
+
+@app.post("/cron/trigger/{job_id}")
+async def trigger_cron_job(job_id: str):
+    """Trigger a specific cron job immediately"""
+    from fastapi import HTTPException
+    cron_manager = app.state.cron_manager
+    registered = cron_manager.get_registered_jobs()
+    if job_id not in registered:
+        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
+    success = cron_manager.trigger_job_now(job_id)
+    return {
+        "service": "ingestion-service",
+        "job_id": job_id,
+        "triggered": success
+    }
+
+
+@app.post("/cron/trigger-all")
+async def trigger_all_cron_jobs():
+    """Trigger all registered cron jobs immediately"""
+    cron_manager = app.state.cron_manager
+    registered = cron_manager.get_registered_jobs()
+    results = {}
+    for job_id in registered:
+        results[job_id] = cron_manager.trigger_job_now(job_id)
+    return {
+        "service": "ingestion-service",
+        "triggered": results
     }
 
 

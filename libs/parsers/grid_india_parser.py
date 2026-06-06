@@ -58,6 +58,10 @@ class GridIndiaParser(BaseParser):
                 logger.warning("ResponseBody not found in content structure")
                 return []
 
+            if response_body is None:
+                logger.warning("ResponseBody is null — no data available from API")
+                return []
+
             date_str = response_body.get("Date")
             # Parse date "DD-MM-YYYY" to ISO format
             try:

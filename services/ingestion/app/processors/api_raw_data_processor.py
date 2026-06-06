@@ -85,11 +85,24 @@ from services.ingestion.app.repositories.integration_apilog_repository import In
 
 logger = logging.getLogger("api_raw_data_processor")
 
+# Module-level flag so the manual API can detect a running cron execution.
+# Guarded by the single asyncio event-loop; no threading concern.
+_api_cron_running: bool = False
+
+
+class RateLimitExceededError(Exception):
+    """Raised when an API keeps returning HTTP 429 after the rate-limit retry budget is exhausted."""
+
 
 class APIRawDataProcessor(BaseRawDataProcessor):
     """
     Service for managing API raw data processing tasks with job detail recording
     """
+
+    # Data types that are most time-critical downstream. Providers of these types
+    # are fetched + published FIRST (and in parallel) so their scheduler triggers
+    # fire without waiting behind slower feeds like exchange/weather.
+    _HIGH_PRIORITY_DATA_TYPES = {DataType.DEMAND.value, DataType.SUPPLY.value}
 
     def __init__(self, audit_logger: AuditLogger):
         """Initialize API raw data processor"""
@@ -104,6 +117,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
+        self._is_manual: bool = False
 
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
@@ -111,6 +125,67 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         # Process API providers for all data types
         return await self.process_all_api_data()
+
+    async def process_supply_demand_api_data(self) -> Dict[str, Any]:
+        """
+        Fetch and process API data exclusively for SUPPLY and DEMAND providers,
+        then publish a job trigger to RabbitMQ for each successful provider.
+
+        Returns HTTP 409-style conflict dict if the cron job is currently running,
+        because the cron already handles the data update — no manual run needed.
+        """
+        if _api_cron_running:
+            logger.warning("API cron job is currently running; rejecting manual supply/demand trigger")
+            return {
+                'status': 'conflict',
+                'message': 'API cron job is currently running. Please try again after it completes.'
+            }
+
+        self._is_manual = True
+        target_types = {DataType.SUPPLY, DataType.DEMAND}
+
+        all_providers = await self._get_all_api_providers()
+        if all_providers is None:
+            return {'status': 'error', 'error': 'Failed to fetch providers'}
+
+        providers = [p for p in all_providers if p.data_type in target_types]
+
+        if not providers:
+            return {
+                'status': 'success',
+                'processed_providers': 0,
+                'failed_providers': 0,
+                'total_providers': 0,
+                'message': 'No enabled supply/demand API providers found',
+                'results': []
+            }
+
+        logger.info("Manual trigger: found %d supply/demand API providers to process", len(providers))
+
+        tier_bools = await self._process_provider_tier(providers)
+
+        processed = sum(1 for ok in tier_bools if ok)
+        failed = sum(1 for ok in tier_bools if not ok)
+
+        results = []
+        for provider, ok in zip(providers, tier_bools):
+            dt_val = self._provider_data_type_value(provider)
+            results.append({
+                'provider_code': getattr(provider, 'code', 'unknown'),
+                'data_type': dt_val,
+                'status': 'success' if ok else 'failed',
+            })
+
+        overall = "success" if processed > 0 and failed == 0 else (
+            "partial_success" if processed > 0 else "error"
+        )
+        return {
+            'status': overall,
+            'processed_providers': processed,
+            'failed_providers': failed,
+            'total_providers': len(providers),
+            'results': results
+        }
 
     async def _get_all_api_providers(self) -> Optional[List[ProviderSummary]]:
         """
@@ -139,10 +214,17 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         Execute API raw data processing for all data types
         """
+        global _api_cron_running
+        _api_cron_running = True
         job_type = "api_raw_data_processor"
         job_name = "API Raw Data Processor"
         schedule = "*/15 * * * *"  # Every 15 minutes
         start_time = datetime.now()
+
+        # Per-run, single-flight cache of raw HTTP responses keyed by request.
+        # Identical requests across providers (supply & renewable for the same
+        # date) share ONE upstream call instead of hitting the API 4x.
+        self._response_cache = {}
 
         # Record job start
         execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
@@ -176,45 +258,22 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             processed_providers = 0
             failed_providers = 0
 
-            # Process data for each provider
-            for provider in providers:
-                try:
-                    provider_code = provider.code
-                    data_type = provider.data_type 
+            # Split providers into priority tiers. Demand/supply are processed first
+            # and in parallel so their triggers fire immediately; the remaining
+            # providers (exchange, weather, renewable, ...) follow, also in parallel.
+            high_priority, normal_priority = self._partition_providers_by_priority(providers)
+            logger.info(
+                "Provider priority split -> high (demand/supply): %d, normal: %d",
+                len(high_priority), len(normal_priority)
+            )
 
-                    logger.info("Processing API data for provider: %s, data type: %s", provider_code, data_type)
-
-                    # Process API data for this provider
-                    result = await self._process_provider_data(provider)
-
-                    if result and result.get('success', False):
-                        logger.info("Successfully processed API data for provider: %s, data_type: %s",
-                                       provider_code, data_type)
-                        processed_providers += 1
-                        
-                        # Publish job trigger
-                        dt_value = str(data_type.value if hasattr(data_type, 'value') else data_type).lower()
-                        trigger_job_type = f"{dt_value}_data_processing"
-                        logger.info(f"Triggering job: {trigger_job_type} for provider {provider_code}")
-                        self.job_publisher.publish_job_trigger(
-                            job_type=trigger_job_type,
-                            source_service="ingestion",
-                            payload={
-                                "provider_code": provider_code,
-                                "data_type": dt_value,
-                                "record_count": result.get('stored_records', 0)
-                            }
-                        )
-                    else:
-                        error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
-                        logger.error("Failed to process API data for provider: %s, data_type: %s, error: %s",
-                                       provider_code, data_type, error_msg)
-                        failed_providers += 1
-
-                except (ValueError, OSError, RuntimeError) as provider_error:
-                    failed_providers += 1
-                    provider_code = getattr(provider, 'code', 'unknown')
-                    logger.error("Exception processing provider %s: %s", provider_code, str(provider_error))
+            for tier_name, tier in (("high-priority", high_priority), ("normal", normal_priority)):
+                if not tier:
+                    continue
+                logger.info("Processing %s provider tier (%d providers) in parallel", tier_name, len(tier))
+                tier_results = await self._process_provider_tier(tier)
+                processed_providers += sum(1 for ok in tier_results if ok)
+                failed_providers += sum(1 for ok in tier_results if not ok)
 
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -263,6 +322,100 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 )
 
             return result
+
+        finally:
+            _api_cron_running = False
+
+    def _provider_data_type_value(self, provider: ProviderSummary) -> str:
+        """Normalize a provider's data_type to its lowercase string value."""
+        data_type = provider.data_type
+        return str(data_type.value if hasattr(data_type, 'value') else data_type).lower()
+
+    def _partition_providers_by_priority(self, providers: List[ProviderSummary]):
+        """Split providers into (high_priority, normal) tiers.
+
+        High priority = demand/supply data types, which are the most time-critical
+        downstream and should be fetched + triggered before everything else.
+        """
+        high_priority: List[ProviderSummary] = []
+        normal_priority: List[ProviderSummary] = []
+        for provider in providers:
+            if self._provider_data_type_value(provider) in self._HIGH_PRIORITY_DATA_TYPES:
+                high_priority.append(provider)
+            else:
+                normal_priority.append(provider)
+        return high_priority, normal_priority
+
+    async def _process_provider_tier(self, providers: List[ProviderSummary]) -> List[bool]:
+        """Process a tier of providers concurrently, bounded by a semaphore.
+
+        Returns a list of booleans (one per provider) indicating success. External
+        API load is capped by API_PROVIDER_CONCURRENCY (default 5) so we don't
+        hammer upstream endpoints when many providers exist in one tier.
+        """
+        concurrency = max(1, getattr(settings, 'API_PROVIDER_CONCURRENCY', 5))
+        semaphore = asyncio.Semaphore(concurrency)
+
+        async def _guarded(provider: ProviderSummary) -> bool:
+            async with semaphore:
+                return await self._process_and_trigger(provider)
+
+        results = await asyncio.gather(
+            *[_guarded(provider) for provider in providers],
+            return_exceptions=True
+        )
+
+        normalized: List[bool] = []
+        for provider, res in zip(providers, results):
+            if isinstance(res, Exception):
+                logger.error("Unhandled exception processing provider %s: %s",
+                             getattr(provider, 'code', 'unknown'), str(res))
+                normalized.append(False)
+            else:
+                normalized.append(bool(res))
+        return normalized
+
+    async def _process_and_trigger(self, provider: ProviderSummary) -> bool:
+        """Process a single provider end-to-end and publish its scheduler trigger.
+
+        Returns True on success, False otherwise. The publish call is a blocking
+        pika operation, so it is offloaded to a thread to avoid serializing the
+        event loop when providers run in parallel.
+        """
+        provider_code = getattr(provider, 'code', 'unknown')
+        try:
+            data_type = provider.data_type
+            logger.info("Processing API data for provider: %s, data type: %s", provider_code, data_type)
+
+            result = await self._process_provider_data(provider)
+
+            if result and result.get('success', False):
+                logger.info("Successfully processed API data for provider: %s, data_type: %s",
+                            provider_code, data_type)
+
+                dt_value = self._provider_data_type_value(provider)
+                trigger_job_type = f"{dt_value}_data_processing"
+                logger.info("Triggering job: %s for provider %s", trigger_job_type, provider_code)
+                await asyncio.to_thread(
+                    self.job_publisher.publish_job_trigger,
+                    job_type=trigger_job_type,
+                    source_service="ingestion",
+                    payload={
+                        "provider_code": provider_code,
+                        "data_type": dt_value,
+                        "record_count": result.get('stored_records', 0)
+                    }
+                )
+                return True
+
+            error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
+            logger.error("Failed to process API data for provider: %s, data_type: %s, error: %s",
+                         provider_code, data_type, error_msg)
+            return False
+
+        except (ValueError, OSError, RuntimeError) as provider_error:
+            logger.error("Exception processing provider %s: %s", provider_code, str(provider_error))
+            return False
 
     async def _process_provider_data(self, provider: ProviderSummary) -> Dict[str, Any]:
         """
@@ -412,7 +565,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids[0]
                 else:
                     additional_metadata["integration_apilog_id"] = log_ids
-            
+            if self._is_manual:
+                additional_metadata["manual"] = True
+
             # Use raw data service to store the data
             result = await self.raw_data_service.store_raw_data(
                 raw_data=data,
@@ -718,6 +873,34 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         if lower in ("localhost", "ip6-localhost", "ip6-loopback") or lower.endswith(".localhost"):
             raise ValueError(f"Disallowed hostname '{hostname}': localhost is not permitted")
 
+    def _parse_retry_after(self, retry_after_header: Optional[str], default_seconds: int) -> int:
+        """Parse a Retry-After header into a wait time (seconds).
+
+        Supports both the delta-seconds form ("120") and the HTTP-date form.
+        Falls back to ``default_seconds`` when the header is missing or unparseable,
+        and clamps the result to a sane maximum to avoid pathological waits.
+        """
+        max_wait = getattr(settings, 'API_RATE_LIMIT_MAX_WAIT_SECONDS', 300)
+        wait = default_seconds
+        if retry_after_header:
+            header = retry_after_header.strip()
+            if header.isdigit():
+                wait = int(header)
+            else:
+                try:
+                    from email.utils import parsedate_to_datetime
+                    retry_dt = parsedate_to_datetime(header)
+                    if retry_dt is not None:
+                        now = datetime.now(retry_dt.tzinfo) if retry_dt.tzinfo else datetime.now()
+                        wait = int((retry_dt - now).total_seconds())
+                except (TypeError, ValueError):
+                    wait = default_seconds
+        if wait < 1:
+            wait = default_seconds
+        if wait > max_wait:
+            wait = max_wait
+        return wait
+
     async def _fetch_api_data(self, api_config: Dict[str, Any], provider: ProviderEntity) -> Dict[str, Any]:
         """
         Fetch data from API endpoint
@@ -754,7 +937,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             if 'User-Agent' not in headers:
                 headers['User-Agent'] = 'EPMS-Backend/1.0'
             
-            logger.info("Making %s request to %s for provider %s", method, url, provider.code)
+            logger.debug("Prepared %s request to %s for provider %s", method, url, provider.code)
             
             # Prepare request kwargs
             request_kwargs = {
@@ -779,90 +962,164 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                     # String or other body
                     request_kwargs['data'] = body
             
-            # Make HTTP request with retry logic
-            for attempt in range(self.retry_attempts):
+            # Fetch raw response — deduplicated across providers that issue an
+            # identical request (e.g. supply & renewable for the same date share
+            # ONE upstream call). Parsing/logging/storage remain per-provider.
+            response_text = await self._fetch_response_text(request_kwargs, timeout, provider)
+            if response_text is None:
+                return {"data": [], "log_id": None}
+
+            # Blind Log — per provider, so each data type gets its own
+            # integration_apilog entry referencing the same raw payload.
+            log_id = None
+            try:
                 try:
-                    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
-                        async with session.request(**request_kwargs) as response:
-                            
-                            # Check response status
-                            if response.status != 200:
-                                error_msg = f"API returned status {response.status}: {response.reason}"
-                                logger.error("API request failed for provider %s: %s", provider.code, error_msg)
-                                
-                                # Log failure attempts if needed, but integration log usually stores the interaction.
-                                # Since we want to log the RAW data, we might want to log even failed responses?
-                                # For now let's focus on logging the successful response before parsing.
-                                
-                                if attempt < self.retry_attempts - 1:
-                                    logger.info("Retrying API request for provider %s (attempt %d/%d)", 
-                                               provider.code, attempt + 2, self.retry_attempts)
-                                    await asyncio.sleep(self.retry_delay)
-                                    continue
-                                else:
-                                    raise Exception(error_msg)
-                            
-                            # Get response content
-                            response_text = await response.text()
-                            
-                            # Blind Log
-                            log_id = None
-                            try:
-                                try:
-                                    raw_data_to_log = json.loads(response_text)
-                                except (json.JSONDecodeError, ValueError):
-                                    raw_data_to_log = response_text
-                                log_entity = IntegrationApiLogEntity(
-                                    provider_id=str(provider.id) if provider.id else provider.code,
-                                    raw_data=raw_data_to_log,
-                                    timestamp=datetime.now(),
-                                    metadata={
-                                        "url": url,
-                                        "method": method,
-                                        "status_code": response.status,
-                                        "attempt": attempt + 1
-                                    }
-                                )
-                                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
-                            except Exception as e:
-                                logger.error("Failed to integration log API response: %s", e)
-                            
-                            # Parse response based on format
-                            parsed_data = self._parse_api_response(
-                                response_text, 
-                                api_config['response_format'], 
-                                api_config.get('data_path'),
-                                provider
-                            )
-                            
-                            logger.info("Successfully fetched and parsed %d records from API for provider %s", 
-                                       len(parsed_data), provider.code)
-                            return {"data": parsed_data, "log_id": log_id}
-                            
-                except aiohttp.ClientError as e:
-                    logger.error("HTTP client error for provider %s (attempt %d/%d): %s", 
-                               provider.code, attempt + 1, self.retry_attempts, str(e))
-                    
-                    if attempt < self.retry_attempts - 1:
-                        logger.info("Retrying API request for provider %s", provider.code)
-                        await asyncio.sleep(self.retry_delay)
-                    else:
-                        raise Exception(f"API request failed after {self.retry_attempts} attempts: {str(e)}")
-                        
-                except Exception as e:
-                    logger.error("Unexpected error during API request for provider %s (attempt %d/%d): %s (%s)", 
-                               provider.code, attempt + 1, self.retry_attempts, str(e) or "No error message", repr(e))
-                    
-                    if attempt < self.retry_attempts - 1:
-                        await asyncio.sleep(self.retry_delay)
-                    else:
-                        raise
-            
-            return {"data": [], "log_id": None}
+                    raw_data_to_log = json.loads(response_text)
+                except (json.JSONDecodeError, ValueError):
+                    raw_data_to_log = response_text
+                log_entity = IntegrationApiLogEntity(
+                    provider_id=str(provider.id) if provider.id else provider.code,
+                    raw_data=raw_data_to_log,
+                    timestamp=datetime.now(),
+                    metadata={
+                        "url": url,
+                        "method": method,
+                        "status_code": 200
+                    }
+                )
+                log_id = self.integration_apilog_repository.save_log(provider.data_type.lower(), log_entity)
+            except Exception as e:
+                logger.error("Failed to integration log API response: %s", e)
+
+            # Parse response — per provider (supply vs renewable extract different fields)
+            parsed_data = self._parse_api_response(
+                response_text,
+                api_config['response_format'],
+                api_config.get('data_path'),
+                provider
+            )
+
+            logger.info("Successfully fetched and parsed %d records from API for provider %s",
+                       len(parsed_data), provider.code)
+            return {"data": parsed_data, "log_id": log_id}
             
         except Exception as e:
             logger.error("Error fetching API data for provider %s: %s (%s)", provider.code, str(e) or "No error message", repr(e))
             raise
+
+    def _build_request_cache_key(self, request_kwargs: Dict[str, Any]) -> str:
+        """Stable key identifying an HTTP request (method+url+params+body).
+
+        Identical requests across providers (e.g. supply & renewable for the same
+        date) produce the same key, so they share one network call.
+        """
+        try:
+            return json.dumps(
+                {
+                    "method": request_kwargs.get("method"),
+                    "url": request_kwargs.get("url"),
+                    "params": request_kwargs.get("params"),
+                    "json": request_kwargs.get("json"),
+                    "data": request_kwargs.get("data"),
+                },
+                sort_keys=True,
+                default=str,
+            )
+        except (TypeError, ValueError):
+            # If we cannot build a stable key, never share (unique per call).
+            return f"{request_kwargs.get('method')}|{request_kwargs.get('url')}|{id(request_kwargs)}"
+
+    async def _fetch_response_text(self, request_kwargs: Dict[str, Any], timeout: Any, provider: ProviderEntity):
+        """Fetch raw response text, deduplicated within the ingestion run.
+
+        Providers issuing an identical request share a single in-flight HTTP call
+        via a task cache. This collapses the duplicate supply/renewable GRID India
+        calls (4 -> 2 per cycle) and avoids 429s. A failed fetch is shared too, so
+        the paired provider does not re-hammer a rate-limited endpoint.
+        """
+        cache = getattr(self, "_response_cache", None)
+        if cache is None:
+            return await self._do_http_fetch(request_kwargs, timeout, provider)
+
+        cache_key = self._build_request_cache_key(request_kwargs)
+        task = cache.get(cache_key)
+        if task is None:
+            task = asyncio.ensure_future(self._do_http_fetch(request_kwargs, timeout, provider))
+            cache[cache_key] = task
+        else:
+            logger.info("Reusing in-run cached API response for provider %s (shared request)", provider.code)
+        return await task
+
+    async def _do_http_fetch(self, request_kwargs: Dict[str, Any], timeout: Any, provider: ProviderEntity) -> str:
+        """Perform the actual HTTP request with retry + 429 back-off; return raw text.
+
+        429 (rate limited) uses its own budget so it retries even when
+        API_RETRY_ATTEMPTS == 1 — wait for Retry-After (or ~60s) then retry.
+        """
+        logger.info("Making %s request to %s for provider %s",
+                    request_kwargs.get('method'), request_kwargs.get('url'), provider.code)
+
+        attempt = 0
+        rate_limit_retries = 0
+        max_rate_limit_retries = max(0, getattr(settings, 'API_RATE_LIMIT_MAX_RETRIES', 3))
+        rate_limit_wait_default = getattr(settings, 'API_RATE_LIMIT_WAIT_SECONDS', 60)
+        while True:
+            try:
+                async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=timeout)) as session:
+                    async with session.request(**request_kwargs) as response:
+
+                        # Rate limited (HTTP 429): wait for Retry-After (or ~60s) and
+                        # retry on a separate budget so general retries are not consumed.
+                        if response.status == 429:
+                            if rate_limit_retries >= max_rate_limit_retries:
+                                raise RateLimitExceededError(
+                                    f"API rate limited (429) for provider {provider.code}; "
+                                    f"exhausted {max_rate_limit_retries} rate-limit retries"
+                                )
+                            rate_limit_retries += 1
+                            wait_seconds = self._parse_retry_after(
+                                response.headers.get('Retry-After'), rate_limit_wait_default
+                            )
+                            logger.warning(
+                                "API returned 429 (rate limited) for provider %s. Waiting %ss "
+                                "before retry (%d/%d).",
+                                provider.code, wait_seconds, rate_limit_retries, max_rate_limit_retries
+                            )
+                            await asyncio.sleep(wait_seconds)
+                            continue
+
+                        if response.status != 200:
+                            error_msg = f"API returned status {response.status}: {response.reason}"
+                            logger.error("API request failed for provider %s: %s", provider.code, error_msg)
+                            attempt += 1
+                            if attempt < self.retry_attempts:
+                                logger.info("Retrying API request for provider %s (attempt %d/%d)",
+                                           provider.code, attempt + 1, self.retry_attempts)
+                                await asyncio.sleep(self.retry_delay)
+                                continue
+                            raise Exception(error_msg)
+
+                        return await response.text()
+
+            except RateLimitExceededError:
+                raise
+            except aiohttp.ClientError as e:
+                attempt += 1
+                logger.error("HTTP client error for provider %s (attempt %d/%d): %s",
+                           provider.code, attempt, self.retry_attempts, str(e))
+                if attempt < self.retry_attempts:
+                    logger.info("Retrying API request for provider %s", provider.code)
+                    await asyncio.sleep(self.retry_delay)
+                else:
+                    raise Exception(f"API request failed after {self.retry_attempts} attempts: {str(e)}")
+            except Exception as e:
+                attempt += 1
+                logger.error("Unexpected error during API request for provider %s (attempt %d/%d): %s (%s)",
+                           provider.code, attempt, self.retry_attempts, str(e) or "No error message", repr(e))
+                if attempt < self.retry_attempts:
+                    await asyncio.sleep(self.retry_delay)
+                else:
+                    raise
 
     def _add_authentication(self, headers: Dict[str, str], auth_type: Optional[str], auth_config: Dict[str, Any]) -> Dict[str, str]:
         """
