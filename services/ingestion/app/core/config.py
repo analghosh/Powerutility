@@ -78,6 +78,10 @@ class Settings(BaseSettings):
     # Processing Service
     PROCESSING_SERVICE_URL: str = "http://localhost:8003"
     PROCESSING_SERVICE_TIMEOUT: int = 30
+
+    # Scheduler Service (used to chain the manual demand pipeline trigger)
+    SCHEDULER_SERVICE_URL: str = "http://localhost:8004"
+    SCHEDULER_DEMAND_TRIGGER_TIMEOUT: int = 300
     
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 50
