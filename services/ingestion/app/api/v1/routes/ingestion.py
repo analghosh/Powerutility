@@ -2,16 +2,46 @@
 Ingestion API routes
 """
 
+import logging
+
+import httpx
 from fastapi import APIRouter, HTTPException, status, Depends
 from typing import Dict, Any
 from pydantic import BaseModel
 from datetime import datetime
 from libs.audit_queue.simple_logger import AuditLogger
+from ....core.config import settings
 from ....core.dependencies import get_audit_logger
 from ....middleware.page_access import require_page_access
 
 router = APIRouter(prefix="/ingest", tags=["Data Ingestion"])
 audit_logger = get_audit_logger()
+logger = logging.getLogger("ingestion_routes")
+
+
+def _scheduler_base_url() -> str:
+    """Return scheme+host+port of the scheduler service (strips any path suffix)."""
+    from urllib.parse import urlparse
+    parsed = urlparse(settings.SCHEDULER_SERVICE_URL)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+async def _trigger_scheduler_demand_pipeline() -> Dict[str, Any]:
+    """
+    Call the scheduler's demand-trigger endpoint to run demand_temp_sync then
+    demand_processor. Failures here do not fail the ingestion (which already
+    published to RabbitMQ); the outcome is reported back in the response.
+    """
+    url = f"{_scheduler_base_url()}/api/v1/scheduler/demand-trigger/trigger"
+    timeout = getattr(settings, 'SCHEDULER_DEMAND_TRIGGER_TIMEOUT', 300)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url)
+            resp.raise_for_status()
+            return {"success": True, "detail": resp.json()}
+    except Exception as e:
+        logger.error("Failed to trigger scheduler demand pipeline at %s: %s", url, str(e))
+        return {"success": False, "error": str(e)}
 
 
 class DataIngestionRequest(BaseModel):
@@ -175,13 +205,15 @@ async def trigger_supply_demand_ingestion(
     _current_user: Dict[str, Any] = Depends(require_page_access("Data Ingestion"))
 ):
     """
-    Manually trigger API data ingestion for SUPPLY and DEMAND providers only.
+    Manually trigger the full manual demand/supply pipeline in one call.
 
-    Runs the same pipeline as the api_raw_data_processor cron job but restricted
-    to supply/demand providers.  Returns 409 Conflict if the cron job is already
-    running (cron will handle the update — no need to duplicate).  On success,
-    publishes job triggers to RabbitMQ so the downstream scheduler picks them up.
-    Raw data records are stored with metadata.manual = true.
+    1. Runs the api_raw_data_processor pipeline restricted to SUPPLY, DEMAND and
+       the RTM optimization provider. Returns 409 Conflict if the cron job is
+       already running (cron handles the update — no need to duplicate).
+    2. Publishes job triggers to RabbitMQ so the downstream consumers pick them up.
+       Raw data records are stored with metadata.manual = true.
+    3. Chains a call to the scheduler's demand-trigger endpoint, which runs
+       demand_temp_sync then demand_processor (the same processors the cron runs).
     """
     from ....processors.api_raw_data_processor import APIRawDataProcessor
 
@@ -201,6 +233,9 @@ async def trigger_supply_demand_ingestion(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=result.get('error', 'Supply/demand ingestion failed')
         )
+
+    # Ingestion + RabbitMQ publish succeeded — chain the scheduler demand pipeline.
+    result['scheduler_trigger'] = await _trigger_scheduler_demand_pipeline()
 
     return result
 
