@@ -85,6 +85,10 @@ from services.ingestion.app.repositories.integration_apilog_repository import In
 
 logger = logging.getLogger("api_raw_data_processor")
 
+# Module-level flag so the manual API can detect a running cron execution.
+# Guarded by the single asyncio event-loop; no threading concern.
+_api_cron_running: bool = False
+
 
 class RateLimitExceededError(Exception):
     """Raised when an API keeps returning HTTP 429 after the rate-limit retry budget is exhausted."""
@@ -113,6 +117,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
+        self._is_manual: bool = False
 
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
@@ -120,6 +125,67 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         # Process API providers for all data types
         return await self.process_all_api_data()
+
+    async def process_supply_demand_api_data(self) -> Dict[str, Any]:
+        """
+        Fetch and process API data exclusively for SUPPLY and DEMAND providers,
+        then publish a job trigger to RabbitMQ for each successful provider.
+
+        Returns HTTP 409-style conflict dict if the cron job is currently running,
+        because the cron already handles the data update — no manual run needed.
+        """
+        if _api_cron_running:
+            logger.warning("API cron job is currently running; rejecting manual supply/demand trigger")
+            return {
+                'status': 'conflict',
+                'message': 'API cron job is currently running. Please try again after it completes.'
+            }
+
+        self._is_manual = True
+        target_types = {DataType.SUPPLY, DataType.DEMAND}
+
+        all_providers = await self._get_all_api_providers()
+        if all_providers is None:
+            return {'status': 'error', 'error': 'Failed to fetch providers'}
+
+        providers = [p for p in all_providers if p.data_type in target_types]
+
+        if not providers:
+            return {
+                'status': 'success',
+                'processed_providers': 0,
+                'failed_providers': 0,
+                'total_providers': 0,
+                'message': 'No enabled supply/demand API providers found',
+                'results': []
+            }
+
+        logger.info("Manual trigger: found %d supply/demand API providers to process", len(providers))
+
+        tier_bools = await self._process_provider_tier(providers)
+
+        processed = sum(1 for ok in tier_bools if ok)
+        failed = sum(1 for ok in tier_bools if not ok)
+
+        results = []
+        for provider, ok in zip(providers, tier_bools):
+            dt_val = self._provider_data_type_value(provider)
+            results.append({
+                'provider_code': getattr(provider, 'code', 'unknown'),
+                'data_type': dt_val,
+                'status': 'success' if ok else 'failed',
+            })
+
+        overall = "success" if processed > 0 and failed == 0 else (
+            "partial_success" if processed > 0 else "error"
+        )
+        return {
+            'status': overall,
+            'processed_providers': processed,
+            'failed_providers': failed,
+            'total_providers': len(providers),
+            'results': results
+        }
 
     async def _get_all_api_providers(self) -> Optional[List[ProviderSummary]]:
         """
@@ -148,6 +214,8 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         """
         Execute API raw data processing for all data types
         """
+        global _api_cron_running
+        _api_cron_running = True
         job_type = "api_raw_data_processor"
         job_name = "API Raw Data Processor"
         schedule = "*/15 * * * *"  # Every 15 minutes
@@ -254,6 +322,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 )
 
             return result
+
+        finally:
+            _api_cron_running = False
 
     def _provider_data_type_value(self, provider: ProviderSummary) -> str:
         """Normalize a provider's data_type to its lowercase string value."""
@@ -494,7 +565,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                     additional_metadata["integration_apilog_id"] = log_ids[0]
                 else:
                     additional_metadata["integration_apilog_id"] = log_ids
-            
+            if self._is_manual:
+                additional_metadata["manual"] = True
+
             # Use raw data service to store the data
             result = await self.raw_data_service.store_raw_data(
                 raw_data=data,
