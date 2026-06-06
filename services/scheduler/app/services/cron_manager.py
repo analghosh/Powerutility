@@ -69,7 +69,13 @@ class CronManager(BaseCronManager):
         # Type annotations for repository instances
         self.job_data_repository: Optional[JobDataRepository] = None
         self.job_detail_repository: Optional[JobDetailRepository] = None
-        
+
+        # Coalescing state: prevents the same job_type from running concurrently
+        # (cron + RabbitMQ triggers stampeding the same processing). See
+        # _execute_job_with_logging_async for the lock + rerun-if-dirty logic.
+        self._jobs_in_flight: set = set()
+        self._jobs_pending_rerun: set = set()
+
         # Initialize audit logger
         try:
             from libs.audit_queue.unified_queue_service import UnifiedQueueService
@@ -1036,6 +1042,44 @@ class CronManager(BaseCronManager):
             return {"status": "error", "error": str(e)}
     
     async def _execute_job_with_logging_async(self, cron_job):
+        """Coalescing wrapper around job execution.
+
+        Ensures a given job_type never runs concurrently. If a run for this
+        job_type is already in flight (cron + a RabbitMQ trigger, or two triggers),
+        the incoming call is coalesced instead of starting an overlapping run — the
+        in-flight run reads ALL pending data anyway, so nothing is missed. When it
+        finishes, if any trigger arrived during the run, it re-runs exactly once
+        (rerun-if-dirty) so the latest data is never stranded.
+        """
+        import asyncio
+
+        job_type = getattr(cron_job, "job_id", None) or getattr(cron_job, "name", "unknown")
+
+        # Already running -> mark dirty and skip (no overlap).
+        if job_type in self._jobs_in_flight:
+            self._jobs_pending_rerun.add(job_type)
+            logger.info(
+                "Job '%s' already running — coalescing this trigger (will re-run after current finishes)",
+                job_type,
+            )
+            return {"status": "coalesced", "job_type": job_type}
+
+        self._jobs_in_flight.add(job_type)
+        try:
+            return await self._run_job_with_logging_async(cron_job)
+        finally:
+            self._jobs_in_flight.discard(job_type)
+            # Rerun-if-dirty: something was triggered while we were running, so run
+            # once more to pick up data that arrived after this run read its pending.
+            if job_type in self._jobs_pending_rerun:
+                self._jobs_pending_rerun.discard(job_type)
+                logger.info(
+                    "Job '%s' received triggers while running — re-running once to catch new data",
+                    job_type,
+                )
+                asyncio.create_task(self._execute_job_with_logging_async(cron_job))
+
+    async def _run_job_with_logging_async(self, cron_job):
         """Override to capture execution logs and store them in job detail records - ASYNC VERSION"""
         import time
         import asyncio
