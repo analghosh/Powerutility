@@ -122,7 +122,7 @@ Validation Rules:
 - block must be between 1-96 (15-minute intervals for 24 hours)
 - action must be UPSERT or DELETE
 - values is required for UPSERT action
-- scheduled_at must be DD-MM-YYYY (04-06-2026) or YYYY-MM-DD (2026-06-04)
+- scheduled_at must be DD-MM-YYYY (04-06-2026)
 """
 
 import asyncio
