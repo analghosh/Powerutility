@@ -175,12 +175,13 @@ async def trigger_supply_demand_ingestion(
     _current_user: Dict[str, Any] = Depends(require_page_access("Data Ingestion"))
 ):
     """
-    Trigger API data ingestion for supply and demand providers only.
+    Manually trigger API data ingestion for SUPPLY and DEMAND providers only.
 
-    Replicates the api_raw_data_processor pipeline but restricts execution to
-    providers whose data_type is SUPPLY or DEMAND.  After each provider is
-    successfully processed the job trigger message is pushed to RabbitMQ so the
-    downstream scheduler can pick it up and run the data-processing job.
+    Runs the same pipeline as the api_raw_data_processor cron job but restricted
+    to supply/demand providers.  Returns 409 Conflict if the cron job is already
+    running (cron will handle the update — no need to duplicate).  On success,
+    publishes job triggers to RabbitMQ so the downstream scheduler picks them up.
+    Raw data records are stored with metadata.manual = true.
     """
     from ....processors.api_raw_data_processor import APIRawDataProcessor
 
