@@ -10,7 +10,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from libs.core.job_entities import JobDetail
-from libs.utils.csv_date_parse import parse_csv_scheduled_at
+from libs.utils.csv_date_parse import parse_ingestion_date
 from libs.core.job_factory import create_job_data_repository, create_job_detail_repository
 from libs.models.provider_models import ProviderEntity
 from libs.services.provider_service import ProviderService
@@ -230,7 +230,7 @@ class BaseRawDataProcessor(ABC):
                         raise ValueError(f"Cannot convert '{value}' to boolean")
                 return bool(value)
             elif field_type.lower() in ("datetime", "timestamp", "date"):
-                return parse_csv_scheduled_at(value)
+                return self._parse_scheduled_at_datetime(value)
             elif field_type.lower() in ("object", "dict", "list", "array", "json"):
                 # Return complex types as-is
                 return value
@@ -241,6 +241,10 @@ class BaseRawDataProcessor(ABC):
 
         except (ValueError, TypeError) as e:
             raise ValueError(f"Cannot convert '{value}' to {field_type}: {str(e)}")
+
+    def _parse_scheduled_at_datetime(self, value: Any) -> datetime:
+        """Parse scheduled_at for API/scrape/FTP ingestion (all standard formats)."""
+        return parse_ingestion_date(value)
 
     def map_data_to_schema(self, data: List[Dict[str, Any]], provider: ProviderEntity) -> List[Dict[str, Any]]:
         """
