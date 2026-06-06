@@ -3453,7 +3453,7 @@ class RTMBiddingServices:
             exchange_config = await self.exchange_config_repository.get_bidType_market_active_config(
                 "single",
                 "RTM"
-            ) or {}
+            )
             system_user_id = exchange_config.get("LoginUserId")
             portfolio_id = exchange_config.get("BidAreaId")
 

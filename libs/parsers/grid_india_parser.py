@@ -11,6 +11,7 @@ from collections import defaultdict
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -57,13 +58,15 @@ class GridIndiaParser(BaseParser):
                 logger.warning("ResponseBody not found in content structure")
                 return []
 
+            if response_body is None:
+                logger.warning("ResponseBody is null — no data available from API")
+                return []
+
             date_str = response_body.get("Date")
             # Parse date "DD-MM-YYYY" to ISO format
             try:
                 if date_str:
-                    # Convert DD-MM-YYYY to YYYY-MM-DD
-                    date_obj = datetime.datetime.strptime(date_str, "%d-%m-%Y")
-                    date_str = date_obj.isoformat()
+                    date_str = parse_ingestion_date(date_str).date().isoformat()
             except ValueError:
                 logger.warning("Could not parse date: %s", date_str)
 

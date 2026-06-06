@@ -407,15 +407,14 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
         """
         Store RTM IDF demand forecasts in forecast_serve (source=rtm_forecast_api).
 
-        Uses the same block filter as legacy demand_serve writes: only active-session
-        blocks on the current day (current_block + min_ahead_blocks), or all blocks
-        1–96 after evening cutover / for future dates.
+        Persists every time block present in the API payload for this delivery date.
+        Assigns one forecast_revision per fetch (increments per day per source).
         """
+        _ = today_ist, current_block, after_evening_cutover, min_ahead_blocks
         try:
             if not data:
                 return 0
 
-            scheduled_date = scheduled_at.date()
             time_block_data: Dict[int, Dict[str, Any]] = {}
             for record in data:
                 tb = record.get("time_block")
@@ -425,17 +424,12 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                 if tb_i not in time_block_data:
                     time_block_data[tb_i] = record
 
+            forecast_revision = await self.forecast_repository.next_forecast_revision(
+                scheduled_at, FORECAST_SOURCE_RTM_API
+            )
+
             bulk_records: List[Dict[str, Any]] = []
             for time_block, record in time_block_data.items():
-                if not should_write_forecast_block(
-                    scheduled_date,
-                    int(time_block),
-                    today_ist,
-                    current_block,
-                    after_evening_cutover=after_evening_cutover,
-                    min_ahead_blocks=min_ahead_blocks,
-                ):
-                    continue
                 forecast_mw = float(record.get("demand_forecast_mw", 0.0) or 0.0)
                 bulk_records.append(
                     {
@@ -445,21 +439,24 @@ class RTMForecastAPIProcessor(BaseRawDataProcessor):
                         "forecasted_frequency": float(
                             freq_by_block.get(int(time_block), 0.0) or 0.0
                         ),
+                        "forecast_revision": forecast_revision,
                     }
                 )
 
             if not bulk_records:
                 return 0
 
-            result = await self.forecast_repository.bulk_upsert_forecasts(
+            result = await self.forecast_repository.bulk_insert_forecasts(
                 bulk_records,
                 source=FORECAST_SOURCE_RTM_API,
             )
-            stored_count = result.get("modified", 0) + result.get("upserted", 0)
+            stored_count = result.get("inserted", 0) or result.get("upserted", 0)
             logger.info(
-                "Stored %d forecast_serve records (rtm_forecast_api) for date %s",
+                "Stored %d forecast_serve records (rtm_forecast_api) for date %s "
+                "forecast_revision=%d",
                 stored_count,
                 scheduled_at.strftime("%Y-%m-%d"),
+                forecast_revision,
             )
             return stored_count
         except Exception as e:

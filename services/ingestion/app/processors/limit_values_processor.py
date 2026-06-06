@@ -122,7 +122,7 @@ Validation Rules:
 - block must be between 1-96 (15-minute intervals for 24 hours)
 - action must be UPSERT or DELETE
 - values is required for UPSERT action
-- scheduled_at must be in YYYY-MM-DD format
+- scheduled_at must be DD-MM-YYYY (04-06-2026)
 """
 
 import asyncio
@@ -142,6 +142,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '../../..'))
 from services.processing.app.v2.repository.limit_workflow_repository import limit_workflow_repository
 from services.processing.app.core.config import settings as processing_settings
 from libs.audit_queue.simple_logger import AuditLogger
+from libs.utils.csv_date_parse import parse_csv_scheduled_at
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +251,7 @@ class LimitValuesProcessor:
                 try:
                     # Validate scheduled_at format
                     if "scheduled_at" in record and record["scheduled_at"]:
-                        datetime.strptime(str(record["scheduled_at"]), "%Y-%m-%d")
+                        record["scheduled_at"] = parse_csv_scheduled_at(record["scheduled_at"])
                     
                     # Validate block range (1-96 for 15-minute intervals for 24 hours)
                     if "block" in record and record["block"]:
@@ -457,14 +458,8 @@ class LimitValuesProcessor:
                     # UNIQUE_KEY_FIELDS = ["block", "id", "market", "category", "area", "scheduled_at"]
                     
                     # Normalize date
-                    if "scheduled_at" in item:
-                        # Ensure it's a datetime object or proper string
-                        # ideally datetime object for MongoDB
-                        if isinstance(item["scheduled_at"], str):
-                            try:
-                                item["scheduled_at"] = datetime.strptime(item["scheduled_at"], "%Y-%m-%d")
-                            except ValueError:
-                                pass # Keep as is if parse fails, validation likely caught it or it's different format
+                    if "scheduled_at" in item and item["scheduled_at"]:
+                        item["scheduled_at"] = parse_csv_scheduled_at(item["scheduled_at"])
                     
                     # Prepare filter doc for upsert (finding existing pending request)
                     filter_doc = {

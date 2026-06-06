@@ -6,10 +6,11 @@ data mapping, job tracking, and error handling.
 
 import logging
 from abc import ABC, abstractmethod
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from libs.core.job_entities import JobDetail
+from libs.utils.csv_date_parse import parse_ingestion_date
 from libs.core.job_factory import create_job_data_repository, create_job_detail_repository
 from libs.models.provider_models import ProviderEntity
 from libs.services.provider_service import ProviderService
@@ -228,31 +229,8 @@ class BaseRawDataProcessor(ABC):
                     else:
                         raise ValueError(f"Cannot convert '{value}' to boolean")
                 return bool(value)
-            elif field_type.lower() in ("datetime", "timestamp"):
-                if isinstance(value, datetime):
-                    return value
-                # Try common datetime formats including ISO format with Z
-                for fmt in ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y", "%Y-%m-%d"]:
-                    try:
-                        return datetime.strptime(str(value), fmt)
-                    except ValueError:
-                        continue
-                # Try ISO format with timezone handling
-                try:
-                    return datetime.fromisoformat(str(value).replace('Z', '+00:00'))
-                except ValueError:
-                    pass
-                raise ValueError(f"Cannot convert '{value}' to datetime")
-            elif field_type.lower() == "date":
-                if isinstance(value, date) and not isinstance(value, datetime):
-                    return value
-                # Add "%d-%m-%Y" to supported formats
-                for fmt in ["%Y-%m-%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%d-%m-%Y"]:
-                    try:
-                        return datetime.strptime(str(value), fmt)
-                    except ValueError:
-                        continue
-                raise ValueError(f"Cannot convert '{value}' to date")
+            elif field_type.lower() in ("datetime", "timestamp", "date"):
+                return self._parse_scheduled_at_datetime(value)
             elif field_type.lower() in ("object", "dict", "list", "array", "json"):
                 # Return complex types as-is
                 return value
@@ -263,6 +241,10 @@ class BaseRawDataProcessor(ABC):
 
         except (ValueError, TypeError) as e:
             raise ValueError(f"Cannot convert '{value}' to {field_type}: {str(e)}")
+
+    def _parse_scheduled_at_datetime(self, value: Any) -> datetime:
+        """Parse scheduled_at for API/scrape/FTP ingestion (all standard formats)."""
+        return parse_ingestion_date(value)
 
     def map_data_to_schema(self, data: List[Dict[str, Any]], provider: ProviderEntity) -> List[Dict[str, Any]]:
         """

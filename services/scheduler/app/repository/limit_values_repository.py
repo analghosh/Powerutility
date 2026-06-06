@@ -6,6 +6,7 @@ from typing import List, Dict, Any, Optional
 import logging
 from datetime import datetime, date, timedelta
 
+from libs.utils.csv_date_parse import midnight_naive, scheduled_at_day_range_filter
 from services.processing.app.v2.repository.base_repository import GenericRepository
 from ..core.config import settings
 
@@ -270,9 +271,12 @@ class LimitValuesRepository(GenericRepository):
         """
         try:
             approval_collection = "limit_approval"
+            tomorrow_start = midnight_naive(
+                tomorrow if isinstance(tomorrow, datetime) else datetime.combine(tomorrow, datetime.min.time())
+            )
             query = {
-                "scheduled_at": tomorrow,
-                "status": "APPROVED"
+                **scheduled_at_day_range_filter(tomorrow_start),
+                "status": "APPROVED",
             }
             cursor = self.db[approval_collection].find(query)
             results = await cursor.to_list(length=10000)

@@ -80,6 +80,7 @@ class DAMBiddingServices:
             bid_date = scheduled_at
             if isinstance(scheduled_at, str):
                 scheduled_at = datetime.strptime(scheduled_at, "%Y-%m-%d")
+            scheduled_at_end = scheduled_at + timedelta(days=1)
             # ---------------------------------------------------------
             # 1. Fetch system user bids
             # ---------------------------------------------------------
@@ -102,18 +103,19 @@ class DAMBiddingServices:
             exchange_config = await self.exchange_config_repo.get_bidType_market_active_config(
                 "single",
                 "DAM"
-            )
+            ) or {}
             system_user_id = exchange_config.get("LoginUserId")
             portfolio_id = exchange_config.get("BidAreaId")
 
             # ---------------------------------------------------------
             # 3. Fetch book data ONLY for other users
             # ---------------------------------------------------------
-            book_details = await self.generic_repo.find_many(
-                self.dam_book_collection,
+            book_details = await self.generic_repo.get_all_async(
+                "dam_bid_data_live",
                 {
-                    "scheduled_at": scheduled_at,
-                    "exchangeOrderId": {"$nin": list(system_order_ids)}
+                    "scheduled_at": {"$gte": scheduled_at, "$lt": scheduled_at_end},
+                    "OrderId": {"$nin": list(system_order_ids)},
+                    "OrderStatus": {"$in": ["Executed", "Provisional"]}
                 }
             )
 
@@ -240,11 +242,11 @@ class DAMBiddingServices:
                         "otherUserPQData": None,
                     }
 
-                response_struct[key]["otherUserPQData"] = bid.get("exchangePQData")
+                response_struct[key]["otherUserPQData"] = bid.get("PQData")
 
                 # Capture other user id (assuming one user context)
                 if other_user_id is None:
-                    other_user_id = bid.get("InitiatedBy")
+                    other_user_id = bid.get("UserId")
 
             # ---------------------------------------------------------
             # 7. Final Response Structure
