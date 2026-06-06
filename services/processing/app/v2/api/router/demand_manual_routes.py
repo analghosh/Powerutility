@@ -36,7 +36,7 @@ class ManualTempDemandItem(BaseModel):
     """
     Schema for manual demand data item.
     """
-    scheduled_at: str = Field(..., description="Schedule date (DD-MM-YYYY or YYYY-MM-DD)")
+    scheduled_at: str = Field(..., description="Schedule date (DD-MM-YYYY)")
     time_block: int = Field(..., description="Time block (1-96)", ge=1, le=96)
     drawal: float = Field(default=0.0, description="Drawal value")
     rostering: float = Field(default=0.0, description="Rostering value")
@@ -177,7 +177,7 @@ async def update_temp_demand_manual_v2(
     Accepts a CSV file and bulk-uploads temp demand data.
 
     **Expected CSV columns (header row required):**
-    - `scheduled_at` — DD-MM-YYYY (04-06-2026) or YYYY-MM-DD (2026-06-04)
+    - `scheduled_at` — DD-MM-YYYY (04-06-2026)
     - `time_block` — integer (1–96)
     - `drawal` — float
     - `rostering` — float
