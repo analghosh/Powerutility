@@ -60,159 +60,182 @@ class IntegrationApiLogRepository(GenericRepository):
         }
         return await self.insert_one_async(self.collection_name, log_entry)
 
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _extract_txn_id(body: Any) -> Optional[str]:
+        """Return TransactionId from a request/response body dict (case-insensitive key variants)."""
+        if not isinstance(body, dict):
+            return None
+        for key in ("TransactionId", "transactionId", "transaction_id"):
+            val = body.get(key)
+            if val is not None:
+                return str(val)
+        return None
+
+    @staticmethod
+    def _format_delivery_date(raw: Any) -> Optional[str]:
+        """Convert a Unix-timestamp delivery_date value to YYYY-MM-DD HH:MM:SS string."""
+        if raw is None:
+            return None
+        try:
+            ts = int(raw) if not isinstance(raw, (int, float)) else raw
+            return datetime.utcfromtimestamp(ts).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return str(raw)
+
+    # ------------------------------------------------------------------
+
     async def get_bid_submission_details(self, date_str: str, market_type: str, bid_type: str) -> list:
         """
-        Get bid submission details grouped by correlation_id for a specific date.
-        
-        Args:
-            date_str: Date string in YYYY-MM-DD format
-            market_type: Market type (DAM/RTM)
-            bid_type: Bid type (single-bid, etc.)
-            
-        Returns:
-            List of grouped bid details
+        Get bid submission details for a specific date.
+
+        Returns one entry per submitSingleBid call (one per bid submitted).
+        Multiple bids submitted in one request share the same correlationId but each
+        gets its own row — no uniqueness on correlationId.
+
+        Associated logs (getBidDetail, cancelRtmBid, etc.) are matched to their
+        parent submission via the TransactionId returned in the submitSingleBid
+        response body.
         """
         try:
             start_date = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
-            end_date = start_date.replace(hour=23, minute=59, second=59, microsecond=999999)
-            
-            # Convert date_str to Unix timestamp range for delivery_date
-            start_ts = int(start_date.timestamp())
-            end_ts = int(end_date.timestamp())
-            
+            end_date   = start_date.replace(hour=23, minute=59, second=59, microsecond=999999)
+            start_ts   = int(start_date.timestamp())
+            end_ts     = int(end_date.timestamp())
+
             pipeline = [
                 {
                     "$match": {
                         "delivery_date": {"$gte": start_ts, "$lte": end_ts},
                         "market_type": market_type,
                         "bid_type": bid_type,
-                        "method": {"$in": ["getBidDetail", "submitSingleBid", "cancelRtmBid", "cancelAllDamBid", "getCancelledBidDetails"]}
+                        "method": {"$in": [
+                            "submitSingleBid", "getBidDetail",
+                            "cancelRtmBid", "cancelAllDamBid", "getCancelledBidDetails"
+                        ]}
                     }
                 },
-                # Sort by timestamp descending to get latest entries first
-                {
-                    "$sort": {"timestamp": -1}
-                },
-                {
-                    "$group": {
-                        "_id": "$correlation_id",
-                        "logs": {"$push": "$$ROOT"}
-                    }
-                }
+                {"$sort": {"timestamp": -1}},  # newest first
             ]
-            
-            logger.info(f"Executing pipeline on {self.collection_name}: {pipeline}")
-            grouped_results = await self.aggregate_async(self.collection_name, pipeline)
-            
+
+            all_logs = await self.aggregate_async(self.collection_name, pipeline)
+
+            # -------------------------------------------------------
+            # Build lookup tables keyed by TransactionId so we can
+            # match associated logs to the correct submission even when
+            # multiple bids share the same correlation_id.
+            # -------------------------------------------------------
+            # submit_txn_id  → getBidDetail log (latest)
+            get_bid_by_txn:    Dict[str, Any] = {}
+            # submit_txn_id  → cancelRtmBid log (latest)
+            cancel_rtm_by_txn: Dict[str, Any] = {}
+            # submit_txn_id  → cancelAllDamBid log (latest)
+            cancel_dam_by_txn: Dict[str, Any] = {}
+            # cancel_txn_id  → getCancelledBidDetails log (latest)
+            get_cancel_by_txn: Dict[str, Any] = {}
+
+            submit_logs: List[Any] = []
+
+            for log in all_logs:
+                method  = log.get("method")
+                req_body = log.get("requestBody") or {}
+
+                if method == "submitSingleBid":
+                    submit_logs.append(log)
+
+                elif method == "getBidDetail":
+                    txn = self._extract_txn_id(req_body)
+                    if txn and txn not in get_bid_by_txn:
+                        get_bid_by_txn[txn] = log
+
+                elif method == "cancelRtmBid":
+                    txn = self._extract_txn_id(req_body)
+                    if txn and txn not in cancel_rtm_by_txn:
+                        cancel_rtm_by_txn[txn] = log
+
+                elif method == "cancelAllDamBid":
+                    txn = self._extract_txn_id(req_body)
+                    if txn and txn not in cancel_dam_by_txn:
+                        cancel_dam_by_txn[txn] = log
+
+                elif method == "getCancelledBidDetails":
+                    txn = self._extract_txn_id(req_body)
+                    if txn and txn not in get_cancel_by_txn:
+                        get_cancel_by_txn[txn] = log
+
+            # -------------------------------------------------------
+            # Build one response entry per submitSingleBid log
+            # -------------------------------------------------------
             response = []
-            for group in grouped_results:
-                correlation_id = group["_id"]
-                logs = group["logs"]
-                
-                result_item = {
-                    "correlationId": correlation_id,
-                    "submitSingleBidRequestBody": None,
-                    "submitSingleBidResponseBody": None,
-                    "getBidDetailResponseBody": None,
+            for log in submit_logs:
+                correlation_id  = log.get("correlation_id")
+                resp_body       = log.get("responseBody") or {}
+                req_body        = log.get("requestBody")  or {}
+                submit_txn_id   = self._extract_txn_id(resp_body)
+
+                result_item: Dict[str, Any] = {
+                    "correlationId":                    correlation_id,
+                    "submitSingleBidRequestBody":        req_body,
+                    "submitSingleBidResponseBody":       resp_body,
+                    "getBidDetailResponseBody":          None,
                     "getCancelledBidDetailsResponseBody": None,
-                    "cancelRtmBidResponseBody": None,
-                    "cancelAllDamBidResponseBody": None,
-                    "cancelRequestBody": None,
-                    "DeliveryDate": None,
-                    "timestamp": None,
-                    "bidType": None
+                    "cancelRtmBidResponseBody":          None,
+                    "cancelAllDamBidResponseBody":       None,
+                    "cancelRequestBody":                 None,
+                    "DeliveryDate":                      None,
+                    "timestamp":                         log.get("timestamp"),
+                    "bidType":                           "submit bid",
                 }
-                
-                # Track if we've already found the latest getBidDetail / getCancelledBidDetails
-                found_get_bid_detail = False
-                found_cancel_bid_detail = False
-                delivery_date_raw = None
-                
-                for log in logs:
-                    method = log.get("method")
-                    if method == "submitSingleBid":
-                        result_item["submitSingleBidRequestBody"] = log.get("requestBody")
-                        result_item["submitSingleBidResponseBody"] = log.get("responseBody")
-                        result_item["timestamp"] = log.get("timestamp")
-                        
-                        # Extract and format DeliveryDate from requestBody
-                        req_body = log.get("requestBody", {})
-                        if req_body and "DeliveryDate" in req_body:
-                             try:
-                                ts = req_body["DeliveryDate"]
-                                if isinstance(ts, (int, float)):
-                                     # Assuming Unix timestamp
-                                     dt_obj = datetime.utcfromtimestamp(ts)
-                                     result_item["DeliveryDate"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-                                elif isinstance(ts, str) and ts.isdigit():
-                                     dt_obj = datetime.utcfromtimestamp(int(ts))
-                                     result_item["DeliveryDate"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-                                else:
-                                     result_item["DeliveryDate"] = str(ts)
-                             except Exception:
-                                 result_item["DeliveryDate"] = str(req_body.get("DeliveryDate"))
 
-                    elif method == "getBidDetail" and not found_get_bid_detail:
-                        # Only take the first (latest) getBidDetail entry since logs are sorted by timestamp desc
-                        result_item["getBidDetailResponseBody"] = log.get("responseBody")
-                        found_get_bid_detail = True
+                # DeliveryDate from submit requestBody
+                dd_raw = req_body.get("DeliveryDate")
+                result_item["DeliveryDate"] = self._format_delivery_date(dd_raw)
 
-                    elif method == "getCancelledBidDetails" and not found_cancel_bid_detail:
-                        # Only take the first (latest) getCancelledBidDetails entry
-                        result_item["getCancelledBidDetailsResponseBody"] = log.get("responseBody")
-                        found_cancel_bid_detail = True
+                delivery_date_raw = log.get("delivery_date")
 
-                    elif method == "cancelRtmBid":
-                        result_item["cancelRtmBidResponseBody"] = log.get("responseBody")
-                        result_item["cancelRequestBody"] = log.get("requestBody")
-                        if not result_item["timestamp"]:
-                            result_item["timestamp"] = log.get("timestamp")
+                if submit_txn_id:
+                    # getBidDetail — matched by TransactionId in its requestBody
+                    if submit_txn_id in get_bid_by_txn:
+                        result_item["getBidDetailResponseBody"] = get_bid_by_txn[submit_txn_id].get("responseBody")
+
+                    # cancelRtmBid — matched by TransactionId in its requestBody
+                    cancel_rtm = cancel_rtm_by_txn.get(submit_txn_id)
+                    if cancel_rtm:
+                        result_item["cancelRtmBidResponseBody"] = cancel_rtm.get("responseBody")
+                        result_item["cancelRequestBody"]        = cancel_rtm.get("requestBody")
+                        if not result_item["DeliveryDate"] and cancel_rtm.get("delivery_date"):
+                            result_item["DeliveryDate"] = self._format_delivery_date(cancel_rtm["delivery_date"])
                         if not delivery_date_raw:
-                            delivery_date_raw = log.get("delivery_date")
-                        if log.get("delivery_date") and not result_item["DeliveryDate"]:
-                            dd = log.get("delivery_date")
-                            try:
-                                if isinstance(dd, (int, float)):
-                                    dt_obj = datetime.utcfromtimestamp(dd)
-                                    result_item["DeliveryDate"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-                                elif isinstance(dd, str) and dd.isdigit():
-                                    dt_obj = datetime.utcfromtimestamp(int(dd))
-                                    result_item["DeliveryDate"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-                                else:
-                                    result_item["DeliveryDate"] = str(dd)
-                            except Exception:
-                                result_item["DeliveryDate"] = str(dd)
+                            delivery_date_raw = cancel_rtm.get("delivery_date")
+                        # getCancelledBidDetails — matched by TransactionId from cancel response
+                        cancel_txn = self._extract_txn_id(cancel_rtm.get("responseBody") or {})
+                        if cancel_txn and cancel_txn in get_cancel_by_txn:
+                            result_item["getCancelledBidDetailsResponseBody"] = get_cancel_by_txn[cancel_txn].get("responseBody")
 
-                    elif method == "cancelAllDamBid":
-                        result_item["cancelAllDamBidResponseBody"] = log.get("responseBody")
-                        result_item["cancelRequestBody"] = log.get("requestBody")
-                        if not result_item["timestamp"]:
-                            result_item["timestamp"] = log.get("timestamp")
+                    # cancelAllDamBid — same pattern
+                    cancel_dam = cancel_dam_by_txn.get(submit_txn_id)
+                    if cancel_dam:
+                        result_item["cancelAllDamBidResponseBody"] = cancel_dam.get("responseBody")
+                        result_item["cancelRequestBody"]           = cancel_dam.get("requestBody")
+                        if not result_item["DeliveryDate"] and cancel_dam.get("delivery_date"):
+                            result_item["DeliveryDate"] = self._format_delivery_date(cancel_dam["delivery_date"])
                         if not delivery_date_raw:
-                            delivery_date_raw = log.get("delivery_date")
-                        if log.get("delivery_date") and not result_item["DeliveryDate"]:
-                            dd = log.get("delivery_date")
-                            try:
-                                if isinstance(dd, (int, float)):
-                                    dt_obj = datetime.utcfromtimestamp(dd)
-                                    result_item["DeliveryDate"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-                                elif isinstance(dd, str) and dd.isdigit():
-                                    dt_obj = datetime.utcfromtimestamp(int(dd))
-                                    result_item["DeliveryDate"] = dt_obj.strftime("%Y-%m-%d %H:%M:%S")
-                                else:
-                                    result_item["DeliveryDate"] = str(dd)
-                            except Exception:
-                                result_item["DeliveryDate"] = str(dd)
-                
-                # Fallback: if cancellation exists but no getCancelledBidDetails log, fetch from API and log it
+                            delivery_date_raw = cancel_dam.get("delivery_date")
+                        cancel_txn = self._extract_txn_id(cancel_dam.get("responseBody") or {})
+                        if cancel_txn and cancel_txn in get_cancel_by_txn:
+                            result_item["getCancelledBidDetailsResponseBody"] = get_cancel_by_txn[cancel_txn].get("responseBody")
+
+                # Fallback: cancellation exists but no getCancelledBidDetails logged → fetch live
                 cancel_response = result_item.get("cancelAllDamBidResponseBody") or result_item.get("cancelRtmBidResponseBody")
                 if cancel_response and not result_item.get("getCancelledBidDetailsResponseBody"):
                     try:
-                        txn_id = cancel_response.get("TransactionId") if isinstance(cancel_response, dict) else None
-                        if txn_id and delivery_date_raw:
+                        cancel_txn_id = self._extract_txn_id(cancel_response)
+                        if cancel_txn_id and delivery_date_raw:
                             from services.processing.app.v2.iex.masterApi import ExchangeAPIClient
                             from services.processing.app.v2.repository.exchange_config_repository import ExchangeConfigRepository
-                            
+
                             exchange_config_repo = ExchangeConfigRepository()
                             config = await exchange_config_repo.get_bidType_market_active_config("single", market_type.upper())
                             if config:
@@ -227,25 +250,25 @@ class IntegrationApiLogRepository(GenericRepository):
                                     bid_type="single-bid",
                                 )
                                 cancel_bid_details = await fallback_client.get_cancel_bid_details(
-                                    transaction_id=str(txn_id),
+                                    transaction_id=str(cancel_txn_id),
                                     delivery_date=int(delivery_date_raw),
                                     bid_type="single-bid",
                                 )
                                 result_item["getCancelledBidDetailsResponseBody"] = cancel_bid_details
-                                logger.info(f"Fallback: fetched and logged getCancelledBidDetails for correlation_id={correlation_id}")
+                                logger.info("Fallback: fetched getCancelledBidDetails for correlation_id=%s txn=%s",
+                                            correlation_id, cancel_txn_id)
                     except Exception as fallback_err:
-                        logger.warning(f"Fallback getCancelBidDetails failed for correlation_id={correlation_id}: {fallback_err}")
+                        logger.warning("Fallback getCancelBidDetails failed for correlation_id=%s: %s",
+                                       correlation_id, fallback_err)
 
-                # Determine bidType based on presence of submission request body
-                if result_item.get("submitSingleBidRequestBody"):
-                    result_item["bidType"] = "submit bid"
-                else:
+                # bidType: cancellation-only entries have no submitSingleBidRequestBody
+                if not result_item.get("submitSingleBidRequestBody"):
                     result_item["bidType"] = "withdrawalBid"
-                    
+
                 response.append(result_item)
-                
+
             return response
-            
+
         except Exception as e:
             logger.error(f"Error fetching bid submission details: {e}")
             return []

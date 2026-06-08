@@ -134,6 +134,14 @@ class BlockBidCurrentDataRepository(GenericRepository):
         logger.debug(f"Update result: {result}")
         return result.modified_count
 
+    async def updatedata_if_pending(self, record_id: str, data: dict) -> bool:
+        """Update only when current status is pending/Pending (approvable). Returns True if matched."""
+        result = await self.collection.update_one(
+            {"_id": ObjectId(record_id), "status": {"$in": ["pending", "Pending"]}},
+            {"$set": data}
+        )
+        return result.matched_count > 0
+
     async def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Dict[str, Any]:
         """Update a single document matching the filter (e.g. to add exchange fields after submission)."""
         try:

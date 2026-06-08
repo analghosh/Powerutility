@@ -165,9 +165,17 @@ class BlockBidServices:
                     "approve_time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
                     "remark": remark,
                 }
-                
+
                 # ✅ Update DB record
-                await self.block_bid_repo.updatedata(ids[i], data)
+                # Approval is only allowed for bids currently in pending status.
+                # Submitted and Rejected bids must not be overwritten.
+                if statuses[i] == "Approved":
+                    matched = await self.block_bid_repo.updatedata_if_pending(ids[i], data)
+                    if not matched:
+                        logger.info("Bid %s skipped: cannot approve a bid that is not in pending status", ids[i])
+                        continue
+                else:
+                    await self.block_bid_repo.updatedata(ids[i], data)
 
                 # ✅ Notification data
                 status_label = "Approved" if statuses[i] == "Approved" else "Rejected"
