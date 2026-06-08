@@ -420,42 +420,26 @@ class RTMBidLapseProcessor:
             return {"success": False, "error": str(e)}
 
     async def _lapse_block_bids_past_dates(self, today: str) -> int:
-        """Lapse all block bids from dates before today.
-        Only lapses the latest revision per (biding_date, time_block).
-        Skips time_blocks where the latest revision is already Submitted.
-        """
+        """Lapse all block bids from dates before today."""
         total_modified = 0
-        try:
-            # Find _ids of latest revision per (biding_date, time_block) where status is lapsable
-            pipeline = [
-                {"$match": {
-                    "biding_date": {"$lt": today},
-                    "status": {"$in": BLOCK_BID_LAPSABLE_STATUSES}
-                }},
-                {"$sort": {"revision_no": -1}},
-                {"$group": {
-                    "_id": {"biding_date": "$biding_date", "time_block": "$time_block"},
-                    "doc_id": {"$first": "$_id"},
-                    "status": {"$first": "$status"}
-                }},
-                {"$match": {"status": {"$in": BLOCK_BID_LAPSABLE_STATUSES}}}
-            ]
-            latest_docs = await self.block_bid_repo.collection.aggregate(pipeline).to_list(length=10000)
-            for doc in latest_docs:
-                status = doc["status"]
-                lapsed_status = f"{status}_lapse"
-                result = await self.block_bid_repo.collection.update_one(
-                    {"_id": doc["doc_id"]},
-                    {"$set": {"status": lapsed_status}}
-                )
-                if result.modified_count > 0:
-                    total_modified += 1
+        for status in BLOCK_BID_LAPSABLE_STATUSES:
+            lapsed_status = f"{status}_lapse"
+            filter_query = {
+                "biding_date": {"$lt": today},
+                "status": status
+            }
+            update_query = {"$set": {"status": lapsed_status}}
+            try:
+                result = await self.block_bid_repo.update_many(filter_query, update_query)
+                modified = result.get("modified_count", 0)
+                if modified > 0:
                     logger.info(
-                        "[BlockBidLapse] Past dates: %s -> %s for time_block=%s",
-                        status, lapsed_status, doc["_id"].get("time_block")
+                        "[BlockBidLapse] Past dates: %s -> %s: %d records",
+                        status, lapsed_status, modified
                     )
-        except Exception as e:
-            logger.error("[BlockBidLapse] Failed to lapse past block bids: %s", str(e))
+                total_modified += modified
+            except Exception as e:
+                logger.error("[BlockBidLapse] Failed to lapse past block bids '%s': %s", status, str(e))
         return total_modified
 
     async def _lapse_decision_block_bids_past_dates(self, today: str) -> int:
@@ -510,45 +494,30 @@ class RTMBidLapseProcessor:
         return total_modified
 
     async def _lapse_block_bids(self, biding_date: str, trade_session_lt: int) -> int:
-        """Lapse block bids for a specific date where trade_session has passed.
-        Only lapses the latest revision per time_block.
-        Skips time_blocks where the latest revision is already Submitted.
-        """
+        """Lapse block bids for a specific date where trade_session has passed."""
         total_modified = 0
-        try:
-            pipeline = [
-                {"$match": {
-                    "biding_date": biding_date,
-                    "trade_session": {"$lt": trade_session_lt},
-                    "status": {"$in": BLOCK_BID_LAPSABLE_STATUSES}
-                }},
-                {"$sort": {"revision_no": -1}},
-                {"$group": {
-                    "_id": "$time_block",
-                    "doc_id": {"$first": "$_id"},
-                    "status": {"$first": "$status"}
-                }},
-                {"$match": {"status": {"$in": BLOCK_BID_LAPSABLE_STATUSES}}}
-            ]
-            latest_docs = await self.block_bid_repo.collection.aggregate(pipeline).to_list(length=10000)
-            for doc in latest_docs:
-                status = doc["status"]
-                lapsed_status = f"{status}_lapse"
-                result = await self.block_bid_repo.collection.update_one(
-                    {"_id": doc["doc_id"]},
-                    {"$set": {"status": lapsed_status}}
-                )
-                if result.modified_count > 0:
-                    total_modified += 1
+        for status in BLOCK_BID_LAPSABLE_STATUSES:
+            lapsed_status = f"{status}_lapse"
+            filter_query = {
+                "biding_date": biding_date,
+                "trade_session": {"$lt": trade_session_lt},
+                "status": status
+            }
+            update_query = {"$set": {"status": lapsed_status}}
+            try:
+                result = await self.block_bid_repo.update_many(filter_query, update_query)
+                modified = result.get("modified_count", 0)
+                if modified > 0:
                     logger.info(
-                        "[BlockBidLapse] %s time_block=%s: %s -> %s",
-                        biding_date, doc["_id"], status, lapsed_status
+                        "[BlockBidLapse] %s trade_session < %d: %s -> %s: %d records",
+                        biding_date, trade_session_lt, status, lapsed_status, modified
                     )
-        except Exception as e:
-            logger.error(
-                "[BlockBidLapse] Failed to lapse block bids for date=%s: %s",
-                biding_date, str(e)
-            )
+                total_modified += modified
+            except Exception as e:
+                logger.error(
+                    "[BlockBidLapse] Failed to lapse block bids '%s' for date=%s: %s",
+                    status, biding_date, str(e)
+                )
         return total_modified
 
 
