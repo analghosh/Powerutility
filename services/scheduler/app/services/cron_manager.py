@@ -684,7 +684,34 @@ class CronManager(BaseCronManager):
             self._main_loop = asyncio.get_running_loop()
             logger.info("Running all enabled jobs on startup...")
             logger.info("   Startup delay: %s seconds", settings.STARTUP_JOB_DELAY_SECONDS)
-            
+
+            # Re-seed here (async context, event loop is running) so any new jobs
+            # added to get_default_jobs() since the last deployment get inserted.
+            # _register_service_jobs() runs during __init__ before the loop is
+            # available, so it falls back to hardcoded jobs and skips DB seeding.
+            if self.cron_job_seeder and self.job_data_repository:
+                try:
+                    seeding_result = await self.cron_job_seeder.seed_default_jobs()
+                    logger.info("Startup re-seed result: %s", seeding_result)
+                    # Register any newly seeded jobs that weren't in _registered_jobs yet
+                    all_jobs = await self.job_data_repository.get_all_jobs(enabled_only=True)
+                    for job_config in all_jobs:
+                        jt = job_config["job_type"]
+                        if jt not in self._registered_jobs:
+                            job_fn = self._get_job_function(jt)
+                            if job_fn:
+                                self.register_job(
+                                    job_type=jt,
+                                    name=job_config["name"],
+                                    schedule=job_config["schedule"],
+                                    func=job_fn,
+                                    enabled=job_config["enabled"],
+                                    timezone=job_config.get("timezone", "Asia/Kolkata"),
+                                )
+                                logger.info("Registered newly seeded job: %s", jt)
+                except Exception as seed_err:
+                    logger.error("Startup re-seed failed: %s", seed_err)
+
             # Wait for the configured delay without blocking the FastAPI event loop
             await asyncio.sleep(settings.STARTUP_JOB_DELAY_SECONDS)
             
