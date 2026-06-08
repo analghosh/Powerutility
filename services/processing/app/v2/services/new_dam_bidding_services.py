@@ -3048,12 +3048,16 @@ class DAMBiddingServices:
         return time_block
 
     async def updatePlantDataForApproval(self, data, current_user):
-        
+
         try:
             filter_query = {
                 "_id": ObjectId(data["reference_number"]),
                 "block_no": int(data["block_no"])
             }
+
+            # Only allow approval when the bid is still pending.
+            if data["bid_status"] == "approved":
+                filter_query["bid_status"] = "pending"
 
             update_query = {
                 "$set": {
@@ -3064,7 +3068,7 @@ class DAMBiddingServices:
                     "approved_time": datetime.now().strftime("%H:%M")
                 }
             }
-            
+
             result = await self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
             matched = result.get("matched_count", 0)
             modified = result.get("modified_count", 0)
