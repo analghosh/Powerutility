@@ -487,7 +487,7 @@ class ExchangeAPIClient:
             f"{self.base_url}/rtm/api/v2/singlebid/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{session},{period},"
-            f"{bid_area_id},{status},{exception_id},{order_id},{sorting_type},{page_number},{page_size}"
+            f"{bid_area_id},{status},{exception_id},{order_id},{sorting_type},{page_number}"
         )
         if isLiveConnection:
             url = (
