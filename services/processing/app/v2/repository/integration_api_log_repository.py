@@ -75,6 +75,24 @@ class IntegrationApiLogRepository(GenericRepository):
         return None
 
     @staticmethod
+    def _extract_txn_id_from_url(url: Any) -> Optional[str]:
+        """
+        Extract TransactionId from a biddetails GET URL.
+        URL format: .../biddetails/{LoginUserId},{ParticipantId},{TransactionId},{DeliveryDate}
+        TransactionId is the 3rd comma-separated segment of the last URL path component.
+        """
+        if not isinstance(url, str):
+            return None
+        try:
+            last_segment = url.rstrip("/").split("/")[-1]
+            parts = last_segment.split(",")
+            if len(parts) >= 3:
+                return parts[2]
+        except Exception:
+            pass
+        return None
+
+    @staticmethod
     def _format_delivery_date(raw: Any) -> Optional[str]:
         """Convert a Unix-timestamp delivery_date value to YYYY-MM-DD HH:MM:SS string."""
         if raw is None:
@@ -146,7 +164,8 @@ class IntegrationApiLogRepository(GenericRepository):
                     submit_logs.append(log)
 
                 elif method == "getBidDetail":
-                    txn = self._extract_txn_id(req_body)
+                    # GET request — TransactionId is in the URL, not the request body
+                    txn = self._extract_txn_id_from_url(log.get("url"))
                     if txn and txn not in get_bid_by_txn:
                         get_bid_by_txn[txn] = log
 
@@ -161,7 +180,8 @@ class IntegrationApiLogRepository(GenericRepository):
                         cancel_dam_by_txn[txn] = log
 
                 elif method == "getCancelledBidDetails":
-                    txn = self._extract_txn_id(req_body)
+                    # GET request — TransactionId is in the URL, not the request body
+                    txn = self._extract_txn_id_from_url(log.get("url"))
                     if txn and txn not in get_cancel_by_txn:
                         get_cancel_by_txn[txn] = log
 
