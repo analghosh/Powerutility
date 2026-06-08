@@ -571,7 +571,7 @@ class BlockBidServices:
         for order_id in order_ids:
             item = {"order_id": order_id, "success": False, "message": "", "exchange_response": None}
             try:
-                # Get last_updated_time from stored IEX response
+                # Get stored IEX response doc (has transaction_id + stale last_updated_time)
                 iex_doc = await self.iex_response_repo.get_by_order_id(order_id)
                 if not iex_doc:
                     item["message"] = f"No exchange response doc found for order_id={order_id}"
@@ -579,7 +579,20 @@ class BlockBidServices:
                     results.append(item)
                     continue
 
-                last_updated_time = iex_doc.get("last_updated_time", 0)
+                # Fetch fresh LastUpdatedTime from exchange — the stored value is stale.
+                # IEX rejects the cancel if LastUpdatedTime doesn't match its current book value.
+                last_updated_time = iex_doc.get("last_updated_time", 0)  # fallback
+                transaction_id = iex_doc.get("transaction_id")
+                if transaction_id and delivery_ts:
+                    try:
+                        fresh = await api_client.get_bid_details(transaction_id, delivery_ts, bid_type="block-bid")
+                        for detail in fresh.get("RTMBlockBidDetails", []):
+                            if int(detail.get("OrderId", 0)) == int(order_id):
+                                last_updated_time = detail.get("LastUpdatedTime", last_updated_time)
+                                logger.info(f"Refreshed LastUpdatedTime for order_id={order_id}: {last_updated_time}")
+                                break
+                    except Exception as fetch_err:
+                        logger.warning(f"Could not refresh LastUpdatedTime for order_id={order_id}, using stored value: {fetch_err}")
 
                 # Call exchange cancel API
                 exchange_response = await api_client.cancel_block_bid(
