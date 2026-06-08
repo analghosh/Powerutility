@@ -495,6 +495,27 @@ class RTMBidLapseProcessor:
 
     async def _lapse_block_bids(self, biding_date: str, trade_session_lt: int) -> int:
         """Lapse block bids for a specific date where trade_session has passed."""
+
+        # --- DIAGNOSTIC: show what's actually in the collection for this date ---
+        try:
+            all_today = await self.block_bid_repo.find_by_filters(
+                {"biding_date": biding_date},
+                {"status": 1, "trade_session": 1, "from": 1, "to": 1, "_id": 0}
+            )
+            logger.info(
+                "[BlockBidLapse-DIAG] biding_date=%s — %d total docs in collection",
+                biding_date, len(all_today)
+            )
+            for doc in all_today[:10]:
+                logger.info(
+                    "[BlockBidLapse-DIAG] sample: trade_session=%s (type=%s) status=%s from=%s to=%s",
+                    doc.get("trade_session"), type(doc.get("trade_session")).__name__,
+                    doc.get("status"), doc.get("from"), doc.get("to")
+                )
+        except Exception as diag_err:
+            logger.error("[BlockBidLapse-DIAG] diagnostic query failed: %s", diag_err)
+        # --- END DIAGNOSTIC ---
+
         total_modified = 0
         for status in BLOCK_BID_LAPSABLE_STATUSES:
             lapsed_status = f"{status}_lapse"

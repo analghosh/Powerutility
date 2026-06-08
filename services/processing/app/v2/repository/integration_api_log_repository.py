@@ -255,7 +255,9 @@ class IntegrationApiLogRepository(GenericRepository):
         Get RTM block bid submission details for a specific date.
         Reads from iex_integration_apilog filtered by bid_type="block-bid".
 
-        Groups by correlation_id, returns submitBlockBid request + response per group.
+        Returns one entry per exchange call (one per bid submitted), sorted newest first.
+        Multiple bids submitted in one API call share the same correlationId — each
+        gets its own row so no submission is hidden.
         """
         try:
             start_date = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
@@ -273,44 +275,28 @@ class IntegrationApiLogRepository(GenericRepository):
                     }
                 },
                 {"$sort": {"timestamp": -1}},
-                {
-                    "$group": {
-                        "_id": "$correlation_id",
-                        "logs": {"$push": "$$ROOT"}
-                    }
-                }
             ]
 
-            grouped_results = await self.aggregate_async(self.collection_name, pipeline)
+            logs = await self.aggregate_async(self.collection_name, pipeline)
 
             response = []
-            for group in grouped_results:
-                correlation_id = group["_id"]
-                logs = group["logs"]
+            for log in logs:
+                dd = log.get("delivery_date")
+                delivery_date_str = None
+                if dd:
+                    try:
+                        delivery_date_str = datetime.utcfromtimestamp(int(dd)).strftime("%Y-%m-%d")
+                    except Exception:
+                        delivery_date_str = str(dd)
 
-                item = {
-                    "correlationId":            correlation_id,
-                    "submitBlockBidRequestBody": None,
-                    "submitBlockBidResponseBody": None,
-                    "DeliveryDate":             None,
-                    "timestamp":                None,
-                    "bidType":                  "block-bid"
-                }
-
-                for log in logs:
-                    if log.get("method") == "submitBlockBid":
-                        item["submitBlockBidRequestBody"]  = log.get("requestBody")
-                        item["submitBlockBidResponseBody"] = log.get("responseBody")
-                        item["timestamp"]                  = log.get("timestamp")
-                        dd = log.get("delivery_date")
-                        if dd:
-                            try:
-                                item["DeliveryDate"] = datetime.utcfromtimestamp(int(dd)).strftime("%Y-%m-%d")
-                            except Exception:
-                                item["DeliveryDate"] = str(dd)
-                        break   # latest entry already first due to sort desc
-
-                response.append(item)
+                response.append({
+                    "correlationId":             log.get("correlation_id"),
+                    "submitBlockBidRequestBody":  log.get("requestBody"),
+                    "submitBlockBidResponseBody": log.get("responseBody"),
+                    "DeliveryDate":               delivery_date_str,
+                    "timestamp":                  log.get("timestamp"),
+                    "bidType":                    "block-bid"
+                })
 
             return response
 
