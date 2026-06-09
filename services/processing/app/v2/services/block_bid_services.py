@@ -605,11 +605,36 @@ class BlockBidServices:
                 # IEX RTM API v2.0: success indicated by Status=="Success"
                 if exchange_response.get("Status") == "Success":
                     cancel_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                    # 1. Update submission snapshot (dicision_rtm_block_bid_iex_response)
                     await self.iex_response_repo.update_status_by_order_id(
                         order_id,
                         "Cancelled",
                         extra_fields={"cancelled_by": cancelled_by, "cancelled_time": cancel_time}
                     )
+
+                    # 2. Immediately update block_bid_current_data so bid-listing
+                    #    endpoints reflect the cancellation without waiting for the
+                    #    next scheduler sync.
+                    await self.block_bid_repo.update_one(
+                        {"exchangeOrderId": order_id},
+                        {"$set": {
+                            "status": "Cancelled",
+                            "exchangeStatus": "Cancelled",
+                            "cancelled_by": cancelled_by,
+                            "cancelled_time": cancel_time,
+                        }}
+                    )
+
+                    # 3. Immediately update rtm_block_bid_book_status so the
+                    #    bid-book endpoint shows the new status right away (the
+                    #    scheduler refreshes every 15 min — too slow for UX).
+                    await self.block_bid_book_repo.update_order_status_by_order_id(
+                        order_id,
+                        "Cancelled",
+                        extra_fields={"cancelled_by": cancelled_by, "cancelled_time": cancel_time},
+                    )
+
                     item["success"] = True
                     item["message"] = "Cancelled successfully on exchange"
                     logger.info(f"order_id={order_id} cancelled on exchange by {cancelled_by}")
