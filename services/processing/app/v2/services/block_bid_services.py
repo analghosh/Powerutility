@@ -381,15 +381,19 @@ class BlockBidServices:
                 order_id     = ""
                 order_status = "Submitted"
 
-            # Mark this specific bid as Submitted
-            await self.block_bid_repo.updatedata(bid_id, {
+            rtm_update_fields: Dict[str, Any] = {
                 "status":                  "Submitted",
                 "exchangeStatus":          order_status,
                 "exchangeOrderId":         order_id,
                 "exchangeLastUpdatedTime": last_val.get("LastUpdatedTime", "") if rtm_bid_details else "",
                 "orderId":                 order_id,
                 "updatedAt":               updated_at,
-            })
+            }
+            # Only mirror the rejection — don't touch status for any other exchange state.
+            if order_status == "Rejected":
+                rtm_update_fields["status"] = "exchange_rejected"
+
+            await self.block_bid_repo.updatedata(bid_id, rtm_update_fields)
 
             for val in rtm_bid_details:
                 from_time = val.get("FromPeriodId", "")
@@ -927,6 +931,16 @@ class BlockBidServices:
             from_time    = val.get("FromPeriodId", "")
             to_time      = val.get("ToPeriodId", "")
             order_id_val = val.get("OrderId", "")
+            set_fields: Dict[str, Any] = {
+                "exchangeStatus":          order_status,
+                "exchangeOrderId":         order_id_val,
+                "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
+                "orderId":                 order_id_val,
+                "updatedAt":               datetime.now(),
+            }
+            # Only mirror the rejection — don't touch status for any other exchange state.
+            if order_status == "Rejected":
+                set_fields["status"] = "exchange_rejected"
             await self.block_bid_repo.update_one(
                 {
                     "biding_date": biding_date,
@@ -935,13 +949,7 @@ class BlockBidServices:
                     "status":      "Submitted",
                     "market_type": "DAM",
                 },
-                {"$set": {
-                    "exchangeStatus":          order_status,
-                    "exchangeOrderId":         order_id_val,
-                    "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
-                    "orderId":                 order_id_val,
-                    "updatedAt":               datetime.now(),
-                }},
+                {"$set": set_fields},
             )
 
         if dam_bid_details:

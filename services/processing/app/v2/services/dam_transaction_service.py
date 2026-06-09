@@ -545,8 +545,9 @@ class DAMTransactionService:
                     target_entry = min(pq_data, key=lambda x: x.get("Price", float("inf")))
                     bidded_qty = float(target_entry.get("Quantity", 0)) / biddedQtyDecimal
 
+            exchange_order_status = detail.get("OrderStatus", "")
             update_data = {
-                "exchangeStatus": detail.get("OrderStatus"),
+                "exchangeStatus": exchange_order_status,
                 "exchangeOrderId": detail.get("OrderId"),
                 "exchangeOrderTime": detail.get("OrderTime"),
                 "exchangeError": detail.get("Error"),
@@ -557,6 +558,9 @@ class DAMTransactionService:
                 "bidded": bidded_qty,
                 "orderId": detail.get("OrderId"),
             }
+            # Mirror rejected status locally so listing endpoints reflect the rejection.
+            if exchange_order_status == "Rejected":
+                update_data["bid_status"] = "exchange_rejected"
 
             db_update = self.dam_single_bid_repo.update_one(
                 {
