@@ -124,12 +124,11 @@ class APIRawDataProcessor(BaseRawDataProcessor):
         )
         self._is_manual: bool = False
 
-    async def execute_cron_job(self) -> Dict[str, Any]:
+    async def execute_cron_job(self, ingestion_type: IngestionType = IngestionType.API) -> Dict[str, Any]:
         """
         Execute API raw data processing as a cron job (implementation of abstract method)
         """
-        # Process API providers for all data types
-        return await self.process_all_api_data()
+        return await self.process_all_api_data(ingestion_type=ingestion_type)
 
     async def process_supply_demand_api_data(self) -> Dict[str, Any]:
         """
@@ -197,17 +196,16 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             'results': results
         }
 
-    async def _get_all_api_providers(self) -> Optional[List[ProviderSummary]]:
+    async def _get_all_api_providers(self, ingestion_type: IngestionType = IngestionType.API) -> Optional[List[ProviderSummary]]:
         """
         Get all enabled API providers regardless of data type
-        
+
         Returns:
             Optional[List[ProviderSummary]]: List of API providers or None if error
         """
         try:
-            # Get all enabled API providers
             provider_response = await self.provider_service.get_all_providers(
-                ingestion_type=IngestionType.API, enabled=True
+                ingestion_type=ingestion_type, enabled=True
             )
             
             if not provider_response or not hasattr(provider_response, 'providers') or not provider_response.providers:
@@ -220,30 +218,26 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             logger.error("Error getting API providers: %s", str(e))
             return None
 
-    async def process_all_api_data(self) -> Dict[str, Any]:
+    async def process_all_api_data(self, ingestion_type: IngestionType = IngestionType.API) -> Dict[str, Any]:
         """
         Execute API raw data processing for all data types
         """
         global _api_cron_running
         _api_cron_running = True
-        job_type = "api_raw_data_processor"
-        job_name = "API Raw Data Processor"
-        schedule = "*/15 * * * *"  # Every 15 minutes
+        is_offset = ingestion_type == IngestionType.API_V2
+        job_type = "api_raw_data_processor_offset" if is_offset else "api_raw_data_processor"
+        job_name = "API Raw Data Processor (Offset)" if is_offset else "API Raw Data Processor"
+        schedule = "8,23,38,53 * * * *" if is_offset else "0,15,30,45 * * * *"
         start_time = datetime.now()
 
-        # Per-run, single-flight cache of raw HTTP responses keyed by request.
-        # Identical requests across providers (supply & renewable for the same
-        # date) share ONE upstream call instead of hitting the API 4x.
         self._response_cache = {}
 
-        # Record job start
         execution_id = await self.record_job_start(job_type, job_name, schedule, start_time)
 
         logger.info("Starting API raw data processing cron job at %s", start_time.strftime('%Y-%m-%d %H:%M:%S'))
 
         try:
-            # Get all enabled API providers regardless of data type
-            providers = await self._get_all_api_providers()
+            providers = await self._get_all_api_providers(ingestion_type=ingestion_type)
 
             if not providers:
                 logger.info("No API providers found for processing")

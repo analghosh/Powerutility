@@ -75,6 +75,7 @@ class CronManager(BaseCronManager):
             "scrape_raw_data_processor": self._execute_scrape_processing_job,
             "ftp_raw_data_processor": self._execute_ftp_processing_job,
             "api_raw_data_processor": self._execute_api_processing_job,
+            "api_raw_data_processor_offset": self._execute_api_processing_job_offset,
             "forecast_api_processor": self._execute_forecast_api_processing_job,
             "schedule_api_processor": self._execute_schedule_api_processing_job,
             "rtm_forecast_api_processor": self._execute_rtm_forecast_api_processing_job,
@@ -212,15 +213,31 @@ class CronManager(BaseCronManager):
         """Execute API processing job by delegating to APIRawDataProcessor"""
         logger.info("=== EXECUTING API PROCESSING JOB ===")
         logger.info("Job started at: %s", datetime.now().isoformat())
-        
+
         try:
-            # Delegate to the APIRawDataProcessor service
             result = await APIRawDataProcessor(self.audit_logger).execute_cron_job()
             logger.info("Job completed successfully with result: %s", result)
             return result
-            
+
         except (OSError, ValueError, TypeError, RuntimeError) as e:
             logger.error("Error executing API processing cron job: %s", str(e))
+            return {'status': 'error', 'error': str(e)}
+
+    async def _execute_api_processing_job_offset(self):
+        """Execute API processing job for api-v2 (offset schedule) providers"""
+        from libs.models.provider_models import IngestionType
+        logger.info("=== EXECUTING API PROCESSING JOB (OFFSET) ===")
+        logger.info("Job started at: %s", datetime.now().isoformat())
+
+        try:
+            result = await APIRawDataProcessor(self.audit_logger).execute_cron_job(
+                ingestion_type=IngestionType.API_V2
+            )
+            logger.info("Offset job completed successfully with result: %s", result)
+            return result
+
+        except (OSError, ValueError, TypeError, RuntimeError) as e:
+            logger.error("Error executing API offset processing cron job: %s", str(e))
             return {'status': 'error', 'error': str(e)}
 
     async def _execute_forecast_api_processing_job(self):
