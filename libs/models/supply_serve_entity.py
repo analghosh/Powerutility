@@ -75,6 +75,8 @@ class SupplyServeEntity(BaseModel):
     entire_shared_onbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Onbar Entitlement Amount")
     entire_shared_offbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Offbar Entitlement Amount")
     rtm_max: Optional[float] = Field(None, description="RTM Max value (SG of tomorrow at 10:10 AM, locked once set)")
+    rtm_max_revision_no: Optional[int] = Field(None, description="RLDC revision number when rtm_max was stored")
+    rtm_tm_revision_no: Optional[int] = Field(None, description="RLDC revision number when rtm_tm was stored")
 
     # Max MW DC for SG records (locked value from 08:00-08:14 tomorrow data)
     max_mw_dc: Optional[float] = Field(None, description="Max MW DC value (copied from volume for SG on tomorrow's 08:00-08:14 data)")
@@ -161,6 +163,8 @@ class SupplyServeHistoricalEntity(BaseModel):
     entire_shared_onbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Onbar Entitlement Amount")
     entire_shared_offbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Offbar Entitlement Amount")
     rtm_max: Optional[float] = Field(None, description="RTM Max value (SG of tomorrow at 10:10 AM, locked once set)")
+    rtm_max_revision_no: Optional[int] = Field(None, description="RLDC revision number when rtm_max was stored")
+    rtm_tm_revision_no: Optional[int] = Field(None, description="RLDC revision number when rtm_tm was stored")
 
     # Original processing timestamps (preserved)
     inserted_at: datetime = Field(..., description="Original insertion timestamp")

@@ -189,6 +189,11 @@ class IntegrationApiLogRepository(GenericRepository):
             # Build one response entry per submitSingleBid log
             # -------------------------------------------------------
             response = []
+            # Track which cancel logs are consumed by submit logs so we can
+            # output standalone manual-withdrawal entries afterwards.
+            consumed_cancel_rtm: set = set()
+            consumed_cancel_dam: set = set()
+
             for log in submit_logs:
                 correlation_id  = log.get("correlation_id")
                 resp_body       = log.get("responseBody") or {}
@@ -215,6 +220,7 @@ class IntegrationApiLogRepository(GenericRepository):
 
                 delivery_date_raw = log.get("delivery_date")
 
+                has_auto_cancel = False
                 if submit_txn_id:
                     # getBidDetail — matched by TransactionId in its requestBody
                     if submit_txn_id in get_bid_by_txn:
@@ -223,6 +229,8 @@ class IntegrationApiLogRepository(GenericRepository):
                     # cancelRtmBid — matched by TransactionId in its requestBody
                     cancel_rtm = cancel_rtm_by_txn.get(submit_txn_id)
                     if cancel_rtm:
+                        has_auto_cancel = True
+                        consumed_cancel_rtm.add(submit_txn_id)
                         result_item["cancelRtmBidResponseBody"] = cancel_rtm.get("responseBody")
                         result_item["cancelRequestBody"]        = cancel_rtm.get("requestBody")
                         if not result_item["DeliveryDate"] and cancel_rtm.get("delivery_date"):
@@ -237,6 +245,8 @@ class IntegrationApiLogRepository(GenericRepository):
                     # cancelAllDamBid — same pattern
                     cancel_dam = cancel_dam_by_txn.get(submit_txn_id)
                     if cancel_dam:
+                        has_auto_cancel = True
+                        consumed_cancel_dam.add(submit_txn_id)
                         result_item["cancelAllDamBidResponseBody"] = cancel_dam.get("responseBody")
                         result_item["cancelRequestBody"]           = cancel_dam.get("requestBody")
                         if not result_item["DeliveryDate"] and cancel_dam.get("delivery_date"):
@@ -281,9 +291,72 @@ class IntegrationApiLogRepository(GenericRepository):
                         logger.warning("Fallback getCancelBidDetails failed for correlation_id=%s: %s",
                                        correlation_id, fallback_err)
 
-                # bidType: cancellation-only entries have no submitSingleBidRequestBody
-                if not result_item.get("submitSingleBidRequestBody"):
-                    result_item["bidType"] = "withdrawalBid"
+                # Mark auto-withdrawal when a submit also cancelled existing bids
+                if has_auto_cancel:
+                    result_item["bidType"] = "auto_withdrawal_and_submit"
+                    result_item["isAutoWithdrawal"] = True
+
+                response.append(result_item)
+
+            # -------------------------------------------------------
+            # Manual withdrawals: cancel logs not tied to a submit log
+            # -------------------------------------------------------
+            for txn_id, cancel_log in cancel_rtm_by_txn.items():
+                if txn_id in consumed_cancel_rtm:
+                    continue
+                req_body = cancel_log.get("requestBody") or {}
+                resp_body = cancel_log.get("responseBody") or {}
+                delivery_date_raw = cancel_log.get("delivery_date")
+                correlation_id = cancel_log.get("correlation_id")
+
+                result_item: Dict[str, Any] = {
+                    "correlationId": correlation_id,
+                    "submitSingleBidRequestBody": None,
+                    "submitSingleBidResponseBody": None,
+                    "getBidDetailResponseBody": None,
+                    "getCancelledBidDetailsResponseBody": None,
+                    "cancelRtmBidResponseBody": resp_body,
+                    "cancelAllDamBidResponseBody": None,
+                    "cancelRequestBody": req_body,
+                    "DeliveryDate": self._format_delivery_date(delivery_date_raw),
+                    "timestamp": cancel_log.get("timestamp"),
+                    "bidType": "manual_withdrawal",
+                    "isManualWithdrawal": True,
+                }
+
+                # getCancelledBidDetails fallback
+                cancel_txn = self._extract_txn_id(resp_body)
+                if cancel_txn and cancel_txn in get_cancel_by_txn:
+                    result_item["getCancelledBidDetailsResponseBody"] = get_cancel_by_txn[cancel_txn].get("responseBody")
+
+                response.append(result_item)
+
+            for txn_id, cancel_log in cancel_dam_by_txn.items():
+                if txn_id in consumed_cancel_dam:
+                    continue
+                req_body = cancel_log.get("requestBody") or {}
+                resp_body = cancel_log.get("responseBody") or {}
+                delivery_date_raw = cancel_log.get("delivery_date")
+                correlation_id = cancel_log.get("correlation_id")
+
+                result_item: Dict[str, Any] = {
+                    "correlationId": correlation_id,
+                    "submitSingleBidRequestBody": None,
+                    "submitSingleBidResponseBody": None,
+                    "getBidDetailResponseBody": None,
+                    "getCancelledBidDetailsResponseBody": None,
+                    "cancelRtmBidResponseBody": None,
+                    "cancelAllDamBidResponseBody": resp_body,
+                    "cancelRequestBody": req_body,
+                    "DeliveryDate": self._format_delivery_date(delivery_date_raw),
+                    "timestamp": cancel_log.get("timestamp"),
+                    "bidType": "manual_withdrawal",
+                    "isManualWithdrawal": True,
+                }
+
+                cancel_txn = self._extract_txn_id(resp_body)
+                if cancel_txn and cancel_txn in get_cancel_by_txn:
+                    result_item["getCancelledBidDetailsResponseBody"] = get_cancel_by_txn[cancel_txn].get("responseBody")
 
                 response.append(result_item)
 

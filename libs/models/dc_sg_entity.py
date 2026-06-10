@@ -69,6 +69,8 @@ class DCSgEntity(BaseModel):
     entire_shared_onbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Onbar Entitlement Amount")
     entire_shared_offbar_ent_amount: Optional[float] = Field(None, description="Entire Shared Offbar Entitlement Amount")
     rtm_max: Optional[float] = Field(None, description="RTM Max value (SG of tomorrow at 10:10 AM, locked once set)")
+    rtm_max_revision_no: Optional[int] = Field(None, description="RLDC revision number when rtm_max was stored")
+    rtm_tm_revision_no: Optional[int] = Field(None, description="RLDC revision number when rtm_tm was stored")
 
     # Process flags
     process_type: Optional[str] = Field(None, description="Process type (today/tomorrow)")
