@@ -352,11 +352,11 @@ class IntegrationApiLogRepository(GenericRepository):
 
     async def get_block_bid_submission_details(self, date_str: str) -> list:
         """
-        Get RTM block bid submission details for a specific date.
+        Get RTM block bid submission/cancellation details for a specific date.
         Reads from iex_integration_apilog filtered by bid_type="block-bid".
 
-        Each exchange call is expanded into one row per BidDetails entry so that
-        multi-block submissions do not collapse into a single visible row.
+        Returns one entry per exchange call (one per submit or cancel operation),
+        sorted newest first. Submit and cancel calls are returned as separate rows.
         """
         try:
             start_date = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
@@ -370,7 +370,7 @@ class IntegrationApiLogRepository(GenericRepository):
                         "delivery_date": {"$gte": start_ts, "$lte": end_ts},
                         "market_type": "rtm",
                         "bid_type": "block-bid",
-                        "method": "submitBlockBid"
+                        "method": {"$in": ["submitBlockBid", "cancelBlockBid"]}
                     }
                 },
                 {"$sort": {"timestamp": -1}},
@@ -388,42 +388,26 @@ class IntegrationApiLogRepository(GenericRepository):
                     except Exception:
                         delivery_date_str = str(dd)
 
-                req_body = log.get("requestBody") or {}
-                resp_body = log.get("responseBody") or {}
-                bid_details = req_body.get("BidDetails") or []
-
-                if not bid_details:
+                method = log.get("method", "submitBlockBid")
+                if method == "cancelBlockBid":
                     response.append({
-                        "correlationId":             log.get("correlation_id"),
-                        "submitBlockBidRequestBody":  req_body,
-                        "submitBlockBidResponseBody": resp_body,
+                        "correlationId":              log.get("correlation_id"),
+                        "cancelBlockBidRequestBody":  log.get("requestBody"),
+                        "cancelBlockBidResponseBody": log.get("responseBody"),
                         "DeliveryDate":               delivery_date_str,
                         "timestamp":                  log.get("timestamp"),
                         "bidType":                    "block-bid",
-                        "blockCount":                 0,
+                        "method":                     "cancelBlockBid",
                     })
-                    continue
-
-                for idx, detail in enumerate(bid_details):
+                else:
                     response.append({
-                        "correlationId":              log.get("correlation_id"),
-                        "transactionId":              resp_body.get("TransactionId"),
-                        "submitStatus":               resp_body.get("Status"),
-                        "submitStatusMessage":        resp_body.get("StatusMessage"),
-                        "deliveryDate":               delivery_date_str,
+                        "correlationId":             log.get("correlation_id"),
+                        "submitBlockBidRequestBody":  log.get("requestBody"),
+                        "submitBlockBidResponseBody": log.get("responseBody"),
+                        "DeliveryDate":               delivery_date_str,
                         "timestamp":                  log.get("timestamp"),
                         "bidType":                    "block-bid",
-                        "blockIndex":                 idx,
-                        "blockCount":                 len(bid_details),
-                        "session":                    detail.get("Session"),
-                        "fromPeriod":                 detail.get("FromPeriodId"),
-                        "toPeriod":                   detail.get("ToPeriodId"),
-                        "buySell":                    detail.get("BuySell"),
-                        "price":                      detail.get("Price"),
-                        "quantity":                   detail.get("Quantity"),
-                        "bidReferenceId":             detail.get("BidReferenceId"),
-                        "submitBlockBidRequestBody":  req_body,
-                        "submitBlockBidResponseBody": resp_body,
+                        "method":                     "submitBlockBid",
                     })
 
             return response
