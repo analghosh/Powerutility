@@ -845,7 +845,7 @@ class SupplyProcessor(BaseProcessor):
                             and sch_date > today):
                         raw_time = raw_timestamp.time()
                         from datetime import time as dt_time
-                        if dt_time(8, 50, 0) <= raw_time <= dt_time(10, 15, 0):
+                        if dt_time(10, 0, 0) <= raw_time <= dt_time(10, 15, 0):
                             rtm_max_value = self._safe_float(item.get("volume"))
                             rtm_max_revision_no_value = self._safe_int(item.get("revision_no"))
                             logger.info(f"Setting rtm_max={rtm_max_value} (revision={rtm_max_revision_no_value}) for plant {item['_resolved_plant_id']} block {item.get('time_block')} (future SG in 10:00-10:15 window)")
