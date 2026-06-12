@@ -138,6 +138,10 @@ class ExchangeRepository(BaseServeRepository):
     async def archive_old_exchange_data(self, days_to_keep: int = 2) -> Dict[str, Any]:
         """
         Archive Strategy for Time-Series Historical.
+
+        The archival is idempotent: if a historical record already exists for the same
+        unique key but the serve copy has been updated more recently, the historical
+        copy is replaced so the historical table remains a true mirror of the serve table.
         """
         try:
             today_min = datetime.combine(date.today(), datetime.min.time())
@@ -149,38 +153,85 @@ class ExchangeRepository(BaseServeRepository):
             cursor = self.serve_collection.find({"scheduled_at": {"$lt": today_min}})
             candidates = await cursor.to_list(length=10000)
 
-            archived_count = 0
             if not candidates:
                 logger.info("No candidates for archival.")
-            else:
-                # 2. Manual Deduplication against Historical Time-Series
-                min_d = min(c["scheduled_at"] for c in candidates)
-                max_d = max(c["scheduled_at"] for c in candidates)
+                return {
+                    "archived_count": 0,
+                    "replaced_count": 0,
+                    "deleted_count": 0,
+                    "status": "success"
+                }
 
-                existing_hist_cursor = self.historical_collection.find(
-                    {"scheduled_at": {"$gte": min_d, "$lte": max_d}},
-                    {"scheduled_at": 1, "time_block": 1, "market_type": 1, "px_name": 1, "_id": 0}
-                )
+            unique_key = ["scheduled_at", "time_block", "market_type", "px_name"]
 
-                seen_keys = set()
-                async for d in existing_hist_cursor:
-                    seen_keys.add((d["scheduled_at"], d["time_block"], d["market_type"], d.get("px_name")))
+            # 2. Deduplication / replacement against Historical Time-Series
+            min_d = min(c["scheduled_at"] for c in candidates)
+            max_d = max(c["scheduled_at"] for c in candidates)
 
-                to_insert = []
-                for doc in candidates:
-                    key = (doc["scheduled_at"], doc["time_block"], doc["market_type"], doc.get("px_name"))
-                    if key not in seen_keys:
-                        hist_doc = dict(doc)
-                        if "_id" in hist_doc: del hist_doc["_id"]
-                        hist_doc["archived_at"] = datetime.now()
-                        to_insert.append(hist_doc)
-                        seen_keys.add(key)
+            existing_hist_cursor = self.historical_collection.find(
+                {"scheduled_at": {"$gte": min_d, "$lte": max_d}},
+                {**{k: 1 for k in unique_key}, "updated_at": 1, "_id": 1}
+            )
 
-                # 3. Insert into Time-Series Historical
-                if to_insert:
-                    res = await self.historical_collection.insert_many(to_insert, ordered=False)
-                    archived_count = len(res.inserted_ids)
-                    logger.info(f"Successfully archived {archived_count} records.")
+            existing_map: Dict[tuple, Dict[str, Any]] = {}
+            async for d in existing_hist_cursor:
+                key = tuple(d.get(k) for k in unique_key)
+                existing_map[key] = d
+
+            to_insert = []
+            keys_to_replace = []
+
+            for doc in candidates:
+                key = tuple(doc.get(k) for k in unique_key)
+                existing = existing_map.get(key)
+
+                source_updated_at = doc.get("updated_at") or doc.get("created_at") or datetime.min
+                if isinstance(source_updated_at, str):
+                    try:
+                        source_updated_at = datetime.fromisoformat(source_updated_at.replace("Z", "+00:00"))
+                    except ValueError:
+                        source_updated_at = datetime.min
+
+                if existing:
+                    hist_updated_at = existing.get("updated_at") or datetime.min
+                    if isinstance(hist_updated_at, str):
+                        try:
+                            hist_updated_at = datetime.fromisoformat(hist_updated_at.replace("Z", "+00:00"))
+                        except ValueError:
+                            hist_updated_at = datetime.min
+
+                    if source_updated_at <= hist_updated_at:
+                        continue
+
+                    keys_to_replace.append(key)
+
+                hist_doc = dict(doc)
+                if "_id" in hist_doc:
+                    del hist_doc["_id"]
+                hist_doc["archived_at"] = datetime.now()
+                to_insert.append(hist_doc)
+
+            replaced_count = 0
+            if keys_to_replace:
+                replace_filter = {
+                    "$or": [
+                        {k: key[i] for i, k in enumerate(unique_key)}
+                        for key in keys_to_replace
+                    ]
+                }
+                try:
+                    del_result = await self.historical_collection.delete_many(replace_filter)
+                    replaced_count = del_result.deleted_count
+                    logger.info(f"Replaced {replaced_count} stale historical exchange records")
+                except Exception as del_err:
+                    logger.error(f"Error deleting stale historical exchange records: {del_err}")
+
+            # 3. Insert into Time-Series Historical
+            archived_count = 0
+            if to_insert:
+                res = await self.historical_collection.insert_many(to_insert, ordered=False)
+                archived_count = len(res.inserted_ids)
+                logger.info(f"Successfully archived {archived_count} records (replaced {replaced_count}).")
 
             # 4. Cleanup Serve collection (Older than T-2)
             del_res = await self.serve_collection.delete_many({"scheduled_at": {"$lt": delete_cutoff}})
@@ -188,13 +239,14 @@ class ExchangeRepository(BaseServeRepository):
 
             return {
                 "archived_count": archived_count,
+                "replaced_count": replaced_count,
                 "deleted_count": del_res.deleted_count,
                 "status": "success"
             }
 
         except Exception as e:
             logger.error(f"Archival failed: {str(e)}", exc_info=True)
-            return {"archived_count": 0, "deleted_count": 0, "error": str(e)}
+            return {"archived_count": 0, "replaced_count": 0, "deleted_count": 0, "error": str(e)}
 
     async def get_market_data_by_date(self, scheduled_at: datetime, market_type: str, px_name: str = None) -> List[Dict[str, Any]]:
         """

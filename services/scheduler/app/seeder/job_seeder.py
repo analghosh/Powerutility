@@ -232,10 +232,10 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "job_type": "exchange_serve_archival",
                 "name": "Exchange Serve Data Archival",
                 "type": "maintenance",
-                "schedule": "0 0 * * *",  # Daily at 12 AM
+                "schedule": "15 3 * * *",  # Daily at 03:15 AM after final upstream processing
                 "enabled": True,  # Enabled for 4-day rolling window archival
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives exchange serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
+                "description": "Archives exchange serve data older than 4 days to historical collection after final upstream processing (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
             },
             # 
@@ -284,60 +284,60 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "job_type": "demand_serve_archival",
                 "name": "Demand Serve Data Archival",
                 "type": "maintenance",
-                "schedule": "0 0 * * *",  # Daily at 12 AM
+                "schedule": "15 3 * * *",  # Daily at 03:15 AM after final DSM run
                 "enabled": True,  # Enabled for 4-day rolling window archival
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives demand serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
+                "description": "Archives demand serve data older than 4 days to historical collection after DSM finalisation (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
             },
             {
                 "job_type": "forecast_serve_archival",
                 "name": "Forecast Serve Data Archival",
                 "type": "maintenance",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives forecast_serve to forecast_serve_historical; keeps 4-day rolling window in forecast_serve (same pattern as demand_serve)",
+                "description": "Archives forecast_serve to forecast_serve_historical after final upstream processing; keeps 4-day rolling window in forecast_serve (same pattern as demand_serve)",
                 "priority": 7,
             },
             {
                 "job_type": "supply_serve_archival",
                 "name": "Supply Serve Data Archival",
                 "type": "maintenance",
-                "schedule": "0 0 * * *",  # Daily at 12 AM
+                "schedule": "15 3 * * *",  # Daily at 03:15 AM after final upstream processing
                 "enabled": True,  # Enabled for 4-day rolling window archival
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives supply serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
+                "description": "Archives supply serve data older than 4 days to historical collection after final upstream processing (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
             },
             {
                 "job_type": "weather_serve_archival",
                 "name": "Weather Serve Data Archival",
                 "type": "maintenance",
-                "schedule": "0 0 * * *",  # Daily at 12 AM
+                "schedule": "15 3 * * *",  # Daily at 03:15 AM after final upstream processing
                 "enabled": True,  # Enabled for 4-day rolling window archival
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives weather serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
+                "description": "Archives weather serve data older than 4 days to historical collection after final upstream processing (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
             },
             {
                 "job_type": "bid_serve_archival",
                 "name": "Bid Serve Data Archival",
                 "type": "maintenance",
-                "schedule": "0 0 * * *",  # Daily at 12 AM
+                "schedule": "15 3 * * *",  # Daily at 03:15 AM after final upstream processing
                 "enabled": True,  # Enabled for 4-day rolling window archival
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives bid serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
+                "description": "Archives bid serve data older than 4 days to historical collection after final upstream processing (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
             },
             {
                 "job_type": "renewable_serve_archival",
                 "name": "Renewable Serve Data Archival",
                 "type": "maintenance",
-                "schedule": "0 0 * * *",  # Daily at 12 AM
+                "schedule": "15 3 * * *",  # Daily at 03:15 AM after final upstream processing
                 "enabled": True,  # Enabled for 4-day rolling window archival
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives renewable serve data older than 4 days to historical collection (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
+                "description": "Archives renewable serve data older than 4 days to historical collection after final upstream processing (4-day rolling window: today, tomorrow, yesterday, day before yesterday)",
                 "priority": 7
             },
             # 

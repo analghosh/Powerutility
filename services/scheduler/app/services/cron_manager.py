@@ -426,7 +426,7 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "exchange_serve_archival",
                 "name": "Exchange Serve Archival",
-                "schedule": "0 2 * * *",  # Every day at 2 AM
+                "schedule": "15 3 * * *",  # Every day at 03:15 AM after final upstream processing
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
@@ -545,42 +545,42 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "demand_serve_archival",
                 "name": "Demand Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "forecast_serve_archival",
                 "name": "Forecast Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "supply_serve_archival",
                 "name": "Supply Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "weather_serve_archival",
                 "name": "Weather Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "bid_serve_archival",
                 "name": "Bid Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "renewable_serve_archival",
                 "name": "Renewable Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },

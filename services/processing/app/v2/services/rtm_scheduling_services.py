@@ -467,6 +467,10 @@ class RTMSchedulingServices:
                                 "dispatch_type": "$plant_details.dispatch_type",  # From plant_master
                                 "VC_Price": "$vc_price",  # Map vc_price to VC_Price
                                 "ceiling_price": {"$ifNull": ["$ceiling_data.ceiling_price", 0]},  # Ceiling price from limit_values
+                                "rtm_tm": {"$ifNull": ["$rtm_tm", 0]},
+                                "rtm_tm_revision_no": {"$ifNull": ["$rtm_tm_revision_no", None]},
+                                "rtm_max": {"$ifNull": ["$rtm_max", None]},
+                                "rtm_max_revision_no": {"$ifNull": ["$rtm_max_revision_no", None]},
                                 # Calculated fields from scheduling_requisition_calculation_table
                                 "remaining_volume": {"$ifNull": ["$calc_data.remaining_volume", 0]},
                                 "price": {"$ifNull": ["$calc_data.price", 0]},

@@ -104,7 +104,8 @@ class ForecastServeRepository(LibForecastServeRepository):
             min_date = min(d["scheduled_at"] for d in archival_candidates)
             max_date = max(d["scheduled_at"] for d in archival_candidates)
 
-            existing_keys = set()
+            existing_map: Dict[tuple, Dict[str, Any]] = {}
+            replaced_count = 0
             existing_hist_cursor = self.historical_collection.find(
                 {"scheduled_at": {"$gte": min_date, "$lte": max_date}},
                 {
@@ -113,17 +114,41 @@ class ForecastServeRepository(LibForecastServeRepository):
                     "type": 1,
                     "source": 1,
                     "forecast_revision": 1,
-                    "_id": 0,
+                    "updated_at": 1,
+                    "_id": 1,
                 },
             )
             async for doc in existing_hist_cursor:
-                existing_keys.add(forecast_serve_revision_key(doc))
+                key = forecast_serve_revision_key(doc)
+                existing_map[key] = doc
 
             historical_inserts: List[Dict[str, Any]] = []
+            keys_to_replace: List[tuple] = []
+
             for doc in archival_candidates:
                 key = forecast_serve_revision_key(doc)
-                if key in existing_keys:
-                    continue
+                existing = existing_map.get(key)
+
+                source_updated_at = doc.get("updated_at") or doc.get("created_at") or datetime.min
+                if isinstance(source_updated_at, str):
+                    try:
+                        source_updated_at = datetime.fromisoformat(source_updated_at.replace("Z", "+00:00"))
+                    except ValueError:
+                        source_updated_at = datetime.min
+
+                if existing:
+                    hist_updated_at = existing.get("updated_at") or datetime.min
+                    if isinstance(hist_updated_at, str):
+                        try:
+                            hist_updated_at = datetime.fromisoformat(hist_updated_at.replace("Z", "+00:00"))
+                        except ValueError:
+                            hist_updated_at = datetime.min
+
+                    if source_updated_at <= hist_updated_at:
+                        continue
+
+                    keys_to_replace.append(key)
+
                 hist_doc = dict(doc)
                 hist_doc.pop("_id", None)
                 hist_doc["archived_at"] = datetime.now()
@@ -131,7 +156,27 @@ class ForecastServeRepository(LibForecastServeRepository):
                 if doc.get("scheduled_at"):
                     hist_doc["schedule_date"] = doc["scheduled_at"].strftime("%Y-%m-%d")
                 historical_inserts.append(hist_doc)
-                existing_keys.add(key)
+
+            replaced_count = 0
+            if keys_to_replace:
+                replace_filter = {
+                    "$or": [
+                        {
+                            "scheduled_at": key[0],
+                            "time_block": key[1],
+                            "type": key[2],
+                            "source": key[3],
+                            "forecast_revision": key[4],
+                        }
+                        for key in keys_to_replace
+                    ]
+                }
+                try:
+                    del_result = await self.historical_collection.delete_many(replace_filter)
+                    replaced_count = del_result.deleted_count
+                    logger.info(f"Replaced {replaced_count} stale historical forecast records")
+                except Exception as del_err:
+                    logger.error(f"Error deleting stale historical forecast records: {del_err}")
 
             archived_count = 0
             if historical_inserts:
@@ -146,9 +191,10 @@ class ForecastServeRepository(LibForecastServeRepository):
                         archived_count = e.details.get("nInserted", 0)
 
             logger.info(
-                "Archived %d of %d forecast_serve records to historical (all revisions)",
+                "Archived %d of %d forecast_serve records to historical (all revisions, replaced %d)",
                 archived_count,
                 len(archival_candidates),
+                replaced_count,
             )
 
             delete_query = {
@@ -168,6 +214,7 @@ class ForecastServeRepository(LibForecastServeRepository):
             return {
                 "status": "success",
                 "archived_count": archived_count,
+                "replaced_count": replaced_count,
                 "deleted_count": deleted_count,
                 "cutoff_date": delete_cutoff.isoformat(),
                 "execution_time": (datetime.now() - start_time).total_seconds(),

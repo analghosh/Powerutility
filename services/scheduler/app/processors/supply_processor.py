@@ -837,17 +837,18 @@ class SupplyProcessor(BaseProcessor):
                     if max_mw_dc_value is None and existing_record:
                         max_mw_dc_value = existing_record.get("max_mw_dc")
 
-                    # rtm_max: SG of tomorrow captured at 10:00-10:15 AM (locked once set)
+                    # rtm_max: SG of tomorrow (or any future schedule date) captured at 10:00-10:15 AM (locked once set)
                     rtm_max_value = None
                     rtm_max_revision_no_value = None
-                    if (process_type == "tomorrow" and str(item.get("dc_sg")).upper() == "SG"
-                            and raw_timestamp is not None):
+                    if (str(item.get("dc_sg")).upper() == "SG"
+                            and raw_timestamp is not None
+                            and sch_date > today):
                         raw_time = raw_timestamp.time()
                         from datetime import time as dt_time
-                        if dt_time(10, 0, 0) <= raw_time <= dt_time(10, 15, 0):
+                        if dt_time(8, 50, 0) <= raw_time <= dt_time(10, 15, 0):
                             rtm_max_value = self._safe_float(item.get("volume"))
                             rtm_max_revision_no_value = self._safe_int(item.get("revision_no"))
-                            logger.info(f"Setting rtm_max={rtm_max_value} (revision={rtm_max_revision_no_value}) for plant {item['_resolved_plant_id']} block {item.get('time_block')} (tomorrow SG in 10:00-10:15 window)")
+                            logger.info(f"Setting rtm_max={rtm_max_value} (revision={rtm_max_revision_no_value}) for plant {item['_resolved_plant_id']} block {item.get('time_block')} (future SG in 10:00-10:15 window)")
 
                     # Preserve existing rtm_max once it has been set
                     if rtm_max_value is None and existing_record:

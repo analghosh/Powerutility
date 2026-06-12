@@ -327,19 +327,26 @@ class RTMBiddingServices:
             if not getplantsData:
                 return {}
 
-            # Fetch DC records to get rtm_tm values per plant/block
-            dc_pipeline = [
+            # Fetch SG records to get rtm_tm values per plant/block
+            # rtm_tm represents the SG value, not the DC value.
+            sg_tm_pipeline = [
                 {"$match": {
                     "scheduled_at": target_date,
-                    "dc_sg": "DC",
+                    "dc_sg": "SG",
                     "time_block": {"$gte": from_block, "$lte": to_block}
                 }},
-                {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "rtm_tm": 1}}
+                {"$project": {"_id": 0, "plant_id": 1, "time_block": 1, "rtm_tm": 1, "rtm_tm_revision_no": 1}}
             ]
-            dc_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, dc_pipeline)
+            sg_tm_data = await self.supply_repo.aggregate(self.supply_repo.collection_name, sg_tm_pipeline)
             # Build lookup: {(plant_id, time_block): rtm_tm}
-            dc_tm_lookup = {(d["plant_id"], d["time_block"]): d.get("rtm_tm", 0) for d in dc_data}
-            
+            sg_tm_lookup = {
+                (d["plant_id"], d["time_block"]): {
+                    "rtm_tm": d.get("rtm_tm", 0),
+                    "rtm_tm_revision_no": d.get("rtm_tm_revision_no"),
+                }
+                for d in sg_tm_data
+            }
+
             # Fetch RTM TM parameter from parameters collection
             rtm_tm_param = await self.parameter_repository.get_parameter_by_key("rtmCalcuTmPr")
             rtm_tm_mode = rtm_tm_param.get("para_value", "45_percent_logic") if rtm_tm_param else "45_percent_logic"
@@ -873,12 +880,16 @@ class RTMBiddingServices:
                         if TotalblkwiseData["surplus_deficit"] > 0:  
                             # If surplus deficit is greater than 0, then it means there is a surplus for the plant
                             # Check if TM value is present
-                            if checkTMvalue == "TM":   
-                                # Get rtm_tm from DC records for this plant + block
+                            if checkTMvalue == "TM":
+                                # Get rtm_tm from SG records for this plant + block
                                 current_block = TotalblkwiseData.get("BlockNo")
-                                TMvalueofPl = float(dc_tm_lookup.get((plant_id, current_block), 0))
+                                tm_info = sg_tm_lookup.get((plant_id, current_block), {})
+                                TMvalueofPl = float(tm_info.get("rtm_tm", 0))
+                                rtm_tm_revision_no_val = tm_info.get("rtm_tm_revision_no")
                                 plnt_fourty_five_vol = max(0, plant_volume - TMvalueofPl)   # Subtract TM from volume
                             else:
+                                TMvalueofPl = 0.0
+                                rtm_tm_revision_no_val = None
                                 plnt_fourty_five_vol = plant_volume * 0.45   # Calculate 45% volume for the plant
 
                             plnt_100_volume = plant_volume   # Calculate 100% volume for the plant
@@ -944,6 +955,8 @@ class RTMBiddingServices:
                                     'plant_name': plant_name,
                                     'display_category': display_category,
                                     'dispatch_type': dispatch_type,
+                                    'rtm_tm': TMvalueofPl,
+                                    'rtm_tm_revision_no': rtm_tm_revision_no_val,
                                     'total_sell_volume': total_sell_volume + sell_volume,
                                     'Ex_split_string': f"IEX-{typeofExchangeIEXblk}_PXIL-{typeofExchangePXILblk}"
                                 }

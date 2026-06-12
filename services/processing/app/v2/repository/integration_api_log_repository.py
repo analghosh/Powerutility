@@ -355,9 +355,8 @@ class IntegrationApiLogRepository(GenericRepository):
         Get RTM block bid submission details for a specific date.
         Reads from iex_integration_apilog filtered by bid_type="block-bid".
 
-        Returns one entry per exchange call (one per bid submitted), sorted newest first.
-        Multiple bids submitted in one API call share the same correlationId — each
-        gets its own row so no submission is hidden.
+        Each exchange call is expanded into one row per BidDetails entry so that
+        multi-block submissions do not collapse into a single visible row.
         """
         try:
             start_date = datetime.strptime(date_str, "%Y-%m-%d").replace(hour=0, minute=0, second=0, microsecond=0)
@@ -389,14 +388,43 @@ class IntegrationApiLogRepository(GenericRepository):
                     except Exception:
                         delivery_date_str = str(dd)
 
-                response.append({
-                    "correlationId":             log.get("correlation_id"),
-                    "submitBlockBidRequestBody":  log.get("requestBody"),
-                    "submitBlockBidResponseBody": log.get("responseBody"),
-                    "DeliveryDate":               delivery_date_str,
-                    "timestamp":                  log.get("timestamp"),
-                    "bidType":                    "block-bid"
-                })
+                req_body = log.get("requestBody") or {}
+                resp_body = log.get("responseBody") or {}
+                bid_details = req_body.get("BidDetails") or []
+
+                if not bid_details:
+                    response.append({
+                        "correlationId":             log.get("correlation_id"),
+                        "submitBlockBidRequestBody":  req_body,
+                        "submitBlockBidResponseBody": resp_body,
+                        "DeliveryDate":               delivery_date_str,
+                        "timestamp":                  log.get("timestamp"),
+                        "bidType":                    "block-bid",
+                        "blockCount":                 0,
+                    })
+                    continue
+
+                for idx, detail in enumerate(bid_details):
+                    response.append({
+                        "correlationId":              log.get("correlation_id"),
+                        "transactionId":              resp_body.get("TransactionId"),
+                        "submitStatus":               resp_body.get("Status"),
+                        "submitStatusMessage":        resp_body.get("StatusMessage"),
+                        "deliveryDate":               delivery_date_str,
+                        "timestamp":                  log.get("timestamp"),
+                        "bidType":                    "block-bid",
+                        "blockIndex":                 idx,
+                        "blockCount":                 len(bid_details),
+                        "session":                    detail.get("Session"),
+                        "fromPeriod":                 detail.get("FromPeriodId"),
+                        "toPeriod":                   detail.get("ToPeriodId"),
+                        "buySell":                    detail.get("BuySell"),
+                        "price":                      detail.get("Price"),
+                        "quantity":                   detail.get("Quantity"),
+                        "bidReferenceId":             detail.get("BidReferenceId"),
+                        "submitBlockBidRequestBody":  req_body,
+                        "submitBlockBidResponseBody": resp_body,
+                    })
 
             return response
 
