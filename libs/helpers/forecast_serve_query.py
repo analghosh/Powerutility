@@ -5,7 +5,11 @@ MongoDB query helpers for forecast_serve — latest forecast_revision in the dat
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
+
 IDF_TYPE = "IDF"
+
+FORECAST_SERVE_RANGE_SOURCES = [FORECAST_SOURCE_RTM_API, FORECAST_SOURCE_CSV]
 
 
 def forecast_serve_revision_key(doc: Dict[str, Any]) -> tuple:
@@ -116,3 +120,49 @@ def build_latest_revision_or_filter(
     if len(or_clauses) == 1:
         return {**base, **or_clauses[0]}
     return {**base, "$or": or_clauses}
+
+
+def build_forecast_serve_latest_revision_range_pipeline(
+    range_start: datetime,
+    range_end_exclusive: datetime,
+    from_block: int,
+    to_block: int,
+    market_type: str = IDF_TYPE,
+    sources: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Single aggregation: latest forecast_revision per (scheduled_at, time_block, source)
+    across an inclusive date range and block range.
+    """
+    source_list = sources or FORECAST_SERVE_RANGE_SOURCES
+    return [
+        {
+            "$match": {
+                "scheduled_at": {"$gte": range_start, "$lt": range_end_exclusive},
+                "type": market_type,
+                "time_block": {"$gte": int(from_block), "$lte": int(to_block)},
+                "source": {"$in": source_list},
+            }
+        },
+        {
+            "$sort": {
+                "scheduled_at": 1,
+                "time_block": 1,
+                "source": 1,
+                "forecast_revision": -1,
+            }
+        },
+        {
+            "$group": {
+                "_id": {
+                    "scheduled_at": "$scheduled_at",
+                    "time_block": "$time_block",
+                    "source": "$source",
+                },
+                "doc": {"$first": "$$ROOT"},
+            }
+        },
+        {"$replaceRoot": {"newRoot": "$doc"}},
+        {"$project": FORECAST_SERVE_READ_PROJECTION},
+        {"$sort": {"scheduled_at": 1, "time_block": 1, "source": 1}},
+    ]

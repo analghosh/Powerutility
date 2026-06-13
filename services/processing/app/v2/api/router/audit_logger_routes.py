@@ -69,7 +69,7 @@ class AuditLogsResponse(BaseModel):
     Fetches **audit logs** from the audit database with filtering options.
 
     ### Query Parameters:
-    - `type`: Filter type - "authentication", "roles", or "data"
+    - `type`: Filter type - "authentication", "roles", "data", or "reports"
     - `skip`: Number of records to skip (for pagination, default 0)
     - `limit`: Maximum number of records to return (for pagination, default 100)
 
@@ -79,6 +79,11 @@ class AuditLogsResponse(BaseModel):
     - **type=data**: Searches for:
       - `service: ingestion` AND `data.action_type: upload` OR
       - `service: processing` AND `data.action_type: download`
+    - **type=reports**: `service: processing` AND `data.data_type: reports_forecast`
+      (view, download, and access-attempt actions)
+
+    - **type=reports**: `service: processing` AND `data.data_type: reports_forecast`
+      (view, download, and access-attempt actions)
 
     ### Notes:
     - User information (username, email) is enriched from auth_db.users collection
@@ -99,8 +104,8 @@ async def get_audit_logs(
         request: Request,
         type: Optional[str] = Query(
             None,
-            description="Filter type: 'authentication', 'roles', or 'data' (defaults to 'authentication')",
-            regex="^(authentication|roles|data)$"
+            description="Filter type: 'authentication', 'roles', 'data', or 'reports' (defaults to 'authentication')",
+            regex="^(authentication|roles|data|reports)$"
         ),
         skip: int = Query(0, description="Number of records to skip (for pagination)", ge=0),
         limit: int = Query(100, description="Maximum number of records to return", ge=1, le=1000),
@@ -112,7 +117,7 @@ async def get_audit_logs(
     
     Args:
         request: FastAPI request object
-        type: Filter type - "authentication", "roles", or "data"
+        type: Filter type - "authentication", "roles", "data", or "reports"
         skip: Number of records to skip
         limit: Maximum number of records to return
         user_context: Current authenticated user context

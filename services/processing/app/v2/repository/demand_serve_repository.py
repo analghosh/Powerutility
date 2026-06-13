@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 IDF_TYPE = "IDF"
+DAF_TYPE = "DAF"
 
 class DemandServeRepository(GenericRepository):
     """
@@ -314,6 +315,140 @@ class DemandServeRepository(GenericRepository):
                 e,
             )
             return []
+
+    async def find_daf_forecast_by_date_range(
+        self,
+        from_date: str,
+        to_date: str,
+        from_block: int = 1,
+        to_block: int = 96,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return DAF forecast rows for an inclusive date range and time block range.
+
+        Past dates read from demand_serve_historical only.
+        Current/future dates read from demand_serve, preferring serve over historical
+        when the same (date, time_block) exists in both collections.
+        """
+        from libs.helpers.historical_date_split import (
+            split_date_range_by_today,
+            today_date_str,
+        )
+
+        try:
+            historical_collection = getattr(
+                settings,
+                "MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION",
+                "demand_serve_historical",
+            )
+            today = today_date_str()
+            past_from, past_to, current_from, current_to = split_date_range_by_today(
+                from_date, to_date, today
+            )
+
+            merged: List[Dict[str, Any]] = []
+
+            if past_from and past_to:
+                merged.extend(
+                    await self._find_daf_forecast_in_collection(
+                        historical_collection,
+                        past_from,
+                        past_to,
+                        from_block,
+                        to_block,
+                    )
+                )
+
+            if current_from and current_to:
+                serve_results = await self._find_daf_forecast_in_collection(
+                    self.collection_name,
+                    current_from,
+                    current_to,
+                    from_block,
+                    to_block,
+                )
+                hist_results = await self._find_daf_forecast_in_collection(
+                    historical_collection,
+                    current_from,
+                    current_to,
+                    from_block,
+                    to_block,
+                )
+                serve_map = {
+                    (row.get("date"), row.get("time_block")): row
+                    for row in serve_results
+                }
+                merged.extend(serve_map.values())
+                for row in hist_results:
+                    key = (row.get("date"), row.get("time_block"))
+                    if key not in serve_map:
+                        merged.append(row)
+
+            merged.sort(key=lambda row: (row.get("date") or "", row.get("time_block") or 0))
+            return merged
+        except Exception as e:
+            logger.error(
+                "Failed to get DAF forecast for %s to %s blocks %s-%s: %s",
+                from_date,
+                to_date,
+                from_block,
+                to_block,
+                e,
+            )
+            return []
+
+    async def _find_daf_forecast_in_collection(
+        self,
+        collection_name: str,
+        from_date: str,
+        to_date: str,
+        from_block: int,
+        to_block: int,
+    ) -> List[Dict[str, Any]]:
+        range_start = datetime.strptime(from_date, "%Y-%m-%d")
+        range_end_exclusive = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+        pipeline = self._build_daf_forecast_read_pipeline(
+            range_start=range_start,
+            range_end_exclusive=range_end_exclusive,
+            from_block=from_block,
+            to_block=to_block,
+        )
+        return await self.aggregate(collection_name, pipeline) or []
+
+    @staticmethod
+    def _build_daf_forecast_read_pipeline(
+        range_start: datetime,
+        range_end_exclusive: datetime,
+        from_block: int,
+        to_block: int,
+    ) -> List[Dict[str, Any]]:
+        """Minimal projection for DAF day-ahead forecast report reads."""
+        return [
+            {
+                "$match": {
+                    "scheduled_at": {
+                        "$gte": range_start,
+                        "$lt": range_end_exclusive,
+                    },
+                    "type": DAF_TYPE,
+                    "time_block": {"$gte": from_block, "$lte": to_block},
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "date": {
+                        "$dateToString": {
+                            "format": "%Y-%m-%d",
+                            "date": "$scheduled_at",
+                        }
+                    },
+                    "time_block": 1,
+                    "forecast": 1,
+                }
+            },
+            {"$sort": {"scheduled_at": 1, "time_block": 1}},
+        ]
 
     @staticmethod
     def _build_demand_block_read_pipeline(
