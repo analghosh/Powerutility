@@ -250,6 +250,20 @@ class AuditLoggerService:
                         "service": {"$in": ["processing", "DAM", "RTM", "Limit Values"]},
                         "data.action_type": {"$in": ["approval", "approved", "rejected"]}
                     }
+
+        # Reports forecast access: view, download, and access attempts
+        elif filter_type == "reports":
+            return {
+                "service": "processing",
+                "data.data_type": "reports_forecast",
+                "data.action_type": {
+                    "$in": [
+                        "reports_forecast_access_attempt",
+                        "reports_forecast_view",
+                        "reports_forecast_download",
+                    ]
+                },
+            }
         
         # Unknown filter type, return all logs
         return {}
