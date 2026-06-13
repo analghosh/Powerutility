@@ -11,8 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from libs.helpers.historical_date_split import (
     REPORTS_FORECAST_MAX_DATE_RANGE_DAYS,
-    split_date_range_by_today,
-    today_date_str,
     validate_max_date_range_days,
 )
 from libs.helpers.reports_forecast_format import (
@@ -24,35 +22,30 @@ from libs.helpers.reports_forecast_format import (
 )
 from libs.models.forecast_serve_entity import (
     FORECAST_SOURCE_CSV,
-    FORECAST_SOURCE_DISPLAY_AUTO,
-    FORECAST_SOURCE_DISPLAY_MANUAL,
     FORECAST_SOURCE_RTM_API,
 )
 
 from ..repository.demand_serve_repository import DemandServeRepository
 from ..repository.forecast_serve_repository import forecast_serve_repository
-from ..repository.reports_forecast_repository import (
-    FORECAST_PRICE_IDS,
-    reports_forecast_repository,
-)
+from ..repository.reports_forecast_repository import reports_forecast_repository
 
 logger = logging.getLogger(__name__)
 
 CSV_HEADERS = [
     "Date",
     "Time Block",
-    "Auto Forecast",
-    "Manual Forecast",
-    "Day Ahead Forecast(DAF)",
-    "Market(DAM/RTM)",
-    "RTM Forecasted Price",
-    "DAM Forecasted Price",
-    "GDAM Forecasted Price",
-    "HPDAM Forecasted Price",
+    "IDF Demand",
+    "DAF Demand",
+    "IDF Price",
+    "DAM Price",
+    "GDAM Price",
+    "HPDAM Price",
 ]
 
 MARKET_DAM = "DAM"
 MARKET_RTM = "RTM"
+MARKET_GDAM = "GDAM"
+MARKET_HPDAM = "HPDAM"
 
 
 class ReportsForecastService:
@@ -100,6 +93,12 @@ class ReportsForecastService:
         return text[:10] if len(text) >= 10 else text
 
     @staticmethod
+    def _iso_to_display_date(iso_date: str) -> str:
+        """Convert YYYY-MM-DD to DD-MM-YYYY for report output."""
+        parsed = datetime.strptime(iso_date, "%Y-%m-%d")
+        return parsed.strftime("%d-%m-%Y")
+
+    @staticmethod
     def _format_csv_value(value: Any) -> str:
         if value is None:
             return ""
@@ -143,6 +142,8 @@ class ReportsForecastService:
         self,
         price_docs: List[Dict[str, Any]],
     ) -> Dict[Tuple[str, int], Dict[str, float]]:
+        from ..repository.reports_forecast_repository import FORECAST_PRICE_IDS
+
         market_by_id = {v: k for k, v in FORECAST_PRICE_IDS.items()}
         prices: Dict[Tuple[str, int], Dict[str, float]] = {}
         for doc in price_docs:
@@ -156,6 +157,27 @@ class ReportsForecastService:
             prices.setdefault(key, {})[market] = value
         return prices
 
+    def _build_block_record(
+        self,
+        date_str: str,
+        block: int,
+        auto: Dict[Tuple[str, int], float],
+        daf: Dict[Tuple[str, int], float],
+        prices: Dict[Tuple[str, int], Dict[str, float]],
+    ) -> Dict[str, Any]:
+        key = (date_str, block)
+        price_row = prices.get(key, {})
+        return {
+            "date": self._iso_to_display_date(date_str),
+            "time_block": block,
+            "idf_demand": auto.get(key),
+            "daf_demand": daf.get(key),
+            "idf_price": price_row.get(MARKET_RTM),
+            "dam_price": price_row.get(MARKET_DAM),
+            "gdam_price": price_row.get(MARKET_GDAM),
+            "hpdam_price": price_row.get(MARKET_HPDAM),
+        }
+
     def _build_by_date(
         self,
         from_date: str,
@@ -163,7 +185,6 @@ class ReportsForecastService:
         from_block: int,
         to_block: int,
         auto: Dict[Tuple[str, int], float],
-        manual: Dict[Tuple[str, int], float],
         daf: Dict[Tuple[str, int], float],
         prices: Dict[Tuple[str, int], Dict[str, float]],
     ) -> List[Dict[str, Any]]:
@@ -171,106 +192,17 @@ class ReportsForecastService:
         for date_str in self._iter_dates(from_date, to_date):
             blocks: List[Dict[str, Any]] = []
             for block in range(from_block, to_block + 1):
-                key = (date_str, block)
-                price_row = prices.get(key, {})
                 blocks.append(
-                    {
-                        "time_block": block,
-                        "idf_forecast": {
-                            "auto": auto.get(key),
-                            "manual": manual.get(key),
-                        },
-                        "daf_forecast": daf.get(key),
-                        "dam": {
-                            "day_ahead_forecast_daf": daf.get(key),
-                            "forecasted_prices": {
-                                "dam": price_row.get(MARKET_DAM),
-                                "gdam": price_row.get("GDAM"),
-                                "hpdam": price_row.get("HPDAM"),
-                            },
-                        },
-                        "rtm": {
-                            "idf_forecast": {
-                                "auto": auto.get(key),
-                                "manual": manual.get(key),
-                            },
-                            "forecasted_prices": {
-                                "rtm": price_row.get(MARKET_RTM),
-                            },
-                        },
-                    }
+                    self._build_block_record(date_str, block, auto, daf, prices)
                 )
             by_date.append(
                 {
-                    "date": date_str,
+                    "date": self._iso_to_display_date(date_str),
                     "block_count": len(blocks),
                     "blocks": blocks,
                 }
             )
         return by_date
-
-    def _build_dam_market_records(
-        self,
-        records: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        dam_records = []
-        for row in records:
-            if row.get("market") != MARKET_DAM:
-                continue
-            dam_records.append(
-                {
-                    "date": row["date"],
-                    "time_block": row["time_block"],
-                    "idf_forecast": {
-                        "auto": row.get("auto_forecast"),
-                        "manual": row.get("manual_forecast"),
-                    },
-                    "day_ahead_forecast_daf": row.get("day_ahead_forecast_daf"),
-                    "forecasted_prices": {
-                        "dam": row.get("dam_forecasted_price"),
-                        "gdam": row.get("gdam_forecasted_price"),
-                        "hpdam": row.get("hpdam_forecasted_price"),
-                    },
-                }
-            )
-        return dam_records
-
-    def _build_rtm_market_records(
-        self,
-        records: List[Dict[str, Any]],
-    ) -> List[Dict[str, Any]]:
-        rtm_records = []
-        for row in records:
-            if row.get("market") != MARKET_RTM:
-                continue
-            rtm_records.append(
-                {
-                    "date": row["date"],
-                    "time_block": row["time_block"],
-                    "idf_forecast": {
-                        "auto": row.get("auto_forecast"),
-                        "manual": row.get("manual_forecast"),
-                    },
-                    "forecasted_prices": {
-                        "rtm": row.get("rtm_forecasted_price"),
-                    },
-                }
-            )
-        return rtm_records
-
-    @staticmethod
-    def _count_forecast_docs_by_source(
-        forecast_docs: List[Dict[str, Any]],
-    ) -> Tuple[int, int]:
-        auto_count = 0
-        manual_count = 0
-        for doc in forecast_docs:
-            source = doc.get("source")
-            if source == FORECAST_SOURCE_RTM_API:
-                auto_count += 1
-            elif source == FORECAST_SOURCE_CSV:
-                manual_count += 1
-        return auto_count, manual_count
 
     def _build_report_rows(
         self,
@@ -279,46 +211,14 @@ class ReportsForecastService:
         from_block: int,
         to_block: int,
         auto: Dict[Tuple[str, int], float],
-        manual: Dict[Tuple[str, int], float],
         daf: Dict[Tuple[str, int], float],
         prices: Dict[Tuple[str, int], Dict[str, float]],
     ) -> List[Dict[str, Any]]:
         records: List[Dict[str, Any]] = []
         for date_str in self._iter_dates(from_date, to_date):
             for block in range(from_block, to_block + 1):
-                key = (date_str, block)
-                price_row = prices.get(key, {})
-                auto_f = auto.get(key)
-                manual_f = manual.get(key)
-                daf_f = daf.get(key)
-
                 records.append(
-                    {
-                        "date": date_str,
-                        "time_block": block,
-                        "auto_forecast": auto_f,
-                        "manual_forecast": manual_f,
-                        "day_ahead_forecast_daf": daf_f,
-                        "market": MARKET_DAM,
-                        "rtm_forecasted_price": None,
-                        "dam_forecasted_price": price_row.get(MARKET_DAM),
-                        "gdam_forecasted_price": price_row.get("GDAM"),
-                        "hpdam_forecasted_price": price_row.get("HPDAM"),
-                    }
-                )
-                records.append(
-                    {
-                        "date": date_str,
-                        "time_block": block,
-                        "auto_forecast": auto_f,
-                        "manual_forecast": manual_f,
-                        "day_ahead_forecast_daf": None,
-                        "market": MARKET_RTM,
-                        "rtm_forecasted_price": price_row.get(MARKET_RTM),
-                        "dam_forecasted_price": None,
-                        "gdam_forecasted_price": None,
-                        "hpdam_forecasted_price": None,
-                    }
+                    self._build_block_record(date_str, block, auto, daf, prices)
                 )
         return records
 
@@ -386,9 +286,7 @@ class ReportsForecastService:
 
         dates = self._iter_dates(resolved_from, resolved_to)
         blocks_per_day = to_block - from_block + 1
-        total_rows = len(dates) * blocks_per_day * 2
-        dam_rows = len(dates) * blocks_per_day
-        rtm_rows = dam_rows
+        total_rows = len(dates) * blocks_per_day
 
         records: List[Dict[str, Any]] = []
         needs_flat_rows = include_records or include_json or include_csv_content
@@ -399,26 +297,10 @@ class ReportsForecastService:
                 from_block,
                 to_block,
                 auto,
-                manual,
                 daf,
                 prices,
             )
             total_rows = len(records)
-            dam_rows = sum(1 for row in records if row.get("market") == MARKET_DAM)
-            rtm_rows = sum(1 for row in records if row.get("market") == MARKET_RTM)
-
-        auto_fetched, manual_fetched = self._count_forecast_docs_by_source(forecast_docs)
-        today = today_date_str()
-        past_from, past_to, current_from, current_to = split_date_range_by_today(
-            resolved_from, resolved_to, today
-        )
-        historical_routing = {
-            "today": today,
-            "past_dates_from": past_from,
-            "past_dates_to": past_to,
-            "current_dates_from": current_from,
-            "current_dates_to": current_to,
-        }
 
         csv_export: Dict[str, Any] = {
             "headers": CSV_HEADERS,
@@ -440,88 +322,24 @@ class ReportsForecastService:
                 "to_date": resolved_to,
                 "from_block": from_block,
                 "to_block": to_block,
-                "date_count": len(dates),
-                "blocks_per_day": blocks_per_day,
-                "rows_per_day": blocks_per_day * 2,
-                "max_date_range_days": REPORTS_FORECAST_MAX_DATE_RANGE_DAYS,
                 "format": fmt,
-                "include_flat_records": include_flat_records if fmt == REPORTS_FORECAST_FORMAT_JSON else None,
-            },
-            "sources": {
-                "daf_forecast": {
-                    "collection": "demand_serve",
-                    "historical_collection": "demand_serve_historical",
-                    "routing": historical_routing,
-                    "type": "DAF",
-                    "field": "forecast",
-                    "records_fetched": len(daf_docs),
-                },
-                "idf_forecast": {
-                    "collection": "forecast_serve",
-                    "historical_collection": "forecast_serve_historical",
-                    "routing": historical_routing,
-                    "type": "IDF",
-                    "revision_policy": "latest forecast_revision per source per day",
-                    "auto": {
-                        "source": FORECAST_SOURCE_RTM_API,
-                        "forecast_source": FORECAST_SOURCE_DISPLAY_AUTO,
-                        "records_fetched": auto_fetched,
-                    },
-                    "manual": {
-                        "source": FORECAST_SOURCE_CSV,
-                        "forecast_source": FORECAST_SOURCE_DISPLAY_MANUAL,
-                        "records_fetched": manual_fetched,
-                    },
-                },
-                "forecasted_prices": {
-                    "collection": "limit_values",
-                    "historical_collection": "limit_values_historical",
-                    "routing": historical_routing,
-                    "category": "Limits",
-                    "markets": list(FORECAST_PRICE_IDS.keys()),
-                    "price_ids": list(FORECAST_PRICE_IDS.values()),
-                    "records_fetched": len(price_docs),
-                },
+                "include_flat_records": (
+                    include_flat_records if fmt == REPORTS_FORECAST_FORMAT_JSON else None
+                ),
             },
             "summary": {
                 "total_rows": total_rows,
-                "dam_rows": dam_rows,
-                "rtm_rows": rtm_rows,
-                "dates": dates,
             },
             "csv_export": csv_export,
         }
 
         if include_json:
-            dam_records = self._build_dam_market_records(records) if records else []
-            rtm_records = self._build_rtm_market_records(records) if records else []
-            response["markets"] = {
-                "dam": {
-                    "market": MARKET_DAM,
-                    "label": "Day Ahead Market",
-                    "description": (
-                        "DAF demand forecast with DAM, GDAM, and HPDAM forecasted prices"
-                    ),
-                    "count": len(dam_records),
-                    "records": dam_records,
-                },
-                "rtm": {
-                    "market": MARKET_RTM,
-                    "label": "Real Time Market",
-                    "description": (
-                        "IDF auto and manual forecasts with RTM forecasted price"
-                    ),
-                    "count": len(rtm_records),
-                    "records": rtm_records,
-                },
-            }
             response["by_date"] = self._build_by_date(
                 resolved_from,
                 resolved_to,
                 from_block,
                 to_block,
                 auto,
-                manual,
                 daf,
                 prices,
             )
@@ -540,14 +358,12 @@ class ReportsForecastService:
                 [
                     row.get("date"),
                     row.get("time_block"),
-                    self._format_csv_value(row.get("auto_forecast")),
-                    self._format_csv_value(row.get("manual_forecast")),
-                    self._format_csv_value(row.get("day_ahead_forecast_daf")),
-                    row.get("market"),
-                    self._format_csv_value(row.get("rtm_forecasted_price")),
-                    self._format_csv_value(row.get("dam_forecasted_price")),
-                    self._format_csv_value(row.get("gdam_forecasted_price")),
-                    self._format_csv_value(row.get("hpdam_forecasted_price")),
+                    self._format_csv_value(row.get("idf_demand")),
+                    self._format_csv_value(row.get("daf_demand")),
+                    self._format_csv_value(row.get("idf_price")),
+                    self._format_csv_value(row.get("dam_price")),
+                    self._format_csv_value(row.get("gdam_price")),
+                    self._format_csv_value(row.get("hpdam_price")),
                 ]
             )
         return output.getvalue()

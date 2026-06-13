@@ -21,5 +21,13 @@ class ForecastServeController:
             to_block=to_block,
         )
 
+    async def get_manual_forecast_status(
+        self,
+        schedule_date: str,
+    ) -> Dict[str, Any]:
+        return await forecast_serve_service.get_manual_forecast_status(
+            schedule_date=schedule_date,
+        )
+
 
 forecast_serve_controller = ForecastServeController()

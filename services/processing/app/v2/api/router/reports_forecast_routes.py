@@ -11,12 +11,6 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
 from libs.audit_queue.simple_logger import AuditLogger
-from libs.models.forecast_serve_entity import (
-    FORECAST_SOURCE_CSV,
-    FORECAST_SOURCE_DISPLAY_AUTO,
-    FORECAST_SOURCE_DISPLAY_MANUAL,
-    FORECAST_SOURCE_RTM_API,
-)
 from ....core.dependencies import get_audit_logger
 from ...controller.reports_forecast_controller import reports_forecast_controller
 from ...dependencies import get_user_context
@@ -50,83 +44,25 @@ class ReportsForecastFormat(str, Enum):
     BOTH = REPORTS_FORECAST_FORMAT_BOTH
 
 
-class IdfForecastValues(BaseModel):
-    auto: Optional[float] = Field(
-        None, description="IDF auto forecast from forecast_serve (rtm_forecast_api)"
-    )
-    manual: Optional[float] = Field(
-        None, description="IDF manual forecast from forecast_serve (csv)"
-    )
+class ReportsForecastRecord(BaseModel):
+    """One row per date + time block (same columns as CSV)."""
 
-
-class DamForecastedPrices(BaseModel):
-    dam: Optional[float] = Field(None, description="DAM forecasted price (Rs/MWh)")
-    gdam: Optional[float] = Field(None, description="GDAM forecasted price (Rs/MWh)")
-    hpdam: Optional[float] = Field(None, description="HPDAM forecasted price (Rs/MWh)")
-
-
-class RtmForecastedPrices(BaseModel):
-    rtm: Optional[float] = Field(None, description="RTM forecasted price (Rs/MWh)")
-
-
-class ReportsForecastFlatRecord(BaseModel):
-    """Flat row used for CSV export (one row per date + block + market)."""
-
-    date: str = Field(..., description="Schedule date (YYYY-MM-DD)")
+    date: str = Field(..., description="Schedule date (DD-MM-YYYY)")
     time_block: int = Field(..., ge=1, le=96, description="Time block (1–96)")
-    auto_forecast: Optional[float] = None
-    manual_forecast: Optional[float] = None
-    day_ahead_forecast_daf: Optional[float] = Field(
-        None, description="Populated on DAM rows only"
-    )
-    market: str = Field(..., description="DAM or RTM")
-    rtm_forecasted_price: Optional[float] = Field(
-        None, description="Populated on RTM rows only"
-    )
-    dam_forecasted_price: Optional[float] = Field(
-        None, description="Populated on DAM rows only"
-    )
-    gdam_forecasted_price: Optional[float] = Field(
-        None, description="Populated on DAM rows only"
-    )
-    hpdam_forecasted_price: Optional[float] = Field(
-        None, description="Populated on DAM rows only"
-    )
+    idf_demand: Optional[float] = Field(None, description="IDF auto forecast")
+    daf_demand: Optional[float] = Field(None, description="DAF demand forecast")
+    idf_price: Optional[float] = Field(None, description="IDF (RTM) forecasted price")
+    dam_price: Optional[float] = Field(None, description="DAM forecasted price")
+    gdam_price: Optional[float] = Field(None, description="GDAM forecasted price")
+    hpdam_price: Optional[float] = Field(None, description="HPDAM forecasted price")
 
 
-class DamMarketRecord(BaseModel):
-    date: str
-    time_block: int
-    idf_forecast: IdfForecastValues
-    day_ahead_forecast_daf: Optional[float] = None
-    forecasted_prices: DamForecastedPrices
-
-
-class RtmMarketRecord(BaseModel):
-    date: str
-    time_block: int
-    idf_forecast: IdfForecastValues
-    forecasted_prices: RtmForecastedPrices
-
-
-class ReportsForecastBlockBucket(BaseModel):
-    time_block: int
-    idf_forecast: IdfForecastValues
-    daf_forecast: Optional[float] = Field(
-        None, description="DAF forecast from demand_serve (type=DAF)"
-    )
-    dam: Dict[str, Any] = Field(
-        ...,
-        description="DAM section: day_ahead_forecast_daf + dam/gdam/hpdam prices",
-    )
-    rtm: Dict[str, Any] = Field(
-        ...,
-        description="RTM section: idf_forecast + rtm forecasted price",
-    )
+class ReportsForecastBlockBucket(ReportsForecastRecord):
+    """Per-block row inside a date bucket (same shape as records)."""
 
 
 class ReportsForecastDateBucket(BaseModel):
-    date: str
+    date: str = Field(..., description="Schedule date (DD-MM-YYYY)")
     block_count: int
     blocks: List[ReportsForecastBlockBucket] = Field(default_factory=list)
 
@@ -136,56 +72,18 @@ class ReportsForecastQuery(BaseModel):
     to_date: str
     from_block: int
     to_block: int
-    date_count: int
-    blocks_per_day: int
-    rows_per_day: int = Field(
-        ...,
-        description="Flat CSV rows per day (2 per block: DAM + RTM)",
-    )
-    max_date_range_days: int = Field(
-        90,
-        description="Maximum allowed inclusive days between from_date and to_date",
-    )
     format: str = Field(
         REPORTS_FORECAST_FORMAT_JSON,
         description="Requested response format: json, csv, or both",
     )
     include_flat_records: Optional[bool] = Field(
         None,
-        description="When format=json, omit flat records if false (lighter UI payload)",
+        description="When format=json, omit flat records if false",
     )
-
-
-class ForecastSourceMeta(BaseModel):
-    source: str
-    forecast_source: str
-    records_fetched: int
-
-
-class ReportsForecastSources(BaseModel):
-    daf_forecast: Dict[str, Any]
-    idf_forecast: Dict[str, Any]
-    forecasted_prices: Dict[str, Any]
 
 
 class ReportsForecastSummary(BaseModel):
     total_rows: int
-    dam_rows: int
-    rtm_rows: int
-    dates: List[str]
-
-
-class ReportsForecastMarketBucket(BaseModel):
-    market: str
-    label: str
-    description: str
-    count: int
-    records: List[Any] = Field(default_factory=list)
-
-
-class ReportsForecastMarkets(BaseModel):
-    dam: ReportsForecastMarketBucket
-    rtm: ReportsForecastMarketBucket
 
 
 class ReportsForecastCsvExport(BaseModel):
@@ -207,172 +105,85 @@ class ReportsForecastResponse(BaseModel):
         description="Resolved format: json, csv, or both",
     )
     query: ReportsForecastQuery
-    sources: ReportsForecastSources
     summary: ReportsForecastSummary
-    markets: Optional[ReportsForecastMarkets] = Field(
-        None,
-        description="Present when format is json or both",
-    )
     by_date: Optional[List[ReportsForecastDateBucket]] = Field(
         None,
-        description="Present when format is json or both",
+        description="Grouped view (one date → blocks) when format is json or both",
     )
     csv_export: ReportsForecastCsvExport
-    records: Optional[List[ReportsForecastFlatRecord]] = Field(
+    records: Optional[List[ReportsForecastRecord]] = Field(
         None,
-        description="Flat rows for CSV (omitted when format=csv or include_flat_records=false)",
+        description="Flat rows matching CSV columns (omitted when include_flat_records=false)",
     )
 
     model_config = {
         "json_schema_extra": {
             "examples": [
                 {
+                    "response_format": "json",
                     "query": {
                         "from_date": "2025-05-22",
                         "to_date": "2025-05-22",
                         "from_block": 1,
                         "to_block": 2,
-                        "date_count": 1,
-                        "blocks_per_day": 2,
-                        "rows_per_day": 4,
-                        "max_date_range_days": 90,
-                    },
-                    "sources": {
-                        "daf_forecast": {
-                            "collection": "demand_serve",
-                            "historical_collection": "demand_serve_historical",
-                            "routing": {
-                                "today": "2025-05-22",
-                                "past_dates_from": None,
-                                "past_dates_to": None,
-                                "current_dates_from": "2025-05-22",
-                                "current_dates_to": "2025-05-22",
-                            },
-                            "type": "DAF",
-                            "field": "forecast",
-                            "records_fetched": 2,
-                        },
-                        "idf_forecast": {
-                            "collection": "forecast_serve",
-                            "type": "IDF",
-                            "auto": {
-                                "source": FORECAST_SOURCE_RTM_API,
-                                "forecast_source": FORECAST_SOURCE_DISPLAY_AUTO,
-                                "records_fetched": 2,
-                            },
-                            "manual": {
-                                "source": FORECAST_SOURCE_CSV,
-                                "forecast_source": FORECAST_SOURCE_DISPLAY_MANUAL,
-                                "records_fetched": 2,
-                            },
-                        },
-                        "forecasted_prices": {
-                            "collection": "limit_values",
-                            "category": "Limits",
-                            "markets": ["RTM", "DAM", "GDAM", "HPDAM"],
-                            "price_ids": [
-                                "RTM_forecasted_price",
-                                "DAM_forecasted_price",
-                                "GDAM_forecasted_price",
-                                "HPDAM_forecasted_price",
-                            ],
-                            "records_fetched": 8,
-                        },
+                        "format": "json",
+                        "include_flat_records": False,
                     },
                     "summary": {
-                        "total_rows": 4,
-                        "dam_rows": 2,
-                        "rtm_rows": 2,
-                        "dates": ["2025-05-22"],
-                    },
-                    "markets": {
-                        "dam": {
-                            "market": "DAM",
-                            "label": "Day Ahead Market",
-                            "description": "DAF demand forecast with DAM, GDAM, and HPDAM forecasted prices",
-                            "count": 2,
-                            "records": [
-                                {
-                                    "date": "2025-05-22",
-                                    "time_block": 1,
-                                    "idf_forecast": {"auto": 1200.5, "manual": 1198.0},
-                                    "day_ahead_forecast_daf": 1215.0,
-                                    "forecasted_prices": {
-                                        "dam": 3500.0,
-                                        "gdam": 3400.0,
-                                        "hpdam": 3300.0,
-                                    },
-                                }
-                            ],
-                        },
-                        "rtm": {
-                            "market": "RTM",
-                            "label": "Real Time Market",
-                            "description": "IDF auto and manual forecasts with RTM forecasted price",
-                            "count": 2,
-                            "records": [
-                                {
-                                    "date": "2025-05-22",
-                                    "time_block": 1,
-                                    "idf_forecast": {"auto": 1200.5, "manual": 1198.0},
-                                    "forecasted_prices": {"rtm": 3200.0},
-                                }
-                            ],
-                        },
+                        "total_rows": 2,
                     },
                     "by_date": [
                         {
-                            "date": "2025-05-22",
+                            "date": "22-05-2025",
                             "block_count": 2,
                             "blocks": [
                                 {
+                                    "date": "22-05-2025",
                                     "time_block": 1,
-                                    "idf_forecast": {"auto": 1200.5, "manual": 1198.0},
-                                    "daf_forecast": 1215.0,
-                                    "dam": {
-                                        "day_ahead_forecast_daf": 1215.0,
-                                        "forecasted_prices": {
-                                            "dam": 3500.0,
-                                            "gdam": 3400.0,
-                                            "hpdam": 3300.0,
-                                        },
-                                    },
-                                    "rtm": {
-                                        "idf_forecast": {"auto": 1200.5, "manual": 1198.0},
-                                        "forecasted_prices": {"rtm": 3200.0},
-                                    },
-                                }
+                                    "idf_demand": 1200.5,
+                                    "daf_demand": 1215.0,
+                                    "idf_price": 3200.0,
+                                    "dam_price": 3500.0,
+                                    "gdam_price": 3400.0,
+                                    "hpdam_price": 3300.0,
+                                },
+                                {
+                                    "date": "22-05-2025",
+                                    "time_block": 2,
+                                    "idf_demand": 1198.0,
+                                    "daf_demand": 1210.0,
+                                    "idf_price": 3180.0,
+                                    "dam_price": 3480.0,
+                                    "gdam_price": 3380.0,
+                                    "hpdam_price": 3280.0,
+                                },
                             ],
                         }
                     ],
                     "csv_export": {
                         "headers": CSV_HEADERS,
-                        "row_count": 4,
+                        "row_count": 2,
                     },
                     "records": [
                         {
-                            "date": "2025-05-22",
+                            "date": "22-05-2025",
                             "time_block": 1,
-                            "auto_forecast": 1200.5,
-                            "manual_forecast": 1198.0,
-                            "day_ahead_forecast_daf": 1215.0,
-                            "market": "DAM",
-                            "rtm_forecasted_price": None,
-                            "dam_forecasted_price": 3500.0,
-                            "gdam_forecasted_price": 3400.0,
-                            "hpdam_forecasted_price": 3300.0,
+                            "idf_demand": 1200.5,
+                            "daf_demand": 1215.0,
+                            "idf_price": 3200.0,
+                            "dam_price": 3500.0,
+                            "gdam_price": 3400.0,
+                            "hpdam_price": 3300.0,
                         },
                         {
-                            "date": "2025-05-22",
-                            "time_block": 1,
-                            "auto_forecast": 1200.5,
-                            "manual_forecast": 1198.0,
-                            "day_ahead_forecast_daf": None,
-                            "market": "RTM",
-                            "rtm_forecasted_price": 3200.0,
-                            "dam_forecasted_price": None,
-                            "gdam_forecasted_price": None,
-                            "hpdam_forecasted_price": None,
+                            "date": "22-05-2025",
+                            "time_block": 2,
+                            "idf_demand": 1198.0,
+                            "daf_demand": 1210.0,
+                            "idf_price": 3180.0,
+                            "dam_price": 3480.0,
+                            "gdam_price": 3380.0,
+                            "hpdam_price": 3280.0,
                         },
                     ],
                 }
@@ -469,7 +280,7 @@ async def get_reports_forecast(
         True,
         description=(
             "When format=json, set false to omit the flat `records` array "
-            "(use markets/by_date only — lighter payload)"
+            "(use by_date only — lighter payload)"
         ),
     ),
     user_context: Dict[str, Any] = Depends(get_user_context),
@@ -482,12 +293,12 @@ async def get_reports_forecast(
 
     **Format (`format` query param):**
 
-    - **json** (default) — structured sections for UI (`markets`, `by_date`, optional `records`)
+    - **json** (default) — `records` and/or `by_date` with columns:
+      Date, Time Block, IDF Demand, DAF Demand, IDF Price, DAM Price, GDAM Price, HPDAM Price
     - **csv** — returns a CSV file (skips JSON section assembly)
     - **both** — JSON plus embedded CSV string in `csv_export.content`
 
-    Use `include_flat_records=false` with `format=json` when the UI only needs
-    `by_date` / `markets` and you want a smaller response.
+    Use `include_flat_records=false` with `format=json` when the UI only needs `by_date`.
     """
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")
@@ -551,7 +362,6 @@ async def get_reports_forecast(
             to_block=to_block,
             response_format=response_format,
             record_count=result.get("summary", {}).get("total_rows", 0),
-            date_count=result.get("query", {}).get("date_count"),
         )
 
         if response_format == REPORTS_FORECAST_FORMAT_CSV:
@@ -702,9 +512,8 @@ async def download_reports_forecast_csv(
 
     **Date range limit:** inclusive range cannot exceed **90 days**.
 
-    Columns: Date, Time Block, Auto Forecast, Manual Forecast,
-    Day Ahead Forecast(DAF), Market(DAM/RTM), RTM Forecasted Price,
-    DAM Forecasted Price, GDAM Forecasted Price, HPDAM Forecasted Price.
+    Columns: Date (DD-MM-YYYY), Time Block, IDF Demand, DAF Demand,
+    IDF Price (RTM), DAM Price, GDAM Price, HPDAM Price.
     """
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")
