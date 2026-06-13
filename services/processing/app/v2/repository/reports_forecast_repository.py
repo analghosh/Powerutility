@@ -29,6 +29,20 @@ LIMIT_VALUES_PRICE_PROJECTION: Dict[str, int] = {
     "values": 1,
 }
 
+# 90 days × 96 blocks × 4 markets
+_LIMIT_VALUES_RANGE_MAX_DOCS = 90 * 96 * 4
+_AGGREGATE_MAX_TIME_MS = 60_000
+
+
+def _limit_values_price_row_key(row: Dict[str, Any]) -> tuple:
+    scheduled_at = row.get("scheduled_at")
+    if hasattr(scheduled_at, "strftime"):
+        date_key = scheduled_at.strftime("%Y-%m-%d")
+    else:
+        date_key = str(scheduled_at)[:10] if scheduled_at else ""
+    market = row.get("market") or row.get("id")
+    return (date_key, row.get("block"), market)
+
 
 class ReportsForecastRepository:
     def __init__(self):
@@ -101,7 +115,31 @@ class ReportsForecastRepository:
             to_block,
             normalize_metadata=normalize_metadata,
         )
-        return await self.repository.aggregate(collection_name, pipeline) or []
+        return await self.repository.aggregate(
+            collection_name,
+            pipeline,
+            max_time_ms=_AGGREGATE_MAX_TIME_MS,
+            max_docs=_LIMIT_VALUES_RANGE_MAX_DOCS,
+        ) or []
+
+    @staticmethod
+    def _merge_price_rows_prefer_live(
+        live_rows: List[Dict[str, Any]],
+        historical_rows: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        live_map = {_limit_values_price_row_key(row): row for row in live_rows}
+        merged = list(live_map.values())
+        for row in historical_rows:
+            key = _limit_values_price_row_key(row)
+            if key not in live_map:
+                merged.append(row)
+        merged.sort(
+            key=lambda row: (
+                str(row.get("scheduled_at") or ""),
+                row.get("block") or 0,
+            )
+        )
+        return merged
 
     async def find_forecasted_prices_by_date_range(
         self,
@@ -114,7 +152,7 @@ class ReportsForecastRepository:
         Return forecasted price rows for the given date/block range.
 
         Past dates read from limit_values_historical (metadata-normalized).
-        Current/future dates read from limit_values, with historical fallback if empty.
+        Current/future dates merge limit_values with historical, preferring live rows.
         """
         try:
             today = today_date_str()
@@ -137,33 +175,25 @@ class ReportsForecastRepository:
                 )
 
             if current_from and current_to:
-                current_results = await self._find_prices_in_collection(
+                live_results = await self._find_prices_in_collection(
                     self.collection_name,
                     current_from,
                     current_to,
                     from_block,
                     to_block,
                 )
-                if current_results:
-                    merged.extend(current_results)
-                else:
-                    merged.extend(
-                        await self._find_prices_in_collection(
-                            self.historical_collection_name,
-                            current_from,
-                            current_to,
-                            from_block,
-                            to_block,
-                            normalize_metadata=True,
-                        )
-                    )
-
-            merged.sort(
-                key=lambda row: (
-                    str(row.get("scheduled_at") or ""),
-                    row.get("block") or 0,
+                hist_results = await self._find_prices_in_collection(
+                    self.historical_collection_name,
+                    current_from,
+                    current_to,
+                    from_block,
+                    to_block,
+                    normalize_metadata=True,
                 )
-            )
+                merged.extend(
+                    self._merge_price_rows_prefer_live(live_results, hist_results)
+                )
+
             return merged
         except Exception as e:
             logger.error(

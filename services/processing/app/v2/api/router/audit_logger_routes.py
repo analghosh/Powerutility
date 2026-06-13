@@ -82,9 +82,6 @@ class AuditLogsResponse(BaseModel):
     - **type=reports**: `service: processing` AND `data.data_type: reports_forecast`
       (view, download, and access-attempt actions)
 
-    - **type=reports**: `service: processing` AND `data.data_type: reports_forecast`
-      (view, download, and access-attempt actions)
-
     ### Notes:
     - User information (username, email) is enriched from auth_db.users collection
     - Enhanced with JWT authentication and correlation tracking

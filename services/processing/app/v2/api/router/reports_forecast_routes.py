@@ -3,6 +3,7 @@ Reports Forecast API — DAF/IDF forecasts with DAM/RTM market prices for CSV ex
 """
 
 import logging
+from enum import Enum
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -23,7 +24,13 @@ from ...helpers.reports_forecast_audit import (
     log_reports_forecast_access_attempt,
     log_reports_forecast_outcome,
 )
-from ...services.reports_forecast_service import CSV_HEADERS
+from ...services.reports_forecast_service import CSV_HEADERS, reports_forecast_service
+
+from libs.helpers.reports_forecast_format import (
+    REPORTS_FORECAST_FORMAT_BOTH,
+    REPORTS_FORECAST_FORMAT_CSV,
+    REPORTS_FORECAST_FORMAT_JSON,
+)
 
 router = APIRouter(
     prefix="/reports-forecast",
@@ -33,6 +40,14 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 _DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+
+
+class ReportsForecastFormat(str, Enum):
+    """Response payload selection — reduces server work when only one format is needed."""
+
+    JSON = REPORTS_FORECAST_FORMAT_JSON
+    CSV = REPORTS_FORECAST_FORMAT_CSV
+    BOTH = REPORTS_FORECAST_FORMAT_BOTH
 
 
 class IdfForecastValues(BaseModel):
@@ -131,6 +146,14 @@ class ReportsForecastQuery(BaseModel):
         90,
         description="Maximum allowed inclusive days between from_date and to_date",
     )
+    format: str = Field(
+        REPORTS_FORECAST_FORMAT_JSON,
+        description="Requested response format: json, csv, or both",
+    )
+    include_flat_records: Optional[bool] = Field(
+        None,
+        description="When format=json, omit flat records if false (lighter UI payload)",
+    )
 
 
 class ForecastSourceMeta(BaseModel):
@@ -168,21 +191,36 @@ class ReportsForecastMarkets(BaseModel):
 class ReportsForecastCsvExport(BaseModel):
     headers: List[str]
     row_count: int
+    content: Optional[str] = Field(
+        None,
+        description="CSV file body (populated when format=both)",
+    )
+    filename: Optional[str] = Field(
+        None,
+        description="Suggested download filename (populated when format=both)",
+    )
 
 
 class ReportsForecastResponse(BaseModel):
+    response_format: str = Field(
+        ...,
+        description="Resolved format: json, csv, or both",
+    )
     query: ReportsForecastQuery
     sources: ReportsForecastSources
     summary: ReportsForecastSummary
-    markets: ReportsForecastMarkets
-    by_date: List[ReportsForecastDateBucket] = Field(
-        default_factory=list,
-        description="Grouped view: one entry per date with per-block DAM/RTM data",
+    markets: Optional[ReportsForecastMarkets] = Field(
+        None,
+        description="Present when format is json or both",
+    )
+    by_date: Optional[List[ReportsForecastDateBucket]] = Field(
+        None,
+        description="Present when format is json or both",
     )
     csv_export: ReportsForecastCsvExport
-    records: List[ReportsForecastFlatRecord] = Field(
-        default_factory=list,
-        description="Flat rows for CSV download (DAM then RTM per block)",
+    records: Optional[List[ReportsForecastFlatRecord]] = Field(
+        None,
+        description="Flat rows for CSV (omitted when format=csv or include_flat_records=false)",
     )
 
     model_config = {
@@ -351,13 +389,39 @@ def _validate_block_range(from_block: int, to_block: int) -> None:
         )
 
 
+def _csv_file_response(
+    result: Dict[str, Any],
+    from_block: int,
+    to_block: int,
+) -> Response:
+    records = result.get("records", [])
+    csv_content = reports_forecast_service.generate_csv(records)
+    filename = reports_forecast_service.build_csv_filename(
+        result["query"]["from_date"],
+        result["query"]["to_date"],
+        from_block,
+        to_block,
+    )
+    return Response(
+        content=csv_content,
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @router.get(
     "/",
-    response_model=ReportsForecastResponse,
+    response_model=None,
     status_code=status.HTTP_200_OK,
     summary="Get DAF/IDF forecast report by date range and time block range",
     responses={
-        200: {"description": "OK"},
+        200: {
+            "description": "JSON report, CSV file, or JSON with embedded CSV (format param)",
+            "content": {
+                "application/json": {},
+                "text/csv": {},
+            },
+        },
         422: {"description": "Validation error"},
         500: {"description": "Failed to fetch reports forecast data"},
     },
@@ -394,6 +458,20 @@ async def get_reports_forecast(
         le=96,
         description="Ending time block (1–96), inclusive",
     ),
+    format: ReportsForecastFormat = Query(
+        ReportsForecastFormat.JSON,
+        description=(
+            "Response format: `json` (UI sections), `csv` (file download), "
+            "or `both` (JSON with embedded CSV in csv_export.content)"
+        ),
+    ),
+    include_flat_records: bool = Query(
+        True,
+        description=(
+            "When format=json, set false to omit the flat `records` array "
+            "(use markets/by_date only — lighter payload)"
+        ),
+    ),
     user_context: Dict[str, Any] = Depends(get_user_context),
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
@@ -402,20 +480,20 @@ async def get_reports_forecast(
 
     **Date range limit:** inclusive range cannot exceed **90 days**.
 
-    Response sections:
+    **Format (`format` query param):**
 
-    - **query** — resolved filters and expected row counts
-    - **sources** — per-collection fetch metadata and record counts
-    - **summary** — total DAM/RTM rows and date list
-    - **markets** — typed DAM and RTM record lists
-    - **by_date** — grouped view (one date → blocks with DAM + RTM nested)
-    - **csv_export** — headers and flat row count for download
-    - **records** — flat CSV-compatible rows (DAM then RTM per block)
+    - **json** (default) — structured sections for UI (`markets`, `by_date`, optional `records`)
+    - **csv** — returns a CSV file (skips JSON section assembly)
+    - **both** — JSON plus embedded CSV string in `csv_export.content`
+
+    Use `include_flat_records=false` with `format=json` when the UI only needs
+    `by_date` / `markets` and you want a smaller response.
     """
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")
     correlation_id = user_context.get("correlation_id", "unknown")
     endpoint = "GET /reports-forecast/"
+    response_format = format.value
 
     log_reports_forecast_access_attempt(
         audit_logger,
@@ -429,6 +507,7 @@ async def get_reports_forecast(
         to_date=to_date,
         from_block=from_block,
         to_block=to_block,
+        response_format=response_format,
     )
 
     try:
@@ -440,26 +519,43 @@ async def get_reports_forecast(
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=response_format,
+            include_flat_records=include_flat_records,
+        )
+
+        audit_action = (
+            "reports_forecast_download"
+            if response_format == REPORTS_FORECAST_FORMAT_CSV
+            else "reports_forecast_view"
+        )
+        audit_message = (
+            "User downloaded reports forecast CSV"
+            if response_format == REPORTS_FORECAST_FORMAT_CSV
+            else "User fetched reports forecast data"
         )
 
         log_reports_forecast_outcome(
             audit_logger,
-            action="reports_forecast_view",
+            action=audit_action,
             user_id=user_id,
             username=username,
             correlation_id=correlation_id,
             endpoint=endpoint,
             request=request,
             success=True,
-            message="User fetched reports forecast data",
+            message=audit_message,
             schedule_date=schedule_date,
             from_date=result.get("query", {}).get("from_date"),
             to_date=result.get("query", {}).get("to_date"),
             from_block=from_block,
             to_block=to_block,
+            response_format=response_format,
             record_count=result.get("summary", {}).get("total_rows", 0),
             date_count=result.get("query", {}).get("date_count"),
         )
+
+        if response_format == REPORTS_FORECAST_FORMAT_CSV:
+            return _csv_file_response(result, from_block, to_block)
 
         return ReportsForecastResponse(**result)
 
@@ -479,6 +575,7 @@ async def get_reports_forecast(
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=response_format,
             failure_reason=str(exc.detail),
             http_status=exc.status_code,
         )
@@ -499,6 +596,7 @@ async def get_reports_forecast(
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=response_format,
             failure_reason=str(e),
             http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
         )
@@ -600,6 +698,8 @@ async def download_reports_forecast_csv(
     """
     Download the forecast report as CSV.
 
+    Equivalent to `GET /reports-forecast/?format=csv` with the same query parameters.
+
     **Date range limit:** inclusive range cannot exceed **90 days**.
 
     Columns: Date, Time Block, Auto Forecast, Manual Forecast,
@@ -623,6 +723,7 @@ async def download_reports_forecast_csv(
         to_date=to_date,
         from_block=from_block,
         to_block=to_block,
+        response_format=REPORTS_FORECAST_FORMAT_CSV,
     )
 
     try:
@@ -651,6 +752,7 @@ async def download_reports_forecast_csv(
             to_date=to_date or schedule_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=REPORTS_FORECAST_FORMAT_CSV,
             filename=filename,
             csv_row_count=csv_content.count("\n") - 1 if csv_content else 0,
         )
@@ -677,6 +779,7 @@ async def download_reports_forecast_csv(
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=REPORTS_FORECAST_FORMAT_CSV,
             failure_reason=str(exc.detail),
             http_status=exc.status_code,
         )

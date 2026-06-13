@@ -15,6 +15,13 @@ from libs.helpers.historical_date_split import (
     today_date_str,
     validate_max_date_range_days,
 )
+from libs.helpers.reports_forecast_format import (
+    REPORTS_FORECAST_FORMAT_JSON,
+    normalize_reports_forecast_format,
+    reports_forecast_includes_csv_content,
+    reports_forecast_includes_flat_records,
+    reports_forecast_includes_json_sections,
+)
 from libs.models.forecast_serve_entity import (
     FORECAST_SOURCE_CSV,
     FORECAST_SOURCE_DISPLAY_AUTO,
@@ -315,6 +322,18 @@ class ReportsForecastService:
                 )
         return records
 
+    @staticmethod
+    def build_csv_filename(
+        from_date: str,
+        to_date: str,
+        from_block: int,
+        to_block: int,
+    ) -> str:
+        return (
+            f"reports_forecast_{from_date}_to_{to_date}"
+            f"_blocks_{from_block}-{to_block}.csv"
+        )
+
     async def get_reports_forecast(
         self,
         from_block: int,
@@ -322,6 +341,8 @@ class ReportsForecastService:
         schedule_date: Optional[str] = None,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        response_format: str = REPORTS_FORECAST_FORMAT_JSON,
+        include_flat_records: bool = True,
     ) -> Dict[str, Any]:
         if from_block > to_block:
             raise ValueError("from_block must be less than or equal to to_block")
@@ -330,6 +351,13 @@ class ReportsForecastService:
             schedule_date, from_date, to_date
         )
         validate_max_date_range_days(resolved_from, resolved_to)
+        fmt = normalize_reports_forecast_format(response_format)
+        include_json = reports_forecast_includes_json_sections(fmt)
+        include_records = reports_forecast_includes_flat_records(
+            fmt,
+            include_flat_records=include_flat_records,
+        )
+        include_csv_content = reports_forecast_includes_csv_content(fmt)
 
         daf_docs, forecast_docs, price_docs = await asyncio.gather(
             self.demand_serve_repository.find_daf_forecast_by_date_range(
@@ -355,21 +383,30 @@ class ReportsForecastService:
         auto, manual = self._build_forecast_maps(forecast_docs)
         daf = self._build_daf_map(daf_docs)
         prices = self._build_price_map(price_docs)
-        records = self._build_report_rows(
-            resolved_from,
-            resolved_to,
-            from_block,
-            to_block,
-            auto,
-            manual,
-            daf,
-            prices,
-        )
 
         dates = self._iter_dates(resolved_from, resolved_to)
         blocks_per_day = to_block - from_block + 1
-        dam_records = self._build_dam_market_records(records)
-        rtm_records = self._build_rtm_market_records(records)
+        total_rows = len(dates) * blocks_per_day * 2
+        dam_rows = len(dates) * blocks_per_day
+        rtm_rows = dam_rows
+
+        records: List[Dict[str, Any]] = []
+        needs_flat_rows = include_records or include_json or include_csv_content
+        if needs_flat_rows:
+            records = self._build_report_rows(
+                resolved_from,
+                resolved_to,
+                from_block,
+                to_block,
+                auto,
+                manual,
+                daf,
+                prices,
+            )
+            total_rows = len(records)
+            dam_rows = sum(1 for row in records if row.get("market") == MARKET_DAM)
+            rtm_rows = sum(1 for row in records if row.get("market") == MARKET_RTM)
+
         auto_fetched, manual_fetched = self._count_forecast_docs_by_source(forecast_docs)
         today = today_date_str()
         past_from, past_to, current_from, current_to = split_date_range_by_today(
@@ -383,7 +420,21 @@ class ReportsForecastService:
             "current_dates_to": current_to,
         }
 
-        return {
+        csv_export: Dict[str, Any] = {
+            "headers": CSV_HEADERS,
+            "row_count": total_rows,
+        }
+        if include_csv_content and records:
+            csv_export["content"] = self.generate_csv(records)
+            csv_export["filename"] = self.build_csv_filename(
+                resolved_from,
+                resolved_to,
+                from_block,
+                to_block,
+            )
+
+        response: Dict[str, Any] = {
+            "response_format": fmt,
             "query": {
                 "from_date": resolved_from,
                 "to_date": resolved_to,
@@ -393,6 +444,8 @@ class ReportsForecastService:
                 "blocks_per_day": blocks_per_day,
                 "rows_per_day": blocks_per_day * 2,
                 "max_date_range_days": REPORTS_FORECAST_MAX_DATE_RANGE_DAYS,
+                "format": fmt,
+                "include_flat_records": include_flat_records if fmt == REPORTS_FORECAST_FORMAT_JSON else None,
             },
             "sources": {
                 "daf_forecast": {
@@ -431,12 +484,18 @@ class ReportsForecastService:
                 },
             },
             "summary": {
-                "total_rows": len(records),
-                "dam_rows": len(dam_records),
-                "rtm_rows": len(rtm_records),
+                "total_rows": total_rows,
+                "dam_rows": dam_rows,
+                "rtm_rows": rtm_rows,
                 "dates": dates,
             },
-            "markets": {
+            "csv_export": csv_export,
+        }
+
+        if include_json:
+            dam_records = self._build_dam_market_records(records) if records else []
+            rtm_records = self._build_rtm_market_records(records) if records else []
+            response["markets"] = {
                 "dam": {
                     "market": MARKET_DAM,
                     "label": "Day Ahead Market",
@@ -455,8 +514,8 @@ class ReportsForecastService:
                     "count": len(rtm_records),
                     "records": rtm_records,
                 },
-            },
-            "by_date": self._build_by_date(
+            }
+            response["by_date"] = self._build_by_date(
                 resolved_from,
                 resolved_to,
                 from_block,
@@ -465,13 +524,12 @@ class ReportsForecastService:
                 manual,
                 daf,
                 prices,
-            ),
-            "csv_export": {
-                "headers": CSV_HEADERS,
-                "row_count": len(records),
-            },
-            "records": records,
-        }
+            )
+
+        if include_records:
+            response["records"] = records
+
+        return response
 
     def generate_csv(self, records: List[Dict[str, Any]]) -> str:
         output = io.StringIO()

@@ -413,7 +413,12 @@ class DemandServeRepository(GenericRepository):
             from_block=from_block,
             to_block=to_block,
         )
-        return await self.aggregate(collection_name, pipeline) or []
+        return await self.aggregate(
+            collection_name,
+            pipeline,
+            max_time_ms=60_000,
+            max_docs=90 * 96,
+        ) or []
 
     @staticmethod
     def _build_daf_forecast_read_pipeline(

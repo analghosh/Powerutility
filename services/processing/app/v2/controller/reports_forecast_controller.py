@@ -3,6 +3,8 @@
 import logging
 from typing import Any, Dict, Optional, Tuple
 
+from libs.helpers.reports_forecast_format import REPORTS_FORECAST_FORMAT_CSV
+
 from ..services.reports_forecast_service import reports_forecast_service
 
 logger = logging.getLogger(__name__)
@@ -16,6 +18,8 @@ class ReportsForecastController:
         schedule_date: Optional[str] = None,
         from_date: Optional[str] = None,
         to_date: Optional[str] = None,
+        response_format: str = "json",
+        include_flat_records: bool = True,
     ) -> Dict[str, Any]:
         return await reports_forecast_service.get_reports_forecast(
             schedule_date=schedule_date,
@@ -23,6 +27,8 @@ class ReportsForecastController:
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=response_format,
+            include_flat_records=include_flat_records,
         )
 
     async def download_csv(
@@ -39,11 +45,15 @@ class ReportsForecastController:
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=REPORTS_FORECAST_FORMAT_CSV,
         )
-        csv_content = reports_forecast_service.generate_csv(result.get("records", []))
-        filename = (
-            f"reports_forecast_{result['query']['from_date']}_to_{result['query']['to_date']}"
-            f"_blocks_{from_block}-{to_block}.csv"
+        records = result.get("records", [])
+        csv_content = reports_forecast_service.generate_csv(records)
+        filename = reports_forecast_service.build_csv_filename(
+            result["query"]["from_date"],
+            result["query"]["to_date"],
+            from_block,
+            to_block,
         )
         return csv_content, filename
 

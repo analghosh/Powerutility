@@ -145,11 +145,16 @@ def build_forecast_serve_latest_revision_range_pipeline(
             }
         },
         {
+            "$addFields": {
+                "_revision_sort": {"$ifNull": ["$forecast_revision", 0]},
+            }
+        },
+        {
             "$sort": {
                 "scheduled_at": 1,
                 "time_block": 1,
                 "source": 1,
-                "forecast_revision": -1,
+                "_revision_sort": -1,
             }
         },
         {

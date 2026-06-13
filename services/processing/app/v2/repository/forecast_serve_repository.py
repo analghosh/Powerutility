@@ -11,7 +11,6 @@ from libs.helpers.forecast_serve_query import (
     apply_latest_revision_to_filter,
     build_day_source_match,
     build_forecast_serve_latest_revision_range_pipeline,
-    build_latest_revision_or_filter,
     fetch_latest_forecast_revision,
 )
 from libs.helpers.historical_date_split import split_date_range_by_today, today_date_str
@@ -26,6 +25,16 @@ IDF_TYPE = "IDF"
 
 # 90 days × 96 blocks × 2 sources
 _FORECAST_SERVE_RANGE_MAX_DOCS = 90 * 96 * 2
+_AGGREGATE_MAX_TIME_MS = 60_000
+
+
+def _forecast_serve_row_key(doc: Dict[str, Any]) -> tuple:
+    scheduled_at = doc.get("scheduled_at")
+    if hasattr(scheduled_at, "strftime"):
+        date_key = scheduled_at.strftime("%Y-%m-%d")
+    else:
+        date_key = str(scheduled_at)[:10] if scheduled_at else ""
+    return (date_key, doc.get("time_block"), doc.get("source"))
 
 
 class ForecastServeRepository(GenericRepository):
@@ -101,8 +110,32 @@ class ForecastServeRepository(GenericRepository):
             to_block=to_block,
             market_type=market_type,
         )
-        cursor = collection.aggregate(pipeline)
+        cursor = collection.aggregate(
+            pipeline,
+            allowDiskUse=True,
+            maxTimeMS=_AGGREGATE_MAX_TIME_MS,
+        )
         return await cursor.to_list(length=_FORECAST_SERVE_RANGE_MAX_DOCS)
+
+    @staticmethod
+    def _merge_forecast_rows_prefer_live(
+        live_rows: List[Dict[str, Any]],
+        historical_rows: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        live_map = {_forecast_serve_row_key(row): row for row in live_rows}
+        merged = list(live_map.values())
+        for row in historical_rows:
+            key = _forecast_serve_row_key(row)
+            if key not in live_map:
+                merged.append(row)
+        merged.sort(
+            key=lambda row: (
+                _forecast_serve_row_key(row)[0],
+                _forecast_serve_row_key(row)[1] or 0,
+                _forecast_serve_row_key(row)[2] or "",
+            )
+        )
+        return merged
 
     async def _find_by_date_and_block_range_on_collection(
         self,
@@ -154,16 +187,14 @@ class ForecastServeRepository(GenericRepository):
                 to_block,
                 market_type,
             )
-            if result:
-                return result
-
-            return await self._find_by_date_and_block_range_on_collection(
+            hist_result = await self._find_by_date_and_block_range_on_collection(
                 self._historical_collection,
                 schedule_date,
                 from_block,
                 to_block,
                 market_type,
             )
+            return self._merge_forecast_rows_prefer_live(result, hist_result)
         except Exception as e:
             logger.error("Error finding forecast_serve by block range: %s", e)
             return []
@@ -206,7 +237,7 @@ class ForecastServeRepository(GenericRepository):
                 )
 
             if current_from and current_to:
-                current_results = await self._find_range_on_collection(
+                live_results = await self._find_range_on_collection(
                     self._collection,
                     current_from,
                     current_to,
@@ -214,19 +245,17 @@ class ForecastServeRepository(GenericRepository):
                     to_block,
                     market_type,
                 )
-                if current_results:
-                    merged.extend(current_results)
-                else:
-                    merged.extend(
-                        await self._find_range_on_collection(
-                            self._historical_collection,
-                            current_from,
-                            current_to,
-                            from_block,
-                            to_block,
-                            market_type,
-                        )
-                    )
+                hist_results = await self._find_range_on_collection(
+                    self._historical_collection,
+                    current_from,
+                    current_to,
+                    from_block,
+                    to_block,
+                    market_type,
+                )
+                merged.extend(
+                    self._merge_forecast_rows_prefer_live(live_results, hist_results)
+                )
 
             return merged
         except Exception as e:

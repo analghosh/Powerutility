@@ -40,6 +40,7 @@ def build_reports_forecast_query_context(
     to_date: Optional[str] = None,
     from_block: Optional[int] = None,
     to_block: Optional[int] = None,
+    response_format: Optional[str] = None,
 ) -> Dict[str, Any]:
     return {
         "data_type": REPORTS_FORECAST_DATA_TYPE,
@@ -49,6 +50,7 @@ def build_reports_forecast_query_context(
         "to_date": to_date,
         "from_block": from_block,
         "to_block": to_block,
+        "response_format": response_format,
     }
 
 
@@ -65,6 +67,7 @@ def log_reports_forecast_access_attempt(
     to_date: Optional[str] = None,
     from_block: Optional[int] = None,
     to_block: Optional[int] = None,
+    response_format: Optional[str] = None,
 ) -> str:
     """Record that a user initiated a reports-forecast request (before outcome)."""
     meta = extract_reports_forecast_request_meta(request)
@@ -85,6 +88,7 @@ def log_reports_forecast_access_attempt(
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=response_format,
         ),
         **meta,
     )
@@ -106,6 +110,7 @@ def log_reports_forecast_outcome(
     to_date: Optional[str] = None,
     from_block: Optional[int] = None,
     to_block: Optional[int] = None,
+    response_format: Optional[str] = None,
     failure_reason: Optional[str] = None,
     **extra: Any,
 ) -> str:
@@ -120,6 +125,7 @@ def log_reports_forecast_outcome(
             to_date=to_date,
             from_block=from_block,
             to_block=to_block,
+            response_format=response_format,
         ),
         **meta,
         **extra,
