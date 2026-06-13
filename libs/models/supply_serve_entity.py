@@ -96,6 +96,7 @@ class SupplyServeEntity(BaseModel):
     # Revision tracking
     source_revision_number: Optional[int] = Field(None, description="Revision number from source data")
     system_revision_number: int = Field(default=1, description="System revision counter (increments on each update)")
+    schedule_published_time: Optional[datetime] = Field(None, description="RLDC schedule publish timestamp from source")
 
 
 class SupplyServeHistoricalEntity(BaseModel):
@@ -179,6 +180,7 @@ class SupplyServeHistoricalEntity(BaseModel):
     # Revision tracking
     source_revision_number: Optional[int] = Field(None, description="Revision number from source data")
     system_revision_number: int = Field(default=1, description="System revision counter (increments on each update)")
+    schedule_published_time: Optional[datetime] = Field(None, description="RLDC schedule publish timestamp from source")
     
     # Archive-specific timestamps
     archived_at: datetime = Field(default_factory=datetime.now, description="Archive timestamp")

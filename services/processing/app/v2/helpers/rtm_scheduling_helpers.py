@@ -127,6 +127,53 @@ def sum_of_data_filter(filter_data: List[Any]) -> float:
     return total
 
 
+def resolve_rldc_revision_no(doc: Optional[Dict[str, Any]]) -> int:
+    """Resolve RLDC revision from supply_serve (source_revision_number, then system_revision_number)."""
+    if not doc:
+        return 0
+    source_rev = doc.get("source_revision_number")
+    system_rev = doc.get("system_revision_number")
+    if source_rev is not None and source_rev != 0:
+        return int(source_rev)
+    if system_rev is not None:
+        return int(system_rev)
+    return 0
+
+
+def format_scheduled_at_date(value: Any, fallback: str) -> str:
+    """Format scheduled_at for revision-no API date field (YYYY-MM-DD)."""
+    if value is None:
+        return fallback
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, str):
+        return value[:10] if len(value) >= 10 else value
+    return fallback
+
+
+def format_published_time(value: Any) -> Optional[str]:
+    """Format schedule_published_time for revision-no API published_time field."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return str(value)
+
+
+def build_rldc_revision_response(schedule_date: str, revision_doc: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build revision-no API payload from latest DC supply_serve document."""
+    return {
+        "date": format_scheduled_at_date(
+            revision_doc.get("scheduled_at") if revision_doc else None,
+            schedule_date,
+        ),
+        "rldc_revision_no": resolve_rldc_revision_no(revision_doc),
+        "published_time": format_published_time(
+            revision_doc.get("schedule_published_time") if revision_doc else None
+        ),
+    }
+
+
 def format_date_for_display(date_str: str) -> str:
     """
     Format date string from YYYY-MM-DD to DD-MM-YYYY for display.

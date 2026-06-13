@@ -18,6 +18,8 @@ from ..repository.forecast_serve_repository import forecast_serve_repository
 
 logger = logging.getLogger(__name__)
 
+MANUAL_FORECAST_NO_DATA_MESSAGE = "No Data Available for this selected date."
+
 
 class ForecastServeService:
     def __init__(self):
@@ -100,6 +102,31 @@ class ForecastServeService:
                 "count": len(manual_records),
                 "records": manual_records,
             },
+        }
+
+    async def get_manual_forecast_status(
+        self,
+        schedule_date: str,
+    ) -> Dict[str, Any]:
+        """
+        Return whether manual (CSV) forecast exists in forecast_serve for the date.
+
+        True when at least one time block has a CSV row at the latest revision.
+        """
+        raw = await self.repository.find_by_date_and_block_range(
+            schedule_date=schedule_date,
+            from_block=1,
+            to_block=96,
+        )
+        manual_forecast = any(
+            doc.get("source") == FORECAST_SOURCE_CSV for doc in raw
+        )
+        return {
+            "schedule_date": schedule_date,
+            "manual_forecast": manual_forecast,
+            "message": None
+            if manual_forecast
+            else MANUAL_FORECAST_NO_DATA_MESSAGE,
         }
 
 
