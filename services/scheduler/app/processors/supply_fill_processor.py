@@ -182,6 +182,7 @@ class SupplyFillProcessor(BaseProcessor):
                     entity = DCSgEntity(
                         scheduled_at=new_scheduled_at,
                         time_block=self._safe_int(record.get("time_block")),
+                        schedule_published_time=record.get("schedule_published_time"),
                         dc_sg=str(record.get("dc_sg")),
                         plant_id=str(record.get("plant_id")),
                         volume=volume,
@@ -216,6 +217,7 @@ class SupplyFillProcessor(BaseProcessor):
                 supply_entity = SupplyServeEntity(
                     scheduled_at=entity.scheduled_at,
                     time_block=entity.time_block,
+                    schedule_published_time=entity.schedule_published_time,
                     dc_sg=entity.dc_sg,
                     volume=entity.volume,
                     fc_price=entity.fc_price,

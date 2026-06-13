@@ -95,6 +95,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             entities.append(DCSgEntity(
                 scheduled_at=new_scheduled_at,
                 time_block=rec.get("time_block"),
+                schedule_published_time=rec.get("schedule_published_time"),
                 plant_id=rec.get("plant_id"),
                 dc_sg=rec.get("dc_sg"),
                 volume=rec.get("volume"),
@@ -229,6 +230,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                     entity = SupplyServeEntity(
                         scheduled_at=scheduled_at,
                         time_block=safe_int(rec.get("time_block")),
+                        schedule_published_time=rec.get("schedule_published_time"),
                         dc_sg=str(rec.get("dc_sg")),
                         plant_id=str(rec.get("plant_id")),
                         volume=vol,

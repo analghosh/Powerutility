@@ -49,6 +49,7 @@ class SupplyServeEntity(BaseModel):
     # Time-related fields
     scheduled_at: datetime = Field(..., description="Schedule date and time")
     time_block: Optional[int] = Field(None, description="Time block identifier")
+    schedule_published_time: Optional[datetime] = Field(None, description="Schedule published timestamp from source API")
     
     # Plant and supply information
     plant_id: Optional[str] = Field(None, description="Plant ID")
@@ -137,6 +138,7 @@ class SupplyServeHistoricalEntity(BaseModel):
     # All fields from SupplyServeEntity
     scheduled_at: datetime = Field(..., description="Schedule date and time")
     time_block: Optional[int] = Field(None, description="Time block identifier")
+    schedule_published_time: Optional[datetime] = Field(None, description="Original schedule published timestamp from source API")
     
     # Plant and supply information
     plant_id: Optional[str] = Field(None, description="Plant ID")

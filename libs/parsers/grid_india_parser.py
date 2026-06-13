@@ -70,6 +70,15 @@ class GridIndiaParser(BaseParser):
             except ValueError:
                 logger.warning("Could not parse date: %s", date_str)
 
+            # Extract schedule published timestamp from ResponseBody if present
+            schedule_published_time = None
+            schedule_published_time_raw = response_body.get("SchedulePublishedTime")
+            if schedule_published_time_raw:
+                try:
+                    schedule_published_time = parse_ingestion_date(schedule_published_time_raw)
+                except ValueError:
+                    logger.warning("Could not parse SchedulePublishedTime: %s", schedule_published_time_raw)
+
             group_list = response_body.get("GroupWiseDataList", [])
             
             raw_data = []
@@ -131,7 +140,8 @@ class GridIndiaParser(BaseParser):
                         agg["volume"], 
                         agg["revision_no"], 
                         None, # approval_no
-                        sg_beforelosses_list=agg["sg_beforelosses"]
+                        sg_beforelosses_list=agg["sg_beforelosses"],
+                        schedule_published_time=schedule_published_time
                     )
 
                 # 3. Process FullschdList (SG) for ISGS, URS, OA_REMC
@@ -252,7 +262,8 @@ class GridIndiaParser(BaseParser):
                     agg["revision_no"],
                     agg["approval_no"],
                     onbar_list=agg["onbar"],
-                    offbar_list=agg["offbar"]
+                    offbar_list=agg["offbar"],
+                    schedule_published_time=schedule_published_time
                 )
 
             # Append Aggregated Records
@@ -268,7 +279,8 @@ class GridIndiaParser(BaseParser):
                     agg["volume"], 
                     agg["revision_no"], 
                     agg["approval_no"],
-                    sg_beforelosses_list=agg["sg_bl"]
+                    sg_beforelosses_list=agg["sg_bl"],
+                    schedule_published_time=schedule_published_time
                 )
 
             logger.info("Parsed Grid India JSON: created %d flattened records", len(raw_data))
@@ -278,7 +290,7 @@ class GridIndiaParser(BaseParser):
             logger.error("Error parsing Grid India content: %s", e, exc_info=True)
             raise ValueError(f"Grid India parsing failed: {str(e)}") from e
 
-    def _append_records(self, raw_data_list, date_str, plant_id, dc_sg, values_list, revision_no, approval_no=None, sg_beforelosses_list=None, onbar_list=None, offbar_list=None):
+    def _append_records(self, raw_data_list, date_str, plant_id, dc_sg, values_list, revision_no, approval_no=None, sg_beforelosses_list=None, onbar_list=None, offbar_list=None, schedule_published_time=None):
         """Helper to append 96-block records to the list"""
         
         # Determine if the record is for tomorrow
@@ -319,6 +331,9 @@ class GridIndiaParser(BaseParser):
                         "volume": float(val),
                         "revision_no": revision_no,
                     }
+                
+                if schedule_published_time is not None:
+                    record["schedule_published_time"] = schedule_published_time
                 
                 # Add optional fields if present
                 if approval_no:

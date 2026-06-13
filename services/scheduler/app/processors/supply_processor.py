@@ -519,6 +519,7 @@ class SupplyProcessor(BaseProcessor):
                 supply_entity = SupplyServeEntity(
                     scheduled_at=dc_sg_entity.scheduled_at,
                     time_block=dc_sg_entity.time_block,
+                    schedule_published_time=dc_sg_entity.schedule_published_time,
                     dc_sg=dc_sg_entity.dc_sg,
                     plant_id=dc_sg_entity.plant_id,
                     volume=dc_sg_entity.volume,
@@ -901,6 +902,7 @@ class SupplyProcessor(BaseProcessor):
                     entity = DCSgEntity(
                         scheduled_at=sch_at,
                         time_block=self._safe_int(item.get("time_block")),
+                        schedule_published_time=item.get("schedule_published_time"),
                         dc_sg=str(item.get("dc_sg")),
                         plant_id=str(item["_resolved_plant_id"]),
                         volume=volume,
@@ -999,6 +1001,7 @@ class SupplyProcessor(BaseProcessor):
             return DCSgEntity(
                 scheduled_at=scheduled_at,
                 time_block=self._safe_int(raw_item.get("time_block")),
+                schedule_published_time=raw_item.get("schedule_published_time"),
                 dc_sg=str(dc_sg),
                 plant_id=str(plant_id),
                 volume=volume,
@@ -1283,6 +1286,7 @@ class SupplyProcessor(BaseProcessor):
             return SupplyServeEntity(
                 scheduled_at=staged_item["scheduled_at"],
                 time_block=staged_item.get("time_block"),
+                schedule_published_time=staged_item.get("schedule_published_time"),
                 dc_sg=staged_item.get("dc_sg"),
                 volume=staged_item.get("volume"),
                 sg_beforelosses=staged_item.get("sg_beforelosses"),
@@ -1353,6 +1357,7 @@ class SupplyProcessor(BaseProcessor):
             return SupplyServeEntity(
                 scheduled_at=staged_item["scheduled_at"],
                 time_block=staged_item.get("time_block"),
+                schedule_published_time=staged_item.get("schedule_published_time"),
                 dc_sg=staged_item.get("dc_sg"),
                 plant_id=staged_item.get("plant_id"),
                 volume=staged_item.get("volume"),
@@ -1486,6 +1491,7 @@ class SupplyProcessor(BaseProcessor):
                             updated_sg_entity = SupplyServeEntity(
                                 scheduled_at=sg_rec["scheduled_at"],
                                 time_block=tb,
+                                schedule_published_time=sg_rec.get("schedule_published_time"),
                                 dc_sg="SG",
                                 plant_id=plant_id,
                                 volume=vol,
@@ -1581,6 +1587,7 @@ class SupplyProcessor(BaseProcessor):
                             updated_dc_entity = SupplyServeEntity(
                                 scheduled_at=dc_rec["scheduled_at"],
                                 time_block=tb,
+                                schedule_published_time=dc_rec.get("schedule_published_time"),
                                 dc_sg="DC",
                                 plant_id=plant_id,
                                 volume=current_vol,
