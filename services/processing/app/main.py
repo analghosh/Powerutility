@@ -134,6 +134,8 @@ from .v2.api.router.audit_logger_routes import router as audit_logger_router
 from .v2.api.router.parameter_routes import router as parameter_router
 from .v2.api.router.idf_forecast_switch_routes import router as idf_forecast_switch_router
 from .v2.api.router.forecast_serve_routes import router as forecast_serve_router
+from .v2.api.router.demand_serve_historical_routes import router as demand_serve_historical_router
+from .v2.api.router.reports_forecast_routes import router as reports_forecast_router
 from .v2.api.router.bid_market_routes import router as bid_market_router
 from .v2.api.router.job_execution_routes import router as job_execution_router
 from .v2.api.router.supply_manual_routes import router as supply_manual_router
@@ -304,6 +306,8 @@ v2_app.include_router(audit_logger_router)
 v2_app.include_router(parameter_router)
 v2_app.include_router(idf_forecast_switch_router)
 v2_app.include_router(forecast_serve_router)
+v2_app.include_router(demand_serve_historical_router)
+v2_app.include_router(reports_forecast_router)
 v2_app.include_router(bid_market_router)
 v2_app.include_router(job_execution_router)
 v2_app.include_router(supply_manual_router)
