@@ -2240,102 +2240,57 @@ class RTMSchedulingProcessor(BaseProcessor):
 
     async def get_revision_no(self, schedule_date: str) -> Dict[str, Any]:
         """
-        Gets latest revision numbers for ISP and SLDC categories
-        
+        Gets latest RLDC revision metadata for a schedule date from supply_serve (DC).
+
         Args:
             schedule_date: Schedule date in YYYY-MM-DD format
-        
+
         Returns:
-            Dict with revision numbers: srldc_revision_DC, srldc_revision_SG, sldc_revision_DC, sldc_revision_SG
+            Dict with date, rldc_revision_no, published_time
         """
         try:
-            from ..helpers.rtm_scheduling_helpers import format_date_for_display
-            
-            # Query SR-LDC revision (ISP category) from scheduling_requisition_calculation_table
-            collection = self.scheduling_repo.db[self.scheduling_repo.collection_name]
-            
-            getsrldcrevision = await collection.find_one(
-                {
-                    "schedule_date": schedule_date,
-                    "category": "ISP"
-                },
-                sort=[("revision_no_SG", -1)]
-            )
-            if getsrldcrevision:
-                getsrldcrevision = {k: v for k, v in getsrldcrevision.items() if k in ["revision_no_DC", "revision_no_SG"]}
-            
-            # Query SLDC revision from supply_serve using dc_sg field
-            # Convert schedule_date to datetime for scheduled_at field
+            from services.processing.app.v2.helpers.rtm_scheduling_helpers import build_rldc_revision_response
+
             schedule_date_dt = datetime.strptime(schedule_date, "%Y-%m-%d")
             schedule_date_start = datetime.combine(schedule_date_dt.date(), datetime.min.time())
             schedule_date_end = schedule_date_start + timedelta(days=1)
-            
-            # Get max revision number for DC from supply_serve (prioritize source_revision_number, then system_revision_number)
+
             supply_collection = self.supply_repo.db[self.supply_repo.collection_name]
-            
-            # For DC: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_dc_doc = await supply_collection.find_one(
+            revision_doc = await supply_collection.find_one(
                 {
                     "scheduled_at": {
                         "$gte": schedule_date_start,
-                        "$lt": schedule_date_end
+                        "$lt": schedule_date_end,
                     },
-                    "dc_sg": "DC"
+                    "dc_sg": "DC",
                 },
-                sort=[("source_revision_number", -1), ("system_revision_number", -1)]
+                sort=[
+                    ("source_revision_number", -1),
+                    ("schedule_published_time", -1),
+                    ("system_revision_number", -1),
+                ],
             )
 
-            # For SG: Sort by source_revision_number first, then system_revision_number
-            sldc_revision_sg_doc = await supply_collection.find_one(
-                {
-                    "scheduled_at": {
-                        "$gte": schedule_date_start,
-                        "$lt": schedule_date_end
-                    },
-                    "dc_sg": "SG"
-                },
-                sort=[("source_revision_number", -1), ("system_revision_number", -1)]
+            result = build_rldc_revision_response(schedule_date, revision_doc)
+
+            logger.info(
+                "[RTMSchedulingServices] get_revision_no: schedule_date=%s, date=%s, "
+                "rldc_revision_no=%s, published_time=%s",
+                schedule_date,
+                result["date"],
+                result["rldc_revision_no"],
+                result["published_time"],
             )
-            
-            # Extract revision numbers (first priority: source_revision_number, secondary: system_revision_number)
-            sldc_revision_DC = 0
-            if sldc_revision_dc_doc:
-                source_rev = sldc_revision_dc_doc.get('source_revision_number')
-                system_rev = sldc_revision_dc_doc.get('system_revision_number')
-                # Use source_revision_number first if available and not None/0, otherwise use system_revision_number
-                sldc_revision_DC = source_rev if source_rev is not None and source_rev != 0 else (system_rev if system_rev is not None else 0)
-            
-            sldc_revision_SG = 0
-            if sldc_revision_sg_doc:
-                source_rev = sldc_revision_sg_doc.get('source_revision_number')
-                system_rev = sldc_revision_sg_doc.get('system_revision_number')
-                # Use source_revision_number first if available and not None/0, otherwise use system_revision_number
-                sldc_revision_SG = source_rev if source_rev is not None and source_rev != 0 else (system_rev if system_rev is not None else 0)
-            
-            # Build response with only the 4 required fields
-            getrevision = {
-                'srldc_revision_DC': getsrldcrevision.get('revision_no_DC', 0) if getsrldcrevision else 0,
-                'srldc_revision_SG': getsrldcrevision.get('revision_no_SG', 0) if getsrldcrevision else 0,
-                'sldc_revision_DC': sldc_revision_DC,
-                'sldc_revision_SG': sldc_revision_SG
-            }
-            
-            logger.info(f"[RTMSchedulingServices] get_revision_no: schedule_date={schedule_date}, "
-                       f"srldc_revision_DC={getrevision['srldc_revision_DC']}, "
-                       f"srldc_revision_SG={getrevision['srldc_revision_SG']}, "
-                       f"sldc_revision_DC={getrevision['sldc_revision_DC']}, "
-                       f"sldc_revision_SG={getrevision['sldc_revision_SG']}")
-            
-            return getrevision
-            
+
+            return result
+
         except Exception as e:
             logger.error(f"Error in get_revision_no: {str(e)}")
             logger.exception(f"Exception details: {type(e).__name__}: {str(e)}")
             return {
-                'srldc_revision_DC': 0,
-                'srldc_revision_SG': 0,
-                'sldc_revision_DC': 0,
-                'sldc_revision_SG': 0
+                "date": schedule_date,
+                "rldc_revision_no": 0,
+                "published_time": None,
             }
 
     async def get_scheduling_graph_data(self, schedule_date: str, from_block: Optional[int] = None,

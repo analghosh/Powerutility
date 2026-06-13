@@ -535,36 +535,45 @@ async def get_rtm_scheduling_table_calculation(
         )
 
 
+class RevisionNoResponse(BaseModel):
+    """Latest RLDC revision metadata for a schedule date."""
+    date: str = Field(..., description="Schedule date from supply_serve.scheduled_at", example="2025-11-02")
+    rldc_revision_no: int = Field(..., description="RLDC revision from supply_serve.source_revision_number", example=133)
+    published_time: Optional[str] = Field(
+        None,
+        description="RLDC publish time from supply_serve.schedule_published_time",
+        example="2025-11-01T14:30:00",
+    )
+
+
 @router.get(
     "/revision-no",
+    response_model=RevisionNoResponse,
     response_model_exclude_none=True,
     summary="Get Revision Number",
     description="""
-    Get latest revision numbers for ISP and SLDC categories.
-    Mirrors PHP GetRevisionNo() method.
-    
+    Get latest RLDC revision metadata for a schedule date from supply_serve (DC).
+
     **Request Parameters:**
     - `schedule_date` (required): Date in YYYY-MM-DD format
-    
+
     **Response:**
-    - `srldc_revision_DC`: SR-LDC (State Regional Load Dispatch Centre) revision DC number
-    - `srldc_revision_SG`: SR-LDC revision SG number
-    - `sldc_revision_DC`: SLDC (State Load Dispatch Centre) revision DC number
-    - `sldc_revision_SG`: SLDC revision SG number
-    
+    - `date`: Schedule date (`scheduled_at`)
+    - `rldc_revision_no`: Latest RLDC revision (`source_revision_number`, same logic as former `sldc_revision_DC`)
+    - `published_time`: RLDC publish timestamp (`schedule_published_time`)
+
     **Authentication:** Required (via Bearer token)
     **Audit:** All requests are logged with user context and correlation ID.
     """,
     responses={
         200: {
-            "description": "Successful response with revision numbers",
+            "description": "Successful response with RLDC revision metadata",
             "content": {
                 "application/json": {
                     "example": {
-                        "srldc_revision_DC": 5,
-                        "srldc_revision_SG": 3,
-                        "sldc_revision_DC": 2,
-                        "sldc_revision_SG": 2
+                        "date": "2025-11-02",
+                        "rldc_revision_no": 133,
+                        "published_time": "2025-11-01T14:30:00",
                     }
                 }
             }
@@ -578,7 +587,7 @@ async def get_revision_no(
     audit_logger: AuditLogger = Depends(get_audit_logger)
 ):
     """
-    Get revision number for a schedule date.
+    Get RLDC revision metadata for a schedule date.
     """
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")

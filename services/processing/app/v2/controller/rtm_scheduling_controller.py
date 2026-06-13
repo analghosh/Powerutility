@@ -200,16 +200,15 @@ class RTMSchedulingController:
         audit_logger: Optional[AuditLogger] = None
     ) -> Dict[str, Any]:
         """
-        Get revision number for a schedule date.
-        Mirrors PHP GetRevisionNo() method.
-        
+        Get RLDC revision metadata for a schedule date from supply_serve.
+
         Args:
             schedule_date: Schedule date in YYYY-MM-DD format
             user_context: Optional user context dictionary
             audit_logger: Optional audit logger instance
-        
+
         Returns:
-            Dict with revision numbers
+            Dict with date, rldc_revision_no, published_time
         """
         correlation_id = user_context.get("correlation_id", "unknown") if user_context else "unknown"
         
