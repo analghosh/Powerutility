@@ -1,5 +1,7 @@
 """
-Demand Serve Historical API — read demand_serve_historical by date and time block range.
+Demand Serve Historical API — read demand data by date and time block range.
+
+Uses demand_serve (recent) with fallback to demand_serve_historical (archived).
 """
 
 import logging
@@ -22,9 +24,11 @@ router = APIRouter(
 
 logger = logging.getLogger(__name__)
 
+_DATE_PATTERN = r"^\d{4}-\d{2}-\d{2}$"
+
 
 class DemandServeHistoricalRecord(BaseModel):
-    """Single time-block row from demand_serve_historical."""
+    """Single time-block row from demand_serve / demand_serve_historical."""
 
     date: str = Field(..., description="Schedule date (YYYY-MM-DD)")
     time_block: int = Field(..., ge=1, le=96, description="Time block (1–96)")
@@ -42,7 +46,8 @@ class DemandServeHistoricalRecord(BaseModel):
 
 
 class DemandServeHistoricalResponse(BaseModel):
-    schedule_date: str
+    from_date: str = Field(..., description="Start date of the query range (YYYY-MM-DD)")
+    to_date: str = Field(..., description="End date of the query range (YYYY-MM-DD), inclusive")
     type: str = Field("IDF", description="Market type — always IDF for this endpoint")
     from_block: int
     to_block: int
@@ -53,14 +58,15 @@ class DemandServeHistoricalResponse(BaseModel):
         "json_schema_extra": {
             "examples": [
                 {
-                    "schedule_date": "2025-05-22",
+                    "from_date": "2025-05-20",
+                    "to_date": "2025-05-22",
                     "type": "IDF",
                     "from_block": 1,
-                    "to_block": 2,
-                    "count": 2,
+                    "to_block": 96,
+                    "count": 288,
                     "records": [
                         {
-                            "date": "2025-05-22",
+                            "date": "2025-05-20",
                             "time_block": 1,
                             "drawal": 1500.0,
                             "actual_demand": 1480.0,
@@ -69,18 +75,7 @@ class DemandServeHistoricalResponse(BaseModel):
                             "dsm_rate": 2.5,
                             "net_dsm_amount": 25000.0,
                             "frequency": 49.98,
-                        },
-                        {
-                            "date": "2025-05-22",
-                            "time_block": 2,
-                            "drawal": 1510.0,
-                            "actual_demand": 1505.0,
-                            "schedule": 1500.0,
-                            "od_ud": 10.0,
-                            "dsm_rate": 2.5,
-                            "net_dsm_amount": 25000.0,
-                            "frequency": 49.99,
-                        },
+                        }
                     ],
                 }
             ]
@@ -92,7 +87,7 @@ class DemandServeHistoricalResponse(BaseModel):
     "/",
     response_model=DemandServeHistoricalResponse,
     status_code=status.HTTP_200_OK,
-    summary="Get demand_serve_historical IDF records by date and time block range",
+    summary="Get IDF demand records by date range and time block range",
     responses={
         200: {"description": "OK"},
         422: {"description": "Validation error"},
@@ -101,11 +96,23 @@ class DemandServeHistoricalResponse(BaseModel):
 )
 async def get_demand_serve_historical(
     request: Request,
-    schedule_date: str = Query(
-        ...,
-        description="Schedule date (YYYY-MM-DD)",
+    schedule_date: Optional[str] = Query(
+        None,
+        description="Single schedule date (YYYY-MM-DD). Use this OR from_date + to_date.",
         example="2025-05-22",
-        regex=r"^\d{4}-\d{2}-\d{2}$",
+        regex=_DATE_PATTERN,
+    ),
+    from_date: Optional[str] = Query(
+        None,
+        description="Start date (YYYY-MM-DD), inclusive. Required with to_date for a range download.",
+        example="2025-05-20",
+        regex=_DATE_PATTERN,
+    ),
+    to_date: Optional[str] = Query(
+        None,
+        description="End date (YYYY-MM-DD), inclusive. Required with from_date for a range download.",
+        example="2025-05-22",
+        regex=_DATE_PATTERN,
     ),
     from_block: int = Query(
         1,
@@ -123,12 +130,17 @@ async def get_demand_serve_historical(
     audit_logger: AuditLogger = Depends(get_audit_logger),
 ):
     """
-    Fetch **IDF-only** rows from **demand_serve_historical** for the given date and block range.
+    Fetch **IDF-only** rows for a single date or date range and block range.
 
-    Only records with `type = IDF` are returned. DAF rows are excluded.
+    **Date selection** (pick one mode):
+    - Single day: `schedule_date=2025-05-22`
+    - Date range: `from_date=2025-05-20&to_date=2025-05-22`
+
+    Reads **demand_serve** (recent, complete data) and **demand_serve_historical**
+    (archived), preferring demand_serve when both have the same date + time_block.
 
     Returns per-block: date, time_block, drawal, actual_demand, schedule, od_ud,
-    dsm_rate, net_dsm_amount, and frequency (sorted by time_block).
+    dsm_rate, net_dsm_amount, and frequency (sorted by date, then time_block).
     """
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")
@@ -148,12 +160,16 @@ async def get_demand_serve_historical(
             correlation_id=correlation_id,
             user_id=user_id,
             schedule_date=schedule_date,
+            from_date=from_date,
+            to_date=to_date,
             from_block=from_block,
             to_block=to_block,
         )
 
         result = await demand_serve_historical_controller.get_by_date_and_blocks(
             schedule_date=schedule_date,
+            from_date=from_date,
+            to_date=to_date,
             from_block=from_block,
             to_block=to_block,
         )
@@ -167,7 +183,8 @@ async def get_demand_serve_historical(
             message="User fetched demand_serve_historical data",
             username=username,
             correlation_id=correlation_id,
-            schedule_date=schedule_date,
+            from_date=result.get("from_date"),
+            to_date=result.get("to_date"),
             from_block=from_block,
             to_block=to_block,
             record_count=record_count,
@@ -191,13 +208,17 @@ async def get_demand_serve_historical(
             user_id=user_id,
             correlation_id=correlation_id,
             schedule_date=schedule_date,
+            from_date=from_date,
+            to_date=to_date,
             from_block=from_block,
             to_block=to_block,
         )
         logger.exception(
-            "Error fetching demand_serve_historical for user %s date=%s blocks=%s-%s",
+            "Error fetching demand_serve_historical for user %s schedule_date=%s from=%s to=%s blocks=%s-%s",
             user_id,
             schedule_date,
+            from_date,
+            to_date,
             from_block,
             to_block,
         )
