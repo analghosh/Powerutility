@@ -27,9 +27,9 @@ class Settings(BaseSettings):
     LOG_BODY: bool = False  # Set to True in development if needed
     
     # Database Configuration
-    MONGODB_URI: str = "mongodb://localhost:27017/" 
-    MONGODB_DATABASE: str = "dev_epms"  # Default, overridden by .env
-    AUDIT_DB_NAME: str = "dev_audit_db" 
+    MONGODB_URI: str = "mongodb://localhost:27017" 
+    MONGODB_DATABASE: str = "epms"  # Default, overridden by .env
+    AUDIT_DB_NAME: str = "audit_db" 
     MONGODB_AUTH_COLLECTION: str = "users"
     MONGODB_SESSIONS_COLLECTION: str = "sessions"
     MONGODB_AUDIT_COLLECTION: str = "audit_logs"
@@ -135,6 +135,7 @@ class Settings(BaseSettings):
 
     MONGODB_DEMAND_SERVE_COLLECTION: str = "demand_serve"
     MONGODB_FORECAST_SERVE_COLLECTION: str = "forecast_serve"
+    MONGODB_FORECAST_SERVE_HISTORICAL_COLLECTION: str = "forecast_serve_historical"
     MONGODB_TEMP_DEMAND_SERVE_COLLECTION: str = "temp_demand_serve"
     MONGODBT_EMP_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "temp_demand_serve_historical" 
     MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION: str = "demand_serve_historical" 
@@ -153,6 +154,7 @@ class Settings(BaseSettings):
 
     # Limit Values Collection
     MONGODB_LIMIT_VALUES_COLLECTION: str = "limit_values"
+    MONGODB_LIMIT_VALUES_HISTORICAL_COLLECTION: str = "limit_values_historical"
     MONGODB_LIMIT_APPROVAL_COLLECTION: str = "limit_approval"
     MONGODB_LIMIT_AUDIT_COLLECTION: str = "limit_audit_log"
 

@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 logger = logging.getLogger(__name__)
 
 IDF_TYPE = "IDF"
+DAF_TYPE = "DAF"
 
 class DemandServeRepository(GenericRepository):
     """
@@ -244,64 +245,274 @@ class DemandServeRepository(GenericRepository):
         from_block: int = 1,
         to_block: int = 96,
     ) -> List[Dict[str, Any]]:
+        """Single-day convenience wrapper around find_historical_by_date_range."""
+        return await self.find_historical_by_date_range(
+            from_date=schedule_date,
+            to_date=schedule_date,
+            from_block=from_block,
+            to_block=to_block,
+        )
+
+    async def find_historical_by_date_range(
+        self,
+        from_date: str,
+        to_date: str,
+        from_block: int = 1,
+        to_block: int = 96,
+    ) -> List[Dict[str, Any]]:
         """
-        Return demand_serve_historical IDF rows for a schedule date and inclusive time block range.
+        Return IDF demand rows for an inclusive date range and time block range.
+
+        Queries demand_serve and demand_serve_historical, preferring demand_serve
+        when the same (date, time_block) exists in both collections.
         """
         try:
-            target_date = datetime.strptime(schedule_date, "%Y-%m-%d")
-            end_date = target_date + timedelta(days=1)
+            range_start = datetime.strptime(from_date, "%Y-%m-%d")
+            range_end_exclusive = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
             historical_collection = getattr(
                 settings,
                 "MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION",
                 "demand_serve_historical",
             )
 
-            pipeline = [
-                {
-                    "$match": {
-                        "scheduled_at": {"$gte": target_date, "$lt": end_date},
-                        "type": IDF_TYPE,
-                        "time_block": {"$gte": from_block, "$lte": to_block},
-                    }
-                },
-                {
-                    "$project": {
-                        "_id": 0,
-                        "date": {
-                            "$dateToString": {
-                                "format": "%Y-%m-%d",
-                                "date": "$scheduled_at",
-                            }
-                        },
-                        "time_block": 1,
-                        "drawal": 1,
-                        "actual_demand": {
-                            "$ifNull": ["$comp_act_demand", "$actual"]
-                        },
-                        "schedule": 1,
-                        "od_ud": {
-                            "$round": [
-                                {"$subtract": ["$drawal", "$schedule"]},
-                                2,
-                            ]
-                        },
-                        "dsm_rate": 1,
-                        "net_dsm_amount": 1,
-                        "frequency": 1,
-                    }
-                },
-                {"$sort": {"time_block": 1}},
-            ]
+            pipeline = self._build_demand_block_read_pipeline(
+                range_start=range_start,
+                range_end_exclusive=range_end_exclusive,
+                from_block=from_block,
+                to_block=to_block,
+            )
 
-            result = await self.aggregate(historical_collection, pipeline)
-            return list(result) if result else []
+            serve_results = await self.aggregate(self.collection_name, pipeline)
+            hist_results = await self.aggregate(historical_collection, pipeline)
+
+            serve_map = {
+                (row.get("date"), row.get("time_block")): row
+                for row in (serve_results or [])
+            }
+            merged: List[Dict[str, Any]] = list(serve_map.values())
+
+            for row in hist_results or []:
+                key = (row.get("date"), row.get("time_block"))
+                if key not in serve_map:
+                    merged.append(row)
+
+            merged.sort(key=lambda row: (row.get("date") or "", row.get("time_block") or 0))
+
+            logger.debug(
+                "Demand historical API: merged %s serve + %s historical → %s records",
+                len(serve_results or []),
+                len(hist_results or []),
+                len(merged),
+            )
+            return merged
         except Exception as e:
             logger.error(
-                "Failed to get demand_serve_historical data for %s blocks %s-%s: %s",
-                schedule_date,
+                "Failed to get demand data for %s to %s blocks %s-%s: %s",
+                from_date,
+                to_date,
                 from_block,
                 to_block,
                 e,
             )
             return []
+
+    async def find_daf_forecast_by_date_range(
+        self,
+        from_date: str,
+        to_date: str,
+        from_block: int = 1,
+        to_block: int = 96,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return DAF forecast rows for an inclusive date range and time block range.
+
+        Past dates read from demand_serve_historical only.
+        Current/future dates read from demand_serve, preferring serve over historical
+        when the same (date, time_block) exists in both collections.
+        """
+        from libs.helpers.historical_date_split import (
+            split_date_range_by_today,
+            today_date_str,
+        )
+
+        try:
+            historical_collection = getattr(
+                settings,
+                "MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION",
+                "demand_serve_historical",
+            )
+            today = today_date_str()
+            past_from, past_to, current_from, current_to = split_date_range_by_today(
+                from_date, to_date, today
+            )
+
+            merged: List[Dict[str, Any]] = []
+
+            if past_from and past_to:
+                merged.extend(
+                    await self._find_daf_forecast_in_collection(
+                        historical_collection,
+                        past_from,
+                        past_to,
+                        from_block,
+                        to_block,
+                    )
+                )
+
+            if current_from and current_to:
+                serve_results = await self._find_daf_forecast_in_collection(
+                    self.collection_name,
+                    current_from,
+                    current_to,
+                    from_block,
+                    to_block,
+                )
+                hist_results = await self._find_daf_forecast_in_collection(
+                    historical_collection,
+                    current_from,
+                    current_to,
+                    from_block,
+                    to_block,
+                )
+                serve_map = {
+                    (row.get("date"), row.get("time_block")): row
+                    for row in serve_results
+                }
+                merged.extend(serve_map.values())
+                for row in hist_results:
+                    key = (row.get("date"), row.get("time_block"))
+                    if key not in serve_map:
+                        merged.append(row)
+
+            merged.sort(key=lambda row: (row.get("date") or "", row.get("time_block") or 0))
+            return merged
+        except Exception as e:
+            logger.error(
+                "Failed to get DAF forecast for %s to %s blocks %s-%s: %s",
+                from_date,
+                to_date,
+                from_block,
+                to_block,
+                e,
+            )
+            return []
+
+    async def _find_daf_forecast_in_collection(
+        self,
+        collection_name: str,
+        from_date: str,
+        to_date: str,
+        from_block: int,
+        to_block: int,
+    ) -> List[Dict[str, Any]]:
+        range_start = datetime.strptime(from_date, "%Y-%m-%d")
+        range_end_exclusive = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
+        pipeline = self._build_daf_forecast_read_pipeline(
+            range_start=range_start,
+            range_end_exclusive=range_end_exclusive,
+            from_block=from_block,
+            to_block=to_block,
+        )
+        return await self.aggregate(
+            collection_name,
+            pipeline,
+            max_time_ms=60_000,
+            max_docs=90 * 96,
+        ) or []
+
+    @staticmethod
+    def _build_daf_forecast_read_pipeline(
+        range_start: datetime,
+        range_end_exclusive: datetime,
+        from_block: int,
+        to_block: int,
+    ) -> List[Dict[str, Any]]:
+        """Minimal projection for DAF day-ahead forecast report reads."""
+        return [
+            {
+                "$match": {
+                    "scheduled_at": {
+                        "$gte": range_start,
+                        "$lt": range_end_exclusive,
+                    },
+                    "type": DAF_TYPE,
+                    "time_block": {"$gte": from_block, "$lte": to_block},
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "date": {
+                        "$dateToString": {
+                            "format": "%Y-%m-%d",
+                            "date": "$scheduled_at",
+                        }
+                    },
+                    "time_block": 1,
+                    "forecast": 1,
+                }
+            },
+            {"$sort": {"scheduled_at": 1, "time_block": 1}},
+        ]
+
+    @staticmethod
+    def _build_demand_block_read_pipeline(
+        range_start: datetime,
+        range_end_exclusive: datetime,
+        from_block: int,
+        to_block: int,
+    ) -> List[Dict[str, Any]]:
+        """Shared aggregation for demand_serve and demand_serve_historical reads."""
+        return [
+            {
+                "$match": {
+                    "scheduled_at": {
+                        "$gte": range_start,
+                        "$lt": range_end_exclusive,
+                    },
+                    "type": IDF_TYPE,
+                    "time_block": {"$gte": from_block, "$lte": to_block},
+                }
+            },
+            {
+                "$addFields": {
+                    "_drawal": {"$ifNull": ["$drawal", "$Drawal"]},
+                    "_frequency": {"$ifNull": ["$frequency", "$Raw_Frequency"]},
+                    "_schedule": {"$ifNull": ["$schedule", "$Schedule"]},
+                    "_od_ud": {"$ifNull": ["$od_ud", "$odud"]},
+                }
+            },
+            {
+                "$project": {
+                    "_id": 0,
+                    "date": {
+                        "$dateToString": {
+                            "format": "%Y-%m-%d",
+                            "date": "$scheduled_at",
+                        }
+                    },
+                    "time_block": 1,
+                    "drawal": "$_drawal",
+                    "actual_demand": {
+                        "$ifNull": ["$comp_act_demand", "$actual"]
+                    },
+                    "schedule": "$_schedule",
+                    "od_ud": {
+                        "$round": [
+                            {
+                                "$ifNull": [
+                                    "$_od_ud",
+                                    {"$subtract": ["$_drawal", "$_schedule"]},
+                                ]
+                            },
+                            2,
+                        ]
+                    },
+                    "dsm_rate": 1,
+                    "net_dsm_amount": 1,
+                    "frequency": "$_frequency",
+                }
+            },
+            {"$sort": {"scheduled_at": 1, "time_block": 1}},
+        ]
 
