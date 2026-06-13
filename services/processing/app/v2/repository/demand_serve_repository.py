@@ -13,6 +13,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 logger = logging.getLogger(__name__)
 
+IDF_TYPE = "IDF"
+
 class DemandServeRepository(GenericRepository):
     """
     Repository for demand_serve collection using v2 pattern.
@@ -235,4 +237,71 @@ class DemandServeRepository(GenericRepository):
     async def get_demand_async(self, schedule_date: str) -> List[Dict[str, Any]]:
         """Get demand data asynchronously (alias for get_demand)"""
         return await self._get_demand_sync(schedule_date)
+
+    async def find_historical_by_date_and_blocks(
+        self,
+        schedule_date: str,
+        from_block: int = 1,
+        to_block: int = 96,
+    ) -> List[Dict[str, Any]]:
+        """
+        Return demand_serve_historical IDF rows for a schedule date and inclusive time block range.
+        """
+        try:
+            target_date = datetime.strptime(schedule_date, "%Y-%m-%d")
+            end_date = target_date + timedelta(days=1)
+            historical_collection = getattr(
+                settings,
+                "MONGODB_DEMAND_SERVE_HISTORICAL_COLLECTION",
+                "demand_serve_historical",
+            )
+
+            pipeline = [
+                {
+                    "$match": {
+                        "scheduled_at": {"$gte": target_date, "$lt": end_date},
+                        "type": IDF_TYPE,
+                        "time_block": {"$gte": from_block, "$lte": to_block},
+                    }
+                },
+                {
+                    "$project": {
+                        "_id": 0,
+                        "date": {
+                            "$dateToString": {
+                                "format": "%Y-%m-%d",
+                                "date": "$scheduled_at",
+                            }
+                        },
+                        "time_block": 1,
+                        "drawal": 1,
+                        "actual_demand": {
+                            "$ifNull": ["$comp_act_demand", "$actual"]
+                        },
+                        "schedule": 1,
+                        "od_ud": {
+                            "$round": [
+                                {"$subtract": ["$drawal", "$schedule"]},
+                                2,
+                            ]
+                        },
+                        "dsm_rate": 1,
+                        "net_dsm_amount": 1,
+                        "frequency": 1,
+                    }
+                },
+                {"$sort": {"time_block": 1}},
+            ]
+
+            result = await self.aggregate(historical_collection, pipeline)
+            return list(result) if result else []
+        except Exception as e:
+            logger.error(
+                "Failed to get demand_serve_historical data for %s blocks %s-%s: %s",
+                schedule_date,
+                from_block,
+                to_block,
+                e,
+            )
+            return []
 
