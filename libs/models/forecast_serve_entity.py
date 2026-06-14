@@ -1,6 +1,7 @@
 """
 Forecast Serve Entity
-Stores IDF demand forecasts per source (rtm_forecast_api, csv) in forecast_serve collection.
+Stores demand forecasts per source in forecast_serve collection.
+IDF: rtm_forecast_api, csv — DAF: dam_forecasted_api.
 """
 
 from datetime import datetime
@@ -10,8 +11,9 @@ from bson import ObjectId
 
 FORECAST_SOURCE_RTM_API = "rtm_forecast_api"
 FORECAST_SOURCE_CSV = "csv"
+FORECAST_SOURCE_DAM_API = "dam_forecasted_api"
 
-ForecastSource = Literal["rtm_forecast_api", "csv"]
+ForecastSource = Literal["rtm_forecast_api", "csv", "dam_forecasted_api"]
 
 FORECAST_SOURCE_DISPLAY_AUTO = "Auto"
 FORECAST_SOURCE_DISPLAY_MANUAL = "Manual"
@@ -41,7 +43,7 @@ class ForecastServeEntity(BaseModel):
     id: Optional[Any] = Field(default_factory=ObjectId, alias="_id")
     scheduled_at: datetime = Field(..., description="Schedule date (midnight)")
     time_block: int = Field(..., description="Time block 1-96")
-    type: Literal["IDF"] = Field(default="IDF", description="Market type")
+    type: Literal["IDF", "DAF"] = Field(default="IDF", description="Market type (IDF/DAF)")
     forecast: Optional[float] = Field(None, description="Forecast demand MW")
     forecasted_frequency: Optional[float] = Field(
         None, description="Forecasted frequency (RTM API source only)"
