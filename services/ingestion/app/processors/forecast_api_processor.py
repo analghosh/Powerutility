@@ -1,6 +1,7 @@
 """
 Forecast API Processor
-Handles fetching forecast data from external API and storing in limit_values and demand_serve collections
+Handles fetching forecast data from external API and storing in limit_values,
+forecast_serve (DAF, source=dam_forecasted_api), and demand_serve collections.
 """
 
 import json
@@ -11,8 +12,9 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, List, Optional
 
 from libs.database.mongo_client_factory import get_mongo_client
-from libs.models.demand_serve_entity import DemandServeEntity
+from libs.models.forecast_serve_entity import FORECAST_SOURCE_DAM_API
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
+from ..repository.forecast_serve_repository import forecast_serve_repository
 from services.ingestion.app.core.config import settings
 from services.ingestion.app.core.logger import get_ingestion_logger
 from services.ingestion.app.processors.base_raw_data_processor import BaseRawDataProcessor
@@ -20,12 +22,16 @@ from services.ingestion.app.repositories.integration_apilog_repository import In
 
 logger = get_ingestion_logger("forecast_api_processor")
 
+DAF_TYPE = "DAF"
+DAM_SOURCE_FORECAST = FORECAST_SOURCE_DAM_API
+
 
 class ForecastAPIProcessor(BaseRawDataProcessor):
     """
     Processor for fetching forecast data from external API and storing:
     - Exchange forecasted prices (DAM, GDAM, HPDAM) in limit_values collection
-    - Demand forecasts in demand_serve collection
+    - DAF demand forecasts in forecast_serve (source=dam_forecasted_api)
+    - DAF demand forecasts in demand_serve collection
     """
     
     def __init__(self, audit_logger=None):
@@ -45,6 +51,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             mongodb_uri=settings.MONGODB_URI,
             database_name=settings.MONGODB_DATABASE
         )
+        self.forecast_repository = forecast_serve_repository
         
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
@@ -99,6 +106,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             
             # Process and store the data
             limit_values_stored = 0
+            forecast_serve_stored = 0
             demand_serve_stored = 0
             
             data_items = api_response.get("data", [])
@@ -132,16 +140,24 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                             )
                             limit_values_stored += stored
                 
-                # Process demand data -> demand_serve
+                # Process demand data -> forecast_serve, then demand_serve
                 demand_data = date_entry.get("demand", {})
                 demand_market = demand_data.get("market", "DAF")
                 demand_records = demand_data.get("data", [])
                 
                 if demand_records:
+                    stored_fs, forecast_revision = await self._store_forecast_serve(
+                        scheduled_at=scheduled_at,
+                        market_type=demand_market,
+                        data=demand_records,
+                    )
+                    forecast_serve_stored += stored_fs
+
                     stored = await self._store_demand_serve(
                         scheduled_at=scheduled_at,
                         market_type=demand_market,
-                        data=demand_records
+                        data=demand_records,
+                        forecast_revision=forecast_revision,
                     )
                     demand_serve_stored += stored
             
@@ -151,6 +167,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             result = {
                 'status': 'success',
                 'limit_values_stored': limit_values_stored,
+                'forecast_serve_stored': forecast_serve_stored,
                 'demand_serve_stored': demand_serve_stored,
                 'execution_time': execution_time,
                 'execution_id': execution_id
@@ -162,8 +179,14 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                     "success", True, execution_id, result
                 )
             
-            logger.info("Forecast API processing completed: limit_values=%d, demand_serve=%d in %.2fs",
-                       limit_values_stored, demand_serve_stored, execution_time)
+            logger.info(
+                "Forecast API processing completed: limit_values=%d, forecast_serve=%d, "
+                "demand_serve=%d in %.2fs",
+                limit_values_stored,
+                forecast_serve_stored,
+                demand_serve_stored,
+                execution_time,
+            )
             
             return result
             
@@ -420,11 +443,77 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
             logger.error("Error storing limit_values: %s", str(e))
             return 0
     
+    async def _store_forecast_serve(
+        self,
+        scheduled_at: datetime,
+        market_type: str,
+        data: List[Dict[str, Any]],
+    ) -> tuple[int, Optional[int]]:
+        """
+        Store DAF demand forecasts in forecast_serve (source=dam_forecasted_api).
+
+        Persists every time block present in the API payload for this delivery date.
+        Assigns one forecast_revision per fetch (increments per day per source).
+
+        Returns:
+            Tuple of (stored_count, forecast_revision).
+        """
+        try:
+            if not data:
+                return 0, None
+
+            time_block_data: Dict[int, Dict[str, Any]] = {}
+            for record in data:
+                tb = record.get("time_block")
+                if tb is not None and int(tb) not in time_block_data:
+                    time_block_data[int(tb)] = record
+
+            forecast_revision = await self.forecast_repository.next_forecast_revision(
+                scheduled_at,
+                DAM_SOURCE_FORECAST,
+                market_type=market_type,
+            )
+
+            bulk_records: List[Dict[str, Any]] = []
+            for time_block, record in time_block_data.items():
+                forecast_mw = float(record.get("demand_forecast_mw", 0.0) or 0.0)
+                bulk_records.append(
+                    {
+                        "scheduled_at": scheduled_at,
+                        "time_block": int(time_block),
+                        "forecast": forecast_mw,
+                        "forecast_revision": forecast_revision,
+                    }
+                )
+
+            if not bulk_records:
+                return 0, forecast_revision
+
+            result = await self.forecast_repository.bulk_insert_forecasts(
+                bulk_records,
+                source=DAM_SOURCE_FORECAST,
+                market_type=market_type,
+            )
+            stored_count = result.get("inserted", 0) or result.get("upserted", 0)
+            logger.info(
+                "Stored %d forecast_serve records (%s) for date %s type %s forecast_revision=%d",
+                stored_count,
+                DAM_SOURCE_FORECAST,
+                scheduled_at.strftime("%Y-%m-%d"),
+                market_type,
+                forecast_revision,
+            )
+            return stored_count, forecast_revision
+        except Exception as e:
+            logger.error("Error storing forecast_serve: %s", str(e))
+            return 0, None
+
     async def _store_demand_serve(
         self, 
         scheduled_at: datetime, 
         market_type: str, 
-        data: List[Dict[str, Any]]
+        data: List[Dict[str, Any]],
+        forecast_revision: Optional[int] = None,
     ) -> int:
         """
         Store demand forecasts in demand_serve collection
@@ -474,7 +563,7 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                             "forecast": forecast_mw,
                             "updated_at": current_time,
                             "timestamp": current_time,
-                            "source_forecast": "forecast_api",
+                            "source_forecast": DAM_SOURCE_FORECAST,
                             # Calculated fields - initialized to 0, will be updated when actual data arrives
                             "comp_act_demand": forecast_mw,
                             "comp_udm" : forecast_mw
@@ -487,6 +576,8 @@ class ForecastAPIProcessor(BaseRawDataProcessor):
                             "system_revision_number": 1
                         }
                     }
+                    if forecast_revision is not None:
+                        update_doc["$set"]["forecast_revision"] = forecast_revision
                     
                     result = await asyncio.to_thread(
                         collection.update_one, filter_doc, update_doc, upsert=True
