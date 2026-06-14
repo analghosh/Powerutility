@@ -214,7 +214,16 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                     # Basic mapping
                     # Note: We are creating a functional duplicate of logic in SupplyProcessor.
                     # This is intentional to isolate the fix.
-                    
+
+                    rec_spt = rec.get("schedule_published_time")
+                    logger.info(
+                        "[SPT-TRACE] tomorrow_sync plant=%s block=%s spt=%s (type=%s)",
+                        rec.get("plant_id"),
+                        rec.get("time_block"),
+                        rec_spt,
+                        type(rec_spt).__name__
+                    )
+
                     # Ensure date time combined
                     scheduled_at = rec.get("scheduled_at")
                     if isinstance(scheduled_at, str):
