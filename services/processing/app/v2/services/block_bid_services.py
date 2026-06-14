@@ -144,6 +144,9 @@ class BlockBidServices:
             other_remark_rej = request.get("other_remark_rej", [])
             ids = request.get("id", [])
 
+            updated = []
+            skipped = []
+
             for i in range(len(statuses)):
                 if statuses[i] is None:
                     continue
@@ -166,16 +169,23 @@ class BlockBidServices:
                     "remark": remark,
                 }
 
-                # ✅ Update DB record
-                # Approval is only allowed for bids currently in pending status.
-                # Submitted and Rejected bids must not be overwritten.
-                if statuses[i] == "Approved":
-                    matched = await self.block_bid_repo.updatedata_if_pending(ids[i], data)
-                    if not matched:
-                        logger.info("Bid %s skipped: cannot approve a bid that is not in pending status", ids[i])
-                        continue
+                # Only update bids currently in pending status (approve and reject).
+                matched = await self.block_bid_repo.updatedata_if_pending(ids[i], data)
+                if matched:
+                    updated.append({
+                        "id": ids[i],
+                        "status": statuses[i],
+                    })
                 else:
-                    await self.block_bid_repo.updatedata(ids[i], data)
+                    logger.info(
+                        "Bid %s skipped: cannot update a bid that is not in pending status",
+                        ids[i],
+                    )
+                    skipped.append({
+                        "id": ids[i],
+                        "status": statuses[i],
+                        "reason": "Bid is no longer pending (already processed by another approver)",
+                    })
 
                 # ✅ Notification data
                 status_label = "Approved" if statuses[i] == "Approved" else "Rejected"
@@ -188,8 +198,29 @@ class BlockBidServices:
                     "notification_type": "bid_for_approve_reject",
                 }
 
-               
-            return {"message": "Bid Approved Successfully"}
+            total = len(updated) + len(skipped)
+            updated_count = len(updated)
+            skipped_count = len(skipped)
+
+            if updated_count == total and total > 0:
+                message = "All bids updated successfully"
+            elif updated_count == 0 and skipped_count > 0:
+                message = "No bids updated — all were already processed"
+            elif updated_count > 0 and skipped_count > 0:
+                message = f"Partial update: {updated_count} updated, {skipped_count} skipped"
+            else:
+                message = "Bid Approved Successfully"
+
+            return {
+                "message": message,
+                "summary": {
+                    "total": total,
+                    "updated_count": updated_count,
+                    "skipped_count": skipped_count,
+                },
+                "updated": updated,
+                "skipped": skipped,
+            }
 
         except Exception as e:
             logger.error(f"Failed to get pending approvals in : {str(e)}")
