@@ -8,6 +8,7 @@ from .forecast_serve_entity import (
     ForecastServeEntity,
     FORECAST_SOURCE_RTM_API,
     FORECAST_SOURCE_CSV,
+    FORECAST_SOURCE_DAM_API,
 )
 from .supply_serve_entity import SupplyServeEntity, SupplyServeHistoricalEntity
 from .plant_entity import PlantEntity
@@ -28,7 +29,8 @@ __all__ = [
     'DemandServeHistoricalEntity',
     'ForecastServeEntity',
     'FORECAST_SOURCE_RTM_API',
-    'FORECAST_SOURCE_CSV', 
+    'FORECAST_SOURCE_CSV',
+    'FORECAST_SOURCE_DAM_API',
     'SupplyServeEntity',
     'SupplyServeHistoricalEntity',
     'PlantEntity',
