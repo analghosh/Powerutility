@@ -230,6 +230,10 @@ class BaseRawDataProcessor(ABC):
                         raise ValueError(f"Cannot convert '{value}' to boolean")
                 return bool(value)
             elif field_type.lower() in ("datetime", "timestamp", "date"):
+                # If the parser already produced a datetime object, preserve it
+                # as-is instead of re-parsing and potentially stripping the time.
+                if isinstance(value, datetime):
+                    return value
                 return self._parse_scheduled_at_datetime(value)
             elif field_type.lower() in ("object", "dict", "list", "array", "json"):
                 # Return complex types as-is
