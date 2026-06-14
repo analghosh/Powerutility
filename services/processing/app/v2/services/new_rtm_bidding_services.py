@@ -2609,9 +2609,51 @@ class RTMBiddingServices:
                         }
                     )
 
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            return {"result": True, "data": data_array}
+            updated = []
+            skipped = []
+            errors = []
+            for ref_dict, res in zip(data_array, results):
+                if isinstance(res, Exception):
+                    errors.append({**ref_dict, "reason": str(res)})
+                    continue
+                if res.get("modified_count", 0) > 0:
+                    updated.append(ref_dict)
+                else:
+                    skipped.append({
+                        **ref_dict,
+                        "reason": "Bid is no longer pending (already processed by another approver)",
+                    })
+
+            total = len(data_array)
+            updated_count = len(updated)
+            skipped_count = len(skipped)
+            error_count = len(errors)
+
+            if error_count > 0:
+                message = f"Update failed for {error_count} bid(s)"
+            elif updated_count == total:
+                message = "All bids updated successfully"
+            elif updated_count == 0:
+                message = "No bids updated — all were already processed"
+            else:
+                message = f"Partial update: {updated_count} updated, {skipped_count} skipped"
+
+            return {
+                "result": updated_count > 0 and error_count == 0,
+                "message": message,
+                "data": data_array,
+                "summary": {
+                    "total": total,
+                    "updated_count": updated_count,
+                    "skipped_count": skipped_count,
+                    "error_count": error_count,
+                },
+                "updated": updated,
+                "skipped": skipped,
+                "errors": errors,
+            }
 
             #     tasks.append(self.updatePlantDataForApproval(ref_dict))  
 
@@ -3761,9 +3803,8 @@ class RTMBiddingServices:
                 "block_no": int(data["block_no"])
             }
 
-            # Only allow approval when the bid is still pending.
-            if data["bid_status"] == "approved":
-                filter_query["bid_status"] = "pending"
+            # Only update when the bid is still pending (approve and reject).
+            filter_query["bid_status"] = "pending"
 
             update_query = {
                 "$set": {
@@ -3780,8 +3821,11 @@ class RTMBiddingServices:
             modified = result.get("modified_count", 0)
 
             return {
+                "reference_number": data["reference_number"],
+                "block_no": int(data["block_no"]),
+                "bid_status": data["bid_status"],
                 "matched_count": matched,
-                "modified_count": modified
+                "modified_count": modified,
             }
         except Exception as e:
             logger.exception(f"[updatePlantDataForApproval] Error: {str(e)}")
