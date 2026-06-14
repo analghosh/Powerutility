@@ -70,12 +70,16 @@ class GridIndiaParser(BaseParser):
             except ValueError:
                 logger.warning("Could not parse date: %s", date_str)
 
-            # Extract schedule published timestamp from ResponseBody if present
+            # Extract schedule published timestamp from ResponseBody if present.
+            # Preserves the full time component, unlike parse_ingestion_date which
+            # normalizes to midnight.
             schedule_published_time = None
             schedule_published_time_raw = response_body.get("SchedulePublishedTime")
             if schedule_published_time_raw:
                 try:
-                    schedule_published_time = parse_ingestion_date(schedule_published_time_raw)
+                    schedule_published_time = self._parse_schedule_published_time(
+                        schedule_published_time_raw
+                    )
                 except ValueError:
                     logger.warning("Could not parse SchedulePublishedTime: %s", schedule_published_time_raw)
 
@@ -362,6 +366,48 @@ class GridIndiaParser(BaseParser):
                         logger.warning("Could not parse offbar value for plant %s time_block %d: %s", plant_id, idx + 1, offbar_list[idx])
 
                 raw_data_list.append(record)
+
+    def _parse_schedule_published_time(self, value: Any) -> datetime.datetime:
+        """
+        Parse the Grid India SchedulePublishedTime value, preserving the full
+        time component. Supports common Grid India datetime formats.
+        """
+        if isinstance(value, datetime.datetime):
+            return value
+        if isinstance(value, datetime.date):
+            return datetime.datetime(value.year, value.month, value.day)
+
+        text = str(value).strip()
+        if not text:
+            raise ValueError("Empty SchedulePublishedTime value")
+
+        # ISO formats (with or without timezone)
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"):
+            try:
+                return datetime.datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+
+        try:
+            return datetime.datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            pass
+
+        # Grid India style DD-MM-YYYY formats
+        for fmt in ("%d-%m-%Y %H:%M:%S", "%d-%m-%Y"):
+            try:
+                return datetime.datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+
+        # Slash-separated formats
+        for fmt in ("%d/%m/%Y %H:%M:%S", "%d/%m/%Y"):
+            try:
+                return datetime.datetime.strptime(text, fmt)
+            except ValueError:
+                continue
+
+        raise ValueError(f"Cannot parse SchedulePublishedTime: {text}")
 
     def validate_content(self, content: str) -> bool:
         """
