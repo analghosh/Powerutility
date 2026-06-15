@@ -519,6 +519,7 @@ class SupplyProcessor(BaseProcessor):
                 supply_entity = SupplyServeEntity(
                     scheduled_at=dc_sg_entity.scheduled_at,
                     time_block=dc_sg_entity.time_block,
+                    schedule_published_time=dc_sg_entity.schedule_published_time,
                     dc_sg=dc_sg_entity.dc_sg,
                     plant_id=dc_sg_entity.plant_id,
                     volume=dc_sg_entity.volume,
@@ -898,9 +899,18 @@ class SupplyProcessor(BaseProcessor):
                             rtm_tm_value = 0.0
                             rtm_tm_revision_no_value = None
                     
+                    item_spt = item.get("schedule_published_time")
+                    logger.info(
+                        "[SPT-TRACE] raw->dc_sg plant=%s block=%s spt=%s (type=%s)",
+                        item.get("plant_id"),
+                        item.get("time_block"),
+                        item_spt,
+                        type(item_spt).__name__
+                    )
                     entity = DCSgEntity(
                         scheduled_at=sch_at,
                         time_block=self._safe_int(item.get("time_block")),
+                        schedule_published_time=item_spt,
                         dc_sg=str(item.get("dc_sg")),
                         plant_id=str(item["_resolved_plant_id"]),
                         volume=volume,
@@ -999,6 +1009,7 @@ class SupplyProcessor(BaseProcessor):
             return DCSgEntity(
                 scheduled_at=scheduled_at,
                 time_block=self._safe_int(raw_item.get("time_block")),
+                schedule_published_time=raw_item.get("schedule_published_time"),
                 dc_sg=str(dc_sg),
                 plant_id=str(plant_id),
                 volume=volume,
@@ -1101,6 +1112,17 @@ class SupplyProcessor(BaseProcessor):
                 return True
             
             logger.info(f"Processing {len(valid_staged_records)} valid records from staged data.")
+
+            # Trace schedule_published_time as it comes out of dc_sg staging
+            for rec in valid_staged_records[:3]:
+                rec_spt = rec.get("schedule_published_time")
+                logger.info(
+                    "[SPT-TRACE] dc_sg->supply_serve plant=%s block=%s spt=%s (type=%s)",
+                    rec.get("plant_id"),
+                    rec.get("time_block"),
+                    rec_spt,
+                    type(rec_spt).__name__
+                )
 
             # 1. Bulk Fetch Existing Supply Records
             existing_supply_map = {} # Key -> Record
@@ -1283,6 +1305,7 @@ class SupplyProcessor(BaseProcessor):
             return SupplyServeEntity(
                 scheduled_at=staged_item["scheduled_at"],
                 time_block=staged_item.get("time_block"),
+                schedule_published_time=staged_item.get("schedule_published_time"),
                 dc_sg=staged_item.get("dc_sg"),
                 volume=staged_item.get("volume"),
                 sg_beforelosses=staged_item.get("sg_beforelosses"),
@@ -1353,6 +1376,7 @@ class SupplyProcessor(BaseProcessor):
             return SupplyServeEntity(
                 scheduled_at=staged_item["scheduled_at"],
                 time_block=staged_item.get("time_block"),
+                schedule_published_time=staged_item.get("schedule_published_time"),
                 dc_sg=staged_item.get("dc_sg"),
                 plant_id=staged_item.get("plant_id"),
                 volume=staged_item.get("volume"),
@@ -1486,6 +1510,7 @@ class SupplyProcessor(BaseProcessor):
                             updated_sg_entity = SupplyServeEntity(
                                 scheduled_at=sg_rec["scheduled_at"],
                                 time_block=tb,
+                                schedule_published_time=sg_rec.get("schedule_published_time"),
                                 dc_sg="SG",
                                 plant_id=plant_id,
                                 volume=vol,
@@ -1581,6 +1606,7 @@ class SupplyProcessor(BaseProcessor):
                             updated_dc_entity = SupplyServeEntity(
                                 scheduled_at=dc_rec["scheduled_at"],
                                 time_block=tb,
+                                schedule_published_time=dc_rec.get("schedule_published_time"),
                                 dc_sg="DC",
                                 plant_id=plant_id,
                                 volume=current_vol,

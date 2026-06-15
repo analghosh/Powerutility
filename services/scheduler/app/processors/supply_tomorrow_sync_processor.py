@@ -95,6 +95,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             entities.append(DCSgEntity(
                 scheduled_at=new_scheduled_at,
                 time_block=rec.get("time_block"),
+                schedule_published_time=rec.get("schedule_published_time"),
                 plant_id=rec.get("plant_id"),
                 dc_sg=rec.get("dc_sg"),
                 volume=rec.get("volume"),
@@ -213,7 +214,16 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                     # Basic mapping
                     # Note: We are creating a functional duplicate of logic in SupplyProcessor.
                     # This is intentional to isolate the fix.
-                    
+
+                    rec_spt = rec.get("schedule_published_time")
+                    logger.info(
+                        "[SPT-TRACE] tomorrow_sync plant=%s block=%s spt=%s (type=%s)",
+                        rec.get("plant_id"),
+                        rec.get("time_block"),
+                        rec_spt,
+                        type(rec_spt).__name__
+                    )
+
                     # Ensure date time combined
                     scheduled_at = rec.get("scheduled_at")
                     if isinstance(scheduled_at, str):
@@ -229,6 +239,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                     entity = SupplyServeEntity(
                         scheduled_at=scheduled_at,
                         time_block=safe_int(rec.get("time_block")),
+                        schedule_published_time=rec.get("schedule_published_time"),
                         dc_sg=str(rec.get("dc_sg")),
                         plant_id=str(rec.get("plant_id")),
                         volume=vol,
