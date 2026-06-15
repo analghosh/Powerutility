@@ -265,9 +265,15 @@ class LimitValuesRepository(GenericRepository):
             logger.error(f"Error in bulk_insert_only for {collection_name}: {e}")
             raise
 
-    async def get_approved_tomorrow(self, tomorrow: datetime) -> List[Dict[str, Any]]:
+    async def get_approved_tomorrow(
+        self, tomorrow: datetime, market: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
         Fetch approved entries for tomorrow from the approval collection.
+
+        Args:
+            tomorrow: The target date for approved entries.
+            market: Optional market filter (e.g. "RTM").
         """
         try:
             approval_collection = "limit_approval"
@@ -278,9 +284,11 @@ class LimitValuesRepository(GenericRepository):
                 **scheduled_at_day_range_filter(tomorrow_start),
                 "status": "APPROVED",
             }
+            if market:
+                query["market"] = market
             cursor = self.db[approval_collection].find(query)
             results = await cursor.to_list(length=10000)
-            logger.info(f"Found {len(results)} approved records for tomorrow ({tomorrow.strftime('%Y-%m-%d')})")
+            logger.info(f"Found {len(results)} approved records for tomorrow ({tomorrow.strftime('%Y-%m-%d')})" + (f" for market={market}" if market else ""))
             return results
         except Exception as e:
             logger.error(f"Failed to fetch approved records for tomorrow: {e}")

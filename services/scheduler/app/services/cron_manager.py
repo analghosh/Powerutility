@@ -253,6 +253,7 @@ class CronManager(BaseCronManager):
             "dsm_rate_calculation": self.dsm_processor.execute_cron_job,
             "new_dsm_rate_calculation": self.new_dsm_processor.execute_cron_job,
             "limit_values_approval_processing": self.limit_values_processor.execute_cron_job,
+            "limit_values_rtm_approval_processing": self.limit_values_processor.execute_rtm_early_cron_job,
 
             "limit_values_rename_id_field": self.limit_values_processor.rename_id_field,
             "rtm_scheduling_calculation": self.rtm_scheduling_processor.execute_cron_job,
@@ -533,11 +534,18 @@ class CronManager(BaseCronManager):
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
-            # Limit Values Job
+            # Limit Values Jobs
             {
                 "job_type": "limit_values_approval_processing",
                 "name": "Limit Values Approval Processing",
                 "schedule": "0 0 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "limit_values_rtm_approval_processing",
+                "name": "Limit Values RTM Early Approval Processing",
+                "schedule": "15 22 * * *",  # RTM rolls over to tomorrow at 22:15 IST
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
