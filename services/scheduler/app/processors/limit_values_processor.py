@@ -33,15 +33,36 @@ class LimitValuesProcessor(BaseProcessor):
         self.repository = LimitValuesRepository()
         # job_data_repository is already initialized by BaseProcessor.__init__()
         
-    async def execute_cron_job(self) -> Dict[str, Any]:
+    async def execute_rtm_early_cron_job(self) -> Dict[str, Any]:
+        """
+        Entry point for the RTM early rollover cron job (22:15 IST).
+
+        RTM limit values are rolled to tomorrow before midnight so that the
+        00:00 run can skip RTM and avoid double-rollover.
+        """
+        return await self.execute_cron_job(rtm_early=True)
+
+    async def execute_cron_job(self, rtm_early: bool = False) -> Dict[str, Any]:
         """
         Main entry point for cron job execution.
+
+        Args:
+            rtm_early: When True, only RTM market records are rolled to tomorrow.
+                       The regular 00:00 run skips RTM records that were already
+                       rolled by the early job.
         """
-        job_type = "limit_values_approval_processing"
-        job_name = "Limit Values Approval Processing"
+        if rtm_early:
+            job_type = "limit_values_rtm_approval_processing"
+            job_name = "Limit Values RTM Early Approval Processing"
+            default_schedule = "15 22 * * *"
+        else:
+            job_type = "limit_values_approval_processing"
+            job_name = "Limit Values Approval Processing"
+            default_schedule = "0 0 * * *"
+
         job_detail = await self.job_data_repository.get_job(job_type)
         start_time = datetime.now()
-        schedule = job_detail.get("schedule", "0 0 * * *")
+        schedule = job_detail.get("schedule", default_schedule)
 
         execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
         if not execution_id:
@@ -60,9 +81,22 @@ class LimitValuesProcessor(BaseProcessor):
             tomorrow_str = tomorrow.strftime("%Y-%m-%d")
             
             current_time = datetime.now()
+
+            # Market-specific rollover behaviour:
+            # - RTM early run (22:15) only touches RTM records.
+            # - Midnight run touches all markets except RTM records already rolled today.
+            base_id_filter = {"id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}
+            rtm_market = "RTM"
+            market_filter = {"market": rtm_market} if rtm_early else {}
+
+            def _build_query(scheduled_at, extra_filters=None):
+                query = {"scheduled_at": scheduled_at, **base_id_filter}
+                if extra_filters:
+                    query.update(extra_filters)
+                return query
             
             # 1. Fetch Today's Data for Rollover to Tomorrow
-            today_existing_query = {"scheduled_at": today, "id":{"$nin":["RTM_forecasted_price", "DAM_forecasted_price"]}}
+            today_existing_query = _build_query(today, market_filter)
             today_existing_data = await self.repository.find_many(self.final_collection_name, today_existing_query, limit=10000)
             logger.info(f"[LimitValuesProcessor] Found {len(today_existing_data)} records for today to rollover to tomorrow")
             
@@ -82,12 +116,20 @@ class LimitValuesProcessor(BaseProcessor):
             }
 
             yesterday = today - timedelta(days=1)
-            yesterday_existing_data = await self.repository.find_many(self.final_collection_name, {"scheduled_at": yesterday, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
+            yesterday_existing_data = await self.repository.find_many(
+                self.final_collection_name,
+                _build_query(yesterday, market_filter),
+                limit=10000,
+            )
             logger.info(f"[LimitValuesProcessor] Found {len(yesterday_existing_data)} records for yesterday to rollover to today")
             if today_existing_data:
                 logger.info(f"[LimitValuesProcessor] Today ({today_str}) already has {len(today_existing_data)} records; will skip per-record duplicates")
             for record in yesterday_existing_data:
-                rollover_key = (today, record.get("block"), record.get("market"), record.get("id"))
+                market = record.get("market")
+                # RTM early run only rolls RTM; midnight run allows all markets.
+                if rtm_early and market != rtm_market:
+                    continue
+                rollover_key = (today, record.get("block"), market, record.get("id"))
                 if rollover_key in today_existing_keys:
                     continue
                 record_id = record.get("id")
@@ -111,7 +153,11 @@ class LimitValuesProcessor(BaseProcessor):
                 merged_data[unique_key_tuple] = today_record
             
             # Fetch all of tomorrow's existing data to do per-record skip check
-            tomorrow_existing_data = await self.repository.find_many(self.final_collection_name, {"scheduled_at": tomorrow, "id": {"$nin": ["RTM_forecasted_price", "DAM_forecasted_price"]}}, limit=10000)
+            tomorrow_existing_data = await self.repository.find_many(
+                self.final_collection_name,
+                _build_query(tomorrow, market_filter),
+                limit=10000,
+            )
             tomorrow_existing_keys = {
                 (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"))
                 for r in tomorrow_existing_data
@@ -126,12 +172,19 @@ class LimitValuesProcessor(BaseProcessor):
 
             # 1a. Prepare Rollover Data — upsert if tomorrow has stale rollover, skip if manual/approval
             for record in today_existing_data:
-                rollover_key = (tomorrow, record.get("block"), record.get("market"), record.get("id"))
+                market = record.get("market")
+                # RTM early run only rolls RTM; midnight run allows all markets.
+                if rtm_early and market != rtm_market:
+                    continue
+                rollover_key = (tomorrow, record.get("block"), market, record.get("id"))
                 if rollover_key in tomorrow_existing_keys:
                     # Only overwrite if tomorrow's value is itself a rollover (not manual/approval)
-                    existing_source = tomorrow_source_map.get((record.get("block"), record.get("market"), record.get("id")))
+                    existing_source = tomorrow_source_map.get((record.get("block"), market, record.get("id")))
                     if existing_source not in ("today_rollover", "yesterday_rollover"):
                         continue  # tomorrow has manual/approval data, preserve it
+                    # If RTM was already rolled by the 22:15 early job, do not roll it again at midnight.
+                    if not rtm_early and market == rtm_market and existing_source == "today_rollover":
+                        continue
                 # Remove _id and other internal fields for fresh upsert
                 record_id = record.get("id")
                 unique_key_tuple = (
@@ -154,7 +207,8 @@ class LimitValuesProcessor(BaseProcessor):
                 tomorrow_rollover_data[unique_key_tuple] = tomorrow_record
 
             # 2. Fetch tomorrow's approved entries — these are built separately and always upsert
-            approved_entries_tomorrow = await self.repository.get_approved_tomorrow(tomorrow)
+            approval_market = rtm_market if rtm_early else None
+            approved_entries_tomorrow = await self.repository.get_approved_tomorrow(tomorrow, market=approval_market)
             logger.info(f"[LimitValuesProcessor] Found {len(approved_entries_tomorrow)} approved entries for tomorrow to merge")
 
             approval_ids_to_delete = []
@@ -275,17 +329,23 @@ class LimitValuesProcessor(BaseProcessor):
                 await self.repository.insert_many(self.audit_collection_name, audit_logs)
 
             # 5. Historical Archival (Older than today)
-            archive_result = await self.repository.archive_to_historical(today)
-            logger.info(f"[LimitValuesProcessor] Archival result: {archive_result}")
+            # Archival is only run at midnight; the 22:15 RTM early run does not move data.
+            if rtm_early:
+                logger.info("[LimitValuesProcessor] Skipping historical archival during RTM early run")
+                archive_result = {"skipped": True, "reason": "rtm_early_run"}
+            else:
+                archive_result = await self.repository.archive_to_historical(today)
+                logger.info(f"[LimitValuesProcessor] Archival result: {archive_result}")
 
             # 6. Delete processed approval entries
             if approval_ids_to_delete:
                 delete_res = await self.repository.delete_many(self.approval_collection_name, {"_id": {"$in": approval_ids_to_delete}})
                 logger.info(f"[LimitValuesProcessor] Deleted {delete_res.deleted_count} processed approval entries")
             
+            market_scope = "RTM" if rtm_early else "non-RTM/all"
             result = {
                 "status": "success",
-                "message": f"Limit values processed successfully for {tomorrow_str}",
+                "message": f"Limit values processed successfully for {tomorrow_str} (market scope: {market_scope})",
                 "execution_time": (datetime.now() - start_time).total_seconds(),
                 "job_type": job_type,
                 "correlation_id": execution_id

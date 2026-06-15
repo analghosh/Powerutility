@@ -406,6 +406,16 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 2
             },
             {
+                "job_type": "limit_values_rtm_approval_processing",
+                "name": "Limit Values RTM Early Approval Processing",
+                "type": "data_processing",
+                "schedule": getattr(self.settings, 'LIMIT_VALUES_RTM_APPROVAL_CRON', "15 22 * * *"),  # RTM rolls over at 22:15
+                "enabled": getattr(self.settings, 'LIMIT_VALUES_RTM_APPROVAL_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Early rollover for RTM limit values to tomorrow so they are not re-rolled at midnight",
+                "priority": 2
+            },
+            {
                 "job_type": "rtm_scheduling_calculation",
                 "name": "RTM Scheduling Calculation",
                 "type": "data_processing",
