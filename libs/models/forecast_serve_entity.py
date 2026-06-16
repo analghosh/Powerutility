@@ -106,21 +106,24 @@ async def ensure_forecast_serve_indexes(collection) -> None:
 
 
 async def ensure_forecast_serve_historical_indexes(collection) -> None:
-    """Ensure indexes for forecast_serve_historical collection."""
+    """
+    Ensure indexes for forecast_serve_historical (time-series collection).
+
+    MongoDB time-series collections do not support unique indexes; revision dedup
+    is handled in archive_old_forecast_data() (same pattern as demand_serve_historical).
+    """
     import logging
 
     logger = logging.getLogger(__name__)
-    try:
-        await collection.create_index([("scheduled_at", 1)], background=True)
-        await collection.create_index([("archived_at", -1)], background=True)
-        await collection.create_index([("archived_timestamp", -1)], background=True)
-        await collection.create_index("source", background=True)
-        await collection.create_index(
-            [("scheduled_at", 1), ("type", 1), ("source", 1)],
-            background=True,
-        )
-        await collection.create_index("time_block", background=True)
-        await collection.create_index(
+
+    index_specs = [
+        ([("scheduled_at", 1)], {}),
+        ([("archived_at", -1)], {}),
+        ([("archived_timestamp", -1)], {}),
+        ("source", {}),
+        ([("scheduled_at", 1), ("type", 1), ("source", 1)], {}),
+        ("time_block", {}),
+        (
             [
                 ("type", 1),
                 ("scheduled_at", 1),
@@ -128,15 +131,31 @@ async def ensure_forecast_serve_historical_indexes(collection) -> None:
                 ("source", 1),
                 ("forecast_revision", 1),
             ],
-            unique=True,
-            name="idx_unique_forecast_serve_historical_revision_key",
-            background=True,
-        )
-        await collection.create_index(
+            {"name": "idx_forecast_serve_historical_revision_key"},
+        ),
+        (
             [("scheduled_at", 1), ("source", 1), ("forecast_revision", -1)],
-            name="idx_forecast_serve_historical_day_source_revision",
-            background=True,
+            {"name": "idx_forecast_serve_historical_day_source_revision"},
+        ),
+    ]
+
+    failed = 0
+    for keys, options in index_specs:
+        try:
+            await collection.create_index(keys, background=True, **options)
+        except Exception as e:
+            failed += 1
+            index_label = options.get("name") or keys
+            logger.warning(
+                "Failed to create forecast_serve_historical index %s: %s",
+                index_label,
+                e,
+            )
+
+    if failed:
+        logger.warning(
+            "forecast_serve_historical indexes partially ensured (%d failures)",
+            failed,
         )
+    else:
         logger.info("forecast_serve_historical collection indexes ensured")
-    except Exception as e:
-        logger.warning("Failed to create forecast_serve_historical indexes: %s", e)
