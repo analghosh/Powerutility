@@ -76,6 +76,7 @@ def _normalize_item(row: Dict[str, Any]) -> Dict[str, Any]:
             "market": row.get("market", "RTM"),
             "category": row.get("category", "Limits"),
             "area": row.get("area", ""),
+            "exchange": row.get("exchange", "IEX"),
             "value": value,  # <-- RENAMED from 'values'
             "comment": row.get("comment"),
         }
@@ -106,6 +107,7 @@ def _business_key(item: Dict[str, Any]) -> Dict[str, Any]:
         "market": item["market"],
         "category": item["category"],
         "area": item["area"],
+        "exchange": item.get("exchange", "IEX"),
     }
 
 def _is_rtm_forecast_past_block(item: Dict[str, Any]) -> bool:
@@ -154,6 +156,7 @@ def _values_doc(item: Dict[str, Any]) -> Dict[str, Any]:
         "market": item["market"],
         "category": item["category"],
         "area": item["area"],
+        "exchange": item.get("exchange", "IEX"),
         "values": item["values"],
         "is_active": True,
     }
@@ -196,6 +199,8 @@ class LimitService:
                 return value
 
             serialized = [_serialize(r) for r in rows]
+            for record in serialized:
+                record.setdefault("exchange", "IEX")
             return {"records": serialized, "count": len(serialized)}
         except Exception as e:
             logger.exception(f"[LimitService] latest failed: {str(e)}")
@@ -207,13 +212,16 @@ class LimitService:
         If date_filter is None, returns data for the latest available date.
         """
         try:
-            return await self.values_repo.get_latest_inserted_at_data_pipeline_paginated(
+            result = await self.values_repo.get_latest_inserted_at_data_pipeline_paginated(
                 self.values_collection,
                 from_block=from_block,
                 to_block=to_block,
                 filters=filters,
                 date_filter=date_filter
             )
+            for record in result.get("data", []):
+                record.setdefault("exchange", "IEX")
+            return result
         except Exception as e:
             logger.exception(f"[LimitService] latest_paginated failed: {str(e)}")
             raise
@@ -238,6 +246,8 @@ class LimitService:
                     filters=filters,
                     date_filter=date_filter
                 )
+            for record in data:
+                record.setdefault("exchange", "IEX")
             return {"data": data, "total": len(data)}
         except Exception as e:
             logger.exception(f"[LimitService] latest_all failed: {str(e)}")
@@ -714,11 +724,18 @@ class LimitService:
                 return []
 
             # Call the new repository method
-            return await self.flow_repo.get_combined_approvals(
-                approval_collection=self.approval_collection, 
+            approvals = await self.flow_repo.get_combined_approvals(
+                approval_collection=self.approval_collection,
                 main_collection=self.values_collection,
                 status_filter=status_filter
             )
+            for approval in approvals:
+                approval.setdefault("exchange", "IEX")
+                if approval.get("old_value"):
+                    approval["old_value"].setdefault("exchange", "IEX")
+                if approval.get("new_value"):
+                    approval["new_value"].setdefault("exchange", "IEX")
+            return approvals
         except Exception as e:
             logger.exception(f"[LimitService] list_for_approver failed: {str(e)}")
             raise
@@ -758,8 +775,8 @@ class LimitService:
             logger.info(f"[DEBUG] Status filter for user {user_ctx.get('username')}: {status_filter}")
 
             # Call the new paginated repository method with date filter
-            return await self.flow_repo.get_combined_approvals_paginated(
-                approval_collection=self.approval_collection, 
+            result = await self.flow_repo.get_combined_approvals_paginated(
+                approval_collection=self.approval_collection,
                 main_collection=self.values_collection,
                 status_filter=status_filter,
                 page=page,
@@ -767,6 +784,13 @@ class LimitService:
                 filters=filters,
                 date_filter=date_filter
             )
+            for approval in result.get("data", []):
+                approval.setdefault("exchange", "IEX")
+                if approval.get("old_value"):
+                    approval["old_value"].setdefault("exchange", "IEX")
+                if approval.get("new_value"):
+                    approval["new_value"].setdefault("exchange", "IEX")
+            return result
         except Exception as e:
             logger.exception(f"[LimitService] list_for_approver_paginated failed: {str(e)}")
             raise
@@ -808,7 +832,8 @@ class LimitService:
                     "market": approval["market"],
                     "category": approval["category"],
                     "area": approval["area"],
-                    "scheduled_at": scheduled_at
+                    "scheduled_at": scheduled_at,
+                    "exchange": approval.get("exchange", "IEX")
                 }
             except KeyError as e:
                 logger.error(f"Approval doc {approval_id} is malformed. Missing key: {str(e)}")
@@ -835,6 +860,7 @@ class LimitService:
                 "market": approval.get("market", "RTM"),
                 "category": approval.get("category", "Limits"),
                 "area": approval.get("area", ""),
+                "exchange": approval.get("exchange", "IEX"),
                 "values": approval.get("value", approval.get("values")),
                 "updated_at": now,
                 "updated_by": actor_id,
@@ -1163,6 +1189,7 @@ class LimitService:
                         "market": existing_record.get("market"),
                         "category": existing_record.get("category"),
                         "area": existing_record.get("area"),
+                        "exchange": existing_record.get("exchange", "IEX"),
                         "is_active": existing_record.get("is_active"),
                         "version": existing_record.get("version"),
                         "created_at": existing_record.get("created_at"),
@@ -1301,6 +1328,7 @@ class LimitService:
                                 "market": existing_record.get("market"),
                                 "category": existing_record.get("category"),
                                 "area": existing_record.get("area"),
+                                "exchange": existing_record.get("exchange", "IEX"),
                                 "is_active": existing_record.get("is_active"),
                                 "version": existing_record.get("version"),
                                 "created_at": existing_record.get("created_at"),

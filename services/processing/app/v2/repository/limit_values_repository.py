@@ -64,12 +64,14 @@ class LimitValuesRepository:
         self,
         collection_name: str,
         filters: Dict[str, Any] = None,
-        date_filter: str = None
+        date_filter: str = None,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Returns all records with latest inserted_at per key for a given date (no pagination).
         If date_filter is not provided, it uses the latest available date.
-        For each unique key (block, id, market, category, area), returns the record with the latest inserted_at.
+        For each unique key (block, id, market, category, area, exchange), returns the record with the latest inserted_at.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         try:
             pipeline = []
@@ -107,6 +109,8 @@ class LimitValuesRepository:
                 additional_match["category"] = filters["category"]
             if "area" in filters:
                 additional_match["area"] = filters["area"]
+            if exchange and exchange != "":
+                additional_match["exchange"] = exchange
             
             if additional_match:
                 pipeline.append({"$match": additional_match})
@@ -121,7 +125,8 @@ class LimitValuesRepository:
                             "id": "$id",
                             "market": "$market",
                             "category": "$category",
-                            "area": "$area"
+                            "area": "$area",
+                            "exchange": "$exchange"
                         },
                         "latest_doc": {"$first": "$$ROOT"}
                     }
@@ -143,12 +148,14 @@ class LimitValuesRepository:
         from_block: int,
         to_block: int,
         filters: Dict[str, Any] = None,
-        date_filter: str = None
+        date_filter: str = None,
+        exchange: str = None
     ) -> Dict[str, Any]:
         """
         Returns paginated records with latest inserted_at per key for a given date or max date,
         filtered by a block range.
         Uses optimized pipeline for speed.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         try:
             if date_filter and date_filter < datetime.now().strftime("%Y-%m-%d"):
@@ -202,6 +209,8 @@ class LimitValuesRepository:
                 match_filter["category"] = filters["category"]
             if "area" in filters:
                 match_filter["area"] = filters["area"]
+            if exchange and exchange != "":
+                match_filter["exchange"] = exchange
             
             base_pipeline.append({"$match": match_filter})
 
@@ -270,6 +279,8 @@ class LimitValuesRepository:
                 match_query["category"] = filters["category"]
             if "area" in filters:
                 match_query["area"] = filters["area"]
+            if "exchange" in filters:
+                match_query["exchange"] = filters["exchange"]
             
             # Count total documents
             count_pipeline = []
@@ -340,6 +351,8 @@ class LimitValuesRepository:
                 match_query["area"] = filters["area"]
             if "scheduled_at" in filters:
                 match_query["scheduled_at"] = filters["scheduled_at"]
+            if "exchange" in filters:
+                match_query["exchange"] = filters["exchange"]
             
             # Build pipeline
             pipeline = []
@@ -361,11 +374,13 @@ class LimitValuesRepository:
         end_date,
         market: str,
         id: str,
-        area: str
+        area: str,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get limit values data asynchronously.
         Accepts dates as either strings (YYYY-MM-DD) or date objects.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         from datetime import date as _date
         if isinstance(start_date, str):
@@ -384,6 +399,8 @@ class LimitValuesRepository:
             filter_query["category"] = id
         if area and area != "" and area != "NA":
             filter_query["area"] = area
+        if exchange and exchange != "":
+            filter_query["exchange"] = exchange
 
         return await self.repository.get_all(
             self.collection_name,
@@ -397,11 +414,13 @@ class LimitValuesRepository:
         market: str,
         category: str,
         area: str,
-        scheduled_at: datetime = None
+        scheduled_at: datetime = None,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get limit values by ID with latest date asynchronously.
         If scheduled_at is not provided, defaults to today at midnight.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         tomorrow_date = datetime.now() + timedelta(days=1)
         if scheduled_at is None:
@@ -417,6 +436,8 @@ class LimitValuesRepository:
                 match_filter["category"] = category
             if area and area != "" and area != "NA":
                 match_filter["area"] = area
+            if exchange and exchange != "":
+                match_filter["exchange"] = exchange
 
             result = await self.repository.get_all(
                 self.collection_name,
@@ -436,10 +457,12 @@ class LimitValuesRepository:
         ID: str,
         category: str,
         market: str,
-        area: str
+        area: str,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get limit values for a specific schedule date, ID, category, market and area.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         try:
             target_date = parse_schedule_date_filter(schedule_date)
@@ -453,6 +476,8 @@ class LimitValuesRepository:
                 filter_query["category"] = category
             if area and area != "" and area != "NA":
                 filter_query["area"] = area
+            if exchange and exchange != "":
+                filter_query["exchange"] = exchange
 
             result = await self.repository.get_all(
                 self.collection_name,
