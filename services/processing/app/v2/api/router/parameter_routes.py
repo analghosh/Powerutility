@@ -22,7 +22,44 @@ router = APIRouter(
 logger = logging.getLogger(__name__)
 
 
-# Pydantic Models
+# ---------------------------------------------------------------------------
+# Bid configuration (parameter master) models
+# ---------------------------------------------------------------------------
+class MarketBidFlags(BaseModel):
+    block_bid_buy: bool = Field(True, description="Enable block bid buy for this market")
+    block_bid_sell: bool = Field(True, description="Enable block bid sell for this market")
+    single_bid_buy: bool = Field(True, description="Enable single bid buy for this market")
+    single_bid_sell: bool = Field(True, description="Enable single bid sell for this market")
+
+
+class RTMGDAMBidFlags(MarketBidFlags):
+    ocf: bool = Field(True, description="Enable OCF for this market")
+    premium: bool = Field(True, description="Enable premium for this market")
+    discount: bool = Field(True, description="Enable discount for this market")
+
+
+class BidConfiguration(BaseModel):
+    RTM: RTMGDAMBidFlags = Field(default_factory=RTMGDAMBidFlags)
+    GDAM: RTMGDAMBidFlags = Field(default_factory=RTMGDAMBidFlags)
+    DAM: MarketBidFlags = Field(default_factory=MarketBidFlags)
+    HPDAM: MarketBidFlags = Field(default_factory=MarketBidFlags)
+
+
+class BidConfigurationResponse(BaseModel):
+    data: BidConfiguration = Field(..., description="Active bid configuration")
+    timestamp: Optional[str] = Field(None, description="Response timestamp")
+    correlation_id: Optional[str] = Field(None, description="Request correlation ID")
+
+
+class BidConfigurationSaveResponse(BaseModel):
+    para_key: str = Field(..., description="Parameter key")
+    para_value: BidConfiguration = Field(..., description="Saved normalized config")
+    message: str = Field(..., description="Status message")
+
+
+# ---------------------------------------------------------------------------
+# Generic parameter models
+# ---------------------------------------------------------------------------
 class ParameterCreate(BaseModel):
     """Schema for creating a parameter"""
     para_key: str = Field(..., description="Parameter key (unique identifier)")
@@ -542,4 +579,101 @@ async def delete_parameter(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to delete parameter"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Bid configuration (parameter master) endpoints
+# ---------------------------------------------------------------------------
+@router.get(
+    "/bid-config",
+    response_model=BidConfigurationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get active bid configuration",
+    description="Returns the currently active bid toggle configuration for all markets"
+)
+async def get_bid_configuration(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    """Get active bid configuration."""
+    user_id = user_context.get("user_id", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+
+    try:
+        result = await parameter_controller.get_bid_configuration()
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="bid_configuration_view",
+            message="Fetched active bid configuration",
+            correlation_id=correlation_id,
+            success=True
+        )
+        return {
+            "data": result,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id
+        }
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="BidConfigurationGetError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error fetching bid configuration")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch bid configuration"
+        )
+
+
+@router.put(
+    "/bid-config",
+    response_model=BidConfigurationSaveResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Save bid configuration",
+    description="Save the bid toggle configuration. It becomes active immediately."
+)
+async def save_bid_configuration(
+    request: Request,
+    body: BidConfiguration,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    """Save the active bid configuration."""
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+
+    try:
+        result = await parameter_controller.save_bid_configuration(
+            body.dict(),
+            user_context
+        )
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="bid_configuration_save",
+            message="Saved active bid configuration",
+            username=username,
+            correlation_id=correlation_id,
+            success=True
+        )
+        return result
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="BidConfigurationSaveError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error saving bid configuration")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save bid configuration"
         )
