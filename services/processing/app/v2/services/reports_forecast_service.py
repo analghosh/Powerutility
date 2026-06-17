@@ -21,11 +21,10 @@ from libs.helpers.reports_forecast_format import (
     reports_forecast_includes_json_sections,
 )
 from libs.models.forecast_serve_entity import (
-    FORECAST_SOURCE_CSV,
-    FORECAST_SOURCE_RTM_API,
+    DAF_TYPE,
+    IDF_FINAL_TYPE,
 )
 
-from ..repository.demand_serve_repository import DemandServeRepository
 from ..repository.forecast_serve_repository import forecast_serve_repository
 from ..repository.reports_forecast_repository import reports_forecast_repository
 
@@ -50,7 +49,6 @@ MARKET_HPDAM = "HPDAM"
 
 class ReportsForecastService:
     def __init__(self):
-        self.demand_serve_repository = DemandServeRepository()
         self.forecast_serve_repository = forecast_serve_repository
         self.reports_forecast_repository = reports_forecast_repository
 
@@ -104,25 +102,19 @@ class ReportsForecastService:
             return ""
         return str(value)
 
-    def _build_forecast_maps(
+    def _build_idf_final_map(
         self,
-        forecast_docs: List[Dict[str, Any]],
-    ) -> Tuple[Dict[Tuple[str, int], float], Dict[Tuple[str, int], float]]:
-        auto: Dict[Tuple[str, int], float] = {}
-        manual: Dict[Tuple[str, int], float] = {}
-        for doc in forecast_docs:
+        idf_docs: List[Dict[str, Any]],
+    ) -> Dict[Tuple[str, int], float]:
+        idf: Dict[Tuple[str, int], float] = {}
+        for doc in idf_docs:
             date_str = self._date_str_from_scheduled_at(doc.get("scheduled_at"))
             block = doc.get("time_block")
-            if date_str is None or block is None:
-                continue
-            key = (date_str, int(block))
             forecast = doc.get("forecast")
-            source = doc.get("source")
-            if source == FORECAST_SOURCE_RTM_API and forecast is not None:
-                auto[key] = forecast
-            elif source == FORECAST_SOURCE_CSV and forecast is not None:
-                manual[key] = forecast
-        return auto, manual
+            if date_str is None or block is None or forecast is None:
+                continue
+            idf[(date_str, int(block))] = forecast
+        return idf
 
     def _build_daf_map(
         self,
@@ -130,7 +122,7 @@ class ReportsForecastService:
     ) -> Dict[Tuple[str, int], float]:
         daf: Dict[Tuple[str, int], float] = {}
         for doc in daf_docs:
-            date_str = doc.get("date")
+            date_str = self._date_str_from_scheduled_at(doc.get("scheduled_at"))
             block = doc.get("time_block")
             forecast = doc.get("forecast")
             if date_str is None or block is None or forecast is None:
@@ -161,7 +153,7 @@ class ReportsForecastService:
         self,
         date_str: str,
         block: int,
-        auto: Dict[Tuple[str, int], float],
+        idf: Dict[Tuple[str, int], float],
         daf: Dict[Tuple[str, int], float],
         prices: Dict[Tuple[str, int], Dict[str, float]],
     ) -> Dict[str, Any]:
@@ -170,7 +162,7 @@ class ReportsForecastService:
         return {
             "date": self._iso_to_display_date(date_str),
             "time_block": block,
-            "idf_demand": auto.get(key),
+            "idf_demand": idf.get(key),
             "daf_demand": daf.get(key),
             "idf_price": price_row.get(MARKET_RTM),
             "dam_price": price_row.get(MARKET_DAM),
@@ -184,7 +176,7 @@ class ReportsForecastService:
         to_date: str,
         from_block: int,
         to_block: int,
-        auto: Dict[Tuple[str, int], float],
+        idf: Dict[Tuple[str, int], float],
         daf: Dict[Tuple[str, int], float],
         prices: Dict[Tuple[str, int], Dict[str, float]],
     ) -> List[Dict[str, Any]]:
@@ -193,7 +185,7 @@ class ReportsForecastService:
             blocks: List[Dict[str, Any]] = []
             for block in range(from_block, to_block + 1):
                 blocks.append(
-                    self._build_block_record(date_str, block, auto, daf, prices)
+                    self._build_block_record(date_str, block, idf, daf, prices)
                 )
             by_date.append(
                 {
@@ -210,7 +202,7 @@ class ReportsForecastService:
         to_date: str,
         from_block: int,
         to_block: int,
-        auto: Dict[Tuple[str, int], float],
+        idf: Dict[Tuple[str, int], float],
         daf: Dict[Tuple[str, int], float],
         prices: Dict[Tuple[str, int], Dict[str, float]],
     ) -> List[Dict[str, Any]]:
@@ -218,7 +210,7 @@ class ReportsForecastService:
         for date_str in self._iter_dates(from_date, to_date):
             for block in range(from_block, to_block + 1):
                 records.append(
-                    self._build_block_record(date_str, block, auto, daf, prices)
+                    self._build_block_record(date_str, block, idf, daf, prices)
                 )
         return records
 
@@ -259,18 +251,20 @@ class ReportsForecastService:
         )
         include_csv_content = reports_forecast_includes_csv_content(fmt)
 
-        daf_docs, forecast_docs, price_docs = await asyncio.gather(
-            self.demand_serve_repository.find_daf_forecast_by_date_range(
+        idf_docs, daf_docs, price_docs = await asyncio.gather(
+            self.forecast_serve_repository.find_by_date_range_and_block_range(
                 from_date=resolved_from,
                 to_date=resolved_to,
                 from_block=from_block,
                 to_block=to_block,
+                market_type=IDF_FINAL_TYPE,
             ),
             self.forecast_serve_repository.find_by_date_range_and_block_range(
                 from_date=resolved_from,
                 to_date=resolved_to,
                 from_block=from_block,
                 to_block=to_block,
+                market_type=DAF_TYPE,
             ),
             self.reports_forecast_repository.find_forecasted_prices_by_date_range(
                 from_date=resolved_from,
@@ -280,7 +274,7 @@ class ReportsForecastService:
             ),
         )
 
-        auto, manual = self._build_forecast_maps(forecast_docs)
+        idf = self._build_idf_final_map(idf_docs)
         daf = self._build_daf_map(daf_docs)
         prices = self._build_price_map(price_docs)
 
@@ -296,7 +290,7 @@ class ReportsForecastService:
                 resolved_to,
                 from_block,
                 to_block,
-                auto,
+                idf,
                 daf,
                 prices,
             )
@@ -339,7 +333,7 @@ class ReportsForecastService:
                 resolved_to,
                 from_block,
                 to_block,
-                auto,
+                idf,
                 daf,
                 prices,
             )

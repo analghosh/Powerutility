@@ -30,6 +30,7 @@ from libs.helpers.idf_forecast_session import (
     time_block_to_session_id,
     writable_blocks_for_date,
 )
+from libs.helpers.idf_final_forecast_freeze import build_idf_final_bulk_ops
 from libs.helpers.rtm_forecast_block_filter import (
     rtm_forecast_run_context,
     target_scheduled_dates_for_rtm,
@@ -424,6 +425,42 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
         return int(result.modified_count) + len(result.upserted_ids)
 
+    async def _sync_idf_final_for_delivery_day(
+        self,
+        scheduled_at: datetime,
+        scheduled_date: date,
+        ctx: Dict[str, Any],
+        api_by_block: Dict[int, Dict[str, Any]],
+    ) -> int:
+        """
+        Upsert IDF_final rows from latest rtm_forecast_api data.
+
+        Blocks before the active session are frozen once; active/future blocks refresh.
+        """
+        if not api_by_block:
+            return 0
+
+        existing_docs = await self.forecast_repository.find_idf_final_by_scheduled_at(
+            scheduled_at
+        )
+        existing_by_block = index_forecast_docs(existing_docs)
+        now = datetime.now()
+        active_sid = int(ctx["active_session_id"])
+        bulk_ops = build_idf_final_bulk_ops(
+            scheduled_at=scheduled_at,
+            scheduled_date=scheduled_date,
+            today_ist=ctx["today_ist"],
+            after_evening_cutover=ctx["after_evening_cutover"],
+            active_session_id=active_sid,
+            api_by_block=api_by_block,
+            existing_by_block=existing_by_block,
+            now=now,
+        )
+        if not bulk_ops:
+            return 0
+        result = await self.forecast_repository.bulk_upsert_idf_final(bulk_ops)
+        return int(result.get("upserted", 0) or 0) + int(result.get("modified", 0) or 0)
+
     @staticmethod
     def _is_primary_delivery_date_for_auto_flip(
         scheduled_date: date,
@@ -627,6 +664,7 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
 
         merged = skipped = failed = 0
+        idf_final_synced = 0
 
         for target_date in target_dates:
             scheduled_at = self._scheduled_at_midnight(target_date)
@@ -693,6 +731,18 @@ class IdfForecastMergeProcessor(BaseProcessor):
             skipped += s
             failed += f
 
+            try:
+                idf_final_synced += await self._sync_idf_final_for_delivery_day(
+                    scheduled_at,
+                    scheduled_date,
+                    ctx,
+                    api_by_block,
+                )
+            except Exception as freeze_err:
+                logger.warning(
+                    "IDF_final sync failed for %s: %s", scheduled_at, freeze_err
+                )
+
         merge_source = (
             FORECAST_SOURCE_RTM_API
             if (api_merge_this_run or switch_flipped)
@@ -700,11 +750,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
         logger.info(
             "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d "
-            "switch_flipped=%s switch_prefers_api=%s",
+            "idf_final_synced=%d switch_flipped=%s switch_prefers_api=%s",
             merge_source,
             merged,
             skipped,
             failed,
+            idf_final_synced,
             switch_flipped,
             switch_prefers_api or switch_flipped,
         )

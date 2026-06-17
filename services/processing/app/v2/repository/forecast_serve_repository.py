@@ -8,13 +8,20 @@ from typing import Any, Dict, List, Optional
 
 from libs.helpers.forecast_serve_query import (
     FORECAST_SERVE_READ_PROJECTION,
+    FORECAST_SERVE_DAF_RANGE_SOURCES,
     apply_latest_revision_to_filter,
     build_day_source_match,
     build_forecast_serve_latest_revision_range_pipeline,
+    build_idf_final_range_pipeline,
     fetch_latest_forecast_revision,
 )
 from libs.helpers.historical_date_split import split_date_range_by_today, today_date_str
-from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
+from libs.models.forecast_serve_entity import (
+    FORECAST_SOURCE_CSV,
+    FORECAST_SOURCE_RTM_API,
+    DAF_TYPE,
+    IDF_FINAL_TYPE,
+)
 
 from ...core.config import settings
 from .base_repository import GenericRepository
@@ -103,13 +110,27 @@ class ForecastServeRepository(GenericRepository):
     ) -> List[Dict[str, Any]]:
         range_start = datetime.strptime(from_date, "%Y-%m-%d")
         range_end_exclusive = datetime.strptime(to_date, "%Y-%m-%d") + timedelta(days=1)
-        pipeline = build_forecast_serve_latest_revision_range_pipeline(
-            range_start=range_start,
-            range_end_exclusive=range_end_exclusive,
-            from_block=from_block,
-            to_block=to_block,
-            market_type=market_type,
-        )
+        if market_type == IDF_FINAL_TYPE:
+            pipeline = build_idf_final_range_pipeline(
+                range_start=range_start,
+                range_end_exclusive=range_end_exclusive,
+                from_block=from_block,
+                to_block=to_block,
+            )
+        else:
+            sources = (
+                FORECAST_SERVE_DAF_RANGE_SOURCES
+                if market_type == DAF_TYPE
+                else None
+            )
+            pipeline = build_forecast_serve_latest_revision_range_pipeline(
+                range_start=range_start,
+                range_end_exclusive=range_end_exclusive,
+                from_block=from_block,
+                to_block=to_block,
+                market_type=market_type,
+                sources=sources,
+            )
         cursor = collection.aggregate(
             pipeline,
             allowDiskUse=True,
