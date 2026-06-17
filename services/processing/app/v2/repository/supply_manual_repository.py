@@ -19,7 +19,7 @@ class SupplyManualRepository(GenericRepository):
     Repository for dc_sg collection using v2 pattern.
     Provides query/update operations for manual supply management.
     """
-
+    
     def __init__(self):
         super().__init__()
         self.collection_name = settings.MONGODB_DC_SG_COLLECTION if hasattr(settings, 'MONGODB_DC_SG_COLLECTION') else "dc_sg"
@@ -130,13 +130,13 @@ class SupplyManualRepository(GenericRepository):
     ) -> Dict[str, Any]:
         """
         Update matching dc_sg records to zero volume with REPLACED flag.
-
+        
         Args:
             plant_id: Plant ID to update (required).
             dc_sg: DC or SG type (required).
             process_type: "today" or "tomorrow" (required).
             time_block: Optional time block filter. If None, updates all blocks.
-
+        
         Returns:
             Dictionary with update results (matched_count, modified_count).
         """
@@ -159,17 +159,17 @@ class SupplyManualRepository(GenericRepository):
                     "updated_at": datetime.now()
                 }
             }
-
+            
             logger.info(f"Updating dc_sg records with query: {query}")
             result = await self.collection.update_many(query, update)
-
+            
             update_result = {
                 "matched_count": result.matched_count,
                 "modified_count": result.modified_count
             }
             logger.info(f"Updated {result.modified_count} records in dc_sg")
             return update_result
-
+            
         except Exception as e:
             logger.error(f"Failed to update manual supply: {str(e)}")
             return {"matched_count": 0, "modified_count": 0, "error": str(e)}
@@ -207,7 +207,7 @@ class SupplyManualRepository(GenericRepository):
                 query["time_block"] = time_block
 
             return await self._find(query)
-
+            
         except Exception as e:
             logger.error(f"Failed to get records for sync: {str(e)}")
             return []

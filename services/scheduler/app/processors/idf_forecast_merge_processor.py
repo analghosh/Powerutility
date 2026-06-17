@@ -22,14 +22,15 @@ from libs.helpers.idf_forecast_switch_validation import active_session_csv_requi
 from libs.helpers.idf_forecast_session import (
     first_writable_block,
     index_forecast_docs,
+    merge_session_ids_for_delivery_date,
     resolve_session_merge_ops_api_only,
     resolve_session_merge_ops_csv_manual,
     session_has_csv_forecast_present,
-    session_ids_from_active_session_through_96,
     session_to_time_blocks,
     time_block_to_session_id,
     writable_blocks_for_date,
 )
+from libs.helpers.idf_final_forecast_freeze import build_idf_final_bulk_ops
 from libs.helpers.rtm_forecast_block_filter import (
     rtm_forecast_run_context,
     target_scheduled_dates_for_rtm,
@@ -349,6 +350,27 @@ class IdfForecastMergeProcessor(BaseProcessor):
         }
 
     @staticmethod
+    def _forecast_revision_for_block(
+        time_block: int,
+        source_forecast: str,
+        csv_by_block: Dict[int, Dict[str, Any]],
+        api_by_block: Dict[int, Dict[str, Any]],
+    ) -> Optional[int]:
+        block_map = csv_by_block if source_forecast == FORECAST_SOURCE_CSV else api_by_block
+        doc = block_map.get(int(time_block)) or {}
+        rev = doc.get("forecast_revision")
+        if rev is not None:
+            return int(rev)
+        b1, b2 = session_to_time_blocks(time_block_to_session_id(int(time_block)))
+        for partner in (b1, b2):
+            if partner == int(time_block):
+                continue
+            partner_rev = (block_map.get(partner) or {}).get("forecast_revision")
+            if partner_rev is not None:
+                return int(partner_rev)
+        return None
+
+    @staticmethod
     def _build_merge_update_op(
         scheduled_at: datetime,
         time_block: int,
@@ -357,6 +379,7 @@ class IdfForecastMergeProcessor(BaseProcessor):
         source_forecast: str,
         demand_by_block: Dict[int, Dict[str, Any]],
         now: datetime,
+        forecast_revision: Optional[int] = None,
     ) -> UpdateOne:
         rostering = float(
             (demand_by_block.get(time_block) or {}).get("rostering") or 0.0
@@ -367,21 +390,24 @@ class IdfForecastMergeProcessor(BaseProcessor):
             "time_block": int(time_block),
             "type": "IDF",
         }
+        set_fields: Dict[str, Any] = {
+            "scheduled_at": scheduled_at,
+            "time_block": int(time_block),
+            "type": "IDF",
+            "forecast": forecast_mw,
+            "forecasted_frequency": forecasted_frequency,
+            "comp_act_demand": comp_act_demand,
+            "comp_udm": forecast_mw,
+            "source_forecast": source_forecast,
+            "updated_at": now,
+            "timestamp": now,
+        }
+        if forecast_revision is not None:
+            set_fields["forecast_revision"] = forecast_revision
         return UpdateOne(
             filter_doc,
             {
-                "$set": {
-                    "scheduled_at": scheduled_at,
-                    "time_block": int(time_block),
-                    "type": "IDF",
-                    "forecast": forecast_mw,
-                    "forecasted_frequency": forecasted_frequency,
-                    "comp_act_demand": comp_act_demand,
-                    "comp_udm": forecast_mw,
-                    "source_forecast": source_forecast,
-                    "updated_at": now,
-                    "timestamp": now,
-                },
+                "$set": set_fields,
                 "$setOnInsert": {
                     "inserted_at": now,
                     "created_at": now,
@@ -398,6 +424,42 @@ class IdfForecastMergeProcessor(BaseProcessor):
             bulk_ops, ordered=False
         )
         return int(result.modified_count) + len(result.upserted_ids)
+
+    async def _sync_idf_final_for_delivery_day(
+        self,
+        scheduled_at: datetime,
+        scheduled_date: date,
+        ctx: Dict[str, Any],
+        api_by_block: Dict[int, Dict[str, Any]],
+    ) -> int:
+        """
+        Upsert IDF_final rows from latest rtm_forecast_api data.
+
+        Blocks before the active session are frozen once; active/future blocks refresh.
+        """
+        if not api_by_block:
+            return 0
+
+        existing_docs = await self.forecast_repository.find_idf_final_by_scheduled_at(
+            scheduled_at
+        )
+        existing_by_block = index_forecast_docs(existing_docs)
+        now = datetime.now()
+        active_sid = int(ctx["active_session_id"])
+        bulk_ops = build_idf_final_bulk_ops(
+            scheduled_at=scheduled_at,
+            scheduled_date=scheduled_date,
+            today_ist=ctx["today_ist"],
+            after_evening_cutover=ctx["after_evening_cutover"],
+            active_session_id=active_sid,
+            api_by_block=api_by_block,
+            existing_by_block=existing_by_block,
+            now=now,
+        )
+        if not bulk_ops:
+            return 0
+        result = await self.forecast_repository.bulk_upsert_idf_final(bulk_ops)
+        return int(result.get("upserted", 0) or 0) + int(result.get("modified", 0) or 0)
 
     @staticmethod
     def _is_primary_delivery_date_for_auto_flip(
@@ -459,7 +521,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         now = datetime.now()
         bulk_ops: List[UpdateOne] = []
 
-        for session_id in session_ids_from_active_session_through_96(ctx["now_local"]):
+        for session_id in merge_session_ids_for_delivery_date(
+            scheduled_date,
+            ctx["today_ist"],
+            ctx["after_evening_cutover"],
+            ctx["now_local"],
+        ):
             if not session_has_csv_forecast_present(session_id, csv_by_block):
                 b1, b2 = session_to_time_blocks(session_id)
                 for block in (b1, b2):
@@ -487,6 +554,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
                             source_label,
                             demand_by_block,
                             now,
+                            forecast_revision=self._forecast_revision_for_block(
+                                time_block,
+                                source_label,
+                                csv_by_block,
+                                api_by_block,
+                            ),
                         )
                     )
                 except Exception as block_err:
@@ -518,7 +591,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         now = datetime.now()
         bulk_ops: List[UpdateOne] = []
 
-        for session_id in session_ids_from_active_session_through_96(ctx["now_local"]):
+        for session_id in merge_session_ids_for_delivery_date(
+            scheduled_date,
+            ctx["today_ist"],
+            ctx["after_evening_cutover"],
+            ctx["now_local"],
+        ):
             ops = resolve_session_merge_ops_api_only(
                 session_id,
                 api_by_block,
@@ -544,6 +622,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
                             source_label,
                             demand_by_block,
                             now,
+                            forecast_revision=self._forecast_revision_for_block(
+                                time_block,
+                                source_label,
+                                {},
+                                api_by_block,
+                            ),
                         )
                     )
                 except Exception as block_err:
@@ -580,6 +664,7 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
 
         merged = skipped = failed = 0
+        idf_final_synced = 0
 
         for target_date in target_dates:
             scheduled_at = self._scheduled_at_midnight(target_date)
@@ -646,6 +731,18 @@ class IdfForecastMergeProcessor(BaseProcessor):
             skipped += s
             failed += f
 
+            try:
+                idf_final_synced += await self._sync_idf_final_for_delivery_day(
+                    scheduled_at,
+                    scheduled_date,
+                    ctx,
+                    api_by_block,
+                )
+            except Exception as freeze_err:
+                logger.warning(
+                    "IDF_final sync failed for %s: %s", scheduled_at, freeze_err
+                )
+
         merge_source = (
             FORECAST_SOURCE_RTM_API
             if (api_merge_this_run or switch_flipped)
@@ -653,11 +750,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
         logger.info(
             "IDF forecast merge complete source=%s merged=%d skipped=%d failed=%d "
-            "switch_flipped=%s switch_prefers_api=%s",
+            "idf_final_synced=%d switch_flipped=%s switch_prefers_api=%s",
             merge_source,
             merged,
             skipped,
             failed,
+            idf_final_synced,
             switch_flipped,
             switch_prefers_api or switch_flipped,
         )

@@ -36,6 +36,10 @@ class ForecastServeBlockRecord(BaseModel):
     type: Optional[str] = None
     forecast: Optional[float] = None
     forecasted_frequency: Optional[float] = None
+    forecast_revision: Optional[int] = Field(
+        None,
+        description="Per delivery-day ingest revision for this source",
+    )
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
 
@@ -50,6 +54,35 @@ class ForecastSourceBucket(BaseModel):
     forecast_source: Literal["Auto", "Manual"]
     count: int = Field(..., description="Number of block records in this bucket")
     records: List[ForecastServeBlockRecord] = Field(default_factory=list)
+
+
+class ManualForecastStatusResponse(BaseModel):
+    schedule_date: str
+    manual_forecast: bool = Field(
+        ...,
+        description="True when manual (CSV) forecast exists for at least one time block",
+    )
+    message: Optional[str] = Field(
+        None,
+        description="Present when manual_forecast is false",
+    )
+
+    model_config = {
+        "json_schema_extra": {
+            "examples": [
+                {
+                    "schedule_date": "2025-05-22",
+                    "manual_forecast": True,
+                    "message": None,
+                },
+                {
+                    "schedule_date": "2025-05-22",
+                    "manual_forecast": False,
+                    "message": "No Data Available for this selected date.",
+                },
+            ]
+        }
+    }
 
 
 class ForecastServeResponse(BaseModel):
@@ -71,8 +104,18 @@ class ForecastServeResponse(BaseModel):
                         "forecast_source": FORECAST_SOURCE_DISPLAY_AUTO,
                         "count": 2,
                         "records": [
-                            {"time_block": 1, "type": "IDF", "forecast": 1200.5},
-                            {"time_block": 2, "type": "IDF", "forecast": 1210.0},
+                            {
+                                "time_block": 1,
+                                "type": "IDF",
+                                "forecast": 1200.5,
+                                "forecast_revision": 3,
+                            },
+                            {
+                                "time_block": 2,
+                                "type": "IDF",
+                                "forecast": 1210.0,
+                                "forecast_revision": 3,
+                            },
                         ],
                     },
                     "manual": {
@@ -126,6 +169,9 @@ async def get_forecast_serve(
 ):
     """
     Fetch IDF forecast rows from **forecast_serve** for the given date and block range.
+
+    Only rows at the **latest** ``forecast_revision`` per source (Auto/Manual) are returned
+    (filtered in MongoDB via ``idx_forecast_serve_day_source_revision``).
 
     Response is split into two objects:
 
@@ -211,4 +257,91 @@ async def get_forecast_serve(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch forecast_serve data.",
+        ) from e
+
+
+@router.get(
+    "/manual-status",
+    response_model=ManualForecastStatusResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Check if manual forecast exists for a schedule date",
+    responses={
+        200: {"description": "OK"},
+        422: {"description": "Validation error"},
+        500: {"description": "Failed to check manual forecast status"},
+    },
+)
+async def get_manual_forecast_status(
+    request: Request,
+    schedule_date: str = Query(
+        ...,
+        description="Schedule date (YYYY-MM-DD)",
+        example="2025-05-22",
+        regex=r"^\d{4}-\d{2}-\d{2}$",
+    ),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    """
+    Return whether **manual** (CSV) forecast data exists in **forecast_serve** for the date.
+
+    - **`manual_forecast`**: `true` if at least one time block has CSV data at the latest revision
+    - **`message`**: ``No Data Available for this selected date.`` when `manual_forecast` is false
+    """
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+
+    try:
+        audit_logger.log_system_operation(
+            service="processing",
+            operation="forecast_serve_manual_status",
+            message="Checking manual forecast status",
+            correlation_id=correlation_id,
+            user_id=user_id,
+            schedule_date=schedule_date,
+        )
+
+        result = await forecast_serve_controller.get_manual_forecast_status(
+            schedule_date=schedule_date,
+        )
+
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="forecast_serve_manual_status_view",
+            message="User checked manual forecast status",
+            username=username,
+            correlation_id=correlation_id,
+            schedule_date=schedule_date,
+            manual_forecast=result.get("manual_forecast"),
+            success=True,
+        )
+
+        return ManualForecastStatusResponse(**result)
+
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ForecastServeManualStatusError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id,
+            schedule_date=schedule_date,
+        )
+        logger.exception(
+            "Error checking manual forecast status for user %s date=%s",
+            user_id,
+            schedule_date,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to check manual forecast status.",
         ) from e

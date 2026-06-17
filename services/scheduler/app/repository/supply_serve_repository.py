@@ -317,6 +317,10 @@ class SupplyServeRepository(BaseServeRepository):
         End-of-Day Job:
         1. Archive 'Yesterday's' data to Historical (Idempotent).
         2. Cleanup Main collection (keep floating window).
+
+        The archival is idempotent: if a historical record already exists for the same
+        unique key but the serve copy has been updated more recently, the historical
+        copy is replaced so the historical table remains a true mirror of the serve table.
         """
         try:
             today = datetime.now().date()
@@ -333,34 +337,90 @@ class SupplyServeRepository(BaseServeRepository):
             })
             all_docs = await cursor.to_list(length=10000)
 
+            if not all_docs:
+                logger.info(f"No supply records to archive for {yesterday}")
+                return {
+                    "archived_count": 0,
+                    "replaced_count": 0,
+                    "deleted_count": 0,
+                    "archive_date": yesterday.isoformat(),
+                    "cleanup_cutoff": cleanup_cutoff.isoformat()
+                }
+
+            unique_key = ["plant_id", "scheduled_at", "time_block", "dc_sg"]
+
+            existing_hist_cursor = self.historical_collection.find({
+                "scheduled_at": {"$gte": start_yesterday, "$lte": end_yesterday}
+            }, {**{k: 1 for k in unique_key}, "updated_at": 1, "_id": 1})
+
+            existing_map: Dict[tuple, Dict[str, Any]] = {}
+            async for doc in existing_hist_cursor:
+                key = tuple(doc.get(k) for k in unique_key)
+                existing_map[key] = doc
+
             archival_batch = []
-            archived_count = 0
+            keys_to_replace = []
 
             for doc in all_docs:
-                hist_doc = dict(doc)
-                if "_id" in hist_doc: del hist_doc["_id"]
+                key = tuple(doc.get(k) for k in unique_key)
+                existing = existing_map.get(key)
 
-                hist_doc["archived_at"] = datetime.now()
-                hist_doc["archived_timestamp"] = datetime.now()
+                source_updated_at = doc.get("updated_at") or doc.get("created_at") or datetime.min
+                if isinstance(source_updated_at, str):
+                    try:
+                        source_updated_at = datetime.fromisoformat(source_updated_at.replace("Z", "+00:00"))
+                    except ValueError:
+                        source_updated_at = datetime.min
+
+                if existing:
+                    hist_updated_at = existing.get("updated_at") or datetime.min
+                    if isinstance(hist_updated_at, str):
+                        try:
+                            hist_updated_at = datetime.fromisoformat(hist_updated_at.replace("Z", "+00:00"))
+                        except ValueError:
+                            hist_updated_at = datetime.min
+
+                    if source_updated_at <= hist_updated_at:
+                        continue
+
+                    keys_to_replace.append(key)
+
+                hist_doc = dict(doc)
+                if "_id" in hist_doc:
+                    del hist_doc["_id"]
+
+                now = datetime.now()
+                hist_doc["archived_at"] = now
+                hist_doc["archived_timestamp"] = now
 
                 archival_batch.append(hist_doc)
 
+            replaced_count = 0
+            if keys_to_replace:
+                replace_filter = {
+                    "$or": [
+                        {k: key[i] for i, k in enumerate(unique_key)}
+                        for key in keys_to_replace
+                    ]
+                }
+                try:
+                    del_result = await self.historical_collection.delete_many(replace_filter)
+                    replaced_count = del_result.deleted_count
+                    logger.info(f"Replaced {replaced_count} stale historical supply records")
+                except Exception as del_err:
+                    logger.error(f"Error deleting stale historical supply records: {del_err}")
+
+            archived_count = 0
             if archival_batch:
-                unique_key = ["plant_id", "scheduled_at", "time_block", "dc_sg"]
+                try:
+                    res = await self.historical_collection.insert_many(archival_batch, ordered=False)
+                    archived_count = len(res.inserted_ids)
+                except Exception as e:
+                    logger.error(f"Bulk insert error in supply archival: {e}")
+                    if hasattr(e, 'details'):
+                        archived_count = e.details.get('nInserted', 0)
 
-                from pymongo import UpdateOne
-                hist_ops = []
-                for hdoc in archival_batch:
-                    filter_q = {k: hdoc.get(k) for k in unique_key}
-                    hist_ops.append(
-                        UpdateOne(filter_q, {"$setOnInsert": hdoc}, upsert=True)
-                    )
-
-                if hist_ops:
-                    h_result = await self.historical_collection.bulk_write(hist_ops, ordered=False)
-                    archived_count = h_result.upserted_count
-
-            logger.info(f"Archived {archived_count} records for {yesterday}")
+            logger.info(f"Archived {archived_count} supply records for {yesterday} (replaced {replaced_count})")
 
             logger.info(f"Cleaning up data older than {cleanup_cutoff}")
 
@@ -373,6 +433,7 @@ class SupplyServeRepository(BaseServeRepository):
 
             return {
                 "archived_count": archived_count,
+                "replaced_count": replaced_count,
                 "deleted_count": deleted_count,
                 "archive_date": yesterday.isoformat(),
                 "cleanup_cutoff": cleanup_cutoff.isoformat()

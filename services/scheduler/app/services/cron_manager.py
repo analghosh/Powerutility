@@ -69,7 +69,13 @@ class CronManager(BaseCronManager):
         # Type annotations for repository instances
         self.job_data_repository: Optional[JobDataRepository] = None
         self.job_detail_repository: Optional[JobDetailRepository] = None
-        
+
+        # Coalescing state: prevents the same job_type from running concurrently
+        # (cron + RabbitMQ triggers stampeding the same processing). See
+        # _execute_job_with_logging_async for the lock + rerun-if-dirty logic.
+        self._jobs_in_flight: set = set()
+        self._jobs_pending_rerun: set = set()
+
         # Initialize audit logger
         try:
             from libs.audit_queue.unified_queue_service import UnifiedQueueService
@@ -247,6 +253,7 @@ class CronManager(BaseCronManager):
             "dsm_rate_calculation": self.dsm_processor.execute_cron_job,
             "new_dsm_rate_calculation": self.new_dsm_processor.execute_cron_job,
             "limit_values_approval_processing": self.limit_values_processor.execute_cron_job,
+            "limit_values_rtm_approval_processing": self.limit_values_processor.execute_rtm_early_cron_job,
 
             "limit_values_rename_id_field": self.limit_values_processor.rename_id_field,
             "rtm_scheduling_calculation": self.rtm_scheduling_processor.execute_cron_job,
@@ -420,7 +427,7 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "exchange_serve_archival",
                 "name": "Exchange Serve Archival",
-                "schedule": "0 2 * * *",  # Every day at 2 AM
+                "schedule": "15 3 * * *",  # Every day at 03:15 AM after final upstream processing
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
@@ -527,7 +534,7 @@ class CronManager(BaseCronManager):
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
-            # Limit Values Job
+            # Limit Values Jobs
             {
                 "job_type": "limit_values_approval_processing",
                 "name": "Limit Values Approval Processing",
@@ -535,46 +542,53 @@ class CronManager(BaseCronManager):
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
+            {
+                "job_type": "limit_values_rtm_approval_processing",
+                "name": "Limit Values RTM Early Approval Processing",
+                "schedule": "15 22 * * *",  # RTM rolls over to tomorrow at 22:15 IST
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
             # Data Archival Jobs (missing from original fallback)
             {
                 "job_type": "demand_serve_archival",
                 "name": "Demand Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "forecast_serve_archival",
                 "name": "Forecast Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "supply_serve_archival",
                 "name": "Supply Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "weather_serve_archival",
                 "name": "Weather Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "bid_serve_archival",
                 "name": "Bid Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
             {
                 "job_type": "renewable_serve_archival",
                 "name": "Renewable Serve Data Archival",
-                "schedule": "0 0 * * *",
+                "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
@@ -678,7 +692,34 @@ class CronManager(BaseCronManager):
             self._main_loop = asyncio.get_running_loop()
             logger.info("Running all enabled jobs on startup...")
             logger.info("   Startup delay: %s seconds", settings.STARTUP_JOB_DELAY_SECONDS)
-            
+
+            # Re-seed here (async context, event loop is running) so any new jobs
+            # added to get_default_jobs() since the last deployment get inserted.
+            # _register_service_jobs() runs during __init__ before the loop is
+            # available, so it falls back to hardcoded jobs and skips DB seeding.
+            if self.cron_job_seeder and self.job_data_repository:
+                try:
+                    seeding_result = await self.cron_job_seeder.seed_default_jobs()
+                    logger.info("Startup re-seed result: %s", seeding_result)
+                    # Register any newly seeded jobs that weren't in _registered_jobs yet
+                    all_jobs = await self.job_data_repository.get_all_jobs(enabled_only=True)
+                    for job_config in all_jobs:
+                        jt = job_config["job_type"]
+                        if jt not in self._registered_jobs:
+                            job_fn = self._get_job_function(jt)
+                            if job_fn:
+                                self.register_job(
+                                    job_type=jt,
+                                    name=job_config["name"],
+                                    schedule=job_config["schedule"],
+                                    func=job_fn,
+                                    enabled=job_config["enabled"],
+                                    timezone=job_config.get("timezone", "Asia/Kolkata"),
+                                )
+                                logger.info("Registered newly seeded job: %s", jt)
+                except Exception as seed_err:
+                    logger.error("Startup re-seed failed: %s", seed_err)
+
             # Wait for the configured delay without blocking the FastAPI event loop
             await asyncio.sleep(settings.STARTUP_JOB_DELAY_SECONDS)
             
@@ -1036,6 +1077,44 @@ class CronManager(BaseCronManager):
             return {"status": "error", "error": str(e)}
     
     async def _execute_job_with_logging_async(self, cron_job):
+        """Coalescing wrapper around job execution.
+
+        Ensures a given job_type never runs concurrently. If a run for this
+        job_type is already in flight (cron + a RabbitMQ trigger, or two triggers),
+        the incoming call is coalesced instead of starting an overlapping run — the
+        in-flight run reads ALL pending data anyway, so nothing is missed. When it
+        finishes, if any trigger arrived during the run, it re-runs exactly once
+        (rerun-if-dirty) so the latest data is never stranded.
+        """
+        import asyncio
+
+        job_type = getattr(cron_job, "job_id", None) or getattr(cron_job, "name", "unknown")
+
+        # Already running -> mark dirty and skip (no overlap).
+        if job_type in self._jobs_in_flight:
+            self._jobs_pending_rerun.add(job_type)
+            logger.info(
+                "Job '%s' already running — coalescing this trigger (will re-run after current finishes)",
+                job_type,
+            )
+            return {"status": "coalesced", "job_type": job_type}
+
+        self._jobs_in_flight.add(job_type)
+        try:
+            return await self._run_job_with_logging_async(cron_job)
+        finally:
+            self._jobs_in_flight.discard(job_type)
+            # Rerun-if-dirty: something was triggered while we were running, so run
+            # once more to pick up data that arrived after this run read its pending.
+            if job_type in self._jobs_pending_rerun:
+                self._jobs_pending_rerun.discard(job_type)
+                logger.info(
+                    "Job '%s' received triggers while running — re-running once to catch new data",
+                    job_type,
+                )
+                asyncio.create_task(self._execute_job_with_logging_async(cron_job))
+
+    async def _run_job_with_logging_async(self, cron_job):
         """Override to capture execution logs and store them in job detail records - ASYNC VERSION"""
         import time
         import asyncio

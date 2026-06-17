@@ -14,7 +14,7 @@ import logging
 from .core.config import settings
 from .api.v1.routes import scheduler
 
-from .routers import queue_health, job_monitoring, rtm_scheduling_router, bid_trade_live_sync_router
+from .routers import queue_health, job_monitoring, rtm_scheduling_router, bid_trade_live_sync_router, demand_trigger_router
 from .services.cron_manager import cron_manager
 from .seeder.timeblock_seeder import TimeblockSeeder
 from .shared.middleware.error_handler import ErrorHandlerMiddleware
@@ -126,6 +126,15 @@ async def lifespan(app: FastAPI):
     
     # Validate configuration on startup
     validate_database_configuration()
+
+    # Ensure forecast_serve indexes (migrate off legacy unique key; CSV + merge reads)
+    try:
+        from .repository.forecast_serve_repository import forecast_serve_repository
+
+        await forecast_serve_repository.create_indexes()
+        await forecast_serve_repository.ensure_historical_collection()
+    except Exception as idx_error:
+        logger.warning("Failed to ensure forecast_serve indexes: %s", idx_error)
 
     # Run timeblock seeder
     run_timeblock_seeder()
@@ -251,6 +260,7 @@ app.include_router(queue_health.router, tags=["queue"])
 app.include_router(job_monitoring.router, tags=["job-monitoring"])
 app.include_router(rtm_scheduling_router.router, prefix="/api/v1/scheduler", tags=["rtm-scheduling"])
 app.include_router(bid_trade_live_sync_router.router, prefix="/api/v1/scheduler", tags=["bid-trade-live-sync"])
+app.include_router(demand_trigger_router.router, prefix="/api/v1/scheduler", tags=["demand-trigger"])
 
 # Mount static files
 from pathlib import Path

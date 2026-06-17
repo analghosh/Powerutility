@@ -2,16 +2,67 @@
 Ingestion API routes
 """
 
-from fastapi import APIRouter, HTTPException, status, Depends
+import logging
+
+import httpx
+from fastapi import APIRouter, HTTPException, status, Depends, BackgroundTasks
 from typing import Dict, Any
 from pydantic import BaseModel
 from datetime import datetime
 from libs.audit_queue.simple_logger import AuditLogger
+from ....core.config import settings
 from ....core.dependencies import get_audit_logger
 from ....middleware.page_access import require_page_access
 
 router = APIRouter(prefix="/ingest", tags=["Data Ingestion"])
 audit_logger = get_audit_logger()
+logger = logging.getLogger("ingestion_routes")
+
+
+def _scheduler_base_url() -> str:
+    """Return scheme+host+port of the scheduler service (strips any path suffix)."""
+    from urllib.parse import urlparse
+    parsed = urlparse(settings.SCHEDULER_SERVICE_URL)
+    return f"{parsed.scheme}://{parsed.netloc}"
+
+
+async def _trigger_scheduler_demand_pipeline() -> Dict[str, Any]:
+    """
+    Call the scheduler's demand-trigger endpoint to run demand_temp_sync then
+    demand_processor. Failures here do not fail the ingestion (which already
+    published to RabbitMQ); the outcome is reported back in the response.
+    """
+    url = f"{_scheduler_base_url()}/api/v1/scheduler/demand-trigger/trigger"
+    timeout = getattr(settings, 'SCHEDULER_DEMAND_TRIGGER_TIMEOUT', 300)
+    try:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            resp = await client.post(url)
+            resp.raise_for_status()
+            return {"success": True, "detail": resp.json()}
+    except Exception as e:
+        logger.error("Failed to trigger scheduler demand pipeline at %s: %s", url, str(e))
+        return {"success": False, "error": str(e)}
+
+
+async def _run_manual_supply_demand_pipeline() -> None:
+    """
+    Background worker: run the supply/demand/rtm-optimization ingestion, then
+    chain the scheduler demand pipeline. Runs detached from the HTTP request so
+    the caller gets an immediate "triggered" response instead of timing out.
+    """
+    from ....processors.api_raw_data_processor import APIRawDataProcessor
+    try:
+        processor = APIRawDataProcessor(audit_logger)
+        result = await processor.process_supply_demand_api_data()
+        logger.info("Manual supply/demand ingestion finished with status=%s", result.get('status'))
+
+        if result.get('status') in ('success', 'partial_success'):
+            sched = await _trigger_scheduler_demand_pipeline()
+            logger.info("Scheduler demand pipeline triggered (success=%s)", sched.get('success'))
+        else:
+            logger.warning("Skipping scheduler trigger; ingestion status=%s", result.get('status'))
+    except Exception as e:
+        logger.error("Manual supply/demand pipeline failed in background: %s", str(e), exc_info=True)
 
 
 class DataIngestionRequest(BaseModel):
@@ -168,6 +219,45 @@ async def validate_data(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Data validation failed: {str(e)}"
         ) from e
+
+
+@router.post("/trigger-supply-demand", status_code=status.HTTP_202_ACCEPTED)
+async def trigger_supply_demand_ingestion(
+    background_tasks: BackgroundTasks,
+    _current_user: Dict[str, Any] = Depends(require_page_access("Data Ingestion"))
+):
+    """
+    Trigger the full manual demand/supply pipeline and return immediately.
+
+    The endpoint only *kicks off* the work and responds right away (202) so the
+    frontend never waits/timeouts. In the background it:
+      1. Runs the api_raw_data_processor pipeline for SUPPLY, DEMAND and the RTM
+         optimization provider, storing raw data with metadata.manual = true.
+      2. Publishes job triggers to RabbitMQ for the downstream consumers.
+      3. Chains a call to the scheduler's demand-trigger endpoint, which runs
+         demand_temp_sync then demand_processor.
+
+    Returns 409 Conflict only if the api cron is already running (cron handles
+    the update — no need to duplicate).
+    """
+    from ....processors import api_raw_data_processor as _api_proc_module
+
+    # Fast pre-check (instant flag read) so the caller still gets a 409 when the
+    # cron is mid-run, without waiting for any processing.
+    if _api_proc_module._api_cron_running:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="API cron job is currently running. Please try again after it completes."
+        )
+
+    # Fire-and-forget: do the heavy ingestion + scheduler chain in the background.
+    background_tasks.add_task(_run_manual_supply_demand_pipeline)
+
+    return {
+        "status": "triggered",
+        "message": "Manual supply/demand pipeline triggered. Ingestion and scheduler "
+                   "processing are running in the background."
+    }
 
 
 @router.get("/status", response_model=StatusResponse)

@@ -144,6 +144,9 @@ class BlockBidServices:
             other_remark_rej = request.get("other_remark_rej", [])
             ids = request.get("id", [])
 
+            updated = []
+            skipped = []
+
             for i in range(len(statuses)):
                 if statuses[i] is None:
                     continue
@@ -165,9 +168,24 @@ class BlockBidServices:
                     "approve_time": datetime.now().strftime("%d-%m-%Y %H:%M:%S"),
                     "remark": remark,
                 }
-                
-                # ✅ Update DB record
-                await self.block_bid_repo.updatedata(ids[i], data)
+
+                # Only update bids currently in pending status (approve and reject).
+                matched = await self.block_bid_repo.updatedata_if_pending(ids[i], data)
+                if matched:
+                    updated.append({
+                        "id": ids[i],
+                        "status": statuses[i],
+                    })
+                else:
+                    logger.info(
+                        "Bid %s skipped: cannot update a bid that is not in pending status",
+                        ids[i],
+                    )
+                    skipped.append({
+                        "id": ids[i],
+                        "status": statuses[i],
+                        "reason": "Bid is no longer pending (already processed by another approver)",
+                    })
 
                 # ✅ Notification data
                 status_label = "Approved" if statuses[i] == "Approved" else "Rejected"
@@ -180,8 +198,29 @@ class BlockBidServices:
                     "notification_type": "bid_for_approve_reject",
                 }
 
-               
-            return {"message": "Bid Approved Successfully"}
+            total = len(updated) + len(skipped)
+            updated_count = len(updated)
+            skipped_count = len(skipped)
+
+            if updated_count == total and total > 0:
+                message = "All bids updated successfully"
+            elif updated_count == 0 and skipped_count > 0:
+                message = "No bids updated — all were already processed"
+            elif updated_count > 0 and skipped_count > 0:
+                message = f"Partial update: {updated_count} updated, {skipped_count} skipped"
+            else:
+                message = "Bid Approved Successfully"
+
+            return {
+                "message": message,
+                "summary": {
+                    "total": total,
+                    "updated_count": updated_count,
+                    "skipped_count": skipped_count,
+                },
+                "updated": updated,
+                "skipped": skipped,
+            }
 
         except Exception as e:
             logger.error(f"Failed to get pending approvals in : {str(e)}")
@@ -273,19 +312,10 @@ class BlockBidServices:
         if total_bids > 60:
             raise HTTPException(status_code=400, detail="Bid Quota Exists! Total number_of_bids exceeds exchange limit of 60")
 
-        # 6. Build BidDetails[] — IEX RTM API v2.0 PascalCase fields
         now = datetime.now()
         day_str = now.strftime("%d")
+        user_id_prefix = str(user_id)[:5].ljust(5)
 
-        # BidReferenceId format: {UserID(5 chars)}{day(2)}{count(1-4 digits)} — max 11 chars total
-        user_id_prefix = str(user_id)[:5].ljust(5)  # ensure exactly 5 chars
-
-        bid_details: List[Dict[str, Any]] = []
-        blck_count = 0
-
-        # Fetch reference count once — calling it per-bid returns the same value
-        # since the counter only increments on successful submission, not on fetch.
-        # Use this as the base and offset each bid by blck_count for unique IDs.
         try:
             bid_ref_base = await api_client.get_bid_reference_id()
             bid_ref_start = bid_ref_base.get("RTMBlockBidRefCount", 0)
@@ -296,7 +326,16 @@ class BlockBidServices:
         except Exception as e:
             raise HTTPException(status_code=502, detail=f"Failed to fetch bid reference ID: {type(e).__name__}: {e}")
 
+        all_transaction_ids: List[str] = []
+        all_response_docs: List[Dict[str, Any]] = []
+        blck_count = 0
+
+        # 6. Submit each approved bid individually — exchange only processes one BidDetails entry at a time
         for bid in bids:
+            bid_id      = bid.get("_id", "")
+            from_period_id = bid.get("from", "00:00")
+            to_period_id   = bid.get("to", "00:00")
+
             ex_split = bid.get("ex_split_string", "IEX-100_PXIL-0")
             try:
                 iex_value = int(ex_split.split("_")[0].split("-")[1])
@@ -304,140 +343,124 @@ class BlockBidServices:
                 iex_value = 100
 
             quantum  = int(bid.get("quantum", 0))
-            bid_type = bid.get("type", "Sell")
-            buy_sell = "S" if bid_type == "Sell" else "B"
-
-            # IEX share in MW then convert to exchange unit (×10)
-            # Quantity: Negative for Sell, Positive for Buy (IEX RTM API v2.0 spec)
+            buy_sell = "S" if bid.get("type", "Sell") == "Sell" else "B"
             iex_quantity = (quantum * iex_value) / 100
             quantity_exchange = iex_quantity * biddedQtyDecimal * (-1 if buy_sell == "S" else 1)
 
-            # FromPeriodId / ToPeriodId are time strings "HH:MM" not integer codes
-            from_period_id = bid.get("from", "00:00")
-            to_period_id   = bid.get("to", "00:00")
-
             num_bids = int(bid.get("number_of_bids", 1))
+            bid_details_for_this_bid: List[Dict[str, Any]] = []
             for _ in range(num_bids):
                 blck_count += 1
                 bid_ref_id = f"{user_id_prefix}{day_str}{bid_ref_start + blck_count}"
-                bid_details.append({
-                    "Session":              int(bid.get("trade_session", 1)),
-                    "FromPeriodId":         from_period_id,
-                    "ToPeriodId":           to_period_id,
-                    "BuySell":              buy_sell,
-                    "Price":                int(bid.get("bid_price", 0)),
-                    "Quantity":             int(quantity_exchange),
-                    "BidReferenceId":       bid_ref_id,
+                bid_details_for_this_bid.append({
+                    "Session":        int(bid.get("trade_session", 1)),
+                    "FromPeriodId":   from_period_id,
+                    "ToPeriodId":     to_period_id,
+                    "BuySell":        buy_sell,
+                    "Price":          int(bid.get("bid_price", 0)),
+                    "Quantity":       int(quantity_exchange),
+                    "BidReferenceId": bid_ref_id,
                 })
 
-        request_body = {
-            "DeliveryDate":  delivery_date_ts,
-            "AssetId":       asset_id,
-            "BidAreaId":     bid_area_id,
-            "UserId":        user_id,
-            "ParticipantId": participant_id,
-            "PortfolioId":   portfolio_id,
-            "InitiatedBy":   user_id,
-            "BidDetails":    bid_details,
-        }
+            request_body = {
+                "DeliveryDate":  delivery_date_ts,
+                "AssetId":       asset_id,
+                "BidAreaId":     bid_area_id,
+                "UserId":        user_id,
+                "ParticipantId": participant_id,
+                "PortfolioId":   portfolio_id,
+                "InitiatedBy":   user_id,
+                "BidDetails":    bid_details_for_this_bid,
+            }
 
-        # 5. POST to exchange — response: {TransactionId, Status, StatusMessage}
-        try:
-            response_data = await api_client.submit_block_bid(request_body)
-        except Exception as e:
-            logger.error(f"Exchange API error during block bid submission: {str(e)}")
-            raise HTTPException(status_code=502, detail=f"Exchange API error: {str(e)}")
+            try:
+                response_data = await api_client.submit_block_bid(request_body)
+            except Exception as e:
+                logger.error(f"Exchange API error for bid from={from_period_id} to={to_period_id}: {e}")
+                continue
 
-        transaction_id = response_data.get("TransactionId") if isinstance(response_data, dict) else None
-        submit_status  = response_data.get("Status", "Unknown") if isinstance(response_data, dict) else "Unknown"
+            transaction_id = response_data.get("TransactionId") if isinstance(response_data, dict) else None
+            submit_status  = response_data.get("Status", "Unknown") if isinstance(response_data, dict) else "Unknown"
 
-        if submit_status != "Success" or not transaction_id:
-            logger.error(f"Block bid submission failed — full exchange response: {response_data}")
-            raise HTTPException(status_code=502, detail={"exchange_response": response_data})
+            if submit_status != "Success" or not transaction_id:
+                logger.error(f"Bid submission failed from={from_period_id} to={to_period_id}: {response_data}")
+                continue
 
-        logger.info(f"Block bid submitted: TransactionId={transaction_id}, waiting for bid details...")
+            logger.info(f"Bid submitted from={from_period_id} to={to_period_id}, TransactionId={transaction_id}")
 
-        # 6. Wait 4 seconds then fetch per-bid order details
-        await asyncio.sleep(4)
+            # Wait 4 seconds then fetch per-bid order details from exchange
+            await asyncio.sleep(4)
 
-        try:
-            bid_details_response = await api_client.get_bid_details(
-                transaction_id=str(transaction_id),
-                delivery_date=delivery_date_ts,
-                bid_type="block-bid",
-            )
-        except Exception as e:
-            logger.warning(f"get_bid_details failed after submission (TransactionId={transaction_id}): {e}")
-            bid_details_response = {}
+            try:
+                bid_details_response = await api_client.get_bid_details(
+                    transaction_id=str(transaction_id),
+                    delivery_date=delivery_date_ts,
+                    bid_type="block-bid",
+                )
+            except Exception as e:
+                logger.warning(f"get_bid_details failed (TransactionId={transaction_id}): {e}")
+                bid_details_response = {}
 
-        # 7. Mark original bids Approved → Submitted
-        await self.block_bid_repo.bulk_update_status(biding_date, "Approved", "Submitted", market_type="RTM")
+            rtm_bid_details = bid_details_response.get("RTMBlockBidDetails", []) if isinstance(bid_details_response, dict) else []
+            updated_at = datetime.now()
 
-        # 8. Map RTMBlockBidDetails → update existing block_bid_current_data docs + insert into iex_response
-        rtm_bid_details = bid_details_response.get("RTMBlockBidDetails", []) if isinstance(bid_details_response, dict) else []
-        response_docs: List[Dict[str, Any]] = []
-        final_status = "Submitted"
-        updated_at = datetime.now()
+            if rtm_bid_details:
+                last_val   = rtm_bid_details[-1]
+                order_id   = last_val.get("OrderId", "")
+                order_status = last_val.get("OrderStatus", "Submitted")
+            else:
+                order_id     = ""
+                order_status = "Submitted"
 
-        async def _update_bid_detail(val):
-            order_status = val.get("OrderStatus", "Submitted")
-            from_time    = val.get("FromPeriodId", "")
-            to_time      = val.get("ToPeriodId", "")
-            order_id     = val.get("OrderId", "")
-            await self.block_bid_repo.update_one(
-                {
-                    "biding_date": biding_date,
-                    "from":        from_time,
-                    "to":          to_time,
-                    "status":      "Submitted",
-                },
-                {"$set": {
-                    "exchangeStatus":          order_status,
-                    "exchangeOrderId":         order_id,
-                    "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
-                    "orderId":                 order_id,
-                    "updatedAt":               updated_at,
-                }},
-            )
+            rtm_update_fields: Dict[str, Any] = {
+                "status":                  "Submitted",
+                "exchangeStatus":          order_status,
+                "exchangeOrderId":         order_id,
+                "exchangeLastUpdatedTime": last_val.get("LastUpdatedTime", "") if rtm_bid_details else "",
+                "orderId":                 order_id,
+                "updatedAt":               updated_at,
+            }
+            # Only mirror the rejection — don't touch status for any other exchange state.
+            if order_status == "Rejected":
+                rtm_update_fields["status"] = "exchange_rejected"
 
-        if rtm_bid_details:
-            final_status = rtm_bid_details[-1].get("OrderStatus", "Submitted")
-            # Fire all DB updates concurrently
-            await asyncio.gather(*[_update_bid_detail(v) for v in rtm_bid_details], return_exceptions=True)
+            await self.block_bid_repo.updatedata(bid_id, rtm_update_fields)
 
-        for val in rtm_bid_details:
-            from_time  = val.get("FromPeriodId", "")
-            to_time    = val.get("ToPeriodId", "")
-            order_id   = val.get("OrderId", "")
-            # 8b. Collect per-OrderId doc for dicision_rtm_block_bid_iex_response
-            response_docs.append({
-                "trade_session":     val.get("Session"),
-                "from":              from_time,
-                "to":                to_time,
-                "time_block":        f"{from_time}-{to_time}",
-                "quantum":           abs(float(val.get("Quantity", 0))) / 10,  # exchange unit → MW
-                "bid_price":         float(val.get("Price", 0)),
-                "order_id":          order_id,
-                "ref_id":            val.get("BidReferenceId", ""),
-                "type":              "Sell" if val.get("BuySell") == "S" else "Buy",
-                "status":            val.get("OrderStatus", "Submitted"),
-                "last_updated_time": val.get("LastUpdatedTime", ""),
-                "transaction_id":    transaction_id,
-                "Biding_date":       biding_date,
-                "inserted_date":     biding_date,
-                "created_by":        submitted_by,
-                "created_time":      now.strftime("%d-%m-%Y %H:%M:%S"),
-            })
+            for val in rtm_bid_details:
+                from_time = val.get("FromPeriodId", "")
+                to_time   = val.get("ToPeriodId", "")
+                oid       = val.get("OrderId", "")
+                all_response_docs.append({
+                    "trade_session":     val.get("Session"),
+                    "from":              from_time,
+                    "to":                to_time,
+                    "time_block":        f"{from_time}-{to_time}",
+                    "quantum":           abs(float(val.get("Quantity", 0))) / 10,
+                    "bid_price":         float(val.get("Price", 0)),
+                    "order_id":          oid,
+                    "ref_id":            val.get("BidReferenceId", ""),
+                    "type":              "Sell" if val.get("BuySell") == "S" else "Buy",
+                    "status":            val.get("OrderStatus", "Submitted"),
+                    "last_updated_time": val.get("LastUpdatedTime", ""),
+                    "transaction_id":    transaction_id,
+                    "Biding_date":       biding_date,
+                    "inserted_date":     biding_date,
+                    "created_by":        submitted_by,
+                    "created_time":      now.strftime("%d-%m-%Y %H:%M:%S"),
+                })
 
-        if response_docs:
-            await self.iex_response_repo.bulk_insert_response_docs(response_docs)
+            all_transaction_ids.append(str(transaction_id))
 
-        logger.info(f"Block bid submission complete: TransactionId={transaction_id}, {len(response_docs)} bids, status={final_status}")
+        if all_response_docs:
+            await self.iex_response_repo.bulk_insert_response_docs(all_response_docs)
+
+        total_submitted = len(all_transaction_ids)
+        logger.info(f"Block bid submission complete: {total_submitted}/{len(bids)} bids submitted, {len(all_response_docs)} exchange records")
         return {
             "status": "success",
-            "message": f"Bid {final_status} in exchange!",
-            "transaction_id": transaction_id,
-            "bids_submitted": len(response_docs),
+            "message": f"{total_submitted} bid(s) submitted to exchange!",
+            "transaction_ids": all_transaction_ids,
+            "bids_submitted": total_submitted,
         }
 
     async def export_iex_excel(self, biding_date: str, market_type: str = "RTM") -> StreamingResponse:
@@ -583,7 +606,7 @@ class BlockBidServices:
         for order_id in order_ids:
             item = {"order_id": order_id, "success": False, "message": "", "exchange_response": None}
             try:
-                # Get last_updated_time from stored IEX response
+                # Get stored IEX response doc (has transaction_id + stale last_updated_time)
                 iex_doc = await self.iex_response_repo.get_by_order_id(order_id)
                 if not iex_doc:
                     item["message"] = f"No exchange response doc found for order_id={order_id}"
@@ -591,7 +614,20 @@ class BlockBidServices:
                     results.append(item)
                     continue
 
-                last_updated_time = iex_doc.get("last_updated_time", 0)
+                # Fetch fresh LastUpdatedTime from exchange — the stored value is stale.
+                # IEX rejects the cancel if LastUpdatedTime doesn't match its current book value.
+                last_updated_time = iex_doc.get("last_updated_time", 0)  # fallback
+                transaction_id = iex_doc.get("transaction_id")
+                if transaction_id and delivery_ts:
+                    try:
+                        fresh = await api_client.get_bid_details(transaction_id, delivery_ts, bid_type="block-bid")
+                        for detail in fresh.get("RTMBlockBidDetails", []):
+                            if int(detail.get("OrderId", 0)) == int(order_id):
+                                last_updated_time = detail.get("LastUpdatedTime", last_updated_time)
+                                logger.info(f"Refreshed LastUpdatedTime for order_id={order_id}: {last_updated_time}")
+                                break
+                    except Exception as fetch_err:
+                        logger.warning(f"Could not refresh LastUpdatedTime for order_id={order_id}, using stored value: {fetch_err}")
 
                 # Call exchange cancel API
                 exchange_response = await api_client.cancel_block_bid(
@@ -604,11 +640,36 @@ class BlockBidServices:
                 # IEX RTM API v2.0: success indicated by Status=="Success"
                 if exchange_response.get("Status") == "Success":
                     cancel_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+                    # 1. Update submission snapshot (dicision_rtm_block_bid_iex_response)
                     await self.iex_response_repo.update_status_by_order_id(
                         order_id,
                         "Cancelled",
                         extra_fields={"cancelled_by": cancelled_by, "cancelled_time": cancel_time}
                     )
+
+                    # 2. Immediately update block_bid_current_data so bid-listing
+                    #    endpoints reflect the cancellation without waiting for the
+                    #    next scheduler sync.
+                    await self.block_bid_repo.update_one(
+                        {"exchangeOrderId": order_id},
+                        {"$set": {
+                            "status": "Cancelled",
+                            "exchangeStatus": "Cancelled",
+                            "cancelled_by": cancelled_by,
+                            "cancelled_time": cancel_time,
+                        }}
+                    )
+
+                    # 3. Immediately update rtm_block_bid_book_status so the
+                    #    bid-book endpoint shows the new status right away (the
+                    #    scheduler refreshes every 15 min — too slow for UX).
+                    await self.block_bid_book_repo.update_order_status_by_order_id(
+                        order_id,
+                        "Cancelled",
+                        extra_fields={"cancelled_by": cancelled_by, "cancelled_time": cancel_time},
+                    )
+
                     item["success"] = True
                     item["message"] = "Cancelled successfully on exchange"
                     logger.info(f"order_id={order_id} cancelled on exchange by {cancelled_by}")
@@ -901,6 +962,16 @@ class BlockBidServices:
             from_time    = val.get("FromPeriodId", "")
             to_time      = val.get("ToPeriodId", "")
             order_id_val = val.get("OrderId", "")
+            set_fields: Dict[str, Any] = {
+                "exchangeStatus":          order_status,
+                "exchangeOrderId":         order_id_val,
+                "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
+                "orderId":                 order_id_val,
+                "updatedAt":               datetime.now(),
+            }
+            # Only mirror the rejection — don't touch status for any other exchange state.
+            if order_status == "Rejected":
+                set_fields["status"] = "exchange_rejected"
             await self.block_bid_repo.update_one(
                 {
                     "biding_date": biding_date,
@@ -909,13 +980,7 @@ class BlockBidServices:
                     "status":      "Submitted",
                     "market_type": "DAM",
                 },
-                {"$set": {
-                    "exchangeStatus":          order_status,
-                    "exchangeOrderId":         order_id_val,
-                    "exchangeLastUpdatedTime": val.get("LastUpdatedTime", ""),
-                    "orderId":                 order_id_val,
-                    "updatedAt":               datetime.now(),
-                }},
+                {"$set": set_fields},
             )
 
         if dam_bid_details:

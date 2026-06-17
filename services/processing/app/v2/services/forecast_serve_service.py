@@ -3,7 +3,10 @@ Forecast Serve service — query forecast_serve by date and time block range.
 """
 
 import logging
-from typing import Any, Dict, List
+from datetime import datetime
+from typing import Any, Dict, List, Optional
+
+from bson import ObjectId
 
 from libs.models.forecast_serve_entity import (
     FORECAST_SOURCE_CSV,
@@ -15,23 +18,46 @@ from ..repository.forecast_serve_repository import forecast_serve_repository
 
 logger = logging.getLogger(__name__)
 
+MANUAL_FORECAST_NO_DATA_MESSAGE = "No Data Available for this selected date."
+
 
 class ForecastServeService:
     def __init__(self):
         self.repository = forecast_serve_repository
 
     @staticmethod
+    def _serialize_api_value(value: Any) -> Optional[str]:
+        """Convert Mongo BSON types to JSON-safe strings for API responses."""
+        if value is None:
+            return None
+        if isinstance(value, ObjectId):
+            return str(value)
+        if isinstance(value, datetime):
+            return value.isoformat()
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    @staticmethod
     def _format_block_record(doc: Dict[str, Any]) -> Dict[str, Any]:
         """Block-level fields only (source label lives on auto/manual parent)."""
+        raw_id = doc.get("_id") or doc.get("id")
         return {
-            "id": doc.get("_id") or doc.get("id"),
-            "scheduled_at": doc.get("scheduled_at"),
+            "id": ForecastServeService._serialize_api_value(raw_id),
+            "scheduled_at": ForecastServeService._serialize_api_value(
+                doc.get("scheduled_at")
+            ),
             "time_block": doc.get("time_block"),
             "type": doc.get("type"),
             "forecast": doc.get("forecast"),
             "forecasted_frequency": doc.get("forecasted_frequency"),
-            "created_at": doc.get("created_at"),
-            "updated_at": doc.get("updated_at"),
+            "forecast_revision": doc.get("forecast_revision"),
+            "created_at": ForecastServeService._serialize_api_value(
+                doc.get("created_at")
+            ),
+            "updated_at": ForecastServeService._serialize_api_value(
+                doc.get("updated_at")
+            ),
         }
 
     async def get_forecast_serve_by_blocks(
@@ -76,6 +102,31 @@ class ForecastServeService:
                 "count": len(manual_records),
                 "records": manual_records,
             },
+        }
+
+    async def get_manual_forecast_status(
+        self,
+        schedule_date: str,
+    ) -> Dict[str, Any]:
+        """
+        Return whether manual (CSV) forecast exists in forecast_serve for the date.
+
+        True when at least one time block has a CSV row at the latest revision.
+        """
+        raw = await self.repository.find_by_date_and_block_range(
+            schedule_date=schedule_date,
+            from_block=1,
+            to_block=96,
+        )
+        manual_forecast = any(
+            doc.get("source") == FORECAST_SOURCE_CSV for doc in raw
+        )
+        return {
+            "schedule_date": schedule_date,
+            "manual_forecast": manual_forecast,
+            "message": None
+            if manual_forecast
+            else MANUAL_FORECAST_NO_DATA_MESSAGE,
         }
 
 

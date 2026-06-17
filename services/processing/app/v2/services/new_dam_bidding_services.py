@@ -80,6 +80,7 @@ class DAMBiddingServices:
             bid_date = scheduled_at
             if isinstance(scheduled_at, str):
                 scheduled_at = datetime.strptime(scheduled_at, "%Y-%m-%d")
+            scheduled_at_end = scheduled_at + timedelta(days=1)
             # ---------------------------------------------------------
             # 1. Fetch system user bids
             # ---------------------------------------------------------
@@ -102,18 +103,19 @@ class DAMBiddingServices:
             exchange_config = await self.exchange_config_repo.get_bidType_market_active_config(
                 "single",
                 "DAM"
-            )
+            ) or {}
             system_user_id = exchange_config.get("LoginUserId")
             portfolio_id = exchange_config.get("BidAreaId")
 
             # ---------------------------------------------------------
             # 3. Fetch book data ONLY for other users
             # ---------------------------------------------------------
-            book_details = await self.generic_repo.find_many(
-                self.dam_book_collection,
+            book_details = await self.generic_repo.get_all_async(
+                "dam_bid_data_live",
                 {
-                    "scheduled_at": scheduled_at,
-                    "exchangeOrderId": {"$nin": list(system_order_ids)}
+                    "scheduled_at": {"$gte": scheduled_at, "$lt": scheduled_at_end},
+                    "OrderId": {"$nin": list(system_order_ids)},
+                    "OrderStatus": {"$in": ["Executed", "Provisional"]}
                 }
             )
 
@@ -240,11 +242,11 @@ class DAMBiddingServices:
                         "otherUserPQData": None,
                     }
 
-                response_struct[key]["otherUserPQData"] = bid.get("exchangePQData")
+                response_struct[key]["otherUserPQData"] = bid.get("PQData")
 
                 # Capture other user id (assuming one user context)
                 if other_user_id is None:
-                    other_user_id = bid.get("InitiatedBy")
+                    other_user_id = bid.get("UserId")
 
             # ---------------------------------------------------------
             # 7. Final Response Structure
@@ -2979,9 +2981,51 @@ class DAMBiddingServices:
                         }
                     )
 
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks, return_exceptions=True)
 
-            return {"result": True, "data": data_array}
+            updated = []
+            skipped = []
+            errors = []
+            for ref_dict, res in zip(data_array, results):
+                if isinstance(res, Exception):
+                    errors.append({**ref_dict, "reason": str(res)})
+                    continue
+                if res.get("modified_count", 0) > 0:
+                    updated.append(ref_dict)
+                else:
+                    skipped.append({
+                        **ref_dict,
+                        "reason": "Bid is no longer pending (already processed by another approver)",
+                    })
+
+            total = len(data_array)
+            updated_count = len(updated)
+            skipped_count = len(skipped)
+            error_count = len(errors)
+
+            if error_count > 0:
+                message = f"Update failed for {error_count} bid(s)"
+            elif updated_count == total:
+                message = "All bids updated successfully"
+            elif updated_count == 0:
+                message = "No bids updated — all were already processed"
+            else:
+                message = f"Partial update: {updated_count} updated, {skipped_count} skipped"
+
+            return {
+                "result": updated_count > 0 and error_count == 0,
+                "message": message,
+                "data": data_array,
+                "summary": {
+                    "total": total,
+                    "updated_count": updated_count,
+                    "skipped_count": skipped_count,
+                    "error_count": error_count,
+                },
+                "updated": updated,
+                "skipped": skipped,
+                "errors": errors,
+            }
             #     tasks.append(self.updatePlantDataForApproval(ref_dict))  
 
             # results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -3046,12 +3090,15 @@ class DAMBiddingServices:
         return time_block
 
     async def updatePlantDataForApproval(self, data, current_user):
-        
+
         try:
             filter_query = {
                 "_id": ObjectId(data["reference_number"]),
                 "block_no": int(data["block_no"])
             }
+
+            # Only update when the bid is still pending (approve and reject).
+            filter_query["bid_status"] = "pending"
 
             update_query = {
                 "$set": {
@@ -3062,14 +3109,17 @@ class DAMBiddingServices:
                     "approved_time": datetime.now().strftime("%H:%M")
                 }
             }
-            
+
             result = await self.single_bid_data_for_approval_repo.update_one(filter_query, update_query)
             matched = result.get("matched_count", 0)
             modified = result.get("modified_count", 0)
 
             return {
+                "reference_number": data["reference_number"],
+                "block_no": int(data["block_no"]),
+                "bid_status": data["bid_status"],
                 "matched_count": matched,
-                "modified_count": modified
+                "modified_count": modified,
             }
         except Exception as e:
             logger.exception(f"[updatePlantDataForApproval] Error: {str(e)}")

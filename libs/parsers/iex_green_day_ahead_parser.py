@@ -5,6 +5,7 @@ from datetime import datetime
 
 from libs.parsers.base_parser import BaseParser
 from libs.models.provider_models import ProviderEntity
+from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +23,9 @@ class IEXGreenDayAheadParser(BaseParser):
             return float(val)
         except (ValueError, TypeError):
             return 0.0
+
+    def _parse_date_str(self, date_str: str) -> str:
+        return parse_ingestion_date(date_str).date().isoformat()
 
     def parse(self, content: str, provider: Optional[ProviderEntity] = None, **kwargs) -> List[Dict[str, Any]]:
         """
@@ -140,7 +144,7 @@ class IEXGreenDayAheadParser(BaseParser):
                     # Actually, usually Date is rowspan=96, Hour is rowspan=4, Session ID is likely rowspan=4 (aligned with Hour)
                     
                     if len(texts) == 18: # Date, Hour, Session, TimeBlock, Data...
-                        current_date = texts[0]
+                        current_date = self._parse_date_str(texts[0])
                         current_hour = texts[1]
                         # session = texts[2] # skip
                         time_block = texts[3]
@@ -189,7 +193,7 @@ class IEXGreenDayAheadParser(BaseParser):
                         
                 else: # Old Logic (No Session ID)
                     if len(texts) == 17:
-                        current_date = texts[0]
+                        current_date = self._parse_date_str(texts[0])
                         current_hour = texts[1]
                         time_block = texts[2]
                         nums = list(map(self._safe_float_conversion, texts[3:]))
