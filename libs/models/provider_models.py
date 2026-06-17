@@ -15,6 +15,7 @@ class IngestionType(str, Enum):
     """Ingestion type enumeration"""
     UPLOAD = "upload"
     API = "api"
+    API_V2 = "api-v2"
     FTP = "ftp"
     SCRAPE = "scrape"
 

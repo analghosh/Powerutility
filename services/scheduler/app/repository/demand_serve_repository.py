@@ -338,6 +338,11 @@ class DemandServeRepository(BaseServeRepository):
     async def archive_old_demand_data(self, days_to_keep: int = 2) -> Dict[str, Any]:
         """
         Archive old demand data to historical collection and cleanup serve collection.
+
+        The archival is idempotent: if a historical record already exists for the same
+        (scheduled_at, time_block, type) key but the serve copy has been updated more
+        recently, the historical copy is replaced so the historical table remains a true
+        mirror of the serve table.
         """
         try:
             today = datetime.now().date()
@@ -359,12 +364,14 @@ class DemandServeRepository(BaseServeRepository):
                 return {
                     "archived_count": 0,
                     "deleted_count": 0,
+                    "replaced_count": 0,
                     "message": "No records to archive"
                 }
 
             logger.info(f"Found {len(archival_candidates)} demand records to potentially archive")
 
             historical_inserts = []
+            replaced_count = 0
 
             if archival_candidates:
                 min_date = min(d["scheduled_at"] for d in archival_candidates)
@@ -372,16 +379,18 @@ class DemandServeRepository(BaseServeRepository):
 
                 existing_hist_cursor = self.historical_collection.find({
                     "scheduled_at": {"$gte": min_date, "$lte": max_date}
-                }, {"scheduled_at": 1, "time_block": 1, "type": 1, "_id": 0})
+                }, {"scheduled_at": 1, "time_block": 1, "type": 1, "updated_at": 1, "_id": 1})
 
-                existing_keys = set()
+                existing_map: Dict[tuple, Dict[str, Any]] = {}
                 async for doc in existing_hist_cursor:
                     key = (
                         doc.get("scheduled_at"),
                         doc.get("time_block"),
                         doc.get("type")
                     )
-                    existing_keys.add(key)
+                    existing_map[key] = doc
+
+                keys_to_replace = []
 
                 for doc in archival_candidates:
                     key = (
@@ -390,15 +399,54 @@ class DemandServeRepository(BaseServeRepository):
                         doc.get("type")
                     )
 
-                    if key not in existing_keys:
-                        hist_doc = dict(doc)
-                        if "_id" in hist_doc: del hist_doc["_id"]
+                    existing = existing_map.get(key)
+                    source_updated_at = doc.get("updated_at") or doc.get("created_at") or datetime.min
+                    if isinstance(source_updated_at, str):
+                        try:
+                            source_updated_at = datetime.fromisoformat(source_updated_at.replace("Z", "+00:00"))
+                        except ValueError:
+                            source_updated_at = datetime.min
 
-                        hist_doc["archived_at"] = datetime.now()
-                        hist_doc["archived_timestamp"] = datetime.now()
+                    if existing:
+                        hist_updated_at = existing.get("updated_at") or datetime.min
+                        if isinstance(hist_updated_at, str):
+                            try:
+                                hist_updated_at = datetime.fromisoformat(hist_updated_at.replace("Z", "+00:00"))
+                            except ValueError:
+                                hist_updated_at = datetime.min
 
-                        historical_inserts.append(hist_doc)
-                        existing_keys.add(key)
+                        if source_updated_at <= hist_updated_at:
+                            continue
+
+                        keys_to_replace.append(key)
+
+                    hist_doc = dict(doc)
+                    if "_id" in hist_doc:
+                        del hist_doc["_id"]
+
+                    now = datetime.now()
+                    hist_doc["archived_at"] = now
+                    hist_doc["archived_timestamp"] = now
+
+                    historical_inserts.append(hist_doc)
+
+                if keys_to_replace:
+                    replace_filter = {
+                        "$or": [
+                            {
+                                "scheduled_at": key[0],
+                                "time_block": key[1],
+                                "type": key[2],
+                            }
+                            for key in keys_to_replace
+                        ]
+                    }
+                    try:
+                        del_result = await self.historical_collection.delete_many(replace_filter)
+                        replaced_count = del_result.deleted_count
+                        logger.info(f"Replaced {replaced_count} stale historical demand records")
+                    except Exception as del_err:
+                        logger.error(f"Error deleting stale historical records: {del_err}")
 
             archived_count = 0
             if historical_inserts:
@@ -410,7 +458,7 @@ class DemandServeRepository(BaseServeRepository):
                     if hasattr(e, 'details'):
                         archived_count = e.details.get('nInserted', 0)
 
-            logger.info(f"Archived {archived_count} new demand records to historical")
+            logger.info(f"Archived {archived_count} demand records to historical (replaced {replaced_count})")
 
             delete_query = {
                 "scheduled_at": {"$lt": datetime.combine(delete_cutoff, datetime.min.time())}
@@ -424,6 +472,7 @@ class DemandServeRepository(BaseServeRepository):
             return {
                 "status": "success",
                 "archived_count": archived_count,
+                "replaced_count": replaced_count,
                 "deleted_count": deleted_count,
                 "cutoff_date": delete_cutoff.isoformat(),
                 "execution_time": (datetime.now() - start_time).total_seconds()

@@ -14,6 +14,7 @@ class TestGridIndiaParser(unittest.TestCase):
         self.sample_json = {
             "ResponseBody": {
                 "Date": "16-12-2025",
+                "SchedulePublishedTime": "14-06-2026 15:30:45",
                 "GroupWiseDataList": [
                     {
                         "FullschdList": [
@@ -82,6 +83,11 @@ class TestGridIndiaParser(unittest.TestCase):
         self.assertIsNotNone(isgs_therm)
         self.assertEqual(isgs_therm["volume"], 50.0)
 
+        # Schedule published timestamp should be present and preserve the full time
+        self.assertIn("schedule_published_time", oa_sg)
+        self.assertEqual(oa_sg["schedule_published_time"], datetime.datetime(2026, 6, 14, 15, 30, 45))
+        self.assertEqual(isgs_therm["schedule_published_time"], datetime.datetime(2026, 6, 14, 15, 30, 45))
+
     @patch('libs.parsers.grid_india_parser.datetime')
     def test_parse_with_time_window(self, mock_datetime):
         # Mock now().time() to return 8:00 AM
@@ -107,6 +113,40 @@ class TestGridIndiaParser(unittest.TestCase):
         self.assertIsNotNone(solar_dc)
         self.assertEqual(solar_sg["volume"], solar_dc["volume"])
         self.assertEqual(solar_dc["dc_sg"], "DC")
+
+    @patch('libs.parsers.grid_india_parser.datetime')
+    def test_parse_schedule_published_time_iso_with_timezone(self, mock_datetime):
+        # Mock now().time() to return 12:00 PM
+        mock_datetime.datetime.now.return_value.time.return_value = datetime.time(12, 0)
+        mock_datetime.time = datetime.time
+
+        sample = {
+            "ResponseBody": {
+                "Date": "16-12-2025",
+                "SchedulePublishedTime": "2026-06-14T15:30:45+00:00",
+                "GroupWiseDataList": [
+                    {
+                        "FullschdList": [
+                            {
+                                "EnergyScheduleTypeName": "OA_REMC",
+                                "SellerAcronym": "SOLAR_PLANT",
+                                "FullScheduleData": {
+                                    "OAFullScheduleJsonData": {
+                                        "TotalDrwBoundrySchdAmt": [100.0] + [0.0] * 95
+                                    }
+                                }
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+
+        result = self.parser.parse(json.dumps(sample))
+        record = next((r for r in result if r["plant_id"] == "SOLAR_PLANT" and r["time_block"] == 1), None)
+        self.assertIsNotNone(record)
+        self.assertIn("schedule_published_time", record)
+        self.assertEqual(record["schedule_published_time"], datetime.datetime(2026, 6, 14, 15, 30, 45, tzinfo=datetime.timezone.utc))
 
     def test_validate_content(self):
         self.assertTrue(self.parser.validate_content(json.dumps(self.sample_json)))

@@ -17,6 +17,7 @@ from ..repository.exchange_repository import ExchangeRepository
 from libs.helpers.demand_calculations import calculate_demand_metrics
 from libs.models.demand_serve_entity import DemandServeEntity, DemandServeHistoricalEntity
 from libs.enum.updated_flag import UpdatedFlag
+from libs.utils.csv_date_parse import parse_csv_scheduled_at
 
 logger = logging.getLogger(__name__)
 
@@ -413,15 +414,7 @@ class DemandManualServices:
                     time_block = item.get("time_block")
                     if not scheduled_at_raw:
                         raise ValueError("scheduled_at is required")
-                    if isinstance(scheduled_at_raw, str):
-                        try:
-                            scheduled_at = datetime.fromisoformat(scheduled_at_raw.replace("Z", "+00:00"))
-                        except ValueError:
-                            raise ValueError(f"Invalid scheduled_at format: '{scheduled_at_raw}'. Expected YYYY-MM-DD or ISO datetime.")
-                    elif isinstance(scheduled_at_raw, datetime):
-                        scheduled_at = scheduled_at_raw
-                    else:
-                        raise ValueError(f"Invalid scheduled_at type: {type(scheduled_at_raw)}")
+                    scheduled_at = parse_csv_scheduled_at(scheduled_at_raw)
                     if not scheduled_at or not time_block:
                             logger.warning(f"Skipping item due to missing date or time block: {item}")
                             continue

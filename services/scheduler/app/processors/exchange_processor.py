@@ -49,6 +49,24 @@ class ExchangeProcessor(BaseProcessor):
             settings.JOB_DETAIL_COLLECTION
         )
 
+    @staticmethod
+    def _parse_date_string(date_str: str) -> Optional[datetime]:
+        """Parse a date string using common exchange date formats.
+
+        Supports ISO format (YYYY-MM-DD), Indian dotted format (DD-MM-YYYY),
+        and slash format (DD/MM/YYYY). Returns None if parsing fails.
+        """
+        if not date_str or not isinstance(date_str, str):
+            return None
+        clean_date = date_str.strip()
+        formats = ["%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"]
+        for fmt in formats:
+            try:
+                return datetime.strptime(clean_date, fmt)
+            except ValueError:
+                continue
+        return None
+
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
         Execute exchange data processing as a cron job with execution_id as correlation ID
@@ -186,13 +204,9 @@ class ExchangeProcessor(BaseProcessor):
                 
                 date_val = item.get("Date") or item.get("date") or item.get("scheduled_at")
                 if isinstance(date_val, str):
-                    try:
-                        clean_date = date_val.strip()
-                        if "-" in clean_date:
-                            date_obj = datetime.strptime(clean_date, "%d-%m-%Y")
-                        else:
-                            date_obj = datetime.strptime(clean_date, "%d/%m/%Y")
-                    except: continue
+                    date_obj = self._parse_date_string(date_val)
+                    if date_obj is None:
+                        continue
                 elif isinstance(date_val, datetime):
                     date_obj = date_val
                 else:
@@ -406,15 +420,11 @@ class ExchangeProcessor(BaseProcessor):
                 scheduled_date = item.get("Date") or item.get("date") or item.get("scheduled_at")
                 # Parse string date if necessary
                 if isinstance(scheduled_date, str):
-                    try:
-                        clean_date = scheduled_date.strip()
-                        if "-" in clean_date:
-                            scheduled_date = datetime.strptime(clean_date, "%d-%m-%Y")
-                        else:
-                            scheduled_date = datetime.strptime(clean_date, "%d/%m/%Y")
-                    except ValueError:
-                         logger.warning(f"Failed to parse date string: {scheduled_date}")
-                         continue
+                    parsed_date = self._parse_date_string(scheduled_date)
+                    if parsed_date is None:
+                        logger.warning(f"Failed to parse date string: {scheduled_date}")
+                        continue
+                    scheduled_date = parsed_date
 
                 if not isinstance(scheduled_date, datetime):
                     logger.warning("Invalid or missing Date field")

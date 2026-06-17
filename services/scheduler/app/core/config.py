@@ -281,6 +281,12 @@ class Settings(BaseSettings):
     # Limit Values Data Processing Configuration
     LIMIT_VALUES_DATA_PROCESSING_CRON: str = "*/15 * * * *"  # Every 15 minutes
     LIMIT_VALUES_DATA_PROCESSING_ENABLED: bool = True
+
+    # Limit Values Approval Cron Configuration
+    LIMIT_VALUES_APPROVAL_CRON: str = "0 0 * * *"  # Daily at midnight
+    LIMIT_VALUES_APPROVAL_ENABLED: bool = True
+    LIMIT_VALUES_RTM_APPROVAL_CRON: str = "15 22 * * *"  # RTM early rollover at 22:15
+    LIMIT_VALUES_RTM_APPROVAL_ENABLED: bool = True
     
     MONGODB_RENEWABLE_SERVE_COLLECTION: str = "renewable_serve"
     MONGODB_RENEWABLE_SERVE_HISTORICAL_COLLECTION: str = "renewable_serve_historical"

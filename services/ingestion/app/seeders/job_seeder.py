@@ -57,11 +57,21 @@ class IngestionJobSeeder(BaseJobSeeder):
                 "job_type": "api_raw_data_processor",
                 "name": "API Raw Data Processor",
                 "type": "raw_data_processor",
-                "schedule": getattr(self.settings, 'API_RAW_DATA_PROCESSOR_CRON_SCHEDULE', "*/15 * * * *"),  # Every 15 minutes
+                "schedule": getattr(self.settings, 'API_RAW_DATA_PROCESSOR_CRON_SCHEDULE', "0,15,30,45 * * * *"),
                 "enabled": getattr(self.settings, 'API_RAW_DATA_PROCESSOR_ENABLED', True),
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Fetch and process data from REST APIs with weather data transposition support",
-                "priority": 2  # Medium priority for API processing
+                "priority": 2
+            },
+            {
+                "job_type": "api_raw_data_processor_offset",
+                "name": "API Raw Data Processor (Offset)",
+                "type": "raw_data_processor",
+                "schedule": getattr(self.settings, 'API_RAW_DATA_PROCESSOR_OFFSET_CRON_SCHEDULE', "8,23,38,53 * * * *"),
+                "enabled": getattr(self.settings, 'API_RAW_DATA_PROCESSOR_OFFSET_ENABLED', True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Fetch and process data from REST APIs for providers with ingestion_type=api-v2",
+                "priority": 2
             },
             {
                 "job_type": "forecast_api_processor",

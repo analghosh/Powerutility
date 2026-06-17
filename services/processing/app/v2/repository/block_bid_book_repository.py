@@ -47,6 +47,26 @@ class BlockBidBookRepository(GenericRepository):
             logger.error(f"[BlockBidBook] get_bid_book failed: {e}")
             return []
 
+    async def update_order_status_by_order_id(self, order_id: int, order_status: str, extra_fields: Dict[str, Any] = None) -> bool:
+        """
+        Immediately reflect a status change (e.g. Cancelled) in the book collection
+        so the bid-book endpoint shows the updated status without waiting for the
+        next scheduler run.
+        """
+        try:
+            update_doc: Dict[str, Any] = {"OrderStatus": order_status}
+            if extra_fields:
+                update_doc.update(extra_fields)
+            result = await self.collection.update_many(
+                {"OrderId": order_id},
+                {"$set": update_doc},
+            )
+            logger.info(f"[BlockBidBook] updated OrderStatus={order_status} for OrderId={order_id} ({result.modified_count} docs)")
+            return result.modified_count > 0
+        except Exception as e:
+            logger.error(f"[BlockBidBook] update_order_status_by_order_id failed for OrderId={order_id}: {e}")
+            return False
+
     async def get_trade_book(self, scheduled_at: str) -> List[Dict[str, Any]]:
         """
         Return executed/provisional block bids for a delivery date.

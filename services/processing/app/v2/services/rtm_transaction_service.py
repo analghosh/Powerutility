@@ -823,8 +823,9 @@ class RTMTransactionService:
                         bidded_qty = 0
                 
                 # Map API fields to DB fields
+                exchange_order_status = detail.get("OrderStatus", "")
                 update_data = {
-                    "exchangeStatus": detail.get("OrderStatus"),
+                    "exchangeStatus": exchange_order_status,
                     "exchangeOrderId": detail.get("OrderId"),
                     "exchangeOrderTime": detail.get("OrderTime"),
                     "exchangeError": detail.get("Error"),
@@ -835,6 +836,9 @@ class RTMTransactionService:
                     "bidded": bidded_qty,
                     "orderId": detail.get("OrderId"),
                 }
+                # Mirror rejected status locally so listing endpoints reflect the rejection.
+                if exchange_order_status == "Rejected":
+                    update_data["bid_status"] = "exchange_rejected"
                 
                 update_filter = {
                     "bid_date": delivery_date_str,
