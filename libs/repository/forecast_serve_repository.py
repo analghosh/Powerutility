@@ -7,11 +7,13 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
+from pymongo import UpdateOne
 from pymongo.errors import BulkWriteError
 
 from libs.database.base_repository import BaseRepository
 from libs.helpers.forecast_serve_query import (
     FORECAST_SERVE_READ_PROJECTION,
+    IDF_FINAL_READ_PROJECTION,
     apply_latest_revision_to_filter,
     build_day_source_match,
     build_latest_revision_or_filter,
@@ -20,6 +22,7 @@ from libs.helpers.forecast_serve_query import (
 from libs.models.forecast_serve_entity import (
     FORECAST_SOURCE_CSV,
     FORECAST_SOURCE_RTM_API,
+    IDF_FINAL_TYPE,
     ensure_forecast_serve_indexes,
 )
 
@@ -299,3 +302,47 @@ class ForecastServeRepository(BaseRepository):
         except Exception as e:
             logger.error("Error finding forecast_serve by block range: %s", e)
             return []
+
+    async def find_idf_final_by_scheduled_at(
+        self,
+        scheduled_at: datetime,
+    ) -> List[Dict[str, Any]]:
+        """All IDF_final rows for one delivery date (up to 96 blocks)."""
+        try:
+            cursor = (
+                self.collection.find(
+                    {"scheduled_at": scheduled_at, "type": IDF_FINAL_TYPE},
+                    projection=IDF_FINAL_READ_PROJECTION,
+                )
+                .sort([("time_block", 1)])
+            )
+            return await cursor.to_list(length=96)
+        except Exception as e:
+            logger.error("Error finding IDF_final by scheduled_at: %s", e)
+            return []
+
+    async def bulk_upsert_idf_final(
+        self,
+        bulk_ops: List[UpdateOne],
+    ) -> Dict[str, int]:
+        """Upsert IDF_final block rows (freeze / refresh)."""
+        if not bulk_ops:
+            return {"upserted": 0, "modified": 0, "matched": 0}
+        try:
+            result = await self.collection.bulk_write(bulk_ops, ordered=False)
+            return {
+                "upserted": len(result.upserted_ids),
+                "modified": result.modified_count,
+                "matched": result.matched_count,
+            }
+        except BulkWriteError as bwe:
+            logger.warning("Partial IDF_final bulk upsert: %s", bwe.details)
+            details = bwe.details or {}
+            return {
+                "upserted": details.get("nUpserted", 0),
+                "modified": details.get("nModified", 0),
+                "matched": details.get("nMatched", 0),
+            }
+        except Exception as e:
+            logger.error("Error bulk upserting IDF_final: %s", e)
+            raise
