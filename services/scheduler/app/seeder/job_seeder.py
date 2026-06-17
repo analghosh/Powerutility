@@ -297,7 +297,7 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "schedule": "15 3 * * *",
                 "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
-                "description": "Archives forecast_serve to forecast_serve_historical after final upstream processing; keeps 4-day rolling window in forecast_serve (same pattern as demand_serve)",
+                "description": "Mirrors every forecast_serve document into forecast_serve_historical; deletes live rows older than the rolling window (same pattern as demand_serve)",
                 "priority": 7,
             },
             {

@@ -184,6 +184,10 @@ async def ensure_forecast_serve_historical_indexes(collection) -> None:
             [("scheduled_at", 1), ("source", 1), ("forecast_revision", -1)],
             {"name": "idx_forecast_serve_historical_day_source_revision"},
         ),
+        (
+            [("type", 1), ("scheduled_at", 1), ("time_block", 1)],
+            {"name": "idx_forecast_serve_historical_type_day_block"},
+        ),
     ]
 
     failed = 0
