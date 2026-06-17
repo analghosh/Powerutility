@@ -5,11 +5,18 @@ MongoDB query helpers for forecast_serve — latest forecast_revision in the dat
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
+from libs.models.forecast_serve_entity import (
+    FORECAST_SOURCE_CSV,
+    FORECAST_SOURCE_DAM_API,
+    FORECAST_SOURCE_RTM_API,
+    IDF_FINAL_TYPE,
+)
 
 IDF_TYPE = "IDF"
+DAF_TYPE = "DAF"
 
 FORECAST_SERVE_RANGE_SOURCES = [FORECAST_SOURCE_RTM_API, FORECAST_SOURCE_CSV]
+FORECAST_SERVE_DAF_RANGE_SOURCES = [FORECAST_SOURCE_DAM_API]
 
 
 def forecast_serve_revision_key(doc: Dict[str, Any]) -> tuple:
@@ -170,4 +177,57 @@ def build_forecast_serve_latest_revision_range_pipeline(
         {"$replaceRoot": {"newRoot": "$doc"}},
         {"$project": FORECAST_SERVE_READ_PROJECTION},
         {"$sort": {"scheduled_at": 1, "time_block": 1, "source": 1}},
+    ]
+
+
+IDF_FINAL_READ_PROJECTION: Dict[str, int] = {
+    "_id": 1,
+    "scheduled_at": 1,
+    "time_block": 1,
+    "type": 1,
+    "source": 1,
+    "forecast": 1,
+    "forecasted_frequency": 1,
+    "forecast_revision": 1,
+    "info": 1,
+    "frozen_at": 1,
+    "created_at": 1,
+    "updated_at": 1,
+}
+
+
+def build_idf_final_range_pipeline(
+    range_start: datetime,
+    range_end_exclusive: datetime,
+    from_block: int,
+    to_block: int,
+) -> List[Dict[str, Any]]:
+    """Range read for IDF_final — one doc per (scheduled_at, time_block), latest updated_at."""
+    return [
+        {
+            "$match": {
+                "scheduled_at": {"$gte": range_start, "$lt": range_end_exclusive},
+                "type": IDF_FINAL_TYPE,
+                "time_block": {"$gte": int(from_block), "$lte": int(to_block)},
+            }
+        },
+        {
+            "$sort": {
+                "scheduled_at": 1,
+                "time_block": 1,
+                "updated_at": -1,
+            }
+        },
+        {
+            "$group": {
+                "_id": {
+                    "scheduled_at": "$scheduled_at",
+                    "time_block": "$time_block",
+                },
+                "doc": {"$first": "$$ROOT"},
+            }
+        },
+        {"$replaceRoot": {"newRoot": "$doc"}},
+        {"$project": IDF_FINAL_READ_PROJECTION},
+        {"$sort": {"scheduled_at": 1, "time_block": 1}},
     ]
