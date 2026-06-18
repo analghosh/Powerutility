@@ -537,7 +537,7 @@ class NewDSMProcessor(BaseProcessor):
                 {
                     "$group": {
                         "_id": "$time_block",
-                        "total_schedule": {"$sum": "$sg_beforelosses"},
+                        "total_schedule": {"$sum": "$volume"},
                     }
                 },
             ]
