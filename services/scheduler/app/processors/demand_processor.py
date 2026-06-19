@@ -1202,6 +1202,8 @@ class DemandProcessor(BaseProcessor):
                 comp_act_demand=float(calculated_metrics.get("comp_act_demand", 0.0)),
                 udm=float(udm),
                 comp_udm=float(calculated_metrics.get("comp_udm", 0.0)),
+                dsm_rate=float(existing_record.get("dsm_rate") or 0.0),
+                net_dsm_amount=float(existing_record.get("net_dsm_amount") or 0.0),
                 updated_flag=UpdatedFlag.UPDATED,
                 # Preserve original timestamps
                 inserted_at=inserted_at,
