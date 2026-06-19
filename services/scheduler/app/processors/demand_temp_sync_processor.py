@@ -626,8 +626,13 @@ class DemandTempSyncProcessor(BaseProcessor):
             "mape": metrics.get("mape", 0),
             "comp_act_demand": metrics.get("comp_act_demand", 0),
             "comp_udm": metrics.get("comp_udm", 0),
-            "net_dsm_amount": metrics.get("net_dsm_amount", 0),
-            "dsm_rate": metrics.get("dsm_rate", 0),
+            # Preserve DSM fields — calculate_demand_metrics does not return them
+            "net_dsm_amount": metrics.get(
+                "net_dsm_amount", (existing_record or {}).get("net_dsm_amount", 0)
+            ),
+            "dsm_rate": metrics.get(
+                "dsm_rate", (existing_record or {}).get("dsm_rate", 0)
+            ),
             "updated_flag": UpdatedFlag.UPDATED.value,
             "updated_at": now,
             "timestamp": scheduled_at,
