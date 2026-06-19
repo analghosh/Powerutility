@@ -504,17 +504,20 @@ class NewDSMProcessor(BaseProcessor):
         scheduled_at: datetime,
         time_blocks: List[int],
     ) -> Dict[int, float]:
-        """One aggregation: schedule_mw per time_block from supply_serve."""
+        """Central SG volume per time_block from supply_serve (plant_master.c_s == central)."""
         if not time_blocks:
             return {}
 
         try:
             from ..repository.supply_serve_repository import supply_serve_repository
 
+            start_of_day = datetime.combine(scheduled_at.date(), datetime.min.time())
+            end_of_day = start_of_day + timedelta(days=1)
+
             pipeline = [
                 {
                     "$match": {
-                        "scheduled_at": scheduled_at,
+                        "scheduled_at": {"$gte": start_of_day, "$lt": end_of_day},
                         "time_block": {"$in": time_blocks},
                         "dc_sg": "SG",
                     }
@@ -573,22 +576,116 @@ class NewDSMProcessor(BaseProcessor):
         from ..core.database import get_database
 
         db = get_database()
-        pipeline = self._build_batch_acp_pipeline(scheduled_at, time_blocks)
-        cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
-        rows = await cursor.to_list(length=10000)
-        acp_map = self._acp_from_aggregate_rows(rows)
+        acp_map: Dict[int, Tuple[float, float]] = {}
+        try:
+            pipeline = self._build_batch_acp_pipeline(scheduled_at, time_blocks)
+            cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
+            rows = await cursor.to_list(length=10000)
+            acp_map = self._acp_from_aggregate_rows(rows)
+        except Exception as exc:
+            logger.warning(
+                "ACP trade aggregation failed for %s, using exchange_serve: %s",
+                scheduled_at.date(),
+                exc,
+            )
+        serve_acp_map = await self._fetch_acp_from_exchange_serve_for_blocks(
+            scheduled_at, time_blocks
+        )
 
         for timeblock in time_blocks:
-            dam, rtm = acp_map.get(timeblock, (0.0, 0.0))
+            merged = self._merge_acp_pair(
+                acp_map.get(timeblock, (0.0, 0.0)),
+                serve_acp_map.get(timeblock, (0.0, 0.0)),
+            )
+            dam, rtm = merged
             if dam == 0 or rtm == 0:
-                acp_map[timeblock] = await self._fetch_cerc_weighted_acp(timeblock, scheduled_at)
+                merged = self._merge_acp_pair(
+                    merged, await self._fetch_cerc_weighted_acp(timeblock, scheduled_at)
+                )
+            acp_map[timeblock] = merged
+            if merged[0] == 0 or merged[1] == 0:
+                logger.warning(
+                    "ACP missing for block %s on %s: DAM=%s RTM=%s",
+                    timeblock,
+                    scheduled_at.date(),
+                    merged[0],
+                    merged[1],
+                )
 
-        logger.debug(
-            "ACP map for %s: %s blocks",
+        logger.info(
+            "ACP map for %s: %s/%s blocks with both DAM and RTM",
             scheduled_at.date(),
-            len(acp_map),
+            sum(1 for tb in time_blocks if acp_map.get(tb, (0, 0))[0] > 0 and acp_map.get(tb, (0, 0))[1] > 0),
+            len(time_blocks),
         )
         return acp_map
+
+    @staticmethod
+    def _day_range_match(scheduled_at: datetime, time_block_clause: Dict[str, Any]) -> Dict[str, Any]:
+        start_of_day = datetime.combine(scheduled_at.date(), datetime.min.time())
+        end_of_day = start_of_day + timedelta(days=1)
+        return {
+            "scheduled_at": {"$gte": start_of_day, "$lt": end_of_day},
+            **time_block_clause,
+        }
+
+    @staticmethod
+    def _exchange_dsm_trade_project_fields() -> Dict[str, Any]:
+        """Support lowercase and PascalCase field names on exchange_dsm_serve."""
+        buy_vol = {
+            "$ifNull": [
+                "$total_buy_cleared_vol",
+                {"$ifNull": ["$Total_Buy_Cleared_Vol", 0]},
+            ]
+        }
+        sell_vol = {
+            "$ifNull": [
+                "$total_sell_cleared_vol",
+                {"$ifNull": ["$Total_Sell_Cleared_Vol", 0]},
+            ]
+        }
+        price = {"$ifNull": ["$price", {"$ifNull": ["$Price", 0]}]}
+        return {
+            "value": {"$multiply": [price, {"$add": [buy_vol, sell_vol]}]},
+            "volume": {"$add": [buy_vol, sell_vol]},
+        }
+
+    @staticmethod
+    def _exchange_serve_weight_volume_expr() -> Dict[str, Any]:
+        return {
+            "$cond": [
+                {"$gt": [{"$ifNull": ["$acv", 0]}, 0]},
+                "$acv",
+                {
+                    "$cond": [
+                        {"$gt": [{"$ifNull": ["$mcv", 0]}, 0]},
+                        "$mcv",
+                        1,
+                    ]
+                },
+            ]
+        }
+
+    @classmethod
+    def _exchange_serve_acp_union(cls, block_match: Dict[str, Any]) -> Dict[str, Any]:
+        """Weighted ACP from exchange_serve (IEX/PXIL MCP/ACP scrapes)."""
+        weight = cls._exchange_serve_weight_volume_expr()
+        return {
+            "$unionWith": {
+                "coll": "exchange_serve",
+                "pipeline": [
+                    {"$match": {**block_match, "acp": {"$gt": 0}}},
+                    {
+                        "$project": {
+                            "time_block": 1,
+                            "market_type": 1,
+                            "value": {"$multiply": ["$acp", weight]},
+                            "volume": weight,
+                        }
+                    },
+                ],
+            }
+        }
 
     def _build_batch_acp_pipeline(
         self,
@@ -596,7 +693,8 @@ class NewDSMProcessor(BaseProcessor):
         time_blocks: List[int],
     ) -> List[Dict[str, Any]]:
         """CERC-weighted ACP pipeline grouped by time_block and market_type."""
-        block_match = {"scheduled_at": scheduled_at, "time_block": {"$in": time_blocks}}
+        block_match = self._day_range_match(scheduled_at, {"time_block": {"$in": time_blocks}})
+        trade_fields = self._exchange_dsm_trade_project_fields()
 
         return [
             {"$match": block_match},
@@ -604,23 +702,7 @@ class NewDSMProcessor(BaseProcessor):
                 "$project": {
                     "time_block": 1,
                     "market_type": 1,
-                    "value": {
-                        "$multiply": [
-                            "$price",
-                            {
-                                "$add": [
-                                    "$total_buy_cleared_vol",
-                                    "$total_sell_cleared_vol",
-                                ]
-                            },
-                        ]
-                    },
-                    "volume": {
-                        "$add": [
-                            "$total_buy_cleared_vol",
-                            "$total_sell_cleared_vol",
-                        ]
-                    },
+                    **trade_fields,
                 }
             },
             {
@@ -746,6 +828,76 @@ class NewDSMProcessor(BaseProcessor):
             result[tb] = (float(idam), float(rtm))
         return result
 
+    async def _fetch_acp_from_exchange_serve_for_blocks(
+        self,
+        scheduled_at: datetime,
+        time_blocks: List[int],
+    ) -> Dict[int, Tuple[float, float]]:
+        """Volume-weighted DAM/GDAM/HPDAM and RTM ACP from exchange_serve scrapes."""
+        if not time_blocks:
+            return {}
+
+        from ..core.database import get_database
+
+        db = get_database()
+        match = self._day_range_match(
+            scheduled_at,
+            {"time_block": {"$in": time_blocks}, "acp": {"$gt": 0}},
+        )
+        docs = await db.exchange_serve.find(
+            match,
+            {"time_block": 1, "market_type": 1, "acp": 1, "acv": 1, "mcv": 1},
+        ).to_list(length=max(len(time_blocks) * 16, 128))
+
+        idam_num: Dict[int, float] = defaultdict(float)
+        idam_den: Dict[int, float] = defaultdict(float)
+        rtm_num: Dict[int, float] = defaultdict(float)
+        rtm_den: Dict[int, float] = defaultdict(float)
+
+        for doc in docs:
+            tb_raw = doc.get("time_block")
+            if tb_raw is None:
+                continue
+            tb = int(tb_raw)
+            acp_val = float(doc.get("acp") or 0)
+            if acp_val <= 0:
+                continue
+            acv_raw = doc.get("acv") if doc.get("acv") is not None else doc.get("mcv")
+            try:
+                vol = float(acv_raw) if acv_raw is not None else 0.0
+            except (TypeError, ValueError):
+                vol = 0.0
+            if vol <= 0:
+                vol = 1.0
+            mt = doc.get("market_type")
+            if mt in ("DAM", "GDAM", "HPDAM"):
+                idam_num[tb] += acp_val * vol
+                idam_den[tb] += vol
+            elif mt == "RTM":
+                rtm_num[tb] += acp_val * vol
+                rtm_den[tb] += vol
+
+        result: Dict[int, Tuple[float, float]] = {}
+        for tb in time_blocks:
+            idam = idam_num[tb] / idam_den[tb] if idam_den[tb] > 0 else 0.0
+            rtm = rtm_num[tb] / rtm_den[tb] if rtm_den[tb] > 0 else 0.0
+            if idam > 0 or rtm > 0:
+                result[tb] = (float(idam), float(rtm))
+        return result
+
+    @staticmethod
+    def _merge_acp_pair(
+        primary: Tuple[float, float],
+        fallback: Tuple[float, float],
+    ) -> Tuple[float, float]:
+        dam, rtm = primary
+        fd, fr = fallback
+        if dam == 0 and fd > 0:
+            dam = fd
+        if rtm == 0 and fr > 0:
+            rtm = fr
+        return dam, rtm
+
     async def _fallback_previous_acp(
         self,
         timeblock: int,
@@ -796,48 +948,29 @@ class NewDSMProcessor(BaseProcessor):
             from ..core.database import get_database
             db = get_database()
 
+            block_match = self._day_range_match(scheduled_at, {"time_block": timeblock})
+            trade_fields = self._exchange_dsm_trade_project_fields()
+
             pipeline = [
 
-                # ================= PXIL =================
+                # ================= PXIL / exchange_dsm_serve =================
                 {
-                    "$match": {
-                        "scheduled_at": scheduled_at,
-                        "time_block": timeblock
-                    }
+                    "$match": block_match
                 },
                 {
                     "$project": {
                         "market_type": 1,
-                        "value": {
-                            "$multiply": [
-                                "$price",
-                                {
-                                    "$add": [
-                                        "$total_buy_cleared_vol",
-                                        "$total_sell_cleared_vol"
-                                    ]
-                                }
-                            ]
-                        },
-                        "volume": {
-                            "$add": [
-                                "$total_buy_cleared_vol",
-                                "$total_sell_cleared_vol"
-                            ]
-                        }
+                        **trade_fields,
                     }
                 },
 
-                # ================= HPX =================
+                # ================= HPX / exchange_trade_serve =================
                 {
                     "$unionWith": {
                         "coll": "exchange_trade_serve",
                         "pipeline": [
                             {
-                                "$match": {
-                                    "scheduled_at": scheduled_at,
-                                    "time_block": timeblock
-                                }
+                                "$match": block_match
                             },
                             {
                                 "$project": {
@@ -865,16 +998,13 @@ class NewDSMProcessor(BaseProcessor):
                     }
                 },
 
-                # ================= IEX =================
+                # ================= IEX / bid_trade_serve =================
                 {
                     "$unionWith": {
                         "coll": "bid_trade_serve",
                         "pipeline": [
                             {
-                                "$match": {
-                                    "scheduled_at": scheduled_at,
-                                    "time_block": timeblock
-                                }
+                                "$match": block_match
                             },
                             {
                                 "$group": {
@@ -928,28 +1058,40 @@ class NewDSMProcessor(BaseProcessor):
                 }
             ]
 
-            cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
-            results = await cursor.to_list(length=10000)
-
-            # combine results: compute weighted average across IDAM subtypes and RTM
             idam_num = 0.0
             idam_den = 0.0
             rtm_num = 0.0
             rtm_den = 0.0
-
-            for row in results:
-                mt = row.get("market_type")
-                acp_val = row.get("acp", 0) or 0
-                vol = row.get("total_volume", 0) or 0
-                if mt in ["DAM", "GDAM", "HPDAM"]:
-                    idam_num += acp_val * vol
-                    idam_den += vol
-                elif mt == "RTM":
-                    rtm_num += acp_val * vol
-                    rtm_den += vol
+            try:
+                cursor = db.exchange_dsm_serve.aggregate(pipeline, allowDiskUse=True)
+                results = await cursor.to_list(length=10000)
+                for row in results:
+                    mt = row.get("market_type")
+                    acp_val = row.get("acp", 0) or 0
+                    vol = row.get("total_volume", 0) or 0
+                    if mt in ["DAM", "GDAM", "HPDAM"]:
+                        idam_num += acp_val * vol
+                        idam_den += vol
+                    elif mt == "RTM":
+                        rtm_num += acp_val * vol
+                        rtm_den += vol
+            except Exception as exc:
+                logger.warning(
+                    "Single-block ACP trade aggregation failed for block %s: %s",
+                    timeblock,
+                    exc,
+                )
 
             idam_acp = idam_num / idam_den if idam_den > 0 else 0.0
             rtm_acp = rtm_num / rtm_den if rtm_den > 0 else 0.0
+
+            serve_map = await self._fetch_acp_from_exchange_serve_for_blocks(
+                scheduled_at, [timeblock]
+            )
+            idam_acp, rtm_acp = self._merge_acp_pair(
+                (idam_acp, rtm_acp),
+                serve_map.get(timeblock, (0.0, 0.0)),
+            )
 
             # Fallback if either is missing
             if idam_acp == 0 or rtm_acp == 0:
