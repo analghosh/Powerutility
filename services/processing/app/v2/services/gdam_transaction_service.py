@@ -20,6 +20,7 @@ from ..repository.exchange_config_repository import ExchangeConfigRepository
 from ..repository.limit_values_repository import LimitValuesRepository
 from ..repository.exchange_bid_detail_repository import exchange_bid_detail_repository
 from ..iex.masterApi import ExchangeAPIClient, block_to_time_period, time_slot_to_block
+from ...core.config import settings
 
 logger = logging.getLogger(__name__)
 
