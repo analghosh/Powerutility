@@ -74,6 +74,10 @@ class GDAMTransactionService:
 
         logger.info(f"Fetching all OCF values for date {scheduled_at_str} in bulk")
 
+        # Active exchange for limit_values filtering
+        exchange_config = await self.exchange_config_repo.get_bidType_market_active_config("single", "GDAM") or {}
+        active_exchange = exchange_config.get("exchange", "IEX")
+
         # Single query: fetch all OCF rows for this date (both id types, all blocks)
         all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
             "limit_values",
@@ -81,6 +85,7 @@ class GDAMTransactionService:
                 "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
                 "category": "Limits",
                 "market": "GDAM",
+                "exchange": active_exchange,
                 "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
             }
         )

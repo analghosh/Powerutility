@@ -65,6 +65,16 @@ class DAMBiddingServices:
         self.dam_book_collection = settings.MONGODB_DAM_BOOK_COLLECTION
         self.time_block_collection = settings.MONGODB_TIME_BLOCK_COLLECTION
 
+    async def _get_active_exchange(self) -> str:
+        """Get active exchange from the active DAM exchange config."""
+        try:
+            config = await self.exchange_config_repo.get_bidType_market_active_config("single", "DAM")
+            if config and config.get("exchange"):
+                return config.get("exchange")
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange for DAM: {e}")
+        return "IEX"
+
     async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
         """Get DAM bid submission details for a specific date."""
         return await self.integration_api_log_repo.get_bid_submission_details(date_str, "dam", "single-bid")
@@ -619,6 +629,8 @@ class DAMBiddingServices:
             # Get end of day for comparison
             target_date_end = datetime.combine(target_date_dt.date(), datetime.max.time())
 
+            # Active exchange for limit_values filtering
+            active_exchange = await self._get_active_exchange()
 
             # Fetch plant data
             pipeline = [
@@ -790,6 +802,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
                                 "id": "DAM_forecasted_price",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -817,6 +830,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Buffer",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -840,6 +854,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Ceiling_Price",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -865,6 +880,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "n_1",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -889,6 +905,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_buy",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -913,6 +930,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_sell",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -937,6 +955,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "iex",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -961,6 +980,7 @@ class DAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "pxil",
                                 "market": "DAM",
+                                "exchange": active_exchange,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }

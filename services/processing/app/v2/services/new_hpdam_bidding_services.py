@@ -56,7 +56,7 @@ def to_float(v):
     except (ValueError, TypeError):
         return 0.0
 
-class HPHPDAMBiddingServices:
+class HPDAMBiddingServices:
     def __init__(self):
         self.generic_repo = GenericRepository()
         self.exchange_config_repo = ExchangeConfigRepository()
@@ -64,6 +64,16 @@ class HPHPDAMBiddingServices:
         self.integration_api_log_repo = IntegrationApiLogRepository()
         self.dam_book_collection = settings.MONGODB_HPDAM_BOOK_COLLECTION
         self.time_block_collection = settings.MONGODB_TIME_BLOCK_COLLECTION
+
+    async def _get_active_exchange(self) -> str:
+        """Get active exchange from the active HPDAM exchange config."""
+        try:
+            config = await self.exchange_config_repo.get_bidType_market_active_config("single", "HPDAM")
+            if config and config.get("exchange"):
+                return config.get("exchange")
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange for HPDAM: {e}")
+        return "IEX"
 
     async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
         """Get DAM bid submission details for a specific date."""
@@ -619,6 +629,8 @@ class HPHPDAMBiddingServices:
             # Get end of day for comparison
             target_date_end = datetime.combine(target_date_dt.date(), datetime.max.time())
 
+            # Active exchange for limit_values filtering
+            active_exchange = await self._get_active_exchange()
 
             # Fetch plant data
             pipeline = [
@@ -790,6 +802,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
                                 "id": "DAM_forecasted_price",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -817,6 +830,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Buffer",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -840,6 +854,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Ceiling_Price",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -865,6 +880,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "n_1",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -889,6 +905,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_buy",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -913,6 +930,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_sell",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -937,6 +955,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "iex",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -961,6 +980,7 @@ class HPHPDAMBiddingServices:
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "pxil",
                                 "market": "HPDAM",
+                                "exchange": active_exchange,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -3783,4 +3803,4 @@ class HPHPDAMBiddingServices:
             raise Exception("An error occurred while processing trade status request")
 
 # Global instance
-hpdam_bidding_services = HPHPDAMBiddingServices()
+hpdam_bidding_services = HPDAMBiddingServices()
