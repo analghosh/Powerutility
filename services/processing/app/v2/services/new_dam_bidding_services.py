@@ -90,13 +90,20 @@ class DAMBiddingServices:
             logger.warning(f"Failed to get active exchange for {market}: {e}")
         return "IEX"
 
-    async def _get_active_market(self) -> str:
-        """Get active market for single-bid-table from parameter."""
+    async def _get_active_markets(self) -> List[str]:
+        """Get list of active markets for single-bid-table from parameter."""
         try:
-            return await parameter_service.get_active_market()
+            markets = await parameter_service.get_active_markets()
+            if markets:
+                return markets
         except Exception as e:
-            logger.warning(f"Failed to get active market from parameter: {e}")
-        return "DAM"
+            logger.warning(f"Failed to get active markets from parameter: {e}")
+        return ["DAM"]
+
+    async def _get_active_market(self) -> str:
+        """Get first active market for single-bid-table from parameter."""
+        markets = await self._get_active_markets()
+        return markets[0] if markets else "DAM"
 
     async def _aggregate_limit_values_with_fallback(
         self,
@@ -159,6 +166,109 @@ class DAMBiddingServices:
                 for old_key, new_key in limit_field_map.items():
                     if old_key in row:
                         row[new_key] = row.pop(old_key)
+
+        return data
+
+    async def _fetch_limit_values_by_block(
+        self,
+        active_market: str,
+        active_exchange: str,
+        target_date_dt: datetime,
+        from_block: int,
+        to_block: int
+    ) -> Dict[str, Dict[int, Any]]:
+        """
+        Fetch limit_values for a specific market and return a dict keyed by field name,
+        where each value is a mapping of block number -> document value.
+        """
+        import copy
+
+        def make_base_pipeline(id_value: str, extra_match: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+            match = {
+                "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
+                "id": id_value,
+                "market": active_market,
+                "block": {"$gte": from_block, "$lte": to_block},
+            }
+            if extra_match:
+                match.update(extra_match)
+            return [
+                {"$match": match},
+                {"$sort": {"scheduled_at": -1, "block": 1}},
+                {
+                    "$group": {
+                        "_id": "$block",
+                        "latest_doc": {"$first": "$$ROOT"}
+                    }
+                },
+                {"$replaceRoot": {"newRoot": "$latest_doc"}},
+                {"$sort": {"block": 1}},
+                {"$project": {"_id": 0}},
+            ]
+
+        pipelines = {
+            "forecasted_price": make_base_pipeline(f"{active_market}_forecasted_price"),
+            "buffer_value": make_base_pipeline("Buffer"),
+            "ceiling_price": make_base_pipeline("Ceiling_Price", {"category": "Limits"}),
+            "nminusone_quantum": make_base_pipeline("n_1", {"category": "Limits"}),
+            "noc_buy_value": make_base_pipeline("noc_buy", {"category": "Limits"}),
+            "noc_sell_value": make_base_pipeline("noc_sell", {"category": "Limits"}),
+        }
+
+        result: Dict[str, Dict[int, Any]] = {}
+        for field, pipeline in pipelines.items():
+            docs = await self._aggregate_limit_values_with_fallback(
+                copy.deepcopy(pipeline),
+                active_exchange,
+            )
+            result[field] = {int(doc.get("block", 0)): doc.get("values", 0) for doc in docs}
+        return result
+
+    async def _add_additional_market_limit_values(
+        self,
+        data: Dict[str, Any],
+        active_markets: List[str],
+        active_exchange: str,
+        target_date_dt: datetime,
+        from_block: int,
+        to_block: int
+    ) -> Dict[str, Any]:
+        """
+        For every active market beyond the first, fetch its limit_values and add
+        {activeExchange}_{market}_{field} keys to each row in table_data.
+        """
+        if not data or not isinstance(data, dict) or not active_markets[1:]:
+            return data
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for additional_market in active_markets[1:]:
+            limit_values = await self._fetch_limit_values_by_block(
+                additional_market,
+                active_exchange,
+                target_date_dt,
+                from_block,
+                to_block,
+            )
+            prefix = f"{active_exchange}_{additional_market}_"
+            for plkey, block_rows in table_data.items():
+                if not isinstance(block_rows, dict):
+                    continue
+                for blk, row in block_rows.items():
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        block_no = int(blk)
+                    except (TypeError, ValueError):
+                        continue
+                    row[f"{prefix}forecasted_price"] = round(limit_values["forecasted_price"].get(block_no, 0) or 0)
+                    row[f"{prefix}ceiling_price"] = limit_values["ceiling_price"].get(block_no, 0) or 0
+                    row[f"{prefix}buffer_value"] = limit_values["buffer_value"].get(block_no, 0) or 0
+                    row[f"{prefix}nminusone_quantum"] = limit_values["nminusone_quantum"].get(block_no, 0) or 0
+                    row[f"{prefix}noc_buy_value"] = limit_values["noc_buy_value"].get(block_no, 0) or 0
+                    row[f"{prefix}noc_sell_value"] = limit_values["noc_sell_value"].get(block_no, 0) or 0
 
         return data
 
@@ -716,9 +826,10 @@ class DAMBiddingServices:
             # Get end of day for comparison
             target_date_end = datetime.combine(target_date_dt.date(), datetime.max.time())
 
-            # Active market/exchange for limit_values filtering
-            active_market = await self._get_active_market()
-            active_exchange = await self._get_active_exchange(active_market)
+            # Active market(s)/exchange for limit_values filtering
+            active_markets = await self._get_active_markets()
+            active_exchange = await self._get_active_exchange(active_markets[0])
+            active_market = active_markets[0]
 
             # Fetch plant data
             pipeline = [
@@ -1453,6 +1564,14 @@ class DAMBiddingServices:
                         plkey += 1
 
             self._apply_active_limit_prefix(data, active_exchange, active_market)
+            await self._add_additional_market_limit_values(
+                data,
+                active_markets,
+                active_exchange,
+                target_date_dt,
+                from_block,
+                to_block,
+            )
             return data
 
         except Exception as e:

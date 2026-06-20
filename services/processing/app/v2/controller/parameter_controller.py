@@ -195,6 +195,20 @@ class ParameterController:
             logger.error(f"Error in bid configuration controller save: {e}")
             raise
 
+    async def get_active_markets(self) -> List[str]:
+        try:
+            return await parameter_service.get_active_markets()
+        except Exception as e:
+            logger.error(f"Error in active markets controller get: {e}")
+            raise
+
+    async def set_active_markets(self, markets: Any) -> Dict[str, Any]:
+        try:
+            return await parameter_service.set_active_markets(markets)
+        except Exception as e:
+            logger.error(f"Error in active markets controller set: {e}")
+            raise
+
     async def get_active_market(self) -> str:
         try:
             return await parameter_service.get_active_market()

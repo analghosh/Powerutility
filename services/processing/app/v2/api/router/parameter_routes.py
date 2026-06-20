@@ -4,7 +4,7 @@ CRUD endpoints for parameter management with JWT authentication
 """
 
 from fastapi import APIRouter, Request, HTTPException, status, Depends, Query, Body
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 import logging
@@ -438,15 +438,18 @@ async def save_bid_configuration(
 # Active market / active exchange for single-bid-table limit values
 # ---------------------------------------------------------------------------
 class ActiveMarketUpdateRequest(BaseModel):
-    market: str = Field(..., description="Active market: DAM, GDAM or HPDAM")
+    markets: Union[str, List[str]] = Field(
+        ...,
+        description="Active market(s): DAM, GDAM or HPDAM. Accepts a single value or a list."
+    )
 
 
 class ActiveExchangeUpdateRequest(BaseModel):
     exchange: str = Field(..., description="Active exchange: IEX, PXIL or HPX")
 
 
-class ActiveMarketResponse(BaseModel):
-    active_market: str = Field(..., description="Currently active market")
+class ActiveMarketsResponse(BaseModel):
+    active_markets: List[str] = Field(..., description="Currently active markets")
     timestamp: Optional[str] = Field(None, description="Response timestamp")
     correlation_id: Optional[str] = Field(None, description="Request correlation ID")
 
@@ -457,9 +460,9 @@ class ActiveExchangeResponse(BaseModel):
     correlation_id: Optional[str] = Field(None, description="Request correlation ID")
 
 
-class ActiveMarketSaveResponse(BaseModel):
+class ActiveMarketsSaveResponse(BaseModel):
     para_key: str = Field(..., description="Parameter key")
-    para_value: str = Field(..., description="Saved active market")
+    para_value: List[str] = Field(..., description="Saved active markets")
     message: str = Field(..., description="Status message")
 
 
@@ -470,13 +473,13 @@ class ActiveExchangeSaveResponse(BaseModel):
 
 
 @router.get(
-    "/active-market",
-    response_model=ActiveMarketResponse,
+    "/active-markets",
+    response_model=ActiveMarketsResponse,
     status_code=status.HTTP_200_OK,
-    summary="Get active market",
-    description="Returns the market (DAM/GDAM/HPDAM) currently used by single-bid-table."
+    summary="Get active markets",
+    description="Returns the list of markets (DAM/GDAM/HPDAM) currently used by single-bid-table."
 )
-async def get_active_market(
+async def get_active_markets(
     request: Request,
     user_context: Dict[str, Any] = Depends(get_user_context),
     audit_logger: AuditLogger = Depends(get_audit_logger)
@@ -484,43 +487,43 @@ async def get_active_market(
     user_id = user_context.get("user_id", "anonymous")
     correlation_id = user_context.get("correlation_id", "unknown")
     try:
-        market = await parameter_controller.get_active_market()
+        markets = await parameter_controller.get_active_markets()
         audit_logger.log_user_action(
             service="processing",
             user_id=user_id,
-            action="active_market_view",
-            message=f"Fetched active market: {market}",
+            action="active_markets_view",
+            message=f"Fetched active markets: {markets}",
             correlation_id=correlation_id,
             success=True
         )
         return {
-            "active_market": market,
+            "active_markets": markets,
             "timestamp": datetime.now().isoformat(),
             "correlation_id": correlation_id
         }
     except Exception as e:
         audit_logger.log_error_event(
             service="processing",
-            error_name="ActiveMarketGetError",
+            error_name="ActiveMarketsGetError",
             error_message=str(e),
             user_id=user_id,
             correlation_id=correlation_id
         )
-        logger.exception("Error fetching active market")
+        logger.exception("Error fetching active markets")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch active market"
+            detail="Failed to fetch active markets"
         )
 
 
 @router.put(
-    "/active-market",
-    response_model=ActiveMarketSaveResponse,
+    "/active-markets",
+    response_model=ActiveMarketsSaveResponse,
     status_code=status.HTTP_200_OK,
-    summary="Set active market",
-    description="Set the market (DAM/GDAM/HPDAM) used by single-bid-table."
+    summary="Set active markets",
+    description="Set one or more markets (DAM/GDAM/HPDAM) used by single-bid-table."
 )
-async def set_active_market(
+async def set_active_markets(
     request: Request,
     body: ActiveMarketUpdateRequest,
     user_context: Dict[str, Any] = Depends(get_user_context),
@@ -530,12 +533,12 @@ async def set_active_market(
     username = user_context.get("username", "anonymous")
     correlation_id = user_context.get("correlation_id", "unknown")
     try:
-        result = await parameter_controller.set_active_market(body.market)
+        result = await parameter_controller.set_active_markets(body.markets)
         audit_logger.log_user_action(
             service="processing",
             user_id=user_id,
-            action="active_market_save",
-            message=f"Saved active market: {result.get('para_value')}",
+            action="active_markets_save",
+            message=f"Saved active markets: {result.get('para_value')}",
             username=username,
             correlation_id=correlation_id,
             success=True
@@ -549,15 +552,15 @@ async def set_active_market(
     except Exception as e:
         audit_logger.log_error_event(
             service="processing",
-            error_name="ActiveMarketSaveError",
+            error_name="ActiveMarketsSaveError",
             error_message=str(e),
             user_id=user_id,
             correlation_id=correlation_id
         )
-        logger.exception("Error saving active market")
+        logger.exception("Error saving active markets")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save active market"
+            detail="Failed to save active markets"
         )
 
 
