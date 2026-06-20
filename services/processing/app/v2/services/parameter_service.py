@@ -18,9 +18,6 @@ DEFAULT_BID_CONFIGURATION = {
         "block_bid_sell": True,
         "single_bid_buy": True,
         "single_bid_sell": True,
-        "ocf": True,
-        "premium": True,
-        "discount": True,
     },
     "GDAM": {
         "block_bid_buy": True,
@@ -36,6 +33,9 @@ DEFAULT_BID_CONFIGURATION = {
         "block_bid_sell": True,
         "single_bid_buy": True,
         "single_bid_sell": True,
+        "ocf": True,
+        "premium": True,
+        "discount": True,
     },
     "HPDAM": {
         "block_bid_buy": True,
@@ -294,7 +294,7 @@ class ParameterService:
         Helper for bidding services to check if a specific bid flag is enabled.
         Markets: RTM, GDAM, DAM, HPDAM.
         Flags: block_bid_buy, block_bid_sell, single_bid_buy, single_bid_sell,
-               ocf, premium, discount (last three only for RTM/GDAM).
+               ocf, premium, discount (last three only for GDAM/DAM).
         """
         try:
             config = await self.get_bid_configuration()

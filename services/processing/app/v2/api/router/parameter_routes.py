@@ -32,16 +32,16 @@ class MarketBidFlags(BaseModel):
     single_bid_sell: bool = Field(True, description="Enable single bid sell for this market")
 
 
-class RTMGDAMBidFlags(MarketBidFlags):
+class GDAMDAMBidFlags(MarketBidFlags):
     ocf: bool = Field(True, description="Enable OCF for this market")
     premium: bool = Field(True, description="Enable premium for this market")
     discount: bool = Field(True, description="Enable discount for this market")
 
 
 class BidConfiguration(BaseModel):
-    RTM: RTMGDAMBidFlags = Field(default_factory=RTMGDAMBidFlags)
-    GDAM: RTMGDAMBidFlags = Field(default_factory=RTMGDAMBidFlags)
-    DAM: MarketBidFlags = Field(default_factory=MarketBidFlags)
+    RTM: MarketBidFlags = Field(default_factory=MarketBidFlags)
+    GDAM: GDAMDAMBidFlags = Field(default_factory=GDAMDAMBidFlags)
+    DAM: GDAMDAMBidFlags = Field(default_factory=GDAMDAMBidFlags)
     HPDAM: MarketBidFlags = Field(default_factory=MarketBidFlags)
 
 
