@@ -216,7 +216,6 @@ class ParameterRepository:
         try:
             now = datetime.now()
             update_data.setdefault("para_key", para_key)
-            update_data.setdefault("created_at", now)
             update_data["updated_at"] = now
 
             result = await self.repo.update_one_async(
