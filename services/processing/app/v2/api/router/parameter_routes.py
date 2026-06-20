@@ -434,6 +434,225 @@ async def save_bid_configuration(
         )
 
 
+# ---------------------------------------------------------------------------
+# Active market / active exchange for single-bid-table limit values
+# ---------------------------------------------------------------------------
+class ActiveMarketUpdateRequest(BaseModel):
+    market: str = Field(..., description="Active market: DAM, GDAM or HPDAM")
+
+
+class ActiveExchangeUpdateRequest(BaseModel):
+    exchange: str = Field(..., description="Active exchange: IEX, PXIL or HPX")
+
+
+class ActiveMarketResponse(BaseModel):
+    active_market: str = Field(..., description="Currently active market")
+    timestamp: Optional[str] = Field(None, description="Response timestamp")
+    correlation_id: Optional[str] = Field(None, description="Request correlation ID")
+
+
+class ActiveExchangeResponse(BaseModel):
+    active_exchange: str = Field(..., description="Currently active exchange")
+    timestamp: Optional[str] = Field(None, description="Response timestamp")
+    correlation_id: Optional[str] = Field(None, description="Request correlation ID")
+
+
+class ActiveMarketSaveResponse(BaseModel):
+    para_key: str = Field(..., description="Parameter key")
+    para_value: str = Field(..., description="Saved active market")
+    message: str = Field(..., description="Status message")
+
+
+class ActiveExchangeSaveResponse(BaseModel):
+    para_key: str = Field(..., description="Parameter key")
+    para_value: str = Field(..., description="Saved active exchange")
+    message: str = Field(..., description="Status message")
+
+
+@router.get(
+    "/active-market",
+    response_model=ActiveMarketResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get active market",
+    description="Returns the market (DAM/GDAM/HPDAM) currently used by single-bid-table."
+)
+async def get_active_market(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        market = await parameter_controller.get_active_market()
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_market_view",
+            message=f"Fetched active market: {market}",
+            correlation_id=correlation_id,
+            success=True
+        )
+        return {
+            "active_market": market,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id
+        }
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveMarketGetError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error fetching active market")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch active market"
+        )
+
+
+@router.put(
+    "/active-market",
+    response_model=ActiveMarketSaveResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set active market",
+    description="Set the market (DAM/GDAM/HPDAM) used by single-bid-table."
+)
+async def set_active_market(
+    request: Request,
+    body: ActiveMarketUpdateRequest,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        result = await parameter_controller.set_active_market(body.market)
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_market_save",
+            message=f"Saved active market: {result.get('para_value')}",
+            username=username,
+            correlation_id=correlation_id,
+            success=True
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveMarketSaveError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error saving active market")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save active market"
+        )
+
+
+@router.get(
+    "/active-exchange",
+    response_model=ActiveExchangeResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get active exchange",
+    description="Returns the exchange (IEX/PXIL/HPX) currently used by single-bid-table."
+)
+async def get_active_exchange(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        exchange = await parameter_controller.get_active_exchange()
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_exchange_view",
+            message=f"Fetched active exchange: {exchange}",
+            correlation_id=correlation_id,
+            success=True
+        )
+        return {
+            "active_exchange": exchange,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id
+        }
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveExchangeGetError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error fetching active exchange")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch active exchange"
+        )
+
+
+@router.put(
+    "/active-exchange",
+    response_model=ActiveExchangeSaveResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set active exchange",
+    description="Set the exchange (IEX/PXIL/HPX) used by single-bid-table."
+)
+async def set_active_exchange(
+    request: Request,
+    body: ActiveExchangeUpdateRequest,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        result = await parameter_controller.set_active_exchange(body.exchange)
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_exchange_save",
+            message=f"Saved active exchange: {result.get('para_value')}",
+            username=username,
+            correlation_id=correlation_id,
+            success=True
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveExchangeSaveError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error saving active exchange")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save active exchange"
+        )
+
+
 @router.get(
     "/{parameter_id}",
     response_model=ParameterResponse,

@@ -305,6 +305,68 @@ class ParameterService:
             # Fail-safe: disable on error.
             return False
 
+    async def get_active_market(self) -> str:
+        """
+        Return the currently configured active market for single-bid-table.
+        Defaults to 'DAM' when not set or on error.
+        """
+        try:
+            record = await parameter_repository.get_parameter_by_key("active_market")
+            if record and record.get("para_value"):
+                return str(record["para_value"]).strip().upper()
+        except Exception as e:
+            logger.error(f"Error reading active_market parameter: {e}")
+        return "DAM"
+
+    async def set_active_market(self, market: str) -> Dict[str, Any]:
+        """
+        Persist the active market parameter.
+        """
+        normalized = str(market).strip().upper()
+        allowed = {"DAM", "GDAM", "HPDAM"}
+        if normalized not in allowed:
+            raise ValueError(f"Invalid active market '{market}'. Allowed: {sorted(allowed)}")
+        record = await parameter_repository.update_parameter_by_key(
+            "active_market",
+            {"para_value": normalized}
+        )
+        return {
+            "para_key": "active_market",
+            "para_value": record.get("para_value") if record else normalized,
+            "message": "Active market saved successfully"
+        }
+
+    async def get_active_exchange(self) -> str:
+        """
+        Return the currently configured active exchange for single-bid-table.
+        Defaults to 'IEX' when not set or on error.
+        """
+        try:
+            record = await parameter_repository.get_parameter_by_key("active_exchange")
+            if record and record.get("para_value"):
+                return str(record["para_value"]).strip().upper()
+        except Exception as e:
+            logger.error(f"Error reading active_exchange parameter: {e}")
+        return "IEX"
+
+    async def set_active_exchange(self, exchange: str) -> Dict[str, Any]:
+        """
+        Persist the active exchange parameter.
+        """
+        normalized = str(exchange).strip().upper()
+        allowed = {"IEX", "PXIL", "HPX"}
+        if normalized not in allowed:
+            raise ValueError(f"Invalid active exchange '{exchange}'. Allowed: {sorted(allowed)}")
+        record = await parameter_repository.update_parameter_by_key(
+            "active_exchange",
+            {"para_value": normalized}
+        )
+        return {
+            "para_key": "active_exchange",
+            "para_value": record.get("para_value") if record else normalized,
+            "message": "Active exchange saved successfully"
+        }
+
 
 # Create singleton instance
 parameter_service = ParameterService()

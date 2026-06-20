@@ -13,6 +13,7 @@ from bson import ObjectId
 from libs.core.jwt_validator import TokenPayload
 from services.processing.app.core.config import settings
 
+from ..services.parameter_service import parameter_service
 from ..repository.supply_serve_repository import SupplyServeRepository
 # from ..repository.serve_supply_table_repository import serveSupplyTableRepository
 from ..repository.new_dam_single_bid_data_for_approval_repository import DAMSingleBidDataForApprovalRepository
@@ -65,15 +66,37 @@ class GDAMBiddingServices:
         self.dam_book_collection = settings.MONGODB_GDAM_BOOK_COLLECTION
         self.time_block_collection = settings.MONGODB_TIME_BLOCK_COLLECTION
 
-    async def _get_active_exchange(self) -> str:
-        """Get active exchange from the active GDAM exchange config."""
+    async def _get_active_exchange(self, active_market: Optional[str] = None) -> str:
+        """
+        Get active exchange for single-bid-table.
+        Priority:
+        1. active_exchange parameter
+        2. exchange_config for the active market (legacy fallback)
+        3. Default IEX
+        """
         try:
-            config = await self.exchange_config_repo.get_bidType_market_active_config("single", "GDAM")
+            param_exchange = await parameter_service.get_active_exchange()
+            if param_exchange:
+                return param_exchange
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange from parameter: {e}")
+
+        try:
+            market = active_market or await self._get_active_market()
+            config = await self.exchange_config_repo.get_bidType_market_active_config("single", market)
             if config and config.get("exchange"):
                 return config.get("exchange")
         except Exception as e:
-            logger.warning(f"Failed to get active exchange for GDAM: {e}")
+            logger.warning(f"Failed to get active exchange for {market}: {e}")
         return "IEX"
+
+    async def _get_active_market(self) -> str:
+        """Get active market for single-bid-table from parameter."""
+        try:
+            return await parameter_service.get_active_market()
+        except Exception as e:
+            logger.warning(f"Failed to get active market from parameter: {e}")
+        return "GDAM"
 
     async def _aggregate_limit_values_with_fallback(
         self,
@@ -99,6 +122,45 @@ class GDAMBiddingServices:
             "falling back to legacy/default (no exchange) documents."
         )
         return await self.limit_values_repo.aggregate(pipeline)
+
+    def _apply_active_limit_prefix(
+        self,
+        data: Dict[str, Any],
+        active_exchange: str,
+        active_market: str
+    ) -> Dict[str, Any]:
+        """
+        Rename limit-values fields in single-bid-table rows so response keys
+        follow the pattern {activeExchange}_{activeMarket}_{fieldname}.
+        """
+        if not data or not isinstance(data, dict):
+            return data
+
+        prefix = f"{active_exchange}_{active_market}_"
+        limit_field_map = {
+            "dam_forecasted_price": f"{prefix}forecasted_price",
+            "ceiling_price": f"{prefix}ceiling_price",
+            "dam_buffer_value": f"{prefix}buffer_value",
+            "dam_nminusone_quantum": f"{prefix}nminusone_quantum",
+            "dam_noc_buy_value": f"{prefix}noc_buy_value",
+            "dam_noc_sell_value": f"{prefix}noc_sell_value",
+        }
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for plkey, block_rows in table_data.items():
+            if not isinstance(block_rows, dict):
+                continue
+            for blk, row in block_rows.items():
+                if not isinstance(row, dict):
+                    continue
+                for old_key, new_key in limit_field_map.items():
+                    if old_key in row:
+                        row[new_key] = row.pop(old_key)
+
+        return data
 
     async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
         """Get DAM bid submission details for a specific date."""
@@ -655,7 +717,8 @@ class GDAMBiddingServices:
             target_date_end = datetime.combine(target_date_dt.date(), datetime.max.time())
 
             # Active exchange for limit_values filtering
-            active_exchange = await self._get_active_exchange()
+            active_market = await self._get_active_market()
+            active_exchange = await self._get_active_exchange(active_market)
 
             # Fetch plant data
             pipeline = [
@@ -825,8 +888,8 @@ class GDAMBiddingServices:
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
-                                "id": "DAM_forecasted_price",
-                                "market": "GDAM",
+                                "id": f"{active_market}_forecasted_price",
+                                "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -856,7 +919,7 @@ class GDAMBiddingServices:
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Buffer",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -884,7 +947,7 @@ class GDAMBiddingServices:
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Ceiling_Price",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -914,7 +977,7 @@ class GDAMBiddingServices:
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "n_1",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -945,7 +1008,7 @@ class GDAMBiddingServices:
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_buy",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -974,7 +1037,7 @@ class GDAMBiddingServices:
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_sell",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -1003,7 +1066,7 @@ class GDAMBiddingServices:
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "iex",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -1032,7 +1095,7 @@ class GDAMBiddingServices:
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "pxil",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -1391,6 +1454,7 @@ class GDAMBiddingServices:
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
                                 
+            self._apply_active_limit_prefix(data, active_exchange, active_market)
             return data
 
         except Exception as e:
