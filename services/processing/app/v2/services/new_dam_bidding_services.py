@@ -75,6 +75,31 @@ class DAMBiddingServices:
             logger.warning(f"Failed to get active exchange for DAM: {e}")
         return "IEX"
 
+    async def _aggregate_limit_values_with_fallback(
+        self,
+        pipeline: List[Dict[str, Any]],
+        active_exchange: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Run a limit_values aggregate first with the active exchange filter.
+        If no results are found, fall back to documents without an exchange field
+        (legacy/default IEX data).
+        """
+        import copy
+        pipeline_with_exchange = copy.deepcopy(pipeline)
+        if pipeline_with_exchange and "$match" in pipeline_with_exchange[0]:
+            pipeline_with_exchange[0]["$match"]["exchange"] = active_exchange
+
+        result = await self.limit_values_repo.aggregate(pipeline_with_exchange)
+        if result:
+            return result
+
+        logger.info(
+            f"No limit_values found for active exchange '{active_exchange}'; "
+            "falling back to legacy/default (no exchange) documents."
+        )
+        return await self.limit_values_repo.aggregate(pipeline)
+
     async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
         """Get DAM bid submission details for a specific date."""
         return await self.integration_api_log_repo.get_bid_submission_details(date_str, "dam", "single-bid")
@@ -795,14 +820,13 @@ class DAMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = await self.limit_values_repo.aggregate(
+            forecastedPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
                                 "id": "DAM_forecasted_price",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -817,20 +841,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},  # Sort by block for consistent ordering
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
             limit_schedule_date = target_date
             print("=============================================================== forecastedPrice =============================================================== ")
             print(forecastedPrice)
             print("=============================================================== forecastedPrice =============================================================== ")
             
-            bufferPrice = await self.limit_values_repo.aggregate(
+            bufferPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Buffer",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -845,16 +869,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+                active_exchange,
+
+            
             )
             
-            ceilingPrice = await self.limit_values_repo.aggregate(
+            ceilingPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Ceiling_Price",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -870,17 +898,21 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+                active_exchange,
+
+            
             )
             
 
-            n_1Limits = await self.limit_values_repo.aggregate(
+            n_1Limits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "n_1",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -896,16 +928,22 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+
+                active_exchange,
+
+            
+
             )
 
-            noc_buyLimits = await self.limit_values_repo.aggregate(
+            noc_buyLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_buy",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -921,16 +959,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            noc_sellLimits = await self.limit_values_repo.aggregate(
+            noc_sellLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_sell",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -946,16 +988,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            typeofExchangeIEX = await self.limit_values_repo.aggregate(
+            typeofExchangeIEX = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "iex",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -971,16 +1017,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            typeofExchangePXIL = await self.limit_values_repo.aggregate(
+            typeofExchangePXIL = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "pxil",
                                 "market": "DAM",
-                                "exchange": active_exchange,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -996,6 +1046,11 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
             
