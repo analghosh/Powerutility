@@ -171,6 +171,30 @@ class ParameterController:
             logger.error(f"Error in parameter controller delete: {e}")
             raise
 
+    # ------------------------------------------------------------------
+    # Bid configuration (parameter master)
+    # ------------------------------------------------------------------
+
+    async def get_bid_configuration(self) -> Dict[str, Any]:
+        """Return active bid configuration."""
+        try:
+            return await parameter_service.get_bid_configuration()
+        except Exception as e:
+            logger.error(f"Error in bid configuration controller get: {e}")
+            raise
+
+    async def save_bid_configuration(
+        self,
+        config: Dict[str, Any],
+        user_ctx: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Save bid configuration directly."""
+        try:
+            return await parameter_service.save_bid_configuration(config, user_ctx)
+        except Exception as e:
+            logger.error(f"Error in bid configuration controller save: {e}")
+            raise
+
 
 # Create singleton instance
 parameter_controller = ParameterController()

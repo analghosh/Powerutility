@@ -204,6 +204,38 @@ class ParameterRepository:
             logger.error(f"Error updating parameter: {e}")
             raise
 
+    async def update_parameter_by_key(
+        self,
+        para_key: str,
+        update_data: Dict[str, Any]
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Upsert a parameter by its unique key.
+        Used by the bid configuration approval workflow.
+        """
+        try:
+            now = datetime.now()
+            update_data.setdefault("para_key", para_key)
+            update_data.setdefault("created_at", now)
+            update_data["updated_at"] = now
+
+            result = await self.repo.update_one_async(
+                self.collection_name,
+                {"para_key": para_key},
+                {
+                    "$set": update_data,
+                    "$setOnInsert": {"created_at": now}
+                },
+                upsert=True
+            )
+
+            logger.info(f"Upserted parameter with key: {para_key}")
+            return await self.get_parameter_by_key(para_key)
+
+        except Exception as e:
+            logger.error(f"Error upserting parameter by key: {e}")
+            raise
+
     async def delete_parameter(self, parameter_id: str) -> bool:
         """
         Delete parameter by ID

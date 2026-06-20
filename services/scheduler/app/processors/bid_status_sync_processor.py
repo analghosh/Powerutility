@@ -49,5 +49,29 @@ class BidStatusSyncProcessor:
             logger.error(f"[BidStatusSync] Error in RTM sync delegation: {e}")
             return {"success": False, "error": str(e)}
 
+    async def execute_gdam_sync(self, payload: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Execute GDAM sync.
+        Delegates to SingleBidBookProcessor.execute_gdam_cron()
+        """
+        logger.info("[BidStatusSync] Delegating GDAM Sync to SingleBidBookProcessor")
+        try:
+            return await single_bid_book_processor.execute_gdam_cron()
+        except Exception as e:
+            logger.error(f"[BidStatusSync] Error in GDAM sync delegation: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def execute_hpdam_sync(self, payload: Dict[str, Any] = None) -> Dict[str, Any]:
+        """
+        Execute HPDAM sync.
+        Delegates to SingleBidBookProcessor.execute_hpdam_cron()
+        """
+        logger.info("[BidStatusSync] Delegating HPDAM Sync to SingleBidBookProcessor")
+        try:
+            return await single_bid_book_processor.execute_hpdam_cron()
+        except Exception as e:
+            logger.error(f"[BidStatusSync] Error in HPDAM sync delegation: {e}")
+            return {"success": False, "error": str(e)}
+
 # Singleton instance
 bid_status_sync_processor = BidStatusSyncProcessor()

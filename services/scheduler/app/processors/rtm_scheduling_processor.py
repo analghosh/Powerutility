@@ -665,17 +665,17 @@ class RTMSchedulingProcessor(BaseProcessor):
         
             
             logger.info("[RTMSchedulingServices] Fetching limit values - TM, SEZ, MLTP")
-            allTMValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "TM", "Puducherry")
+            allTMValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "TM", "Puducherry", exchange="IEX")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allTMValuesRaw)} TM limit values")
             await self._store_raw_snapshot(
                 allTMValuesRaw, "limit_tm_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
-            allSEZValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "DAM", "SEZ", "Puducherry")
+            allSEZValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "DAM", "SEZ", "Puducherry", exchange="IEX")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allSEZValuesRaw)} SEZ limit values")
             await self._store_raw_snapshot(
                 allSEZValuesRaw, "limit_sez_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
             )
-            allMLTPValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "Multiplier", "Puducherry")
+            allMLTPValuesRaw = await self.limit_values_repo.get_data(yesterday, tomorrow, "RTM", "Multiplier", "Puducherry", exchange="IEX")
             logger.info(f"[RTMSchedulingServices] Retrieved {len(allMLTPValuesRaw)} MLTP limit values")
             await self._store_raw_snapshot(
                 allMLTPValuesRaw, "limit_mltp_raw", run_id, execution_id, snapshot_storage_date, snapshot_session_id
@@ -796,7 +796,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             # RTM forecasted price from limit_values (id=RTM_forecasted_price), today's schedule — not exchange yesterday MCP
             # category="" so documents with category "Limits" (ingestion) match; area=Puducherry
             rtm_forecasted_price_list = await self.limit_values_repo.get_data_byID_with_latest_date(
-                "RTM_forecasted_price", "RTM", "", "Puducherry", today_dt
+                "RTM_forecasted_price", "RTM", "", "Puducherry", today_dt, exchange="IEX"
             )
             logger.info(
                 f"[RTMSchedulingServices] Retrieved {len(rtm_forecasted_price_list)} RTM_forecasted_price "

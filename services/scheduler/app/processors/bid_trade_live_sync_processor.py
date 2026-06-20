@@ -36,20 +36,55 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
         self.bid_trade_serve_repo = BidTradeServeRepository()
         self.rtm_single_bid_approval_repo = RTMSingleBidDataForApprovalRepository()
         self.dam_single_bid_approval_repo = DAMSingleBidDataForApprovalRepository()
+        self.gdam_single_bid_approval_repo = DAMSingleBidDataForApprovalRepository(settings.MONGODB_GDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION)
+        self.hpdam_single_bid_approval_repo = DAMSingleBidDataForApprovalRepository(settings.MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION)
         self.time_block_cache = TimeblockRepository()
         self.dam_bid_data_live = "dam_bid_data_live"
+        self.gdam_bid_data_live = "gdam_bid_data_live"
+        self.hpdam_bid_data_live = "hpdam_bid_data_live"
         self.rtm_bid_data_live = "rtm_bid_data_live"
         from services.scheduler.app.core.database import get_database
         self.db = get_database()
 
+        self._live_market_config = {
+            "dam": {
+                "get_delivery_dates": self.client.get_live_valid_delivery_date_dam,
+                "get_single_bid": self.client.get_live_single_bid_dam,
+                "approval_repo": self.dam_single_bid_approval_repo,
+                "raw_collection": self.dam_bid_data_live,
+                "is_multi_date": False,
+            },
+            "gdam": {
+                "get_delivery_dates": self.client.get_live_valid_delivery_date_gdam,
+                "get_single_bid": self.client.get_live_single_bid_gdam,
+                "approval_repo": self.gdam_single_bid_approval_repo,
+                "raw_collection": self.gdam_bid_data_live,
+                "is_multi_date": False,
+            },
+            "hpdam": {
+                "get_delivery_dates": self.client.get_live_valid_delivery_date_hpdam,
+                "get_single_bid": self.client.get_live_single_bid_hpdam,
+                "approval_repo": self.hpdam_single_bid_approval_repo,
+                "raw_collection": self.hpdam_bid_data_live,
+                "is_multi_date": False,
+            },
+            "rtm": {
+                "get_delivery_dates": self.client.get_live_valid_delivery_date_rtm,
+                "get_single_bid": self.client.get_live_single_bid_rtm,
+                "approval_repo": self.rtm_single_bid_approval_repo,
+                "raw_collection": self.rtm_bid_data_live,
+                "is_multi_date": True,
+            },
+        }
+
     async def execute_cron_job(self) -> Dict[str, Any]:
         """
         Execute the cron job for Bid Trade Live Sync.
-        Runs both DAM and RTM syncs.
+        Runs DAM, GDAM, HPDAM and RTM syncs.
         """
         logger.info("TESTING LOGS: Starting Bid Trade Live Sync Cron Job")
         results = {}
-        
+
         # DAM Sync
         logger.info("TESTING LOGS: [FLOW] 1. Starting DAM Sync")
         try:
@@ -58,6 +93,24 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
         except Exception as e:
             logger.error(f"TESTING LOGS: [FLOW] 2. DAM Sync FAILED: {e}")
             results["dam"] = {"status": "error", "error": str(e)}
+
+        # GDAM Sync
+        logger.info("TESTING LOGS: [FLOW] 1b. Starting GDAM Sync")
+        try:
+            results["gdam"] = await self.execute_gdam_live_sync()
+            logger.info("TESTING LOGS: [FLOW] 2b. GDAM Sync Finished")
+        except Exception as e:
+            logger.error(f"TESTING LOGS: [FLOW] 2b. GDAM Sync FAILED: {e}")
+            results["gdam"] = {"status": "error", "error": str(e)}
+
+        # HPDAM Sync
+        logger.info("TESTING LOGS: [FLOW] 1c. Starting HPDAM Sync")
+        try:
+            results["hpdam"] = await self.execute_hpdam_live_sync()
+            logger.info("TESTING LOGS: [FLOW] 2c. HPDAM Sync Finished")
+        except Exception as e:
+            logger.error(f"TESTING LOGS: [FLOW] 2c. HPDAM Sync FAILED: {e}")
+            results["hpdam"] = {"status": "error", "error": str(e)}
 
         # RTM Sync
         logger.info("TESTING LOGS: [FLOW] 3. Starting RTM Sync")
@@ -86,6 +139,20 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
         logger.info("TESTING LOGS: Entering execute_dam_live_sync")
         return await self._execute_sync("dam")
 
+    async def execute_gdam_live_sync(self) -> Dict[str, Any]:
+        """
+        Execute GDAM live sync.
+        """
+        logger.info("TESTING LOGS: Entering execute_gdam_live_sync")
+        return await self._execute_sync("gdam")
+
+    async def execute_hpdam_live_sync(self) -> Dict[str, Any]:
+        """
+        Execute HPDAM live sync.
+        """
+        logger.info("TESTING LOGS: Entering execute_hpdam_live_sync")
+        return await self._execute_sync("hpdam")
+
     async def execute_rtm_live_sync(self) -> Dict[str, Any]:
         """
         Execute RTM live sync.
@@ -99,31 +166,27 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
         """
         logger.info(f"TESTING LOGS: Entering _execute_sync with market={market}")
         job_name = f"{market.upper()} Live Bid Trade Sync"
-        
+        cfg = self._live_market_config.get(market.lower())
+        if not cfg:
+            return {"status": "error", "message": f"Unsupported market: {market}"}
+
         try:
             logger.info(f"TESTING LOGS: [{job_name}] Starting execution...")
-            
+
             # 1. Get Delivery Date(s)
-            delivery_dates = []
-            if market == "dam":
-                # DAM returns a single int based on current logic
-                d_int = await self.client.get_live_valid_delivery_date_dam()
-                delivery_dates = [d_int]
+            if cfg["is_multi_date"]:
+                delivery_dates = await cfg["get_delivery_dates"]()
             else:
-                # RTM returns a list of ints
-                delivery_dates = await self.client.get_live_valid_delivery_date_rtm()
-                
+                d_int = await cfg["get_delivery_dates"]()
+                delivery_dates = [d_int]
+
             logger.info(f"TESTING LOGS: [{job_name}] Fetching for DeliveryDates: {delivery_dates}")
-            
+
             results_details = []
             for delivery_date_int in delivery_dates:
                 # 2. Fetch Data
-                # Refactored to use client directly
-                if market == "dam":
-                    data = await self.client.get_live_single_bid_dam(delivery_date_int)
-                else:
-                    data = await self.client.get_live_single_bid_rtm(delivery_date_int)
-                    
+                data = await cfg["get_single_bid"](delivery_date_int)
+
                 # 3. Process and Store
                 now = datetime.now().strftime("%H:%M:%S.%f")
                 logger.info(f"TESTING LOGS: [{now}] [{job_name}] Processing date: {delivery_date_int}")
@@ -132,7 +195,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
                 now = datetime.now().strftime("%H:%M:%S.%f")
                 logger.info(f"TESTING LOGS: [{now}] [{job_name}] AFTER await _process_and_store")
                 results_details.append({"date": delivery_date_int, "result": res})
-            
+
             return {
                 "status": "success",
                 "details": results_details
@@ -183,8 +246,9 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             return t
 
         timeblock_map = {f"{normalize_time(tb['starttime'])}-{normalize_time(tb['endtime'])}": tb['timeblock'] for tb in timeblocks}
-        target_collection_name = "dam_bid_data_live" if market.lower() == "dam" else "rtm_bid_data_live"
-        
+        market_cfg = self._live_market_config.get(market.lower())
+        target_collection_name = market_cfg["raw_collection"] if market_cfg else f"{market.lower()}_bid_data_live"
+
         # Factors
         asset_details_response = await scheduler_exchange_client.get_live_asset_details(market)
         asset_list = asset_details_response.get("AssetDetails", [])
@@ -252,7 +316,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             traded_qty = safe_float(bid.get("TotalExecutedQty", 0))
             trade_price = safe_float(bid.get("TradePrice", 0))
 
-            approval_repo = self.rtm_single_bid_approval_repo if market.upper() == "RTM" else self.dam_single_bid_approval_repo
+            approval_repo = market_cfg["approval_repo"] if market_cfg else self.dam_single_bid_approval_repo
             approval_query = {"start_time": from_period, "end_time": to_period, "bid_date": bid_delivery_dt_str, "exchangeStatus": "Submitted"}
             
             # Update approval if exists

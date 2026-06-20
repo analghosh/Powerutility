@@ -51,7 +51,27 @@ class SchedulerExchangeAPIClient:
                 }
                 logger.info(f"Fetching DAM config with query: {query}")
                 return await config_collection.find_one(query)
-                
+
+            elif market_type.lower() == "gdam":
+                query = {
+                    "is_active": True,
+                    "is_deleted": {"$ne": True},
+                    "bidType": "single",
+                    "market": "GDAM"
+                }
+                logger.info(f"Fetching GDAM config with query: {query}")
+                return await config_collection.find_one(query)
+
+            elif market_type.lower() == "hpdam":
+                query = {
+                    "is_active": True,
+                    "is_deleted": {"$ne": True},
+                    "bidType": "single",
+                    "market": "HPDAM"
+                }
+                logger.info(f"Fetching HPDAM config with query: {query}")
+                return await config_collection.find_one(query)
+
             elif market_type.lower() == "rtm":
                 # Matches RTMTransactionService calling exchange_config_repo.get_bidType_market_active_config("single", "RTM")
                 # Query: {"is_active": True, "is_deleted": {"$ne": True}, "bidType": "single", "market": "RTM"}
@@ -265,13 +285,13 @@ class SchedulerExchangeAPIClient:
         config = await self._get_exchange_config(market)
         if not config:
             raise ValueError("Exchange Configuration not found for DAM")
-            
+
         base_url = config.get("baseUrl") or config.get("BaseUrl")
         login_user_id = config.get("LoginUserId")
         participant_id = config.get("ParticipantId")
         portfolio_id = config.get("PortfolioId")
         bearer_token = config.get("BearerToken")
-        
+
         # DAM Params - Corrected based on user feedback
         # Remove sorting_type as it's not present in DAM API
         period = "ALL"
@@ -282,18 +302,116 @@ class SchedulerExchangeAPIClient:
         # sorting_type removed
         page_number = 0
         page_size = 0
-        
+
         url = (
             f"{base_url}/dam/api/v2/singlebid/"
             f"{login_user_id},{participant_id},{delivery_date},"
             f"{login_user_id},{portfolio_id},{period},"
             f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
         )
-        
+
         headers = {"Content-Type": "application/json"}
         if bearer_token:
             headers["Authorization"] = f"Bearer {bearer_token}"
         return await self._execute_and_log(url, "GET", headers, None, market, "getSingleBidDam")
+
+    async def get_valid_delivery_date_gdam(self) -> int:
+        """
+        Fetch and return valid GDAM delivery date.
+        """
+        data = await self.get_delivery_dates("gdam")
+        delivery_date = data.get("DeliveryDate")
+        if not delivery_date:
+            if "DeliveryDates" in data and data["DeliveryDates"]:
+                delivery_date = data["DeliveryDates"][0].get("DeliveryDate")
+        if not delivery_date:
+            raise ValueError("Could not find valid DeliveryDate in GDAM response")
+        return int(delivery_date)
+
+    async def get_valid_delivery_date_hpdam(self) -> int:
+        """
+        Fetch and return valid HPDAM delivery date.
+        """
+        data = await self.get_delivery_dates("hpdam")
+        delivery_date = data.get("DeliveryDate")
+        if not delivery_date:
+            if "DeliveryDates" in data and data["DeliveryDates"]:
+                delivery_date = data["DeliveryDates"][0].get("DeliveryDate")
+        if not delivery_date:
+            raise ValueError("Could not find valid DeliveryDate in HPDAM response")
+        return int(delivery_date)
+
+    async def get_single_bid_gdam(self, delivery_date: int) -> Dict[str, Any]:
+        """
+        Fetch GDAM Single Bid Book.
+        API: /gdam/api/v2/singlebid/...
+        """
+        market = "gdam"
+        config = await self._get_exchange_config(market)
+        if not config:
+            raise ValueError("Exchange Configuration not found for GDAM")
+
+        base_url = config.get("baseUrl") or config.get("BaseUrl")
+        login_user_id = config.get("LoginUserId")
+        participant_id = config.get("ParticipantId")
+        portfolio_id = config.get("PortfolioId")
+        bearer_token = config.get("BearerToken")
+
+        period = "ALL"
+        bid_area_id = "S2"
+        status = "ALL"
+        exception_id = 0
+        order_id = 0
+        page_number = 0
+        page_size = 0
+
+        url = (
+            f"{base_url}/gdam/api/v2/singlebid/"
+            f"{login_user_id},{participant_id},{delivery_date},"
+            f"{login_user_id},{portfolio_id},{period},"
+            f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+        )
+
+        headers = {"Content-Type": "application/json"}
+        if bearer_token:
+            headers["Authorization"] = f"Bearer {bearer_token}"
+        return await self._execute_and_log(url, "GET", headers, None, market, "getSingleBidGdam")
+
+    async def get_single_bid_hpdam(self, delivery_date: int) -> Dict[str, Any]:
+        """
+        Fetch HPDAM Single Bid Book.
+        API: /hpdam/api/v2/singlebid/...
+        """
+        market = "hpdam"
+        config = await self._get_exchange_config(market)
+        if not config:
+            raise ValueError("Exchange Configuration not found for HPDAM")
+
+        base_url = config.get("baseUrl") or config.get("BaseUrl")
+        login_user_id = config.get("LoginUserId")
+        participant_id = config.get("ParticipantId")
+        portfolio_id = config.get("PortfolioId")
+        bearer_token = config.get("BearerToken")
+
+        period = "ALL"
+        bid_area_id = "S2"
+        status = "ALL"
+        exception_id = 0
+        order_id = 0
+        page_number = 0
+        page_size = 0
+
+        url = (
+            f"{base_url}/hpdam/api/v2/singlebid/"
+            f"{login_user_id},{participant_id},{delivery_date},"
+            f"{login_user_id},{portfolio_id},{period},"
+            f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+        )
+
+        headers = {"Content-Type": "application/json"}
+        if bearer_token:
+            headers["Authorization"] = f"Bearer {bearer_token}"
+        return await self._execute_and_log(url, "GET", headers, None, market, "getSingleBidHpdam")
 
     async def get_block_bid_rtm(self, delivery_date: int) -> Dict[str, Any]:
         """
@@ -479,7 +597,27 @@ class SchedulerExchangeAPIClient:
                 }
                 logger.info(f"Fetching DAM config with query: {query}")
                 return await config_collection.find_one(query)
-                
+
+            elif market_type.lower() == "gdam":
+                query = {
+                    "is_active": True,
+                    "is_deleted": {"$ne": True},
+                    "bidType": "single",
+                    "market": "GDAM"
+                }
+                logger.info(f"Fetching GDAM config with query: {query}")
+                return await config_collection.find_one(query)
+
+            elif market_type.lower() == "hpdam":
+                query = {
+                    "is_active": True,
+                    "is_deleted": {"$ne": True},
+                    "bidType": "single",
+                    "market": "HPDAM"
+                }
+                logger.info(f"Fetching HPDAM config with query: {query}")
+                return await config_collection.find_one(query)
+
             elif market_type.lower() == "rtm":
                 # Matches RTMTransactionService calling exchange_config_repo.get_bidType_market_active_config("single", "RTM")
                 # Query: {"is_active": True, "is_deleted": {"$ne": True}, "bidType": "single", "market": "RTM"}
@@ -511,13 +649,13 @@ class SchedulerExchangeAPIClient:
         config = await self._get_live_exchange_config(market)
         if not config:
             raise ValueError("Exchange Configuration not found for DAM")
-            
+
         base_url = config.get("baseUrl") or config.get("BaseUrl")
         login_user_id = config.get("LoginUserId")
         participant_id = config.get("ParticipantId")
         portfolio_id = config.get("PortfolioId")
         bearer_token = config.get("BearerToken")
-        
+
         # DAM Params - Corrected based on user feedback
         # Remove sorting_type as it's not present in DAM API
         period = "ALL"
@@ -528,20 +666,122 @@ class SchedulerExchangeAPIClient:
         # sorting_type removed
         page_number = 0
         page_size = 0
-        
+
         url = (
             f"{base_url}/dam/api/v2/singlebid/"
             f"{login_user_id},{participant_id},{delivery_date},"
             f"{login_user_id},{portfolio_id},{period},"
             f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
         )
-        
+
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {bearer_token}"
         }
-        
+
         return await self._execute_and_log(url, "GET", headers, None, market, "getSingleBidDam")
+
+    async def get_live_valid_delivery_date_gdam(self) -> int:
+        """
+        Fetch and return valid GDAM delivery date from Production.
+        """
+        data = await self.get_live_delivery_dates("gdam")
+        delivery_date = data.get("DeliveryDate")
+        if not delivery_date:
+            if "DeliveryDates" in data and data["DeliveryDates"]:
+                delivery_date = data["DeliveryDates"][0].get("DeliveryDate")
+        if not delivery_date:
+            raise ValueError("Could not find valid Production DeliveryDate in GDAM response")
+        return int(delivery_date)
+
+    async def get_live_valid_delivery_date_hpdam(self) -> int:
+        """
+        Fetch and return valid HPDAM delivery date from Production.
+        """
+        data = await self.get_live_delivery_dates("hpdam")
+        delivery_date = data.get("DeliveryDate")
+        if not delivery_date:
+            if "DeliveryDates" in data and data["DeliveryDates"]:
+                delivery_date = data["DeliveryDates"][0].get("DeliveryDate")
+        if not delivery_date:
+            raise ValueError("Could not find valid Production DeliveryDate in HPDAM response")
+        return int(delivery_date)
+
+    async def get_live_single_bid_gdam(self, delivery_date: int) -> Dict[str, Any]:
+        """
+        Fetch GDAM Single Bid Book from Production.
+        API: /gdam/api/v2/singlebid/...
+        """
+        market = "gdam"
+        config = await self._get_live_exchange_config(market)
+        if not config:
+            raise ValueError("Exchange Configuration not found for GDAM")
+
+        base_url = config.get("baseUrl") or config.get("BaseUrl")
+        login_user_id = config.get("LoginUserId")
+        participant_id = config.get("ParticipantId")
+        portfolio_id = config.get("PortfolioId")
+        bearer_token = config.get("BearerToken")
+
+        period = "ALL"
+        bid_area_id = "S2"
+        status = "Executed"
+        exception_id = 0
+        order_id = 0
+        page_number = 0
+        page_size = 0
+
+        url = (
+            f"{base_url}/gdam/api/v2/singlebid/"
+            f"{login_user_id},{participant_id},{delivery_date},"
+            f"{login_user_id},{portfolio_id},{period},"
+            f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+        )
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {bearer_token}"
+        }
+
+        return await self._execute_and_log(url, "GET", headers, None, market, "getLiveSingleBidGdam")
+
+    async def get_live_single_bid_hpdam(self, delivery_date: int) -> Dict[str, Any]:
+        """
+        Fetch HPDAM Single Bid Book from Production.
+        API: /hpdam/api/v2/singlebid/...
+        """
+        market = "hpdam"
+        config = await self._get_live_exchange_config(market)
+        if not config:
+            raise ValueError("Exchange Configuration not found for HPDAM")
+
+        base_url = config.get("baseUrl") or config.get("BaseUrl")
+        login_user_id = config.get("LoginUserId")
+        participant_id = config.get("ParticipantId")
+        portfolio_id = config.get("PortfolioId")
+        bearer_token = config.get("BearerToken")
+
+        period = "ALL"
+        bid_area_id = "S2"
+        status = "Executed"
+        exception_id = 0
+        order_id = 0
+        page_number = 0
+        page_size = 0
+
+        url = (
+            f"{base_url}/hpdam/api/v2/singlebid/"
+            f"{login_user_id},{participant_id},{delivery_date},"
+            f"{login_user_id},{portfolio_id},{period},"
+            f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+        )
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {bearer_token}"
+        }
+
+        return await self._execute_and_log(url, "GET", headers, None, market, "getLiveSingleBidHpdam")
 
     async def get_live_single_bid_rtm(self, delivery_date: int) -> Dict[str, Any]:
         """

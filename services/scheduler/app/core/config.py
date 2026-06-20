@@ -294,10 +294,14 @@ class Settings(BaseSettings):
     
     # Single Bid Book Collections
     MONGODB_DAM_BOOK_COLLECTION: str = "dam_book_status"
+    MONGODB_GDAM_BOOK_COLLECTION: str = "gdam_book_status"
+    MONGODB_HPDAM_BOOK_COLLECTION: str = "hpdam_book_status"
     MONGODB_RTM_BOOK_COLLECTION: str = "rtm_book_status"
     # Block Bid Book Collection
     MONGODB_RTM_BLOCK_BID_BOOK_COLLECTION: str = "rtm_block_bid_book_status"
     MONGODB_DAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "dam_single_bid_data_for_approval"
+    MONGODB_GDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "gdam_single_bid_data_for_approval"
+    MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "hpdam_single_bid_data_for_approval"
     MONGODB_RTM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "rtm_single_bid_data_for_approval"
     
     class Config:
