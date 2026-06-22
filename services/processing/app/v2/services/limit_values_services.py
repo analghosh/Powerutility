@@ -873,7 +873,6 @@ class LimitService:
                     "category": approval["category"],
                     "area": approval["area"],
                     "scheduled_at": scheduled_at,
-                    "exchange": approval.get("exchange", "IEX")
                 }
             except KeyError as e:
                 logger.error(f"Approval doc {approval_id} is malformed. Missing key: {str(e)}")
@@ -963,7 +962,7 @@ class LimitService:
                 
                 result = await self.values_repo.repository.update_one(
                     self.values_collection,
-                    key,  # Unique key without date
+                    key,  # Unique business key matching limit_values_unique_idx
                     update_payload,
                     upsert=True
                 )
