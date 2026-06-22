@@ -261,9 +261,12 @@ class LimitWorkflowRepository:
                         }
                     }
                 },
-                
-                # Stage 5: Sort by request date
-                {"$sort": {"requested_at": -1}}
+
+                # Stage 5: Ensure block is numeric for consistent sorting
+                {"$addFields": {"block": {"$toInt": "$block"}}},
+
+                # Stage 6: Sort by block number (ascending)
+                {"$sort": {"block": 1}}
             ]
             
             cursor = await self.repository.aggregate(approval_collection, pipeline)
@@ -422,11 +425,14 @@ class LimitWorkflowRepository:
                         }
                     }
                 },
-                
-                # Stage 5: Sort by block number (ascending)
+
+                # Stage 5: Ensure block is numeric for consistent sorting
+                {"$addFields": {"block": {"$toInt": "$block"}}},
+
+                # Stage 6: Sort by block number (ascending)
                 {"$sort": {"block": 1}},
                 
-                # Stage 6: Pagination
+                # Stage 7: Pagination
                 {"$skip": skip},
                 {"$limit": page_size}
             ]

@@ -1151,6 +1151,7 @@ class RTMTransactionService:
         for bid in rtm_bid_details:
             from_period = bid.get("FromPeriodId")
             to_period = bid.get("ToPeriodId")
+            user_id = bid.get("UserId")
             if (from_period, to_period) in target_period_keys:
                 if bid.get("OrderStatus") != "Cancelled": 
                     orders_to_cancel.append({
@@ -1158,7 +1159,8 @@ class RTMTransactionService:
                         "LastUpdatedTime": bid.get("LastUpdatedTime"),
                         "Session": bid.get("Session"),
                         "FromPeriodId": from_period,
-                        "ToPeriodId": to_period
+                        "ToPeriodId": to_period,
+                        "UserId": user_id
                     })
         
         if not orders_to_cancel:
@@ -1178,6 +1180,7 @@ class RTMTransactionService:
             try:
                 cancel_result = await api_client.cancel_rtm_bid(
                     order_id=order["OrderId"],
+                    user_id=order["UserId"],
                     last_updated_time=order["LastUpdatedTime"],
                     delivery_date=delivery_date_timestamp
                 )
