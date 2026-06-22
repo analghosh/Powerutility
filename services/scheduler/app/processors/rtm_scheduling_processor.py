@@ -2262,7 +2262,7 @@ class RTMSchedulingProcessor(BaseProcessor):
                         "$gte": schedule_date_start,
                         "$lt": schedule_date_end,
                     },
-                    "dc_sg": "DC",
+                    "dc_sg": "SG",
                 },
                 sort=[
                     ("source_revision_number", -1),
