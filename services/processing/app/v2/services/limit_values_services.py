@@ -88,7 +88,7 @@ def _normalize_item(row: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("scheduled_at is required")
 
         try:
-            item["scheduled_at"] = parse_csv_scheduled_at(raw_date_value)
+            item["scheduled_at"] = parse_schedule_date_filter(raw_date_value)
         except ValueError:
             raise
     
@@ -148,7 +148,7 @@ def _is_rtm_forecast_past_block(item: Dict[str, Any]) -> bool:
 
 def _values_doc(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "scheduled_at": parse_csv_scheduled_at(item["scheduled_at"]),
+        "scheduled_at": parse_schedule_date_filter(item["scheduled_at"]),
         "block": item["block"],
         "id": item["id"],
         "market": item["market"],
