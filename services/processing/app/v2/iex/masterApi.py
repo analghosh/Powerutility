@@ -518,6 +518,7 @@ class ExchangeAPIClient:
     async def cancel_rtm_bid(
         self,
         order_id: int,
+        user_id: str,
         last_updated_time: int,
         delivery_date: Optional[int] = None
     ) -> Dict[str, Any]:
@@ -539,7 +540,7 @@ class ExchangeAPIClient:
         
         request_body = {
             "OrderId": int(order_id),  # Must be Number per API spec
-            "UserId": self.login_user_id,
+            "UserId": str(user_id),
             "ParticipantId": self.participant_id,
             "PortfolioId": self.portfolio_id,
             "LastUpdatedTime": int(last_updated_time)  # Must be Number per API spec
