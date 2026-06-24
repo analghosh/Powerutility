@@ -63,7 +63,7 @@ class BidConfigurationSaveResponse(BaseModel):
 class ParameterCreate(BaseModel):
     """Schema for creating a parameter"""
     para_key: str = Field(..., description="Parameter key (unique identifier)")
-    para_value: str = Field(..., description="Parameter value")
+    para_value: Any = Field(..., description="Parameter value (string or structured object)")
 
     class Config:
         json_schema_extra = {
@@ -77,7 +77,7 @@ class ParameterCreate(BaseModel):
 class ParameterUpdate(BaseModel):
     """Schema for updating a parameter"""
     para_key: Optional[str] = Field(None, description="Parameter key")
-    para_value: Optional[str] = Field(None, description="Parameter value")
+    para_value: Optional[Any] = Field(None, description="Parameter value (string or structured object)")
 
     class Config:
         json_schema_extra = {
@@ -91,7 +91,7 @@ class ParameterResponse(BaseModel):
     """Schema for parameter response"""
     id: str = Field(..., alias="_id", description="Parameter ID")
     para_key: Optional[str] = Field(None, description="Parameter key")
-    para_value: Optional[str] = Field(None, description="Parameter value")
+    para_value: Optional[Any] = Field(None, description="Parameter value (string or structured object)")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
 
