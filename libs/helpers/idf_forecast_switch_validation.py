@@ -10,6 +10,7 @@ from libs.helpers.idf_forecast_session import (
     session_to_time_blocks,
 )
 from libs.helpers.rtm_forecast_block_filter import (
+    effective_active_session_for_delivery_date,
     rtm_forecast_run_context,
     target_scheduled_dates_for_rtm,
 )
@@ -53,7 +54,7 @@ def active_session_has_any_valid_csv(
 def validate_csv_coverage_for_manual_switch(
     csv_docs_by_date: Dict[date, List[Dict[str, Any]]],
     today_ist: date,
-    active_rtm_session_id: int,
+    now_local: datetime,
     after_evening_cutover: bool,
     include_tomorrow_forecast: bool,
 ) -> Tuple[bool, str]:
@@ -68,8 +69,6 @@ def validate_csv_coverage_for_manual_switch(
     - Future sessions (active+1 through 48): not validated. They may be all
       missing or zero; switch is still allowed when the active session is valid.
     """
-    active_sid = int(active_rtm_session_id)
-
     target_dates = target_scheduled_dates_for_rtm(
         today_ist,
         after_evening_cutover,
@@ -77,6 +76,12 @@ def validate_csv_coverage_for_manual_switch(
     )
 
     for target_date in target_dates:
+        active_sid = effective_active_session_for_delivery_date(
+            target_date,
+            today_ist,
+            now_local,
+            after_evening_cutover,
+        )
         csv_by_block = index_forecast_docs(csv_docs_by_date.get(target_date, []))
 
         if session_has_complete_csv(active_sid, csv_by_block):
