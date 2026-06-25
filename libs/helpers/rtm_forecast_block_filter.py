@@ -36,8 +36,54 @@ def rtm_active_session_id(
     now_local: datetime,
     offset: int = RTM_ACTIVE_SESSION_OFFSET,
 ) -> int:
-    """RTM active session = IST current session + offset (aligned with bid lapse)."""
-    return min(SESSIONS_PER_DAY, ist_current_session_id(now_local) + offset)
+    """RTM active session = IST current session + offset (capped at 48 for today)."""
+    return min(SESSIONS_PER_DAY, rtm_active_session_id_uncapped(now_local, offset))
+
+
+def rtm_active_session_id_uncapped(
+    now_local: datetime,
+    offset: int = RTM_ACTIVE_SESSION_OFFSET,
+) -> int:
+    """IST current session + offset without end-of-day cap (matches RTM bid lapse)."""
+    return ist_current_session_id(now_local) + offset
+
+
+def tomorrow_overflow_session_id(
+    now_local: datetime,
+    offset: int = RTM_ACTIVE_SESSION_OFFSET,
+) -> int:
+    """
+    Tomorrow's effective active session when uncapped active exceeds 48.
+
+    E.g. at 22:30 IST uncapped active is 49 → tomorrow session 1 (00:00).
+    """
+    raw = rtm_active_session_id_uncapped(now_local, offset)
+    if raw <= SESSIONS_PER_DAY:
+        return 1
+    return raw - SESSIONS_PER_DAY
+
+
+def effective_active_session_for_delivery_date(
+    scheduled_date: date,
+    today_ist: date,
+    now_local: datetime,
+    after_evening_cutover: bool = False,
+    offset: int = RTM_ACTIVE_SESSION_OFFSET,
+) -> int:
+    """
+    Active session for auto-flip / manual validation for one delivery date.
+
+    - Today: capped RTM active session (intraday).
+    - Tomorrow after evening cutover or when uncapped active > 48: overflow session
+      on the delivery day (session 1 at 22:30 IST).
+    - Tomorrow before cutover while uncapped active <= 48: session 1.
+    """
+    if scheduled_date <= today_ist:
+        return rtm_active_session_id(now_local, offset)
+    raw = rtm_active_session_id_uncapped(now_local, offset)
+    if after_evening_cutover or raw > SESSIONS_PER_DAY:
+        return tomorrow_overflow_session_id(now_local, offset)
+    return 1
 
 
 def get_rtm_timezone(tz_name: Optional[str] = None):
@@ -115,6 +161,7 @@ def rtm_forecast_run_context(
     ahead = max(0, int(min_ahead_blocks if min_ahead_blocks is not None else DEFAULT_MIN_AHEAD_BLOCKS))
     current_session_id = ist_current_session_id(now_local)
     active_session_id = rtm_active_session_id(now_local)
+    raw_active_session_id = rtm_active_session_id_uncapped(now_local)
     return {
         "tz": tz,
         "now_local": now_local,
@@ -122,6 +169,7 @@ def rtm_forecast_run_context(
         "current_block": current_block,
         "current_session_id": current_session_id,
         "active_session_id": active_session_id,
+        "raw_active_session_id": raw_active_session_id,
         "after_evening_cutover": after_evening,
         "include_tomorrow_forecast": include_tomorrow,
         "min_ahead_blocks": ahead,

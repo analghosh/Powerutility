@@ -32,6 +32,7 @@ from libs.helpers.idf_forecast_session import (
 )
 from libs.helpers.idf_final_forecast_freeze import build_idf_final_bulk_ops
 from libs.helpers.rtm_forecast_block_filter import (
+    effective_active_session_for_delivery_date,
     rtm_forecast_run_context,
     target_scheduled_dates_for_rtm,
 )
@@ -445,7 +446,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         )
         existing_by_block = index_forecast_docs(existing_docs)
         now = datetime.now()
-        active_sid = int(ctx["active_session_id"])
+        active_sid = effective_active_session_for_delivery_date(
+            scheduled_date,
+            ctx["today_ist"],
+            ctx["now_local"],
+            ctx["after_evening_cutover"],
+        )
         bulk_ops = build_idf_final_bulk_ops(
             scheduled_at=scheduled_at,
             scheduled_date=scheduled_date,
@@ -491,7 +497,12 @@ class IdfForecastMergeProcessor(BaseProcessor):
         _ = api_by_block, demand_by_block, writable_set
         if not self._is_primary_delivery_date_for_auto_flip(scheduled_date, ctx):
             return False
-        active_sid = int(ctx["active_session_id"])
+        active_sid = effective_active_session_for_delivery_date(
+            scheduled_date,
+            ctx["today_ist"],
+            ctx["now_local"],
+            ctx["after_evening_cutover"],
+        )
         should_flip, user_message = active_session_csv_requires_auto_flip(
             active_sid, csv_by_block
         )
