@@ -1563,7 +1563,6 @@ class DAMBiddingServices:
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
 
-            self._apply_active_limit_prefix(data, active_exchange, active_market)
             await self._add_additional_market_limit_values(
                 data,
                 active_markets,
