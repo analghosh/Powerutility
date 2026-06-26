@@ -193,9 +193,10 @@ class RTMTransactionService:
                 rtm_bid_details = existing_bids.get("SingleBidDetails", [])
                 
                 # Find matching order for this specific period
+                # Normalize Session to string to avoid int/string JSON mismatch
                 matching_order = next((
                     bid for bid in rtm_bid_details 
-                    if bid.get("Session") == session_id and 
+                    if str(bid.get("Session", "")) == str(session_id) and 
                        bid.get("FromPeriodId") == from_period and 
                        bid.get("ToPeriodId") == to_period
                 ), None)
@@ -203,11 +204,13 @@ class RTMTransactionService:
                 if matching_order and matching_order.get("OrderStatus") != "Cancelled":
                     order_id = matching_order.get("OrderId")
                     last_updated_time = matching_order.get("LastUpdatedTime")
+                    user_id = matching_order.get("UserId")
                     
                     if order_id not in cancelled_order_ids:
                         try:
                             cancel_result = await api_client.cancel_rtm_bid(
                                 order_id=order_id,
+                                user_id=user_id,
                                 last_updated_time=last_updated_time,
                                 delivery_date=delivery_date_timestamp
                             )
@@ -562,10 +565,16 @@ class RTMTransactionService:
                     to_period = bid.get("ToPeriodId")
                     
                     if session is not None and from_period and to_period:
+                        try:
+                            session = int(session)
+                        except (ValueError, TypeError):
+                            logger.warning(f"Skipping existing bid with non-numeric Session: {session}")
+                            continue
                         key = (session, from_period, to_period)
                         existing_bids_map[key] = {
                             "OrderId": bid.get("OrderId"),
                             "LastUpdatedTime": bid.get("LastUpdatedTime"),
+                            "UserId": bid.get("UserId"),
                             "Session": session,
                             "FromPeriodId": from_period,
                             "ToPeriodId": to_period
@@ -578,7 +587,11 @@ class RTMTransactionService:
                 
                 # For each session detail in our request, check if exact (Session, FromPeriodId, ToPeriodId) exists
                 for session_detail in api_payload.get("BidDetails", []):
-                    session_id = session_detail.get("Session")
+                    try:
+                        session_id = int(session_detail.get("Session"))
+                    except (ValueError, TypeError):
+                        logger.warning(f"Skipping request session with non-numeric Session: {session_detail.get('Session')}")
+                        continue
                     session_details = session_detail.get("SessionDetails", [])
                     
                     for sd in session_details:
@@ -590,6 +603,7 @@ class RTMTransactionService:
                             existing_info = existing_bids_map[key]
                             order_id = existing_info.get("OrderId")
                             last_updated_time = existing_info.get("LastUpdatedTime")
+                            user_id = existing_info.get("UserId")
                             
                             # Skip if we already cancelled this OrderId
                             if order_id in cancelled_order_ids:
@@ -601,6 +615,7 @@ class RTMTransactionService:
                             try:
                                 cancel_result = await api_client.cancel_rtm_bid(
                                     order_id=order_id,
+                                    user_id=user_id,
                                     last_updated_time=last_updated_time,
                                     delivery_date=delivery_date_timestamp
                                 )
@@ -633,7 +648,10 @@ class RTMTransactionService:
                                                 "end_time": req_to_period,
                                                 "bid_status": {"$in": ["submitted", "approved"]}
                                             },
-                                            {"$set": { "exchangeOrderId": order_id}}
+                                            {"$set": {
+                                                "exchangeOrderId": order_id,
+                                                "bid_status": "cancelled_for_resubmission"
+                                            }}
                                         )
                                         await self.update_single_bid_rtm_in_system(delivery_date_timestamp, asset_id, bid_area_id)
                                         logger.info(f"Updated DB status to 'cancelled' for OrderId {order_id}")
