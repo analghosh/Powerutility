@@ -101,7 +101,7 @@ class IdfForecastSwitchService:
         ok, message = validate_csv_coverage_for_manual_switch(
             csv_docs_by_date,
             ctx["today_ist"],
-            ctx["active_session_id"],
+            ctx["now_local"],
             ctx["after_evening_cutover"],
             ctx.get("include_tomorrow_forecast", False),
         )
