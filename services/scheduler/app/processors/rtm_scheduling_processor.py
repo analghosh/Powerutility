@@ -2265,8 +2265,8 @@ class RTMSchedulingProcessor(BaseProcessor):
                     "dc_sg": "SG",
                 },
                 sort=[
-                    ("source_revision_number", -1),
                     ("schedule_published_time", -1),
+                    ("source_revision_number", -1),
                     ("system_revision_number", -1),
                 ],
             )
