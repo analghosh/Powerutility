@@ -18,9 +18,6 @@ DEFAULT_BID_CONFIGURATION = {
         "block_bid_sell": True,
         "single_bid_buy": True,
         "single_bid_sell": True,
-        "ocf": True,
-        "premium": True,
-        "discount": True,
     },
     "GDAM": {
         "block_bid_buy": True,
@@ -36,6 +33,9 @@ DEFAULT_BID_CONFIGURATION = {
         "block_bid_sell": True,
         "single_bid_buy": True,
         "single_bid_sell": True,
+        "ocf": True,
+        "premium": True,
+        "discount": True,
     },
     "HPDAM": {
         "block_bid_buy": True,
@@ -294,7 +294,7 @@ class ParameterService:
         Helper for bidding services to check if a specific bid flag is enabled.
         Markets: RTM, GDAM, DAM, HPDAM.
         Flags: block_bid_buy, block_bid_sell, single_bid_buy, single_bid_sell,
-               ocf, premium, discount (last three only for RTM/GDAM).
+               ocf, premium, discount (last three only for GDAM/DAM).
         """
         try:
             config = await self.get_bid_configuration()
@@ -304,6 +304,107 @@ class ParameterService:
             logger.error(f"Error checking bid flag {market}/{flag}: {e}")
             # Fail-safe: disable on error.
             return False
+
+    def _normalize_markets(self, markets: Any) -> List[str]:
+        """
+        Normalize active markets input to a list of unique, uppercase values.
+        Accepts a list, a single string, or a comma-separated string.
+        """
+        allowed = {"DAM", "GDAM", "HPDAM"}
+        if markets is None:
+            return []
+        if isinstance(markets, (list, tuple, set)):
+            raw = [str(m).strip() for m in markets if m is not None]
+        else:
+            raw = [m.strip() for m in str(markets).split(",") if m.strip()]
+        normalized = []
+        for m in raw:
+            upper = m.upper()
+            if upper not in allowed:
+                raise ValueError(f"Invalid active market '{m}'. Allowed: {sorted(allowed)}")
+            if upper not in normalized:
+                normalized.append(upper)
+        return normalized
+
+    async def get_active_markets(self) -> List[str]:
+        """
+        Return the list of currently configured active markets for single-bid-table.
+        Defaults to ['DAM'] when not set or on error.
+        """
+        try:
+            record = await parameter_repository.get_parameter_by_key("active_markets")
+            if record and record.get("para_value"):
+                value = record["para_value"]
+                if isinstance(value, str):
+                    return self._normalize_markets(value)
+                if isinstance(value, (list, tuple, set)):
+                    return self._normalize_markets(value)
+        except Exception as e:
+            logger.error(f"Error reading active_markets parameter: {e}")
+        return ["DAM"]
+
+    async def set_active_markets(self, markets: Any) -> Dict[str, Any]:
+        """
+        Persist the list of active markets.
+        Accepts a list or a comma-separated string.
+        """
+        normalized = self._normalize_markets(markets)
+        if not normalized:
+            raise ValueError("At least one active market is required.")
+        record = await parameter_repository.update_parameter_by_key(
+            "active_markets",
+            {"para_value": normalized}
+        )
+        return {
+            "para_key": "active_markets",
+            "para_value": record.get("para_value") if record else normalized,
+            "message": "Active markets saved successfully"
+        }
+
+    async def get_active_market(self) -> str:
+        """
+        Convenience helper that returns the first configured active market.
+        Defaults to 'DAM'.
+        """
+        markets = await self.get_active_markets()
+        return markets[0] if markets else "DAM"
+
+    async def set_active_market(self, market: str) -> Dict[str, Any]:
+        """
+        Convenience helper to set a single active market.
+        """
+        return await self.set_active_markets([market])
+
+    async def get_active_exchange(self) -> str:
+        """
+        Return the currently configured active exchange for single-bid-table.
+        Defaults to 'IEX' when not set or on error.
+        """
+        try:
+            record = await parameter_repository.get_parameter_by_key("active_exchange")
+            if record and record.get("para_value"):
+                return str(record["para_value"]).strip().upper()
+        except Exception as e:
+            logger.error(f"Error reading active_exchange parameter: {e}")
+        return "IEX"
+
+    async def set_active_exchange(self, exchange: str) -> Dict[str, Any]:
+        """
+        Persist the active exchange parameter.
+        """
+        normalized = str(exchange).strip().upper()
+        allowed = {"IEX", "PXIL", "HPX"}
+        if normalized not in allowed:
+            raise ValueError(f"Invalid active exchange '{exchange}'. Allowed: {sorted(allowed)}")
+        record = await parameter_repository.update_parameter_by_key(
+            "active_exchange",
+            {"para_value": normalized}
+        )
+        return {
+            "para_key": "active_exchange",
+            "para_value": record.get("para_value") if record else normalized,
+            "message": "Active exchange saved successfully"
+        }
 
 
 # Create singleton instance

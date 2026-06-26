@@ -538,9 +538,12 @@ class ExchangeAPIClient:
         url = f"{self.base_url}/rtm/api/v2/singlebid/cancel"
         headers = self._get_headers()
         
+        # Fallback to login user if caller did not supply a user id
+        effective_user_id = user_id if user_id else self.login_user_id
         request_body = {
             "OrderId": int(order_id),  # Must be Number per API spec
-            "UserId": str(user_id),
+            
+            "UserId": self.login_user_id,
             "ParticipantId": self.participant_id,
             "PortfolioId": self.portfolio_id,
             "LastUpdatedTime": int(last_updated_time)  # Must be Number per API spec

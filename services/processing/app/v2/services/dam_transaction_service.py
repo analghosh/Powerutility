@@ -74,16 +74,36 @@ class DAMTransactionService:
 
         logger.info(f"Fetching all OCF values for date {scheduled_at_str} in bulk")
 
+        # Active exchange for limit_values filtering
+        exchange_config = await self.exchange_config_repo.get_bidType_market_active_config("single", "DAM") or {}
+        active_exchange = exchange_config.get("exchange", "IEX")
+
         # Single query: fetch all OCF rows for this date (both id types, all blocks)
+        # First try with active exchange filter; fall back to legacy docs without exchange field.
         all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
             "limit_values",
             filters={
                 "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
                 "category": "Limits",
                 "market": "DAM",
+                "exchange": active_exchange,
                 "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
             }
         )
+        if not all_ocf_rows:
+            logger.info(
+                f"No OCF limit_values found for active exchange '{active_exchange}'; "
+                "falling back to legacy/default (no exchange) documents."
+            )
+            all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
+                "limit_values",
+                filters={
+                    "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
+                    "category": "Limits",
+                    "market": "DAM",
+                    "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
+                }
+            )
 
         # Build per-block maps
         premium_map: Dict[int, float] = {}

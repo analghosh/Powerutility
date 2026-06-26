@@ -4,7 +4,7 @@ CRUD endpoints for parameter management with JWT authentication
 """
 
 from fastapi import APIRouter, Request, HTTPException, status, Depends, Query, Body
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Union
 from pydantic import BaseModel, Field
 from datetime import datetime
 import logging
@@ -32,16 +32,16 @@ class MarketBidFlags(BaseModel):
     single_bid_sell: bool = Field(True, description="Enable single bid sell for this market")
 
 
-class RTMGDAMBidFlags(MarketBidFlags):
+class GDAMDAMBidFlags(MarketBidFlags):
     ocf: bool = Field(True, description="Enable OCF for this market")
     premium: bool = Field(True, description="Enable premium for this market")
     discount: bool = Field(True, description="Enable discount for this market")
 
 
 class BidConfiguration(BaseModel):
-    RTM: RTMGDAMBidFlags = Field(default_factory=RTMGDAMBidFlags)
-    GDAM: RTMGDAMBidFlags = Field(default_factory=RTMGDAMBidFlags)
-    DAM: MarketBidFlags = Field(default_factory=MarketBidFlags)
+    RTM: MarketBidFlags = Field(default_factory=MarketBidFlags)
+    GDAM: GDAMDAMBidFlags = Field(default_factory=GDAMDAMBidFlags)
+    DAM: GDAMDAMBidFlags = Field(default_factory=GDAMDAMBidFlags)
     HPDAM: MarketBidFlags = Field(default_factory=MarketBidFlags)
 
 
@@ -63,7 +63,7 @@ class BidConfigurationSaveResponse(BaseModel):
 class ParameterCreate(BaseModel):
     """Schema for creating a parameter"""
     para_key: str = Field(..., description="Parameter key (unique identifier)")
-    para_value: str = Field(..., description="Parameter value")
+    para_value: Any = Field(..., description="Parameter value (string or structured object)")
 
     class Config:
         json_schema_extra = {
@@ -77,7 +77,7 @@ class ParameterCreate(BaseModel):
 class ParameterUpdate(BaseModel):
     """Schema for updating a parameter"""
     para_key: Optional[str] = Field(None, description="Parameter key")
-    para_value: Optional[str] = Field(None, description="Parameter value")
+    para_value: Optional[Any] = Field(None, description="Parameter value (string or structured object)")
 
     class Config:
         json_schema_extra = {
@@ -91,7 +91,7 @@ class ParameterResponse(BaseModel):
     """Schema for parameter response"""
     id: str = Field(..., alias="_id", description="Parameter ID")
     para_key: Optional[str] = Field(None, description="Parameter key")
-    para_value: Optional[str] = Field(None, description="Parameter value")
+    para_value: Optional[Any] = Field(None, description="Parameter value (string or structured object)")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
 
@@ -334,6 +334,325 @@ async def get_all_parameters(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch parameters"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Bid configuration (parameter master) endpoints
+# ---------------------------------------------------------------------------
+@router.get(
+    "/bid-config",
+    response_model=BidConfigurationResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get active bid configuration",
+    description="Returns the currently active bid toggle configuration for all markets"
+)
+async def get_bid_configuration(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    """Get active bid configuration."""
+    user_id = user_context.get("user_id", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+
+    try:
+        result = await parameter_controller.get_bid_configuration()
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="bid_configuration_view",
+            message="Fetched active bid configuration",
+            correlation_id=correlation_id,
+            success=True
+        )
+        return {
+            "data": result,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id
+        }
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="BidConfigurationGetError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error fetching bid configuration")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch bid configuration"
+        )
+
+
+@router.put(
+    "/bid-config",
+    response_model=BidConfigurationSaveResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Save bid configuration",
+    description="Save the bid toggle configuration. It becomes active immediately."
+)
+async def save_bid_configuration(
+    request: Request,
+    body: BidConfiguration,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    """Save the active bid configuration."""
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+
+    try:
+        result = await parameter_controller.save_bid_configuration(
+            body.dict(),
+            user_context
+        )
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="bid_configuration_save",
+            message="Saved active bid configuration",
+            username=username,
+            correlation_id=correlation_id,
+            success=True
+        )
+        return result
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="BidConfigurationSaveError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error saving bid configuration")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save bid configuration"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Active market / active exchange for single-bid-table limit values
+# ---------------------------------------------------------------------------
+class ActiveMarketUpdateRequest(BaseModel):
+    markets: Union[str, List[str]] = Field(
+        ...,
+        description="Active market(s): DAM, GDAM or HPDAM. Accepts a single value or a list."
+    )
+
+
+class ActiveExchangeUpdateRequest(BaseModel):
+    exchange: str = Field(..., description="Active exchange: IEX, PXIL or HPX")
+
+
+class ActiveMarketsResponse(BaseModel):
+    active_markets: List[str] = Field(..., description="Currently active markets")
+    timestamp: Optional[str] = Field(None, description="Response timestamp")
+    correlation_id: Optional[str] = Field(None, description="Request correlation ID")
+
+
+class ActiveExchangeResponse(BaseModel):
+    active_exchange: str = Field(..., description="Currently active exchange")
+    timestamp: Optional[str] = Field(None, description="Response timestamp")
+    correlation_id: Optional[str] = Field(None, description="Request correlation ID")
+
+
+class ActiveMarketsSaveResponse(BaseModel):
+    para_key: str = Field(..., description="Parameter key")
+    para_value: List[str] = Field(..., description="Saved active markets")
+    message: str = Field(..., description="Status message")
+
+
+class ActiveExchangeSaveResponse(BaseModel):
+    para_key: str = Field(..., description="Parameter key")
+    para_value: str = Field(..., description="Saved active exchange")
+    message: str = Field(..., description="Status message")
+
+
+@router.get(
+    "/active-markets",
+    response_model=ActiveMarketsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get active markets",
+    description="Returns the list of markets (DAM/GDAM/HPDAM) currently used by single-bid-table."
+)
+async def get_active_markets(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        markets = await parameter_controller.get_active_markets()
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_markets_view",
+            message=f"Fetched active markets: {markets}",
+            correlation_id=correlation_id,
+            success=True
+        )
+        return {
+            "active_markets": markets,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id
+        }
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveMarketsGetError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error fetching active markets")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch active markets"
+        )
+
+
+@router.put(
+    "/active-markets",
+    response_model=ActiveMarketsSaveResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set active markets",
+    description="Set one or more markets (DAM/GDAM/HPDAM) used by single-bid-table."
+)
+async def set_active_markets(
+    request: Request,
+    body: ActiveMarketUpdateRequest,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        result = await parameter_controller.set_active_markets(body.markets)
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_markets_save",
+            message=f"Saved active markets: {result.get('para_value')}",
+            username=username,
+            correlation_id=correlation_id,
+            success=True
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveMarketsSaveError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error saving active markets")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save active markets"
+        )
+
+
+@router.get(
+    "/active-exchange",
+    response_model=ActiveExchangeResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get active exchange",
+    description="Returns the exchange (IEX/PXIL/HPX) currently used by single-bid-table."
+)
+async def get_active_exchange(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        exchange = await parameter_controller.get_active_exchange()
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_exchange_view",
+            message=f"Fetched active exchange: {exchange}",
+            correlation_id=correlation_id,
+            success=True
+        )
+        return {
+            "active_exchange": exchange,
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id
+        }
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveExchangeGetError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error fetching active exchange")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch active exchange"
+        )
+
+
+@router.put(
+    "/active-exchange",
+    response_model=ActiveExchangeSaveResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Set active exchange",
+    description="Set the exchange (IEX/PXIL/HPX) used by single-bid-table."
+)
+async def set_active_exchange(
+    request: Request,
+    body: ActiveExchangeUpdateRequest,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        result = await parameter_controller.set_active_exchange(body.exchange)
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="active_exchange_save",
+            message=f"Saved active exchange: {result.get('para_value')}",
+            username=username,
+            correlation_id=correlation_id,
+            success=True
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e)
+        )
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ActiveExchangeSaveError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id
+        )
+        logger.exception("Error saving active exchange")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save active exchange"
         )
 
 
@@ -582,98 +901,4 @@ async def delete_parameter(
         )
 
 
-# ---------------------------------------------------------------------------
-# Bid configuration (parameter master) endpoints
-# ---------------------------------------------------------------------------
-@router.get(
-    "/bid-config",
-    response_model=BidConfigurationResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Get active bid configuration",
-    description="Returns the currently active bid toggle configuration for all markets"
-)
-async def get_bid_configuration(
-    request: Request,
-    user_context: Dict[str, Any] = Depends(get_user_context),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
-):
-    """Get active bid configuration."""
-    user_id = user_context.get("user_id", "anonymous")
-    correlation_id = user_context.get("correlation_id", "unknown")
 
-    try:
-        result = await parameter_controller.get_bid_configuration()
-        audit_logger.log_user_action(
-            service="processing",
-            user_id=user_id,
-            action="bid_configuration_view",
-            message="Fetched active bid configuration",
-            correlation_id=correlation_id,
-            success=True
-        )
-        return {
-            "data": result,
-            "timestamp": datetime.now().isoformat(),
-            "correlation_id": correlation_id
-        }
-    except Exception as e:
-        audit_logger.log_error_event(
-            service="processing",
-            error_name="BidConfigurationGetError",
-            error_message=str(e),
-            user_id=user_id,
-            correlation_id=correlation_id
-        )
-        logger.exception("Error fetching bid configuration")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to fetch bid configuration"
-        )
-
-
-@router.put(
-    "/bid-config",
-    response_model=BidConfigurationSaveResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Save bid configuration",
-    description="Save the bid toggle configuration. It becomes active immediately."
-)
-async def save_bid_configuration(
-    request: Request,
-    body: BidConfiguration,
-    user_context: Dict[str, Any] = Depends(get_user_context),
-    audit_logger: AuditLogger = Depends(get_audit_logger)
-):
-    """Save the active bid configuration."""
-    user_id = user_context.get("user_id", "anonymous")
-    username = user_context.get("username", "anonymous")
-    correlation_id = user_context.get("correlation_id", "unknown")
-
-    try:
-        result = await parameter_controller.save_bid_configuration(
-            body.dict(),
-            user_context
-        )
-        audit_logger.log_user_action(
-            service="processing",
-            user_id=user_id,
-            action="bid_configuration_save",
-            message="Saved active bid configuration",
-            username=username,
-            correlation_id=correlation_id,
-            success=True
-        )
-        return result
-    except Exception as e:
-        audit_logger.log_error_event(
-            service="processing",
-            error_name="BidConfigurationSaveError",
-            error_message=str(e),
-            user_id=user_id,
-            correlation_id=correlation_id
-        )
-        logger.exception("Error saving bid configuration")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to save bid configuration"
-        )

@@ -13,6 +13,7 @@ from bson import ObjectId
 from libs.core.jwt_validator import TokenPayload
 from services.processing.app.core.config import settings
 
+from ..services.parameter_service import parameter_service
 from ..repository.supply_serve_repository import SupplyServeRepository
 # from ..repository.serve_supply_table_repository import serveSupplyTableRepository
 from ..repository.new_dam_single_bid_data_for_approval_repository import DAMSingleBidDataForApprovalRepository
@@ -56,7 +57,7 @@ def to_float(v):
     except (ValueError, TypeError):
         return 0.0
 
-class GGDAMBiddingServices:
+class GDAMBiddingServices:
     def __init__(self):
         self.generic_repo = GenericRepository()
         self.exchange_config_repo = ExchangeConfigRepository()
@@ -64,6 +65,212 @@ class GGDAMBiddingServices:
         self.integration_api_log_repo = IntegrationApiLogRepository()
         self.dam_book_collection = settings.MONGODB_GDAM_BOOK_COLLECTION
         self.time_block_collection = settings.MONGODB_TIME_BLOCK_COLLECTION
+
+    async def _get_active_exchange(self, active_market: Optional[str] = None) -> str:
+        """
+        Get active exchange for single-bid-table.
+        Priority:
+        1. active_exchange parameter
+        2. exchange_config for the active market (legacy fallback)
+        3. Default IEX
+        """
+        try:
+            param_exchange = await parameter_service.get_active_exchange()
+            if param_exchange:
+                return param_exchange
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange from parameter: {e}")
+
+        try:
+            market = active_market or await self._get_active_market()
+            config = await self.exchange_config_repo.get_bidType_market_active_config("single", market)
+            if config and config.get("exchange"):
+                return config.get("exchange")
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange for {market}: {e}")
+        return "IEX"
+
+    async def _get_active_markets(self) -> List[str]:
+        """Get list of active markets for single-bid-table from parameter."""
+        try:
+            markets = await parameter_service.get_active_markets()
+            if markets:
+                return markets
+        except Exception as e:
+            logger.warning(f"Failed to get active markets from parameter: {e}")
+        return ["GDAM"]
+
+    async def _get_active_market(self) -> str:
+        """Get first active market for single-bid-table from parameter."""
+        markets = await self._get_active_markets()
+        return markets[0] if markets else "GDAM"
+
+    async def _aggregate_limit_values_with_fallback(
+        self,
+        pipeline: List[Dict[str, Any]],
+        active_exchange: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Run a limit_values aggregate first with the active exchange filter.
+        If no results are found, fall back to documents without an exchange field
+        (legacy/default IEX data).
+        """
+        import copy
+        pipeline_with_exchange = copy.deepcopy(pipeline)
+        if pipeline_with_exchange and "$match" in pipeline_with_exchange[0]:
+            pipeline_with_exchange[0]["$match"]["exchange"] = active_exchange
+
+        result = await self.limit_values_repo.aggregate(pipeline_with_exchange)
+        if result:
+            return result
+
+        logger.info(
+            f"No limit_values found for active exchange '{active_exchange}'; "
+            "falling back to legacy/default (no exchange) documents."
+        )
+        return await self.limit_values_repo.aggregate(pipeline)
+
+    def _apply_active_limit_prefix(
+        self,
+        data: Dict[str, Any],
+        active_exchange: str,
+        active_market: str
+    ) -> Dict[str, Any]:
+        """
+        Rename limit-values fields in single-bid-table rows so response keys
+        follow the pattern {activeExchange}_{activeMarket}_{fieldname}.
+        """
+        if not data or not isinstance(data, dict):
+            return data
+
+        prefix = f"{active_exchange}_{active_market}_"
+        limit_field_map = {
+            "dam_forecasted_price": f"{prefix}forecasted_price",
+            "ceiling_price": f"{prefix}ceiling_price",
+            "dam_buffer_value": f"{prefix}buffer_value",
+            "dam_nminusone_quantum": f"{prefix}nminusone_quantum",
+            "dam_noc_buy_value": f"{prefix}noc_buy_value",
+            "dam_noc_sell_value": f"{prefix}noc_sell_value",
+        }
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for plkey, block_rows in table_data.items():
+            if not isinstance(block_rows, dict):
+                continue
+            for blk, row in block_rows.items():
+                if not isinstance(row, dict):
+                    continue
+                for old_key, new_key in limit_field_map.items():
+                    if old_key in row:
+                        row[new_key] = row.pop(old_key)
+
+        return data
+
+    async def _fetch_limit_values_by_block(
+        self,
+        active_market: str,
+        active_exchange: str,
+        target_date_dt: datetime,
+        from_block: int,
+        to_block: int
+    ) -> Dict[str, Dict[int, Any]]:
+        """
+        Fetch limit_values for a specific market and return a dict keyed by field name,
+        where each value is a mapping of block number -> document value.
+        """
+        import copy
+
+        def make_base_pipeline(id_value: str, extra_match: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+            match = {
+                "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
+                "id": id_value,
+                "market": active_market,
+                "block": {"$gte": from_block, "$lte": to_block},
+            }
+            if extra_match:
+                match.update(extra_match)
+            return [
+                {"$match": match},
+                {"$sort": {"scheduled_at": -1, "block": 1}},
+                {
+                    "$group": {
+                        "_id": "$block",
+                        "latest_doc": {"$first": "$$ROOT"}
+                    }
+                },
+                {"$replaceRoot": {"newRoot": "$latest_doc"}},
+                {"$sort": {"block": 1}},
+                {"$project": {"_id": 0}},
+            ]
+
+        pipelines = {
+            "forecasted_price": make_base_pipeline(f"{active_market}_forecasted_price"),
+            "buffer_value": make_base_pipeline("Buffer"),
+            "ceiling_price": make_base_pipeline("Ceiling_Price", {"category": "Limits"}),
+            "nminusone_quantum": make_base_pipeline("n_1", {"category": "Limits"}),
+            "noc_buy_value": make_base_pipeline("noc_buy", {"category": "Limits"}),
+            "noc_sell_value": make_base_pipeline("noc_sell", {"category": "Limits"}),
+        }
+
+        result: Dict[str, Dict[int, Any]] = {}
+        for field, pipeline in pipelines.items():
+            docs = await self._aggregate_limit_values_with_fallback(
+                copy.deepcopy(pipeline),
+                active_exchange,
+            )
+            result[field] = {int(doc.get("block", 0)): doc.get("values", 0) for doc in docs}
+        return result
+
+    async def _add_additional_market_limit_values(
+        self,
+        data: Dict[str, Any],
+        active_markets: List[str],
+        active_exchange: str,
+        target_date_dt: datetime,
+        from_block: int,
+        to_block: int
+    ) -> Dict[str, Any]:
+        """
+        For every active market beyond the first, fetch its limit_values and add
+        {activeExchange}_{market}_{field} keys to each row in table_data.
+        """
+        if not data or not isinstance(data, dict) or not active_markets[1:]:
+            return data
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for additional_market in active_markets[1:]:
+            limit_values = await self._fetch_limit_values_by_block(
+                additional_market,
+                active_exchange,
+                target_date_dt,
+                from_block,
+                to_block,
+            )
+            prefix = f"{active_exchange}_{additional_market}_"
+            for plkey, block_rows in table_data.items():
+                if not isinstance(block_rows, dict):
+                    continue
+                for blk, row in block_rows.items():
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        block_no = int(blk)
+                    except (TypeError, ValueError):
+                        continue
+                    row[f"{prefix}forecasted_price"] = round(limit_values["forecasted_price"].get(block_no, 0) or 0)
+                    row[f"{prefix}ceiling_price"] = limit_values["ceiling_price"].get(block_no, 0) or 0
+                    row[f"{prefix}buffer_value"] = limit_values["buffer_value"].get(block_no, 0) or 0
+                    row[f"{prefix}nminusone_quantum"] = limit_values["nminusone_quantum"].get(block_no, 0) or 0
+                    row[f"{prefix}noc_buy_value"] = limit_values["noc_buy_value"].get(block_no, 0) or 0
+                    row[f"{prefix}noc_sell_value"] = limit_values["noc_sell_value"].get(block_no, 0) or 0
+
+        return data
 
     async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
         """Get DAM bid submission details for a specific date."""
@@ -619,6 +826,10 @@ class GGDAMBiddingServices:
             # Get end of day for comparison
             target_date_end = datetime.combine(target_date_dt.date(), datetime.max.time())
 
+            # Active market(s)/exchange for limit_values filtering
+            active_markets = await self._get_active_markets()
+            active_exchange = await self._get_active_exchange(active_markets[0])
+            active_market = active_markets[0]
 
             # Fetch plant data
             pipeline = [
@@ -783,13 +994,13 @@ class GGDAMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = await self.limit_values_repo.aggregate(
+            forecastedPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
-                                "id": "DAM_forecasted_price",
-                                "market": "GDAM",
+                                "id": f"{active_market}_forecasted_price",
+                                "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -804,19 +1015,22 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},  # Sort by block for consistent ordering
                         {"$project": {"_id": 0}},
                 ],
+
+                active_exchange,
+
             )
             limit_schedule_date = target_date
             print("=============================================================== forecastedPrice =============================================================== ")
             print(forecastedPrice)
             print("=============================================================== forecastedPrice =============================================================== ")
             
-            bufferPrice = await self.limit_values_repo.aggregate(
+            bufferPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Buffer",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -831,15 +1045,20 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+                active_exchange,
+
+            
             )
             
-            ceilingPrice = await self.limit_values_repo.aggregate(
+            ceilingPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Ceiling_Price",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -855,16 +1074,21 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+                active_exchange,
+
+            
             )
             
 
-            n_1Limits = await self.limit_values_repo.aggregate(
+            n_1Limits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "n_1",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -880,15 +1104,22 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+
+                active_exchange,
+
+            
+
             )
 
-            noc_buyLimits = await self.limit_values_repo.aggregate(
+            noc_buyLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_buy",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -904,15 +1135,20 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            noc_sellLimits = await self.limit_values_repo.aggregate(
+            noc_sellLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_sell",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -928,15 +1164,20 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            typeofExchangeIEX = await self.limit_values_repo.aggregate(
+            typeofExchangeIEX = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "iex",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -952,15 +1193,20 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            typeofExchangePXIL = await self.limit_values_repo.aggregate(
+            typeofExchangePXIL = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "pxil",
-                                "market": "GDAM",
+                                "market": active_market,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -976,6 +1222,11 @@ class GGDAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
             
@@ -1314,6 +1565,15 @@ class GGDAMBiddingServices:
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
                                 
+            self._apply_active_limit_prefix(data, active_exchange, active_market)
+            await self._add_additional_market_limit_values(
+                data,
+                active_markets,
+                active_exchange,
+                target_date_dt,
+                from_block,
+                to_block,
+            )
             return data
 
         except Exception as e:
@@ -3783,4 +4043,4 @@ class GGDAMBiddingServices:
             raise Exception("An error occurred while processing trade status request")
 
 # Global instance
-gdam_bidding_services = GGDAMBiddingServices()
+gdam_bidding_services = GDAMBiddingServices()

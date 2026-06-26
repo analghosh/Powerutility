@@ -20,6 +20,7 @@ from ..repository.exchange_config_repository import ExchangeConfigRepository
 from ..repository.limit_values_repository import LimitValuesRepository
 from ..repository.exchange_bid_detail_repository import exchange_bid_detail_repository
 from ..iex.masterApi import ExchangeAPIClient, block_to_time_period, time_slot_to_block
+from ...core.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -74,16 +75,36 @@ class GDAMTransactionService:
 
         logger.info(f"Fetching all OCF values for date {scheduled_at_str} in bulk")
 
+        # Active exchange for limit_values filtering
+        exchange_config = await self.exchange_config_repo.get_bidType_market_active_config("single", "GDAM") or {}
+        active_exchange = exchange_config.get("exchange", "IEX")
+
         # Single query: fetch all OCF rows for this date (both id types, all blocks)
+        # First try with active exchange filter; fall back to legacy docs without exchange field.
         all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
             "limit_values",
             filters={
                 "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
                 "category": "Limits",
                 "market": "GDAM",
+                "exchange": active_exchange,
                 "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
             }
         )
+        if not all_ocf_rows:
+            logger.info(
+                f"No OCF limit_values found for active exchange '{active_exchange}'; "
+                "falling back to legacy/default (no exchange) documents."
+            )
+            all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
+                "limit_values",
+                filters={
+                    "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
+                    "category": "Limits",
+                    "market": "GDAM",
+                    "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
+                }
+            )
 
         # Build per-block maps
         premium_map: Dict[int, float] = {}
