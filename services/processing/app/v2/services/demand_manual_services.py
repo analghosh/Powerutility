@@ -17,7 +17,7 @@ from ..repository.exchange_repository import ExchangeRepository
 from libs.helpers.demand_calculations import calculate_demand_metrics
 from libs.models.demand_serve_entity import DemandServeEntity, DemandServeHistoricalEntity
 from libs.enum.updated_flag import UpdatedFlag
-from libs.utils.csv_date_parse import parse_csv_scheduled_at
+from libs.utils.csv_date_parse import parse_csv_scheduled_at, parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -488,6 +488,14 @@ class DemandManualServices:
         await self.demand_repository.delete_many_async(collection_name, filter_query)
         await self.demand_repository.insert_one_async(collection_name, full_document)
 
+    def _format_scheduled_at_for_csv_export(self, scheduled_at: Any) -> str:
+        """Format scheduled_at as DD-MM-YYYY for CSV export."""
+        if not scheduled_at:
+            return datetime.now().strftime("%d-%m-%Y")
+        if isinstance(scheduled_at, datetime):
+            return scheduled_at.strftime("%d-%m-%Y")
+        return parse_ingestion_date(scheduled_at).strftime("%d-%m-%Y")
+
     async def export_temp_demand_csv(self) -> str:
         """
         Export today's records from temp_demand_serve as a CSV string.
@@ -498,16 +506,11 @@ class DemandManualServices:
             sort=[("time_block", 1)],
         )
 
-        today_str = datetime.now().strftime("%Y-%m-%d")
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(["scheduled_at", "time_block", "drawal", "rostering", "frequency"])
         for rec in records:
-            scheduled_at = rec.get("scheduled_at")
-            if isinstance(scheduled_at, datetime):
-                scheduled_at = scheduled_at.strftime("%Y-%m-%d")
-            elif not scheduled_at:
-                scheduled_at = today_str
+            scheduled_at = self._format_scheduled_at_for_csv_export(rec.get("scheduled_at"))
             writer.writerow([
                 scheduled_at,
                 rec.get("time_block", ""),

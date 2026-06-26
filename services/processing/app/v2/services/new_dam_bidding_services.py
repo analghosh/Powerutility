@@ -178,7 +178,9 @@ class DAMBiddingServices:
                         "cleared_price": 0,
                         "otherUserPQData": [],
                         "orderId": order_id,
-                        "exchange_status": data.get("exchangeStatus")
+                        "exchange_status": data.get("exchangeStatus"),
+                        "systemSubmissionTime": None,
+                        "otherUserSubmissiontime": None,
                     }
 
                 status = data.get("bid_status")
@@ -222,6 +224,12 @@ class DAMBiddingServices:
                 if data.get("tradedPrice") is not None:
                     response_struct[key]["cleared_price"] = data.get("tradedPrice")
 
+                # Capture system user submission time (exchange order time preferred)
+                if data.get("exchangeOrderTime") is not None:
+                    response_struct[key]["systemSubmissionTime"] = data.get("exchangeOrderTime")
+                elif data.get("submitted_at") is not None:
+                    response_struct[key]["systemSubmissionTime"] = data.get("submitted_at")
+
             # ---- OTHER USER DATA ----
             for bid in book_details:
                 start = bid.get("FromPeriodId")
@@ -240,9 +248,15 @@ class DAMBiddingServices:
                         "cleared_volume": None,
                         "cleared_price": None,
                         "otherUserPQData": None,
+                        "systemSubmissionTime": None,
+                        "otherUserSubmissiontime": None,
                     }
 
                 response_struct[key]["otherUserPQData"] = bid.get("PQData")
+
+                # Capture other user submission time
+                if bid.get("OrderTime") is not None:
+                    response_struct[key]["otherUserSubmissiontime"] = bid.get("OrderTime")
 
                 # Capture other user id (assuming one user context)
                 if other_user_id is None:
@@ -3097,12 +3111,21 @@ class DAMBiddingServices:
                 "block_no": int(data["block_no"])
             }
 
-            # Only update when the bid is still pending (approve and reject).
-            filter_query["bid_status"] = "pending"
+            # Only update when the bid is still pending or pending withdrawal.
+            filter_query["bid_status"] = {"$in": ["pending", "pending_withdrawal"]}
+
+            bid_status = data["bid_status"]
+            existing_docs = await self.single_bid_data_for_approval_repo.find_by_filters({
+                "_id": ObjectId(data["reference_number"]),
+                "block_no": int(data["block_no"]),
+            })
+            if existing_docs and existing_docs[0].get("bid_status") == "pending_withdrawal":
+                if bid_status == "approved":
+                    bid_status = "approved_withdrawal"
 
             update_query = {
                 "$set": {
-                    "bid_status": data["bid_status"],
+                    "bid_status": bid_status,
                     "remark": data["Remarks"],
                     "approved_by": current_user.username,
                     "approved_by_user_id": current_user.user_id,
@@ -3117,7 +3140,7 @@ class DAMBiddingServices:
             return {
                 "reference_number": data["reference_number"],
                 "block_no": int(data["block_no"]),
-                "bid_status": data["bid_status"],
+                "bid_status": bid_status,
                 "matched_count": matched,
                 "modified_count": modified,
             }

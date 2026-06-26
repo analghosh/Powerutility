@@ -88,7 +88,7 @@ def _normalize_item(row: Dict[str, Any]) -> Dict[str, Any]:
             raise ValueError("scheduled_at is required")
 
         try:
-            item["scheduled_at"] = parse_csv_scheduled_at(raw_date_value)
+            item["scheduled_at"] = parse_schedule_date_filter(raw_date_value)
         except ValueError:
             raise
     
@@ -125,7 +125,11 @@ def _is_rtm_forecast_past_block(item: Dict[str, Any]) -> bool:
         scheduled_at = item.get("scheduled_at")
         if scheduled_at is None:
             return False
-        item_date = scheduled_at.date() if isinstance(scheduled_at, datetime) else scheduled_at
+        if isinstance(scheduled_at, datetime):
+            item_date = scheduled_at.date()
+        else:
+            # Repository serialization returns ISO strings; parse before comparing.
+            item_date = parse_schedule_date_filter(scheduled_at).date()
 
         if item_id == "RTM_forecasted_price":
             current_block = (now_local.hour * 60 + now_local.minute) // 15 + 1
@@ -148,7 +152,7 @@ def _is_rtm_forecast_past_block(item: Dict[str, Any]) -> bool:
 
 def _values_doc(item: Dict[str, Any]) -> Dict[str, Any]:
     return {
-        "scheduled_at": parse_csv_scheduled_at(item["scheduled_at"]),
+        "scheduled_at": parse_schedule_date_filter(item["scheduled_at"]),
         "block": item["block"],
         "id": item["id"],
         "market": item["market"],
@@ -800,7 +804,12 @@ class LimitService:
                 scheduled_at_raw = approval.get("scheduled_at")
                 if scheduled_at_raw is None:
                     raise ValueError("Approval document is missing scheduled_at")
-                scheduled_at = parse_csv_scheduled_at(scheduled_at_raw)
+                # Repository serialization returns ISO strings; convert back to datetime.
+                scheduled_at = (
+                    parse_schedule_date_filter(scheduled_at_raw)
+                    if isinstance(scheduled_at_raw, str)
+                    else scheduled_at_raw
+                )
 
                 key = {
                     "block": approval["block"],
@@ -808,7 +817,7 @@ class LimitService:
                     "market": approval["market"],
                     "category": approval["category"],
                     "area": approval["area"],
-                    "scheduled_at": scheduled_at
+                    "scheduled_at": scheduled_at,
                 }
             except KeyError as e:
                 logger.error(f"Approval doc {approval_id} is malformed. Missing key: {str(e)}")
@@ -897,7 +906,7 @@ class LimitService:
                 
                 result = await self.values_repo.repository.update_one(
                     self.values_collection,
-                    key,  # Unique key without date
+                    key,  # Unique business key matching limit_values_unique_idx
                     update_payload,
                     upsert=True
                 )

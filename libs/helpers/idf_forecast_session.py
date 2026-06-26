@@ -5,14 +5,17 @@ Aligned with rtm_transaction_service / rtm_bidding block indexing.
 IST merge session ranges (see merge_session_ids_for_delivery_date):
 - 00:00-11:59: today only, active session -> 48
 - 12:00-22:29: today active -> 48; tomorrow sessions 1 -> 48 (blocks 1-96)
-- >= 22:30: tomorrow only, active session -> 48
+- >= 22:30: tomorrow only, overflow active session -> 48 (session 1 at 22:30)
 """
 
 from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from libs.helpers.rtm_forecast_block_filter import (
+    SESSIONS_PER_DAY,
     rtm_active_session_id,
+    rtm_active_session_id_uncapped,
+    tomorrow_overflow_session_id,
     should_write_forecast_block,
 )
 
@@ -53,6 +56,11 @@ def session_ids_from_active_session_through_96(now_local: datetime) -> List[int]
     return list(range(active_session_id(now_local), 49))
 
 
+def session_ids_from_session_through_96(start_session_id: int) -> List[int]:
+    """Session IDs from start_session_id through session 48."""
+    return list(range(max(1, min(48, int(start_session_id))), 49))
+
+
 def merge_session_ids_for_delivery_date(
     scheduled_date: date,
     today_ist: date,
@@ -64,16 +72,20 @@ def merge_session_ids_for_delivery_date(
 
     - Past dates: none
     - Today: active RTM session through 48
-    - Tomorrow before 22:30 IST: sessions 1 through 48 (blocks 1-96)
-    - Tomorrow from 22:30 IST: active session through 48
+    - Tomorrow before 22:30 IST (uncapped active <= 48): sessions 1 through 48
+    - Tomorrow from 22:30 IST or when uncapped active > 48: overflow session through 48
+      (session 1 at 22:30 IST — aligned with RTM bid lapse)
     """
     if scheduled_date < today_ist:
         return []
     if scheduled_date == today_ist:
         return session_ids_from_active_session_through_96(now_local)
     if scheduled_date > today_ist:
-        if after_evening_cutover:
-            return session_ids_from_active_session_through_96(now_local)
+        raw_active = rtm_active_session_id_uncapped(now_local)
+        if after_evening_cutover or raw_active > SESSIONS_PER_DAY:
+            return session_ids_from_session_through_96(
+                tomorrow_overflow_session_id(now_local)
+            )
         return session_ids_from_block_through_96(1)
     return []
 
