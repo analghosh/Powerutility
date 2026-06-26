@@ -800,7 +800,7 @@ class LimitService:
                 scheduled_at_raw = approval.get("scheduled_at")
                 if scheduled_at_raw is None:
                     raise ValueError("Approval document is missing scheduled_at")
-                scheduled_at = parse_csv_scheduled_at(scheduled_at_raw)
+                scheduled_at = scheduled_at_raw
 
                 key = {
                     "block": approval["block"],
