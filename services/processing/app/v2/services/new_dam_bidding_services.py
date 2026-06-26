@@ -385,7 +385,9 @@ class DAMBiddingServices:
                         "cleared_price": 0,
                         "otherUserPQData": [],
                         "orderId": order_id,
-                        "exchange_status": data.get("exchangeStatus")
+                        "exchange_status": data.get("exchangeStatus"),
+                        "systemSubmissionTime": None,
+                        "otherUserSubmissiontime": None,
                     }
 
                 status = data.get("bid_status")
@@ -429,6 +431,12 @@ class DAMBiddingServices:
                 if data.get("tradedPrice") is not None:
                     response_struct[key]["cleared_price"] = data.get("tradedPrice")
 
+                # Capture system user submission time (exchange order time preferred)
+                if data.get("exchangeOrderTime") is not None:
+                    response_struct[key]["systemSubmissionTime"] = data.get("exchangeOrderTime")
+                elif data.get("submitted_at") is not None:
+                    response_struct[key]["systemSubmissionTime"] = data.get("submitted_at")
+
             # ---- OTHER USER DATA ----
             for bid in book_details:
                 start = bid.get("FromPeriodId")
@@ -447,9 +455,15 @@ class DAMBiddingServices:
                         "cleared_volume": None,
                         "cleared_price": None,
                         "otherUserPQData": None,
+                        "systemSubmissionTime": None,
+                        "otherUserSubmissiontime": None,
                     }
 
                 response_struct[key]["otherUserPQData"] = bid.get("PQData")
+
+                # Capture other user submission time
+                if bid.get("OrderTime") is not None:
+                    response_struct[key]["otherUserSubmissiontime"] = bid.get("OrderTime")
 
                 # Capture other user id (assuming one user context)
                 if other_user_id is None:
