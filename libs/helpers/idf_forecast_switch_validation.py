@@ -61,15 +61,14 @@ def validate_csv_coverage_for_manual_switch(
     """
     Manual switch rules (per target delivery date):
 
-    - Today (when in scope): current RTM active session must have valid non-zero
-      CSV in forecast_serve for both time blocks.
+    - Today (always when in scope): active session must have valid non-zero CSV in
+      forecast_serve for both time blocks.
 
-    - Tomorrow before 22:30 IST: no active session — never blocks Manual switch.
-      Merge may still copy tomorrow CSV when uploaded (sessions 1–48).
+    - Tomorrow (noon–22:29 only): validated only when CSV has been ingested for
+      that delivery day. If no tomorrow CSV upload exists yet, tomorrow is skipped
+      so switching to Manual is not blocked while today has valid data.
 
-    - After 22:30 IST (tomorrow-only window): current tomorrow active session is
-      required (session 1 at 22:30, session 2 at 23:00, etc.). Earlier sessions
-      are not re-validated.
+    - After 22:30 IST (tomorrow-only window): tomorrow CSV is required.
 
     - Future sessions (active+1 through 48) within a day: not validated.
     """
@@ -80,12 +79,12 @@ def validate_csv_coverage_for_manual_switch(
     )
 
     for target_date in target_dates:
-        if target_date != today_ist and not after_evening_cutover:
-            continue
-
         csv_docs = csv_docs_by_date.get(target_date, [])
         if not csv_docs:
-            return False, MANUAL_SWITCH_BLOCKED_MESSAGE
+            if target_date == today_ist or after_evening_cutover:
+                return False, MANUAL_SWITCH_BLOCKED_MESSAGE
+            # Tomorrow not uploaded yet during noon–22:29 window.
+            continue
 
         active_sid = effective_active_session_for_delivery_date(
             target_date,
