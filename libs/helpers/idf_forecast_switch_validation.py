@@ -61,13 +61,16 @@ def validate_csv_coverage_for_manual_switch(
     """
     Manual switch rules (per target delivery date):
 
-    - Active session (always required): both time blocks must have valid non-zero
-      CSV in forecast_serve. If either block is zero/invalid but the other has
-      valid CSV → reject (active-session message). If neither block has any valid
-      CSV → reject (no manual data message).
+    - Today (always when in scope): active session must have valid non-zero CSV in
+      forecast_serve for both time blocks.
 
-    - Future sessions (active+1 through 48): not validated. They may be all
-      missing or zero; switch is still allowed when the active session is valid.
+    - Tomorrow (noon–22:29 only): validated only when CSV has been ingested for
+      that delivery day. If no tomorrow CSV upload exists yet, tomorrow is skipped
+      so switching to Manual is not blocked while today has valid data.
+
+    - After 22:30 IST (tomorrow-only window): tomorrow CSV is required.
+
+    - Future sessions (active+1 through 48) within a day: not validated.
     """
     target_dates = target_scheduled_dates_for_rtm(
         today_ist,
@@ -76,13 +79,20 @@ def validate_csv_coverage_for_manual_switch(
     )
 
     for target_date in target_dates:
+        csv_docs = csv_docs_by_date.get(target_date, [])
+        if not csv_docs:
+            if target_date == today_ist or after_evening_cutover:
+                return False, MANUAL_SWITCH_BLOCKED_MESSAGE
+            # Tomorrow not uploaded yet during noon–22:29 window.
+            continue
+
         active_sid = effective_active_session_for_delivery_date(
             target_date,
             today_ist,
             now_local,
             after_evening_cutover,
         )
-        csv_by_block = index_forecast_docs(csv_docs_by_date.get(target_date, []))
+        csv_by_block = index_forecast_docs(csv_docs)
 
         if session_has_complete_csv(active_sid, csv_by_block):
             continue
