@@ -48,8 +48,32 @@ class IdfForecastSwitchResponse(BaseModel):
             "(e.g. active session CSV zero/empty)"
         ),
     )
+    value_changed: Optional[bool] = None
+    demand_serve_updated: Optional[bool] = None
+    merge_summary: Optional[str] = None
+    pipeline_trigger: Optional[Dict[str, Any]] = None
+    demand_update_warning: Optional[str] = None
     correlation_id: Optional[str] = None
     timestamp: Optional[str] = None
+
+
+def _enrich_switch_response_for_client(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Map scheduler pipeline outcome into fields the UI can show immediately."""
+    pt = data.get("pipeline_trigger") or {}
+    detail = (pt.get("detail") or {}) if pt.get("success") else {}
+    pipeline_data = detail.get("data", {}).get("demand_serve_pipeline", {})
+    steps = pipeline_data.get("steps") or []
+    idf_step = next((s for s in steps if s.get("step") == "idf_forecast_merge"), None)
+    idf_result = (idf_step or {}).get("result") or {}
+
+    data["demand_serve_updated"] = bool(
+        pt.get("success") and detail.get("status") in ("success", "partial_success")
+    )
+    if idf_result.get("message"):
+        data["merge_summary"] = idf_result.get("message")
+    elif data.get("value_changed") and not pt.get("success"):
+        data["demand_serve_updated"] = False
+    return data
 
 
 def _user_id_from_context(user_context: Dict[str, Any]) -> str:
@@ -171,6 +195,7 @@ async def put_idf_forecast_switch(
             **switch_change_audit_fields(previous, new_state),
         )
         response_data = {k: v for k, v in data.items() if not str(k).startswith("previous_")}
+        response_data = _enrich_switch_response_for_client(response_data)
         return IdfForecastSwitchResponse(
             **response_data,
             correlation_id=correlation_id,
