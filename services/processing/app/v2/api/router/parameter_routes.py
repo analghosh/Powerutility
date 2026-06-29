@@ -11,7 +11,6 @@ import logging
 
 from ...controller.parameter_controller import parameter_controller
 from ...dependencies import get_user_context
-from ...services.idf_forecast_switch_service import ManualSwitchNotAllowedError
 from libs.audit_queue.simple_logger import AuditLogger
 from ....core.dependencies import get_audit_logger
 
@@ -796,11 +795,7 @@ async def update_parameter(
                 detail="No fields to update"
             )
 
-        result = await parameter_controller.update_parameter(
-            parameter_id,
-            update_data,
-            updated_by=user_id,
-        )
+        result = await parameter_controller.update_parameter(parameter_id, update_data)
 
         if not result:
             raise HTTPException(
@@ -823,21 +818,6 @@ async def update_parameter(
 
     except HTTPException:
         raise
-    except ManualSwitchNotAllowedError as e:
-        audit_logger.log_user_action(
-            service="processing",
-            user_id=user_id,
-            action="parameter_update_rejected",
-            message=str(e.message),
-            username=username,
-            correlation_id=correlation_id,
-            parameter_id=parameter_id,
-            success=False,
-        )
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=e.message,
-        ) from e
     except ValueError as ve:
         audit_logger.log_error_event(
             service="processing",
