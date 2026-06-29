@@ -6,7 +6,10 @@ Service layer for parameter business logic
 import logging
 from typing import List, Dict, Any, Optional
 
+from libs.constants.idf_forecast import IDF_FORECAST_SWITCH_KEY, parse_switch_use_rtm_api
+
 from ..repository.parameter_repository import parameter_repository
+from .idf_forecast_switch_service import idf_forecast_switch_service
 
 logger = logging.getLogger(__name__)
 
@@ -183,7 +186,8 @@ class ParameterService:
     async def update_parameter(
         self,
         parameter_id: str,
-        update_data: Dict[str, Any]
+        update_data: Dict[str, Any],
+        updated_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Update parameter by ID
@@ -191,20 +195,43 @@ class ParameterService:
         Args:
             parameter_id: Parameter ID
             update_data: Dictionary containing fields to update
+            updated_by: User id for audit (IDF forecast switch delegation)
             
         Returns:
             Updated parameter or None
         """
         try:
+            existing = await parameter_repository.get_parameter_by_id(parameter_id)
+            if not existing:
+                return None
+
+            para_key = existing.get("para_key")
+            if para_key == IDF_FORECAST_SWITCH_KEY and "para_value" in update_data:
+                if (
+                    "para_key" in update_data
+                    and update_data["para_key"] != IDF_FORECAST_SWITCH_KEY
+                ):
+                    raise ValueError("para_key cannot be changed for idf_forecast_switch")
+                use_rtm_api = parse_switch_use_rtm_api(update_data.get("para_value"))
+                await idf_forecast_switch_service.set_switch(
+                    use_rtm_api,
+                    updated_by=updated_by,
+                )
+                return await parameter_repository.get_parameter_by_id(parameter_id)
+
             # Don't allow updating para_key to avoid conflicts
             if "para_key" in update_data:
                 # Check if new key already exists
-                existing = await parameter_repository.get_parameter_by_key(update_data["para_key"])
-                if existing and str(existing.get("_id")) != parameter_id:
-                    raise ValueError(f"Parameter with key '{update_data['para_key']}' already exists")
-            
+                existing_by_key = await parameter_repository.get_parameter_by_key(
+                    update_data["para_key"]
+                )
+                if existing_by_key and str(existing_by_key.get("_id")) != parameter_id:
+                    raise ValueError(
+                        f"Parameter with key '{update_data['para_key']}' already exists"
+                    )
+
             return await parameter_repository.update_parameter(parameter_id, update_data)
-            
+
         except Exception as e:
             logger.error(f"Error in parameter service update: {e}")
             raise
