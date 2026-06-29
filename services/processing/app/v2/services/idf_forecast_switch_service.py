@@ -6,6 +6,8 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
+import httpx
+
 from libs.constants.idf_forecast import (
     IDF_FORECAST_SWITCH_AUTO_FALLBACK_MESSAGE_KEY,
     IDF_FORECAST_SWITCH_KEY,
@@ -108,6 +110,21 @@ class IdfForecastSwitchService:
         if not ok:
             raise ManualSwitchNotAllowedError(message)
 
+    async def _trigger_demand_pipeline_after_switch(self) -> Dict[str, Any]:
+        """Run scheduler demand pipeline so forecast_serve is merged into demand_serve."""
+        base = settings.SCHEDULER_SERVICE_URL.rstrip("/")
+        url = f"{base}/api/v1/scheduler/demand-trigger/trigger"
+        timeout = getattr(settings, "SCHEDULER_DEMAND_TRIGGER_TIMEOUT", 180)
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post(url)
+                resp.raise_for_status()
+                body = resp.json()
+                return {"success": True, "status": body.get("status"), "detail": body}
+        except Exception as e:
+            logger.error("Demand pipeline trigger failed url=%s: %s", url, e)
+            return {"success": False, "error": str(e)}
+
     async def set_switch(self, use_rtm_api: bool, updated_by: Optional[str] = None) -> Dict[str, Any]:
         previous = await self.get_switch()
 
@@ -122,20 +139,32 @@ class IdfForecastSwitchService:
             IDF_FORECAST_SWITCH_KEY, para_value, extra_set=extra or None
         )
         await self._clear_auto_fallback_user_message()
+        value_changed = previous.get("use_rtm_api") != use_rtm_api
+        pipeline_trigger = None
+        if value_changed:
+            pipeline_trigger = await self._trigger_demand_pipeline_after_switch()
         logger.info(
             "IDF forecast switch set to use_rtm_api=%s (para_value=%s) by %s "
-            "(was use_rtm_api=%s active_source=%s)",
+            "(was use_rtm_api=%s active_source=%s value_changed=%s pipeline_ok=%s)",
             use_rtm_api,
             para_value,
             updated_by or "system",
             previous.get("use_rtm_api"),
             previous.get("active_source"),
+            value_changed,
+            (pipeline_trigger or {}).get("success") if value_changed else None,
         )
         result = await self.get_switch()
         result["updated_by"] = updated_by
         result["previous_use_rtm_api"] = previous.get("use_rtm_api")
         result["previous_active_source"] = previous.get("active_source")
         result["previous_para_value"] = previous.get("para_value")
+        result["value_changed"] = value_changed
+        result["pipeline_trigger"] = pipeline_trigger
+        if pipeline_trigger and not pipeline_trigger.get("success"):
+            result["demand_update_warning"] = (
+                "Switch saved but demand_serve pipeline failed; retry or contact support."
+            )
         return result
 
 
