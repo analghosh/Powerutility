@@ -91,7 +91,6 @@ class Settings(BaseSettings):
     # Scheduler Service
     SCHEDULER_SERVICE_URL: str = "http://localhost:8004"
     SCHEDULER_SERVICE_TIMEOUT: int = 10
-    SCHEDULER_IDF_FORECAST_MERGE_TIMEOUT: int = 60
     
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 30

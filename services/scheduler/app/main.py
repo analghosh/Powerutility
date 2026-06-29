@@ -14,14 +14,7 @@ import logging
 from .core.config import settings
 from .api.v1.routes import scheduler
 
-from .routers import (
-    queue_health,
-    job_monitoring,
-    rtm_scheduling_router,
-    bid_trade_live_sync_router,
-    demand_trigger_router,
-    idf_forecast_merge_router,
-)
+from .routers import queue_health, job_monitoring, rtm_scheduling_router, bid_trade_live_sync_router, demand_trigger_router
 from .services.cron_manager import cron_manager
 from .seeder.timeblock_seeder import TimeblockSeeder
 from .shared.middleware.error_handler import ErrorHandlerMiddleware
@@ -268,11 +261,6 @@ app.include_router(job_monitoring.router, tags=["job-monitoring"])
 app.include_router(rtm_scheduling_router.router, prefix="/api/v1/scheduler", tags=["rtm-scheduling"])
 app.include_router(bid_trade_live_sync_router.router, prefix="/api/v1/scheduler", tags=["bid-trade-live-sync"])
 app.include_router(demand_trigger_router.router, prefix="/api/v1/scheduler", tags=["demand-trigger"])
-app.include_router(
-    idf_forecast_merge_router.router,
-    prefix="/api/v1/scheduler",
-    tags=["idf-forecast-merge"],
-)
 
 # Mount static files
 from pathlib import Path
