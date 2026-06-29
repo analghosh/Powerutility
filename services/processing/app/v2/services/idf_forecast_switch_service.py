@@ -6,8 +6,6 @@ import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
-import httpx
-
 from libs.constants.idf_forecast import (
     IDF_FORECAST_SWITCH_AUTO_FALLBACK_MESSAGE_KEY,
     IDF_FORECAST_SWITCH_KEY,
@@ -110,18 +108,6 @@ class IdfForecastSwitchService:
         if not ok:
             raise ManualSwitchNotAllowedError(message)
 
-    async def _trigger_idf_forecast_merge(self) -> Dict[str, Any]:
-        """Call scheduler to merge forecast_serve into demand_serve for the active switch."""
-        url = (
-            f"{settings.SCHEDULER_SERVICE_URL.rstrip('/')}"
-            "/api/v1/scheduler/idf-forecast-merge/trigger"
-        )
-        timeout = float(getattr(settings, "SCHEDULER_IDF_FORECAST_MERGE_TIMEOUT", 60))
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(url)
-            response.raise_for_status()
-            return response.json()
-
     async def set_switch(self, use_rtm_api: bool, updated_by: Optional[str] = None) -> Dict[str, Any]:
         previous = await self.get_switch()
 
@@ -150,22 +136,6 @@ class IdfForecastSwitchService:
         result["previous_use_rtm_api"] = previous.get("use_rtm_api")
         result["previous_active_source"] = previous.get("active_source")
         result["previous_para_value"] = previous.get("para_value")
-
-        if previous.get("use_rtm_api") != use_rtm_api:
-            try:
-                result["merge"] = await self._trigger_idf_forecast_merge()
-            except Exception as merge_err:
-                logger.error(
-                    "IDF forecast merge failed after switch update use_rtm_api=%s: %s",
-                    use_rtm_api,
-                    merge_err,
-                    exc_info=True,
-                )
-                result["merge"] = {
-                    "status": "error",
-                    "message": str(merge_err),
-                }
-
         return result
 
 
