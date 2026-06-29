@@ -91,7 +91,6 @@ class Settings(BaseSettings):
     # Scheduler Service
     SCHEDULER_SERVICE_URL: str = "http://localhost:8004"
     SCHEDULER_SERVICE_TIMEOUT: int = 10
-    SCHEDULER_DEMAND_TRIGGER_TIMEOUT: int = 180
     
     # Rate Limiting
     RATE_LIMIT_REQUESTS: int = 30
