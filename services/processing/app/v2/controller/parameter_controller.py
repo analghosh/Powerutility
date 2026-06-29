@@ -127,7 +127,8 @@ class ParameterController:
     async def update_parameter(
         self,
         parameter_id: str,
-        update_data: Dict[str, Any]
+        update_data: Dict[str, Any],
+        updated_by: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Update parameter by ID
@@ -135,13 +136,18 @@ class ParameterController:
         Args:
             parameter_id: Parameter ID
             update_data: Dictionary containing fields to update
+            updated_by: User id for audit when updating idf_forecast_switch
             
         Returns:
             Updated parameter or None
         """
         try:
             logger.info(f"Updating parameter with ID: {parameter_id}")
-            result = await parameter_service.update_parameter(parameter_id, update_data)
+            result = await parameter_service.update_parameter(
+                parameter_id,
+                update_data,
+                updated_by=updated_by,
+            )
             if result:
                 logger.info(f"Successfully updated parameter")
             return result
