@@ -48,6 +48,10 @@ class IdfForecastSwitchResponse(BaseModel):
             "(e.g. active session CSV zero/empty)"
         ),
     )
+    merge: Optional[Dict[str, Any]] = Field(
+        None,
+        description="IDF forecast merge result when the switch value changed",
+    )
     correlation_id: Optional[str] = None
     timestamp: Optional[str] = None
 
