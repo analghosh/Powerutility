@@ -6,6 +6,7 @@ Service layer for parameter business logic
 import logging
 from typing import List, Dict, Any, Optional
 
+from libs.constants.idf_forecast import IDF_FORECAST_SWITCH_KEY
 from ..repository.parameter_repository import parameter_repository
 
 logger = logging.getLogger(__name__)
@@ -13,6 +14,12 @@ logger = logging.getLogger(__name__)
 
 class ParameterService:
     """Service for parameter operations"""
+
+    @staticmethod
+    def _is_idf_forecast_switch_update(
+        para_key: Optional[str], update_data: Dict[str, Any]
+    ) -> bool:
+        return para_key == IDF_FORECAST_SWITCH_KEY and "para_value" in update_data
 
     async def create_parameter(self, parameter_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -159,15 +166,45 @@ class ParameterService:
             Updated parameter or None
         """
         try:
+            existing = await parameter_repository.get_parameter_by_id(parameter_id)
+            if not existing:
+                return None
+
             # Don't allow updating para_key to avoid conflicts
             if "para_key" in update_data:
                 # Check if new key already exists
-                existing = await parameter_repository.get_parameter_by_key(update_data["para_key"])
-                if existing and str(existing.get("_id")) != parameter_id:
-                    raise ValueError(f"Parameter with key '{update_data['para_key']}' already exists")
-            
-            return await parameter_repository.update_parameter(parameter_id, update_data)
-            
+                key_existing = await parameter_repository.get_parameter_by_key(
+                    update_data["para_key"]
+                )
+                if key_existing and str(key_existing.get("_id")) != parameter_id:
+                    raise ValueError(
+                        f"Parameter with key '{update_data['para_key']}' already exists"
+                    )
+
+            effective_key = update_data.get("para_key") or existing.get("para_key")
+            if self._is_idf_forecast_switch_update(effective_key, update_data):
+                from .idf_forecast_switch_service import idf_forecast_switch_service
+
+                await idf_forecast_switch_service.validate_parameter_switch(
+                    existing.get("para_value"),
+                    update_data["para_value"],
+                )
+
+            result = await parameter_repository.update_parameter(parameter_id, update_data)
+            if (
+                result
+                and self._is_idf_forecast_switch_update(effective_key, update_data)
+            ):
+                from .idf_forecast_switch_service import idf_forecast_switch_service
+
+                result["merge_result"] = (
+                    await idf_forecast_switch_service.merge_after_parameter_switch(
+                        update_data["para_value"],
+                        updated_by=update_data.get("updated_by"),
+                    )
+                )
+            return result
+
         except Exception as e:
             logger.error(f"Error in parameter service update: {e}")
             raise
