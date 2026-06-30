@@ -20,10 +20,18 @@ from libs.helpers.idf_forecast_switch_validation import (
 )
 from libs.helpers.rtm_forecast_block_filter import target_scheduled_dates_for_rtm
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
+from libs.repository.forecast_serve_repository import (
+    ForecastServeRepository as LibForecastServeRepository,
+)
+from libs.services.idf_forecast_merge_service import (
+    IdfForecastMergeService,
+    merge_result_status,
+)
 from ...core.config import settings
 from ...repository.idf_forecast_parameter_repository import (
     idf_forecast_parameter_repository,
 )
+from ..repository.demand_serve_repository import DemandServeRepository
 from ..repository.forecast_serve_repository import forecast_serve_repository
 
 logger = logging.getLogger(__name__)
@@ -41,6 +49,17 @@ class IdfForecastSwitchService:
     def __init__(self):
         self.parameter_repository = idf_forecast_parameter_repository
         self.forecast_repository = forecast_serve_repository
+        self._demand_repository = DemandServeRepository()
+        self._lib_forecast_repository = LibForecastServeRepository(
+            mongodb_uri=settings.MONGODB_URI,
+            database_name=settings.MONGODB_DATABASE,
+            collection_name=settings.MONGODB_FORECAST_SERVE_COLLECTION,
+        )
+        self._merge_service = IdfForecastMergeService(
+            parameter_repository=self.parameter_repository,
+            forecast_repository=self._lib_forecast_repository,
+            demand_serve_collection=self._demand_repository.collection,
+        )
 
     async def _get_auto_fallback_user_message(self) -> Optional[str]:
         doc = await self.parameter_repository.get_by_key(
@@ -108,20 +127,82 @@ class IdfForecastSwitchService:
         if not ok:
             raise ManualSwitchNotAllowedError(message)
 
-    async def set_switch(self, use_rtm_api: bool, updated_by: Optional[str] = None) -> Dict[str, Any]:
-        previous = await self.get_switch()
-
-        if not use_rtm_api and previous.get("use_rtm_api"):
+    async def validate_parameter_switch(
+        self,
+        previous_para_value: Any,
+        new_para_value: Any,
+    ) -> None:
+        """Validate manual switch before persisting via generic parameters API."""
+        previous_use_rtm = parse_switch_use_rtm_api(
+            str(previous_para_value) if previous_para_value is not None else None
+        )
+        use_rtm_api = parse_switch_use_rtm_api(
+            str(new_para_value) if new_para_value is not None else None
+        )
+        if not use_rtm_api and previous_use_rtm:
             await self._validate_manual_switch()
 
+    async def merge_after_parameter_switch(
+        self,
+        new_para_value: Any,
+        updated_by: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Run instant demand_serve merge after idf_forecast_switch saved via parameters API."""
+        use_rtm_api = parse_switch_use_rtm_api(
+            str(new_para_value) if new_para_value is not None else None
+        )
+        await self._clear_auto_fallback_user_message()
+        logger.info(
+            "IDF forecast switch updated via parameters API use_rtm_api=%s (para_value=%s) by %s",
+            use_rtm_api,
+            switch_para_value(use_rtm_api),
+            updated_by or "system",
+        )
+        return await self._run_merge_after_switch(use_rtm_api)
+
+    async def _run_merge_after_switch(self, use_rtm_api: bool) -> Dict[str, Any]:
+        tz_name = getattr(settings, "CRON_TIMEZONE", None) or "Asia/Kolkata"
+        min_ahead = max(
+            0,
+            int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)),
+        )
+        merged = skipped = failed = 0
+        status = "error"
+        try:
+            merged, skipped, failed = await self._merge_service.run_merge(
+                skip_daily_reset=True,
+                skip_auto_flip=not use_rtm_api,
+                tz_name=tz_name,
+                min_ahead_blocks=min_ahead,
+            )
+            status = merge_result_status(merged, skipped, failed)
+        except Exception as merge_err:
+            logger.error(
+                "IDF forecast merge after switch failed: %s", merge_err, exc_info=True
+            )
+        return {
+            "merged": merged,
+            "skipped": skipped,
+            "failed": failed,
+            "status": status,
+        }
+
+    async def set_switch(self, use_rtm_api: bool, updated_by: Optional[str] = None) -> Dict[str, Any]:
+        previous = await self.get_switch()
         para_value = switch_para_value(use_rtm_api)
+
+        if not use_rtm_api and previous.get("use_rtm_api"):
+            await self.validate_parameter_switch(
+                previous.get("para_value"),
+                para_value,
+            )
+
         extra: Dict[str, Any] = {}
         if updated_by:
             extra["updated_by"] = updated_by
         await self.parameter_repository.upsert_by_key(
             IDF_FORECAST_SWITCH_KEY, para_value, extra_set=extra or None
         )
-        await self._clear_auto_fallback_user_message()
         logger.info(
             "IDF forecast switch set to use_rtm_api=%s (para_value=%s) by %s "
             "(was use_rtm_api=%s active_source=%s)",
@@ -131,11 +212,18 @@ class IdfForecastSwitchService:
             previous.get("use_rtm_api"),
             previous.get("active_source"),
         )
+
+        merge_result = await self.merge_after_parameter_switch(
+            para_value,
+            updated_by=updated_by,
+        )
+
         result = await self.get_switch()
         result["updated_by"] = updated_by
         result["previous_use_rtm_api"] = previous.get("use_rtm_api")
         result["previous_active_source"] = previous.get("active_source")
         result["previous_para_value"] = previous.get("para_value")
+        result["merge_result"] = merge_result
         return result
 
 
