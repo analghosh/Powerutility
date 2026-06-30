@@ -11,6 +11,7 @@ import logging
 
 from ...controller.parameter_controller import parameter_controller
 from ...dependencies import get_user_context
+from ...services.idf_forecast_switch_service import ManualSwitchNotAllowedError
 from libs.audit_queue.simple_logger import AuditLogger
 from ....core.dependencies import get_audit_logger
 
@@ -87,6 +88,13 @@ class ParameterUpdate(BaseModel):
         }
 
 
+class ParameterMergeResult(BaseModel):
+    merged: int
+    skipped: int
+    failed: int
+    status: str
+
+
 class ParameterResponse(BaseModel):
     """Schema for parameter response"""
     id: str = Field(..., alias="_id", description="Parameter ID")
@@ -94,9 +102,14 @@ class ParameterResponse(BaseModel):
     para_value: Optional[Any] = Field(None, description="Parameter value (string or structured object)")
     created_at: Optional[datetime] = Field(None, description="Creation timestamp")
     updated_at: Optional[datetime] = Field(None, description="Last update timestamp")
+    merge_result: Optional[ParameterMergeResult] = Field(
+        None,
+        description="Present when idf_forecast_switch was updated and demand_serve merge ran",
+    )
 
     class Config:
         populate_by_name = True
+        extra = "allow"
 
 
 class ParameterListResponse(BaseModel):
@@ -803,6 +816,7 @@ async def update_parameter(
                 detail=f"Parameter with ID {parameter_id} not found"
             )
 
+        merge_result = result.get("merge_result") or {}
         audit_logger.log_user_action(
             service="processing",
             user_id=user_id,
@@ -811,11 +825,31 @@ async def update_parameter(
             username=username,
             correlation_id=correlation_id,
             parameter_id=parameter_id,
-            success=True
+            para_key=result.get("para_key"),
+            success=True,
+            merge_merged=merge_result.get("merged"),
+            merge_skipped=merge_result.get("skipped"),
+            merge_failed=merge_result.get("failed"),
+            merge_status=merge_result.get("status"),
         )
 
         return result
 
+    except ManualSwitchNotAllowedError as e:
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="parameter_update_rejected",
+            message=str(e.message),
+            username=username,
+            correlation_id=correlation_id,
+            parameter_id=parameter_id,
+            success=False,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=e.message,
+        ) from e
     except HTTPException:
         raise
     except ValueError as ve:

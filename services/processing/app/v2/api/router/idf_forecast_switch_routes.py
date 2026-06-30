@@ -34,6 +34,16 @@ class IdfForecastSwitchUpdate(BaseModel):
     )
 
 
+class MergeResult(BaseModel):
+    merged: int
+    skipped: int
+    failed: int
+    status: str = Field(
+        ...,
+        description="success | partial | error",
+    )
+
+
 class IdfForecastSwitchResponse(BaseModel):
     use_rtm_api: bool
     active_source: str
@@ -47,6 +57,10 @@ class IdfForecastSwitchResponse(BaseModel):
             "Set when the system auto-switched from Manual to Auto "
             "(e.g. active session CSV zero/empty)"
         ),
+    )
+    merge_result: Optional[MergeResult] = Field(
+        None,
+        description="Instant demand_serve merge outcome after PUT /switch",
     )
     correlation_id: Optional[str] = None
     timestamp: Optional[str] = None
@@ -150,6 +164,7 @@ async def put_idf_forecast_switch(
             previous.get("use_rtm_api") != new_state.get("use_rtm_api")
             or previous.get("para_value") != new_state.get("para_value")
         )
+        merge_result = data.get("merge_result") or {}
         audit_logger.log_user_action(
             service="processing",
             user_id=user_id,
@@ -167,6 +182,10 @@ async def put_idf_forecast_switch(
             change_source="api",
             value_changed=changed,
             requested_use_rtm_api=body.use_rtm_api,
+            merge_merged=merge_result.get("merged"),
+            merge_skipped=merge_result.get("skipped"),
+            merge_failed=merge_result.get("failed"),
+            merge_status=merge_result.get("status"),
             **request_audit_context(request),
             **switch_change_audit_fields(previous, new_state),
         )
