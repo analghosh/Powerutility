@@ -11,8 +11,8 @@ from libs.helpers.idf_forecast_session import (
 )
 from libs.helpers.rtm_forecast_block_filter import (
     effective_active_session_for_delivery_date,
+    primary_scheduled_date_for_rtm,
     rtm_forecast_run_context,
-    target_scheduled_dates_for_rtm,
 )
 from libs.constants.idf_forecast import MANUAL_AUTO_FLIP_ACTIVE_SESSION_CSV_MESSAGE
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV
@@ -59,40 +59,34 @@ def validate_csv_coverage_for_manual_switch(
     include_tomorrow_forecast: bool,
 ) -> Tuple[bool, str]:
     """
-    Manual switch rules (per target delivery date):
+    Manual switch rules for the **primary** delivery date only (aligned with UI
+    manual-status for today before 22:30 IST, or tomorrow from 22:30 IST).
 
-    - Active session (always required): both time blocks must have valid non-zero
-      CSV in forecast_serve. If either block is zero/invalid but the other has
-      valid CSV → reject (active-session message). If neither block has any valid
-      CSV → reject (no manual data message).
+    Tomorrow is not validated here during the noon–22:29 window; merge may still
+    apply tomorrow CSV later when present, or skip missing sessions.
 
-    - Future sessions (active+1 through 48): not validated. They may be all
-      missing or zero; switch is still allowed when the active session is valid.
+    - Active session on the primary date: both time blocks must have valid
+      non-zero CSV in forecast_serve. If either block is zero/invalid but the
+      other has valid CSV → reject (active-session message). If neither block
+      has any valid CSV → reject (no manual data message).
     """
-    target_dates = target_scheduled_dates_for_rtm(
+    _ = include_tomorrow_forecast
+    target_date = primary_scheduled_date_for_rtm(today_ist, after_evening_cutover)
+    active_sid = effective_active_session_for_delivery_date(
+        target_date,
         today_ist,
+        now_local,
         after_evening_cutover,
-        include_tomorrow_forecast,
     )
+    csv_by_block = index_forecast_docs(csv_docs_by_date.get(target_date, []))
 
-    for target_date in target_dates:
-        active_sid = effective_active_session_for_delivery_date(
-            target_date,
-            today_ist,
-            now_local,
-            after_evening_cutover,
-        )
-        csv_by_block = index_forecast_docs(csv_docs_by_date.get(target_date, []))
+    if session_has_complete_csv(active_sid, csv_by_block):
+        return True, ""
 
-        if session_has_complete_csv(active_sid, csv_by_block):
-            continue
+    if not active_session_has_any_valid_csv(active_sid, csv_by_block):
+        return False, MANUAL_SWITCH_BLOCKED_MESSAGE
 
-        if not active_session_has_any_valid_csv(active_sid, csv_by_block):
-            return False, MANUAL_SWITCH_BLOCKED_MESSAGE
-
-        return False, MANUAL_SWITCH_ACTIVE_SESSION_INVALID_MESSAGE
-
-    return True, ""
+    return False, MANUAL_SWITCH_ACTIVE_SESSION_INVALID_MESSAGE
 
 
 def scheduled_at_midnight(d: date) -> datetime:

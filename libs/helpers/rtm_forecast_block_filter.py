@@ -198,6 +198,24 @@ def target_scheduled_dates_for_rtm(
     return dates
 
 
+def primary_scheduled_date_for_rtm(
+    today_ist: date,
+    after_evening_cutover: bool,
+) -> date:
+    """
+    Primary intraday delivery date for switch validation and auto-flip.
+
+    - Before 22:30 IST: today
+    - From 22:30 IST: tomorrow
+    """
+    dates = target_scheduled_dates_for_rtm(
+        today_ist,
+        after_evening_cutover,
+        include_tomorrow_forecast=False,
+    )
+    return dates[0] if dates else today_ist
+
+
 def is_rtm_forecast_scheduled_date_allowed(
     scheduled_date: date,
     today_ist: date,
