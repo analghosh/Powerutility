@@ -18,7 +18,7 @@ from libs.helpers.idf_forecast_switch_validation import (
     scheduled_at_midnight,
     validate_csv_coverage_for_manual_switch,
 )
-from libs.helpers.rtm_forecast_block_filter import target_scheduled_dates_for_rtm
+from libs.helpers.rtm_forecast_block_filter import primary_scheduled_date_for_rtm
 from libs.models.forecast_serve_entity import FORECAST_SOURCE_CSV, FORECAST_SOURCE_RTM_API
 from libs.repository.forecast_serve_repository import (
     ForecastServeRepository as LibForecastServeRepository,
@@ -103,22 +103,17 @@ class IdfForecastSwitchService:
             int(getattr(settings, "RTM_FORECAST_MIN_AHEAD_BLOCKS", 5)),
         )
         ctx = build_manual_switch_validation_context(tz_name, min_ahead)
-        target_dates = target_scheduled_dates_for_rtm(
+        primary_date = primary_scheduled_date_for_rtm(
             ctx["today_ist"],
             ctx["after_evening_cutover"],
-            ctx.get("include_tomorrow_forecast", False),
+        )
+        scheduled_at = scheduled_at_midnight(primary_date)
+        csv_docs = await self.forecast_repository.find_by_scheduled_at_and_source(
+            scheduled_at, FORECAST_SOURCE_CSV
         )
 
-        csv_docs_by_date = {}
-        for target_date in target_dates:
-            scheduled_at = scheduled_at_midnight(target_date)
-            docs = await self.forecast_repository.find_by_scheduled_at_and_source(
-                scheduled_at, FORECAST_SOURCE_CSV
-            )
-            csv_docs_by_date[target_date] = docs
-
         ok, message = validate_csv_coverage_for_manual_switch(
-            csv_docs_by_date,
+            {primary_date: csv_docs},
             ctx["today_ist"],
             ctx["now_local"],
             ctx["after_evening_cutover"],
