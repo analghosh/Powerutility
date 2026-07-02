@@ -192,20 +192,25 @@ class RTMTransactionService:
                 )
                 rtm_bid_details = existing_bids.get("SingleBidDetails", [])
                 
-                # Find matching order for this specific period
+                # Find ALL active orders for this specific period. The bid book keeps
+                # Cancelled and Rejected orders from earlier revisions, so matching
+                # only the first entry can pick a dead order and leave the live one
+                # in place — the exchange then rejects the resubmission with
+                # "Single Bid already exists."
                 # Normalize Session to string to avoid int/string JSON mismatch
-                matching_order = next((
-                    bid for bid in rtm_bid_details 
-                    if str(bid.get("Session", "")) == str(session_id) and 
-                       bid.get("FromPeriodId") == from_period and 
-                       bid.get("ToPeriodId") == to_period
-                ), None)
+                matching_orders = [
+                    bid for bid in rtm_bid_details
+                    if str(bid.get("Session", "")) == str(session_id) and
+                       bid.get("FromPeriodId") == from_period and
+                       bid.get("ToPeriodId") == to_period and
+                       bid.get("OrderStatus") not in ("Cancelled", "Rejected")
+                ]
 
-                if matching_order and matching_order.get("OrderStatus") != "Cancelled":
+                for matching_order in matching_orders:
                     order_id = matching_order.get("OrderId")
                     last_updated_time = matching_order.get("LastUpdatedTime")
                     user_id = matching_order.get("UserId")
-                    
+
                     if order_id not in cancelled_order_ids:
                         try:
                             cancel_result = await api_client.cancel_rtm_bid(
@@ -215,7 +220,7 @@ class RTMTransactionService:
                                 delivery_date=delivery_date_timestamp
                             )
                             status_msg = cancel_result.get("StatusMessage", "")
-                            
+
                             if cancel_result.get("Status") == "Success" or "Doesn't Exist" in status_msg:
                                 cancelled_order_ids.add(order_id)
                                 all_cancelled.append({
@@ -226,7 +231,7 @@ class RTMTransactionService:
                                     "OrderId": order_id
                                 })
                                 logger.info(f"[Sequential] Cancelled existing bid: OrderId={order_id}")
-                                
+
                                 # Update DB status to reflect cancellation
                                 try:
                                     await self.rtm_single_bid_repo.update_one(
@@ -563,7 +568,12 @@ class RTMTransactionService:
                     session = bid.get("Session")
                     from_period = bid.get("FromPeriodId")
                     to_period = bid.get("ToPeriodId")
-                    
+
+                    # Cancelled/Rejected orders from earlier revisions must not shadow
+                    # the active order for the same period in the map
+                    if bid.get("OrderStatus") in ("Cancelled", "Rejected"):
+                        continue
+
                     if session is not None and from_period and to_period:
                         try:
                             session = int(session)
