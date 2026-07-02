@@ -138,9 +138,11 @@ def _map_buy_sell_flag(buy_sell_bid: str) -> str:
     return "S" if buy_sell_bid.strip().lower() == "sell" else "B"
 
 
-def _max_time_block(bid_trade_data: List[Dict[str, Any]]) -> int:
+def _max_time_block(bid_trade_data: List[Dict[str, Any]], market: str = RTM_MARKET) -> int:
     max_block = 0
     for market_row in bid_trade_data:
+        if market_row.get("market") != market:
+            continue
         for time_block_row in market_row.get("time_blocks", []):
             block = time_block_row.get("time_block")
             if isinstance(block, int):
@@ -153,7 +155,7 @@ def _max_time_block(bid_trade_data: List[Dict[str, Any]]) -> int:
 def _merge_submitted_exchange_bids(
     primary_data: List[Dict[str, Any]], submitted_rows: List[Dict[str, Any]]
 ) -> List[Dict[str, Any]]:
-    max_block = _max_time_block(primary_data)
+    max_block = _max_time_block(primary_data, market=RTM_MARKET)
 
     existing_keys = set()
     for market_row in primary_data:
