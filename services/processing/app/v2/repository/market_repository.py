@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_EXCHANGE = "IEX"
 BLOCKS_PER_DAY = 96  # 96 blocks of 15 minutes
-RTM_MARKET = "RTM"
 
 
 def build_exchange_pipeline_string(start_date: str, end_date: str, current_block: int) -> str:
@@ -131,82 +130,6 @@ def log_pipeline(title: str, collection: str, extra: Dict[str, Any], pipeline: L
     except Exception:
         logger.error("Pipeline (repr): %r", pipeline)
 
-
-def _map_buy_sell_flag(buy_sell_bid: str) -> str:
-    if not buy_sell_bid:
-        return "B"
-    return "S" if buy_sell_bid.strip().lower() == "sell" else "B"
-
-
-def _max_time_block(bid_trade_data: List[Dict[str, Any]]) -> int:
-    max_block = 0
-    for market_row in bid_trade_data:
-        for time_block_row in market_row.get("time_blocks", []):
-            block = time_block_row.get("time_block")
-            if isinstance(block, int):
-                max_block = max(max_block, block)
-            elif isinstance(block, str) and block.isdigit():
-                max_block = max(max_block, int(block))
-    return max_block
-
-
-def _merge_submitted_exchange_bids(
-    primary_data: List[Dict[str, Any]], submitted_rows: List[Dict[str, Any]]
-) -> List[Dict[str, Any]]:
-    max_block = _max_time_block(primary_data)
-
-    existing_keys = set()
-    for market_row in primary_data:
-        market = market_row.get("market")
-        for time_block_row in market_row.get("time_blocks", []):
-            existing_keys.add(
-                (market, time_block_row.get("time_block"), time_block_row.get("buy_sell_flag"))
-            )
-
-    market_index = {row.get("market"): row for row in primary_data}
-    pending_blocks = []
-
-    for row in submitted_rows:
-        block_no_raw = row.get("block_no")
-        if block_no_raw is None:
-            continue
-        try:
-            block_no = int(str(block_no_raw))
-        except (TypeError, ValueError):
-            continue
-        if block_no <= max_block:
-            continue
-
-        buy_sell_flag = _map_buy_sell_flag(row.get("buy_sell_bid", ""))
-        key = (RTM_MARKET, block_no, buy_sell_flag)
-        if key in existing_keys:
-            continue
-
-        pending_blocks.append(
-            {
-                "time_block": block_no,
-                "total_bidded": row.get("bidded", 0) or 0,
-                "total_traded": 0,
-                "total_value": 0,
-                "buy_sell_flag": buy_sell_flag,
-            }
-        )
-        existing_keys.add(key)
-
-    if not pending_blocks:
-        return primary_data
-
-    pending_blocks.sort(key=lambda item: item["time_block"])
-    rtm_market_data = market_index.get(RTM_MARKET)
-
-    if rtm_market_data:
-        rtm_market_data["time_blocks"].extend(pending_blocks)
-        rtm_market_data["time_blocks"].sort(key=lambda item: item.get("time_block", 0))
-    else:
-        primary_data.append({"market": RTM_MARKET, "time_blocks": pending_blocks})
-
-    return primary_data
-
 class MarketRepository:
     """Repository for market-related operations."""
 
@@ -214,12 +137,10 @@ class MarketRepository:
         self.repository = GenericRepository()
         self.serve_exchange_table = settings.MONGODB_SERVE_EXCHANGE_COLLECTION
         self.serve_px_bid_trade = settings.MONGODB_SERVE_PX_BID_COLLECTION
-        self.rtm_single_bid_for_approval = settings.MONGODB_RTM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION
         logger.info(
-            "MarketRepository initialized with collections: %s, %s, %s",
+            "MarketRepository initialized with collections: %s, %s",
             self.serve_exchange_table,
             self.serve_px_bid_trade,
-            self.rtm_single_bid_for_approval,
         )
 
     async def _aggregate(self, collection: str, pipeline: List[Dict[str, Any]], batch_size=500, max_docs=50000) -> List[Dict[str, Any]]:
@@ -332,7 +253,7 @@ class MarketRepository:
         start_date, end_date = day_bounds_utc(schedule_date)
 
         # REFINED: The match criteria now correctly targets the 'scheduled_at' field with a date range.
-        match_criteria: Dict[str, Any] = {
+        match_criteria = {
             "scheduled_at": {
                 "$gte": start_date,
                 "$lt": end_date
@@ -411,8 +332,8 @@ class MarketRepository:
             self.serve_exchange_table, pipeline, batch_size=500, max_docs=25000
         )
 
-    async def _fetch_bid_trade_from_serve(self, schedule_date: str) -> List[Dict[str, Any]]:
-        """Fetch primary bid/trade sums from serve collection."""
+    async def get_bid_trade_data(self, schedule_date: str, use_concatenated: bool = False) -> List[Dict[str, Any]]:
+        """Get bid/trade sums by market and time_block for the date."""
 
         # This logic is now consistent for both traditional and "concatenated" approaches
         # since string concatenation for queries is not recommended.
@@ -465,69 +386,6 @@ class MarketRepository:
         return await self._aggregate(
             self.serve_px_bid_trade, pipeline, batch_size=1000, max_docs=100000
         )
-
-    async def get_submitted_exchange_bid_data(
-        self, schedule_date: str, exchange_user_id: Optional[str] = None
-    ) -> List[Dict[str, Any]]:
-        """Fetch submitted RTM exchange bids for fallback blocks."""
-        if not exchange_user_id:
-            logger.info(
-                "[MarketRepository] Skipping submitted exchange bid lookup; exchange user id not provided"
-            )
-            return []
-
-        pipeline = [
-            {
-                "$match": {
-                    "schedule_date": schedule_date,
-                    "bid_date": schedule_date,
-                    "bid_status": "submitted",
-                    "bid_type": "single",
-                    "user_id": exchange_user_id,
-                    "exchangeUserId": exchange_user_id,
-                    "bidded": {"$exists": True, "$ne": None},
-                    "$expr": {"$eq": ["$user_id", "$exchangeUserId"]},
-                }
-            },
-            {"$sort": {"block_no": 1, "exchangeRevisionNo": -1}},
-            {
-                "$group": {
-                    "_id": {"block_no": "$block_no", "buy_sell_bid": "$buy_sell_bid"},
-                    "block_no": {"$first": "$block_no"},
-                    "bidded": {"$first": "$bidded"},
-                    "buy_sell_bid": {"$first": "$buy_sell_bid"},
-                }
-            },
-            {"$sort": {"block_no": 1}},
-            {"$project": {"_id": 0, "block_no": 1, "bidded": 1, "buy_sell_bid": 1}},
-        ]
-
-        log_pipeline(
-            "MarketRepository.get_submitted_exchange_bid_data",
-            self.rtm_single_bid_for_approval,
-            {
-                "Schedule Date": schedule_date,
-                "Bid Status": "submitted",
-                "Exchange User": exchange_user_id,
-            },
-            pipeline,
-        )
-        return await self._aggregate(
-            self.rtm_single_bid_for_approval, pipeline, batch_size=1000, max_docs=100000
-        )
-
-    async def get_bid_trade_data(
-        self,
-        schedule_date: str,
-        use_concatenated: bool = False,
-        exchange_user_id: Optional[str] = None,
-    ) -> List[Dict[str, Any]]:
-        """Get bid/trade sums by market and time_block for the date."""
-        primary_data = await self._fetch_bid_trade_from_serve(schedule_date)
-        submitted_rows = await self.get_submitted_exchange_bid_data(
-            schedule_date, exchange_user_id=exchange_user_id
-        )
-        return _merge_submitted_exchange_bids(primary_data, submitted_rows)
 
     async def get_bid_trade_by_time_block(self, schedule_date: str, time_block: int) -> List[Dict[str, Any]]:
         """Get bid/trade rows for a date + time_block, grouped by market, preserving exchange breakdowns."""
