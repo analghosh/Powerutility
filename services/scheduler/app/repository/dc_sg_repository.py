@@ -169,13 +169,22 @@ class DcSgRepository(BaseRepository):
             logger.error(f"Error getting last available date for plant {plant_id}: {str(e)}")
             return None
 
-    async def get_latest_records_per_timeblock(self, plant_id: str) -> List[Dict[str, Any]]:
+    async def get_latest_records_per_timeblock(
+        self, plant_id: str, before_date: Optional[datetime] = None
+    ) -> List[Dict[str, Any]]:
         """
         Get the latest record for each time_block and dc_sg combination for a specific plant.
+
+        When before_date is given, only records scheduled strictly before that date are
+        considered, so future-dated schedules (e.g. a new generator sharing data from
+        tomorrow onwards) are never rolled back into an earlier day.
         """
         try:
+            match_stage: Dict[str, Any] = {"plant_id": plant_id}
+            if before_date is not None:
+                match_stage["scheduled_at"] = {"$lt": before_date}
             pipeline = [
-                {"$match": {"plant_id": plant_id}},
+                {"$match": match_stage},
                 {"$sort": {"scheduled_at": -1}},
                 {
                     "$group": {
