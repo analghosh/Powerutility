@@ -30,11 +30,13 @@ class LimitValuesRepository(GenericRepository):
         end_date,    # Can be str or date
         market: str,
         id: str,
-        area: str
+        area: str,
+        exchange: str = "IEX"
     ) -> List[Dict[str, Any]]:
         """
         Get limit values data asynchronously.
         Accepts dates as either strings (YYYY-MM-DD) or date objects.
+        Defaults to exchange='IEX' for core functionality queries.
         """
         # Convert strings to date objects if needed
         if isinstance(start_date, str):
@@ -60,13 +62,15 @@ class LimitValuesRepository(GenericRepository):
                 filter_query["category"] = id
             if area and area != "" and area != "NA":
                 filter_query["area"] = area
+            if exchange and exchange != "":
+                filter_query["exchange"] = exchange
 
             result = await self.get_all(
                 self.collection_name,
                 filter=filter_query,
                 sort=[("scheduled_at", 1)],
             )
-            logger.info(f"Retrieved {len(result)} limit values for market={market}, ID={id}, area={area}")
+            logger.info(f"Retrieved {len(result)} limit values for market={market}, ID={id}, area={area}, exchange={exchange}")
             return result
         except Exception as e:
             logger.error(f"Failed to retrieve limit values: {str(e)}")
@@ -78,10 +82,12 @@ class LimitValuesRepository(GenericRepository):
         market: str,
         category: str,
         area: str,
-        scheduled_at: datetime = None
+        scheduled_at: datetime = None,
+        exchange: str = "IEX"
     ) -> List[Dict[str, Any]]:
         """
         Get limit values by ID with latest date asynchronously.
+        Defaults to exchange='IEX' for core functionality queries.
         """
         tomorrow_date = datetime.now() + timedelta(days=1)
         try:
@@ -95,6 +101,8 @@ class LimitValuesRepository(GenericRepository):
                 match_filter["category"] = category
             if area and area != "" and area != "NA":
                 match_filter["area"] = area
+            if exchange and exchange != "":
+                match_filter["exchange"] = exchange
 
             result = await self.get_all(
                 self.collection_name,
@@ -102,7 +110,7 @@ class LimitValuesRepository(GenericRepository):
                 sort=[("scheduled_at", 1), ("time_block", 1)],
             )
 
-            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}")
+            logger.info(f"Retrieved {len(result)} limit values for ID={ID}, latest_date={scheduled_at}, exchange={exchange}")
             return result
         except Exception as e:
             logger.error(f"Failed to retrieve limit values by ID: {str(e)}")
@@ -113,10 +121,12 @@ class LimitValuesRepository(GenericRepository):
         schedule_date: str,
         plant_id: str,
         time_block: int,
-        ID: str
+        ID: str,
+        exchange: str = "IEX"
     ) -> Optional[Dict[str, Any]]:
         """
         Get limit value for a specific plant and time block.
+        Defaults to exchange='IEX' for core functionality queries.
         """
         try:
             filter_query = {
@@ -125,6 +135,8 @@ class LimitValuesRepository(GenericRepository):
                 "block": time_block,
                 "category": ID
             }
+            if exchange and exchange != "":
+                filter_query["exchange"] = exchange
 
             result = await self.find_one(self.collection_name, filter_query)
             return result
@@ -178,7 +190,8 @@ class LimitValuesRepository(GenericRepository):
                     "id": doc.get("id"),
                     "market": doc.get("market"),
                     "category": doc.get("category"),
-                    "area": doc.get("area")
+                    "area": doc.get("area"),
+                    "exchange": doc.get("exchange", "IEX")
                 }
 
                 hist_doc = {

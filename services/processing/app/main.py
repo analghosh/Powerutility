@@ -125,6 +125,12 @@ from .v2.api.router.new_dam_bidding_routes import (
     router as new_dam_bidding_router,
     public_router as new_dam_bidding_public_router,
 )
+from .v2.api.router.new_gdam_bidding_routes import (
+    public_router as new_gdam_bidding_public_router,
+)
+from .v2.api.router.new_hpdam_bidding_routes import (
+    public_router as new_hpdam_bidding_public_router,
+)
 from .v2.api.router.renewable_routes import router as renewable_routes
 from .v2.api.router.dam_sheduling_routes import router as dam_scheduling_router
 from .v2.api.router.block_bid_routes import router as block_bid_route
@@ -231,6 +237,10 @@ exclude_paths = [
     "/rtm-bidding/public",
     "/api/v2/dam-bidding/public",
     "/dam-bidding/public",
+    "/api/v2/gdam-bidding/public",
+    "/gdam-bidding/public",
+    "/api/v2/hpdam-bidding/public",
+    "/hpdam-bidding/public",
     # Exclude power optimization - it uses HMAC authentication instead of JWT
     "/api/v2/power-optimization",  # Matches /api/v2/power-optimization/*
     "/api/v2/power-optimization/",  # Also match with trailing slash
@@ -297,6 +307,8 @@ v2_app.include_router(new_rtm_bidding_router)
 v2_app.include_router(new_rtm_bidding_public_router)
 v2_app.include_router(new_dam_bidding_router)
 v2_app.include_router(new_dam_bidding_public_router)
+v2_app.include_router(new_gdam_bidding_public_router)
+v2_app.include_router(new_hpdam_bidding_public_router)
 v2_app.include_router(renewable_routes)
 v2_app.include_router(dam_scheduling_router)
 v2_app.include_router(block_bid_route)
@@ -361,10 +373,14 @@ async def auth_middleware(request: Request, call_next):
     
     # Define paths to exclude from authentication (swagger docs, health, etc.)
     exclude_paths = [
-        "/api/v2/health", 
-        "/api/v2/docs", 
-        "/api/v2/redoc", 
+        "/api/v2/health",
+        "/api/v2/docs",
+        "/api/v2/redoc",
         "/api/v2/openapi.json",
+        "/api/v2/gdam-bidding/public",
+        "/gdam-bidding/public",
+        "/api/v2/hpdam-bidding/public",
+        "/hpdam-bidding/public",
         # Exclude power optimization - it uses HMAC authentication instead of JWT
         "/api/v2/power-optimization",  # Matches /api/v2/power-optimization/*
         "/api/v2/power-optimization/",  # Also match with trailing slash
@@ -378,6 +394,10 @@ async def auth_middleware(request: Request, call_next):
             f"{base_path}/api/v2/docs",
             f"{base_path}/api/v2/redoc", 
             f"{base_path}/api/v2/openapi.json",
+            f"{base_path}/api/v2/gdam-bidding/public",
+            f"{base_path}/gdam-bidding/public",
+            f"{base_path}/api/v2/hpdam-bidding/public",
+            f"{base_path}/hpdam-bidding/public",
             # CRITICAL: Add BASE_PATH-prefixed power-optimization paths for server
             f"{base_path}/api/v2/power-optimization",  # Matches /processing/api/v2/power-optimization/*
             f"{base_path}/api/v2/power-optimization/",  # With trailing slash

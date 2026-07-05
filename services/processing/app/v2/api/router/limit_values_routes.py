@@ -28,6 +28,7 @@ class StageEditItem(BaseModel):
     market: Optional[str] = "RTM"
     category: Optional[str] = "Limits"
     area: Optional[str] = ""
+    exchange: Optional[str] = "IEX"
     values: Optional[float] = None
     action: Optional[str] = "UPSERT"
     comment: Optional[str] = None
@@ -430,6 +431,7 @@ class SingleUpdateItem(BaseModel):
     market: Optional[str] = "RTM"
     category: Optional[str] = "Limits"
     area: Optional[str] = ""
+    exchange: Optional[str] = "IEX"
     values: Optional[float] = None
     action: Optional[str] = "UPSERT"
     comment: Optional[str] = None

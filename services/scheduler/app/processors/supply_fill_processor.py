@@ -153,12 +153,27 @@ class SupplyFillProcessor(BaseProcessor):
                 plant_id = plant.get("plant_id")
                 if not plant_id: continue
                 
-                # Fetch latest historical record for each block and type
-                historical_records = await self.dc_sg_repository.get_latest_records_per_timeblock(plant_id)
+                # Fetch latest historical record for each block and type.
+                # Cap at today so future-dated schedules (new gens sharing from
+                # tomorrow onwards) are never pulled into today.
+                historical_records = await self.dc_sg_repository.get_latest_records_per_timeblock(
+                    plant_id, before_date=today_dt
+                )
                 if not historical_records:
                     logger.debug(f"No history for plant {plant_id}")
                     continue
-                
+
+                # A plant whose latest DC was changed to 0 is deactivated and must
+                # not be rolled over into supply_serve.
+                dc_volumes = [
+                    self._safe_float(r.get("volume"))
+                    for r in historical_records
+                    if str(r.get("dc_sg", "")).upper() == "DC"
+                ]
+                if dc_volumes and all(v == 0.0 for v in dc_volumes):
+                    logger.info(f"Skipping rollover for plant {plant_id}: DC is zeroed out")
+                    continue
+
                 for record in historical_records:
                     key = create_key(record)
                     if key in existing_keys:

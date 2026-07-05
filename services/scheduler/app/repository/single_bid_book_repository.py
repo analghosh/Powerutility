@@ -20,6 +20,10 @@ class SingleBidBookRepository(BaseRepository):
         self.market_type = market_type.lower()
         if self.market_type == "dam":
             collection_name = settings.MONGODB_DAM_BOOK_COLLECTION
+        elif self.market_type == "gdam":
+            collection_name = settings.MONGODB_GDAM_BOOK_COLLECTION
+        elif self.market_type == "hpdam":
+            collection_name = settings.MONGODB_HPDAM_BOOK_COLLECTION
         elif self.market_type == "rtm":
             collection_name = settings.MONGODB_RTM_BOOK_COLLECTION
         else:

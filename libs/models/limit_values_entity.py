@@ -16,6 +16,7 @@ class LimitValues(BaseModel):
                 "market": "RTM",
                 "category": "Limits",
                 "area": "Puducherry",
+                "exchange": "IEX",
                 "values": 20.0,
                 "unit": "MW",
                 "is_active": True,
@@ -34,6 +35,7 @@ class LimitValues(BaseModel):
     market: str = Field(default="RTM")
     category: str = Field(default="Limits")
     area: str = Field(default="")
+    exchange: str = Field(default="IEX")
     values: float = Field(...)
     unit: Optional[str] = Field(default="MW")
     is_active: bool = Field(default=True)
@@ -60,6 +62,7 @@ class ApprovalItem(BaseModel):
                 "market": "RTM",
                 "category": "Limits",
                 "area": "Puducherry",
+                "exchange": "IEX",
                 "values": 20.0,
                 "unit": "MW",
                 "comment": "Initial load",
@@ -75,6 +78,7 @@ class ApprovalItem(BaseModel):
     market: str = Field(default="RTM")
     category: str = Field(default="Limits")
     area: str = Field(default="")
+    exchange: str = Field(default="IEX")
     values: Optional[float] = Field(None)
     unit: Optional[str] = Field(default="MW")
     comment: Optional[str] = Field(None)
@@ -120,6 +124,7 @@ class LimitApproval(BaseModel):
                         "market": "RTM",
                         "category": "Limits",
                         "area": "Puducherry",
+                        "exchange": "IEX",
                         "values": 20.0,
                         "unit": "MW",
                         "row_status": "OK",
@@ -189,6 +194,7 @@ class AuditKey(BaseModel):
     market: Optional[str] = Field(None)
     category: Optional[str] = Field(None)
     area: Optional[str] = Field(None)
+    exchange: Optional[str] = Field(None)
 
 class LimitAuditLog(BaseModel):
     model_config = ConfigDict(
@@ -213,7 +219,8 @@ class LimitAuditLog(BaseModel):
                     "id_type": "n_1",
                     "market": "RTM",
                     "category": "Limits",
-                    "area": "Puducherry"
+                    "area": "Puducherry",
+                    "exchange": "IEX"
                 },
                 "before": {"values": 18.0, "unit": "MW", "version": 2},
                 "after": {"values": 20.0, "unit": "MW", "version": 3}
