@@ -120,6 +120,23 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             ))
         return entities
 
+    @staticmethod
+    def _plant_dc_is_zero(records: list, plant_id: str) -> bool:
+        """
+        True when the plant has DC records in `records` and every one is zero volume.
+        """
+        dc_volumes = []
+        for rec in records:
+            if rec.get("plant_id") != plant_id:
+                continue
+            if str(rec.get("dc_sg", "")).upper() != "DC":
+                continue
+            try:
+                dc_volumes.append(float(rec.get("volume") or 0.0))
+            except (TypeError, ValueError):
+                dc_volumes.append(0.0)
+        return bool(dc_volumes) and all(v == 0.0 for v in dc_volumes)
+
     async def sync_tomorrow_data(self) -> bool:
         """
         Fetches all records for Tomorrow from dc_sg and upserts them into supply_serve.
@@ -174,6 +191,23 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                 (tomorrow, plants_tomorrow, "tomorrow"),
             ]:
                 missing_plants = best_plants - target_plants
+
+                if target_date == today:
+                    # A plant present only in tomorrow's data (e.g. a new generator
+                    # sharing its schedule from tomorrow onwards) must not be
+                    # backfilled into today's schedule.
+                    missing_plants &= (plants_yesterday | plants_today)
+
+                # A plant whose DC was changed to 0 is deactivated and must not be
+                # rolled over.
+                zeroed_plants = {
+                    pid for pid in missing_plants
+                    if self._plant_dc_is_zero(best_records, pid)
+                }
+                if zeroed_plants:
+                    logger.info(f"Skipping zeroed-out DC plant(s) for {label}: {zeroed_plants}")
+                    missing_plants -= zeroed_plants
+
                 if not missing_plants:
                     logger.info(f"No missing plants for {label}.")
                     continue

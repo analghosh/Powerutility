@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime, timedelta
 
 from ..repository.market_repository import market_repository
+from ..repository.exchange_config_repository import exchange_config_repository
 from libs.helpers.timeblock_helper import ist_now, block_from_hhmm
 from libs.utils.date_filters import validate_schedule_date, normalize_schedule_date
 
@@ -22,6 +23,29 @@ class MarketService:
 
     def __init__(self):
         self.market_repository = market_repository
+        self.exchange_config_repository = exchange_config_repository
+
+    async def _resolve_rtm_exchange_user_id(self) -> Optional[str]:
+        """Resolve active RTM single-bid exchange login user id."""
+        config = await self.exchange_config_repository.get_bidType_market_active_config(
+            "single", "RTM"
+        )
+        if not config:
+            logger.warning(
+                "[MarketService] No active RTM single exchange config found; "
+                "skipping submitted bid fallback"
+            )
+            return None
+
+        exchange_user_id = (config.get("LoginUserId") or "").strip()
+        if not exchange_user_id:
+            logger.warning(
+                "[MarketService] Active RTM single exchange config missing LoginUserId; "
+                "skipping submitted bid fallback"
+            )
+            return None
+
+        return exchange_user_id
 
     async def get_exchange_graph_data(self, scheduled_at: Optional[str] = None) -> List[Dict[str, Any]]:
         """
@@ -91,8 +115,11 @@ class MarketService:
                 logger.error(f"Invalid date format: {scheduled_at}")
                 return []
             
-            # Repository just fetches data - no business logic
-            result = await self.market_repository.get_bid_trade_data(scheduled_at)
+            # Repository fetches primary bid/trade data and merges submitted exchange bids
+            exchange_user_id = await self._resolve_rtm_exchange_user_id()
+            result = await self.market_repository.get_bid_trade_data(
+                scheduled_at, exchange_user_id=exchange_user_id
+            )
 
             return self._flatten_data(result)  # Return flattened data
 
@@ -153,11 +180,14 @@ class MarketService:
                 logger.error(f"Invalid date format: {scheduled_at}")
                 return []
             
-            # Repository just fetches data - no business logic
+            # Repository fetches primary bid/trade data and merges submitted exchange bids
+            exchange_user_id = await self._resolve_rtm_exchange_user_id()
             if time_block is not None:
                 result = await self.market_repository.get_bid_trade_by_time_block(scheduled_at, time_block)
             else:
-                result = await self.market_repository.get_bid_trade_data(scheduled_at)
+                result = await self.market_repository.get_bid_trade_data(
+                    scheduled_at, exchange_user_id=exchange_user_id
+                )
             
             return self._flatten_data(result)  # Return flattened data
             
