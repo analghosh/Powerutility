@@ -14,6 +14,7 @@ from .supply_serve_entity import SupplyServeEntity, SupplyServeHistoricalEntity
 from .plant_entity import PlantEntity
 from .peak_demand_serve_entity import PeakDemandServeEntity
 from .renewable_serve_entity import RenewableServeEntity, RenewableServeHistoricalEntity
+from .power_exchange_entity import PowerExchangeEntity, MarketEnum, ExchangeEnum
 from .provider_models import (
     ProviderEntity, CreateProviderRequest, UpdateProviderRequest,
     ProviderResponse, ProviderListResponse, ProviderSummary,
@@ -37,6 +38,9 @@ __all__ = [
     'PeakDemandServeEntity',
     'RenewableServeEntity',
     'RenewableServeHistoricalEntity',
+    'PowerExchangeEntity',
+    'MarketEnum',
+    'ExchangeEnum',
     'ProviderEntity',
     'CreateProviderRequest',
     'UpdateProviderRequest',
