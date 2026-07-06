@@ -111,7 +111,7 @@ class LimitValuesProcessor(BaseProcessor):
                 return dt
 
             today_existing_keys = {
-                (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"), r.get("exchange", "IEX"))
+                (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"))
                 for r in today_existing_data
             }
 
@@ -129,8 +129,7 @@ class LimitValuesProcessor(BaseProcessor):
                 # RTM early run only rolls RTM; midnight run allows all markets.
                 if rtm_early and market != rtm_market:
                     continue
-                record_exchange = record.get("exchange", "IEX")
-                rollover_key = (today, record.get("block"), market, record.get("id"), record_exchange)
+                rollover_key = (today, record.get("block"), market, record.get("id"))
                 if rollover_key in today_existing_keys:
                     continue
                 record_id = record.get("id")
@@ -141,14 +140,13 @@ class LimitValuesProcessor(BaseProcessor):
                     record.get("category"),
                     record.get("area"),
                     today, # Important: merged for today
-                    record_exchange
+                    
                 )
 
                 # Clone record for today
                 today_record = record.copy()
                 today_record.pop("_id", None)
                 today_record["scheduled_at"] = today
-                today_record.setdefault("exchange", "IEX")
                 today_record["source"] = "yesterday_rollover"
                 today_record["created_by"] = "system_cron"
                 today_record["updated_by"] = "system_cron"
@@ -162,12 +160,11 @@ class LimitValuesProcessor(BaseProcessor):
                 limit=10000,
             )
             tomorrow_existing_keys = {
-                (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"), r.get("exchange", "IEX"))
+                (_normalize_dt(r.get("scheduled_at")), r.get("block"), r.get("market"), r.get("id"))
                 for r in tomorrow_existing_data
             }
-            # Map (block, market, id, exchange) -> source for tomorrow's existing records
             tomorrow_source_map = {
-                (r.get("block"), r.get("market"), r.get("id"), r.get("exchange", "IEX")): r.get("source")
+                (r.get("block"), r.get("market"), r.get("id")): r.get("source")
                 for r in tomorrow_existing_data
             }
             if tomorrow_existing_data:
@@ -179,11 +176,10 @@ class LimitValuesProcessor(BaseProcessor):
                 # RTM early run only rolls RTM; midnight run allows all markets.
                 if rtm_early and market != rtm_market:
                     continue
-                record_exchange = record.get("exchange", "IEX")
-                rollover_key = (tomorrow, record.get("block"), market, record.get("id"), record_exchange)
+                rollover_key = (tomorrow, record.get("block"), market, record.get("id"))
                 if rollover_key in tomorrow_existing_keys:
                     # Only overwrite if tomorrow's value is itself a rollover (not manual/approval)
-                    existing_source = tomorrow_source_map.get((record.get("block"), market, record.get("id"), record_exchange))
+                    existing_source = tomorrow_source_map.get((record.get("block"), market, record.get("id")))
                     if existing_source not in ("today_rollover", "yesterday_rollover"):
                         continue  # tomorrow has manual/approval data, preserve it
                     # If RTM was already rolled by the 22:15 early job, do not roll it again at midnight.
@@ -198,14 +194,12 @@ class LimitValuesProcessor(BaseProcessor):
                     record.get("category"),
                     record.get("area"),
                     tomorrow, # Important: merged for tomorrow
-                    record_exchange
                 )
 
                 # Clone record for tomorrow
                 tomorrow_record = record.copy()
                 tomorrow_record.pop("_id", None)
                 tomorrow_record["scheduled_at"] = tomorrow
-                tomorrow_record.setdefault("exchange", "IEX")
                 tomorrow_record["source"] = "today_rollover"
                 tomorrow_record["created_by"] = "system_cron"
                 tomorrow_record["updated_by"] = "system_cron"
@@ -222,15 +216,13 @@ class LimitValuesProcessor(BaseProcessor):
 
             for entry in approved_entries_tomorrow:
                 entry_id = entry.get("id") or entry.get("ID")
-                entry_exchange = entry.get("exchange", "IEX")
                 unique_key_tuple = (
                     entry.get("block"),
                     entry_id,
                     entry.get("market"),
                     entry.get("category"),
-                    entry.get("area"),-
-                    tomorrow,
-                    entry_exchange
+                    entry.get("area"),
+                    tomorrow
                 )
 
                 approval_doc = {
@@ -240,7 +232,6 @@ class LimitValuesProcessor(BaseProcessor):
                     "market": entry.get("market", "RTM"),
                     "category": entry.get("category", "Limits"),
                     "area": entry.get("area", ""),
-                    "exchange": entry_exchange,
                     "values": entry.get("value") or entry.get("values"),
                     "unit": entry.get("unit", "MW"),
                     "inserted_at": current_time,
@@ -253,7 +244,7 @@ class LimitValuesProcessor(BaseProcessor):
                 approval_docs[unique_key_tuple] = approval_doc
                 approval_ids_to_delete.append(entry.get("_id"))
 
-            unique_key_fields = ["block", "id", "market", "category", "area", "scheduled_at", "exchange"]
+            unique_key_fields = ["block", "id", "market", "category", "area", "scheduled_at"]
             audit_logs = []
 
             # 3a. Rollover docs — yesterday→today insert only, today→tomorrow upsert (to propagate manual edits)
