@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 # ---------- helpers ----------
 REQUIRED_COLUMNS = ["schedule_date", "block", "id_type", "values"]
 ALLOWED_ACTIONS = {"UPSERT", "DELETE"}
-MATRIX_FIXED_COLUMNS = ["Date", "Market", "Block"]
+MATRIX_FIXED_COLUMNS = ["Date", "Market", "Block", "Exchange"]
 
 # CSV Header -> Internal ID partial map (excluding dynamic ones)
 CSV_TO_DB_MAP = {
@@ -278,9 +278,9 @@ class LimitService:
             filters["scheduled_at"] = {"$gte": start_dt, "$lte": end_dt}
             
             docs = await self.values_repo.get_all_data_with_filters(self.values_collection, filters=filters)
-            
+
             if not docs:
-                return "Date,Market,Block"
+                return "Date,Market,Block,Exchange"
 
             data = []
             
@@ -306,21 +306,22 @@ class LimitService:
                     "Date": datestr,
                     "Market": market_val,
                     "Block": doc.get("block"),
+                    "Exchange": doc.get("exchange", "IEX"),
                     "ID_Header": csv_header,
                     "Value": doc.get("values", doc.get("value"))
                 }
                 data.append(row)
-                
+
             if not data:
-                 return "Date,Market,Block"
-                 
+                 return "Date,Market,Block,Exchange"
+
             df = pd.DataFrame(data)
-            
+
             # Drop duplicates
-            df = df.drop_duplicates(subset=["Date", "Market", "Block", "ID_Header"], keep='last')
-            
+            df = df.drop_duplicates(subset=["Date", "Market", "Block", "Exchange", "ID_Header"], keep='last')
+
             # Pivot
-            pivot_df = df.pivot(index=["Date", "Market", "Block"], columns="ID_Header", values="Value")
+            pivot_df = df.pivot(index=["Date", "Market", "Block", "Exchange"], columns="ID_Header", values="Value")
             
             # Reset index
             pivot_df = pivot_df.reset_index()
@@ -328,7 +329,7 @@ class LimitService:
             # Ensure specific column order if possible, or at least fixed columns first
             cols = list(pivot_df.columns)
             # Remove index cols from list to re-order
-            for c in ["Date", "Market", "Block"]:
+            for c in ["Date", "Market", "Block", "Exchange"]:
                 if c in cols: cols.remove(c)
             
             # Sort remaining columns based on user preference if needed, or alpha?
@@ -342,7 +343,7 @@ class LimitService:
                     cols.remove(p)
             ordered_cols.extend(cols) # Add any remaining
             preferred_order =['OCF Max Qty', 'OCF Premium/Discount Price']
-            final_cols = ["Date", "Market", "Block"] + ordered_cols
+            final_cols = ["Date", "Market", "Block", "Exchange"] + ordered_cols
             pivot_df = pivot_df[final_cols]
             
             return pivot_df.to_csv(index=False)
@@ -387,10 +388,11 @@ class LimitService:
                             date_val = row.get("Date")
                             market = row.get("Market", "RTM")
                             block_raw = row.get("Block")
-                            
+                            exchange = (row.get("Exchange") or "IEX").strip() or "IEX"
+
                             if not date_val or not block_raw:
-                                continue 
-                                
+                                continue
+
                             block = int(block_raw)
                             
                             for header in id_columns:
@@ -413,10 +415,11 @@ class LimitService:
                                     "market": market,
                                     "category": "Limits", # ALWAYS Limits
                                     "area": "Puducherry", # ALWAYS Puducherry
+                                    "exchange": exchange,
                                     "values": float(val_str),
                                     "scheduled_at": date_val,
                                     "schedule_date": date_val,
-                                    "action": "UPSERT" 
+                                    "action": "UPSERT"
                                 }
                                 
                                 try:
@@ -488,7 +491,7 @@ class LimitService:
             correlation_id = user_ctx.get("correlation_id", "unknown")
             batch_id = str(ObjectId()) # One ID for this entire upload
             
-            UNIQUE_KEY_FIELDS = ["block", "id", "market", "category", "area", "scheduled_at"]
+            UNIQUE_KEY_FIELDS = ["block", "id", "market", "category", "area", "exchange", "scheduled_at"]
 
             audit_logs_to_write = []
             successful_upserts = 0
@@ -1512,7 +1515,7 @@ class LimitService:
             )
 
             if not docs:
-                return "Date,Market,Block"
+                return "Date,Market,Block,Exchange"
 
             # ✅ Correct OCF Mapping
             OCF_DB_TO_CSV_MAP = {
@@ -1543,6 +1546,7 @@ class LimitService:
                     "Date": datestr,
                     "Market": doc.get("market", "RTM"),
                     "Block": doc.get("block"),
+                    "Exchange": doc.get("exchange", "IEX"),
                     "ID_Header": csv_header,
                     "Value": doc.get("values", doc.get("value"))
                 }
@@ -1552,19 +1556,19 @@ class LimitService:
             # ✅ If no OCF data found
             if not data:
                 logger.warning(f"No OCF data found for filters: {filters}")
-                return "Date,Market,Block"
+                return "Date,Market,Block,Exchange"
 
             df = pd.DataFrame(data)
 
             # Remove duplicates
             df = df.drop_duplicates(
-                subset=["Date", "Market", "Block", "ID_Header"],
+                subset=["Date", "Market", "Block", "Exchange", "ID_Header"],
                 keep="last"
             )
 
             # Pivot
             pivot_df = df.pivot(
-                index=["Date", "Market", "Block"],
+                index=["Date", "Market", "Block", "Exchange"],
                 columns="ID_Header",
                 values="Value"
             ).reset_index()
@@ -1577,7 +1581,7 @@ class LimitService:
 
             cols = list(pivot_df.columns)
 
-            for c in ["Date", "Market", "Block"]:
+            for c in ["Date", "Market", "Block", "Exchange"]:
                 if c in cols:
                     cols.remove(c)
 
@@ -1589,7 +1593,7 @@ class LimitService:
 
             ordered_cols.extend(cols)
 
-            final_cols = ["Date", "Market", "Block"] + ordered_cols
+            final_cols = ["Date", "Market", "Block", "Exchange"] + ordered_cols
             pivot_df = pivot_df[final_cols]
 
             return pivot_df.to_csv(index=False)
