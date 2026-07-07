@@ -156,6 +156,7 @@ from .v2.api.router.job_execution_routes import router as job_execution_router
 from .v2.api.router.supply_manual_routes import router as supply_manual_router
 from .v2.api.router.demand_manual_routes import router as demand_manual_router
 from .v2.api.router.power_optimization_routes import router as power_optimization_router
+from .v2.api.router.power_exchange_routes import router as power_exchange_router
 from .v2.api.router.iex_api_detail_routes import router as iex_api_detail_router
 from .v2.api.router.api_key_management_routes import router as api_key_management_router 
 from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
@@ -334,6 +335,7 @@ v2_app.include_router(job_execution_router)
 v2_app.include_router(supply_manual_router)
 v2_app.include_router(demand_manual_router)
 v2_app.include_router(power_optimization_router)
+v2_app.include_router(power_exchange_router)
 v2_app.include_router(iex_api_detail_router)
 v2_app.include_router(api_key_management_router)
 v2_app.include_router(exchange_trade_router)
