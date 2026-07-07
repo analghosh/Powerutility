@@ -383,32 +383,28 @@ async def auth_middleware(request: Request, call_next):
         v2_paths.append(f"{base_path}/api/v2/")
     
     # Define paths to exclude from authentication (swagger docs, health, etc.)
+    # NOTE: gdam/hpdam public paths intentionally NOT excluded here — like
+    # dam-bidding/public, they must be validated by this middleware so
+    # request.state.current_user is set for the routes' get_current_user
+    # dependency (local JWT fallback fails due to cross-service secrets).
     exclude_paths = [
         "/api/v2/health",
         "/api/v2/docs",
         "/api/v2/redoc",
         "/api/v2/openapi.json",
-        "/api/v2/gdam-bidding/public",
-        "/gdam-bidding/public",
-        "/api/v2/hpdam-bidding/public",
-        "/hpdam-bidding/public",
         # Exclude power optimization - it uses HMAC authentication instead of JWT
         "/api/v2/power-optimization",  # Matches /api/v2/power-optimization/*
         "/api/v2/power-optimization/",  # Also match with trailing slash
         "/api/v2/power-optimization/power-optimization-input",  # Explicit match
     ]
-    
+
     # Add base path prefixed versions for server environments
     if base_path:
         exclude_paths.extend([
             f"{base_path}/api/v2/health",
             f"{base_path}/api/v2/docs",
-            f"{base_path}/api/v2/redoc", 
+            f"{base_path}/api/v2/redoc",
             f"{base_path}/api/v2/openapi.json",
-            f"{base_path}/api/v2/gdam-bidding/public",
-            f"{base_path}/gdam-bidding/public",
-            f"{base_path}/api/v2/hpdam-bidding/public",
-            f"{base_path}/hpdam-bidding/public",
             # CRITICAL: Add BASE_PATH-prefixed power-optimization paths for server
             f"{base_path}/api/v2/power-optimization",  # Matches /processing/api/v2/power-optimization/*
             f"{base_path}/api/v2/power-optimization/",  # With trailing slash

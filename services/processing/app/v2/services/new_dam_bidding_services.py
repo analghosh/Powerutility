@@ -42,6 +42,7 @@ from services.processing.app.v2.repository.base_repository import GenericReposit
 
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
+from ..repository.power_exchange_repository import power_exchange_repository
 from libs.messaging.job_publisher import JobPublisher
 
 logger = logging.getLogger(__name__)
@@ -90,8 +91,40 @@ class DAMBiddingServices:
             logger.warning(f"Failed to get active exchange for {market}: {e}")
         return "IEX"
 
+    async def _get_power_exchange_active_market(self) -> Optional[str]:
+        """
+        Read the active day-ahead market from the power_exchange config record
+        (key "active_exchange", value DAM/GDAM/HPDAM). Returns None when the
+        record is absent or holds an unknown value.
+        """
+        try:
+            record = await power_exchange_repository.find_one_async(
+                power_exchange_repository.collection_name,
+                {"key": "active_exchange"},
+            )
+            if record:
+                value = str(record.get("value") or record.get("market") or "").upper()
+                if value in ("DAM", "GDAM", "HPDAM"):
+                    return value
+                logger.warning(
+                    f"power_exchange active_exchange has unknown value '{value}'; ignoring"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to read active market from power_exchange: {e}")
+        return None
+
     async def _get_active_markets(self) -> List[str]:
-        """Get list of active markets for single-bid-table from parameter."""
+        """
+        Get list of active markets for single-bid-table.
+        Priority:
+        1. power_exchange config record (key "active_exchange")
+        2. active markets parameter (legacy fallback)
+        3. Default DAM
+        """
+        power_exchange_market = await self._get_power_exchange_active_market()
+        if power_exchange_market:
+            return [power_exchange_market]
+
         try:
             markets = await parameter_service.get_active_markets()
             if markets:
