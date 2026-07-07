@@ -138,19 +138,20 @@ class DAMBiddingServices:
     ) -> Dict[str, Any]:
         """
         Rename limit-values fields in single-bid-table rows so response keys
-        follow the pattern {activeExchange}_{activeMarket}_{fieldname}.
+        carry the exchange they were sourced from, following the pattern
+        {exchange_lowercase}_{original_fieldname} (e.g. iex_dam_nminusone_quantum).
         """
         if not data or not isinstance(data, dict):
             return data
 
-        prefix = f"{active_exchange}_{active_market}_"
+        prefix = f"{active_exchange.lower()}_"
         limit_field_map = {
-            "dam_forecasted_price": f"{prefix}forecasted_price",
+            "dam_forecasted_price": f"{prefix}dam_forecasted_price",
             "ceiling_price": f"{prefix}ceiling_price",
-            "dam_buffer_value": f"{prefix}buffer_value",
-            "dam_nminusone_quantum": f"{prefix}nminusone_quantum",
-            "dam_noc_buy_value": f"{prefix}noc_buy_value",
-            "dam_noc_sell_value": f"{prefix}noc_sell_value",
+            "dam_buffer_value": f"{prefix}dam_buffer_value",
+            "dam_nminusone_quantum": f"{prefix}dam_nminusone_quantum",
+            "dam_noc_buy_value": f"{prefix}dam_noc_buy_value",
+            "dam_noc_sell_value": f"{prefix}dam_noc_sell_value",
         }
 
         table_data = data.get("table_data")
@@ -252,7 +253,7 @@ class DAMBiddingServices:
                 from_block,
                 to_block,
             )
-            prefix = f"{active_exchange}_{additional_market}_"
+            prefix = f"{active_exchange.lower()}_{additional_market.lower()}_"
             for plkey, block_rows in table_data.items():
                 if not isinstance(block_rows, dict):
                     continue
@@ -1577,6 +1578,7 @@ class DAMBiddingServices:
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
 
+            self._apply_active_limit_prefix(data, active_exchange, active_market)
             await self._add_additional_market_limit_values(
                 data,
                 active_markets,

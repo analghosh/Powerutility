@@ -41,6 +41,7 @@ from ..repository.integration_api_log_repository import IntegrationApiLogReposit
 from ..repository.bid_capture_repository import CaptureServeTableDataRepository
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
+from ..services.parameter_service import parameter_service
 from libs.messaging.job_publisher import JobPublisher
 from libs.models.forecast_serve_entity import map_forecast_source_display
 
@@ -277,10 +278,97 @@ class RTMBiddingServices:
 
 
         
+    async def _get_active_exchange(self) -> str:
+        """
+        Get active exchange for single-bid-table.
+        Priority:
+        1. active_exchange parameter
+        2. exchange_config for RTM (legacy fallback)
+        3. Default IEX
+        """
+        try:
+            param_exchange = await parameter_service.get_active_exchange()
+            if param_exchange:
+                return param_exchange
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange from parameter: {e}")
+
+        try:
+            config = await self.exchange_config_repository.get_bidType_market_active_config("single", "RTM")
+            if config and config.get("exchange"):
+                return config.get("exchange")
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange for RTM: {e}")
+        return "IEX"
+
+    async def _aggregate_limit_values_with_fallback(
+        self,
+        pipeline: List[Dict[str, Any]],
+        active_exchange: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Run a limit_values aggregate first with the active exchange filter.
+        If no results are found, fall back to documents without an exchange field
+        (legacy/default IEX data).
+        """
+        import copy
+        pipeline_with_exchange = copy.deepcopy(pipeline)
+        if pipeline_with_exchange and "$match" in pipeline_with_exchange[0]:
+            pipeline_with_exchange[0]["$match"]["exchange"] = active_exchange
+
+        result = await self.limit_values_repo.aggregate(pipeline_with_exchange)
+        if result:
+            return result
+
+        logger.info(
+            f"No limit_values found for active exchange '{active_exchange}'; "
+            "falling back to legacy/default (no exchange) documents."
+        )
+        return await self.limit_values_repo.aggregate(pipeline)
+
+    def _apply_active_limit_prefix(
+        self,
+        data: Dict[str, Any],
+        active_exchange: str
+    ) -> Dict[str, Any]:
+        """
+        Rename limit-values fields in single-bid-table rows so response keys
+        carry the exchange they were sourced from, following the pattern
+        {exchange_lowercase}_{original_fieldname} (e.g. iex_rtm_nminusone_quantum).
+        """
+        if not data or not isinstance(data, dict):
+            return data
+
+        prefix = f"{active_exchange.lower()}_"
+        limit_field_map = {
+            "rtm_forecasted_price": f"{prefix}rtm_forecasted_price",
+            "ceiling_price": f"{prefix}ceiling_price",
+            "rtm_buffer_value": f"{prefix}rtm_buffer_value",
+            "rtm_nminusone_quantum": f"{prefix}rtm_nminusone_quantum",
+            "rtm_noc_buy_value": f"{prefix}rtm_noc_buy_value",
+            "rtm_noc_sell_value": f"{prefix}rtm_noc_sell_value",
+        }
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for plkey, block_rows in table_data.items():
+            if not isinstance(block_rows, dict):
+                continue
+            for blk, row in block_rows.items():
+                if not isinstance(row, dict):
+                    continue
+                for old_key, new_key in limit_field_map.items():
+                    if old_key in row:
+                        row[new_key] = row.pop(old_key)
+
+        return data
+
     async def rtm_single_bid_table(
-        self, 
-        schedule_date: Optional[str], 
-        from_block: int, 
+        self,
+        schedule_date: Optional[str],
+        from_block: int,
         to_block: int
     ) -> Dict[str, Any]:
         """
@@ -305,6 +393,8 @@ class RTMBiddingServices:
             # Get end of day for comparison
             target_date_end = datetime.combine(target_date_dt.date(), datetime.max.time())
 
+            # Active exchange for limit_values filtering
+            active_exchange = await self._get_active_exchange()
 
             # Fetch plant data
             pipeline = [
@@ -481,7 +571,7 @@ class RTMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = await self.limit_values_repo.aggregate(
+            forecastedPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
@@ -502,10 +592,11 @@ class RTMBiddingServices:
                         {"$sort": {"block": 1}},  # Sort by block for consistent ordering
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
             limit_schedule_date = target_date
             
-            bufferPrice = await self.limit_values_repo.aggregate(
+            bufferPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
@@ -526,9 +617,10 @@ class RTMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
             
-            ceilingPrice = await self.limit_values_repo.aggregate(
+            ceilingPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
@@ -550,10 +642,11 @@ class RTMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                     ],
+                    active_exchange,
                 )
             
 
-            n_1Limits = await self.limit_values_repo.aggregate(
+            n_1Limits = await self._aggregate_limit_values_with_fallback(
                 [
                     {
                         "$match": {
@@ -575,9 +668,10 @@ class RTMBiddingServices:
                     {"$sort": {"block": 1}},
                     {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
 
-            noc_buyLimits = await self.limit_values_repo.aggregate(
+            noc_buyLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
@@ -599,9 +693,10 @@ class RTMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
 
-            noc_sellLimits = await self.limit_values_repo.aggregate(
+            noc_sellLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
@@ -623,9 +718,10 @@ class RTMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
 
-            typeofExchangeIEX = await self.limit_values_repo.aggregate(
+            typeofExchangeIEX = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
@@ -647,9 +743,10 @@ class RTMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
 
-            typeofExchangePXIL = await self.limit_values_repo.aggregate(
+            typeofExchangePXIL = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
@@ -671,6 +768,7 @@ class RTMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
 
             
@@ -1010,7 +1108,8 @@ class RTMBiddingServices:
                         
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
-                                
+
+            self._apply_active_limit_prefix(data, active_exchange)
             return data
 
         except Exception as e:
