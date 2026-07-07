@@ -226,15 +226,18 @@ class LimitService:
             logger.exception(f"[LimitService] latest_paginated failed: {str(e)}")
             raise
 
-    async def latest_all(self, filters: Dict[str, Any], date_filter: str = None) -> Dict[str, Any]:
+    async def latest_all(self, filters: Dict[str, Any], date_filter: str = None, exchange: str = None) -> Dict[str, Any]:
         """
         Get all limit values without pagination.
         If date_filter is None, returns ALL data irrespective of date.
         If date_filter is provided, uses latest inserted_at per key for the given date.
+        Exchange is optional; when omitted, all exchanges are returned (one row per exchange).
         """
         try:
             if date_filter is None:
                 # Return all data without date filtering
+                if exchange:
+                    filters = {**(filters or {}), "exchange": exchange}
                 data = await self.values_repo.get_all_data_with_filters(
                     self.values_collection,
                     filters=filters
@@ -244,7 +247,8 @@ class LimitService:
                 data = await self.values_repo.get_latest_inserted_at_data_pipeline_with_filters(
                     self.values_collection,
                     filters=filters,
-                    date_filter=date_filter
+                    date_filter=date_filter,
+                    exchange=exchange
                 )
             for record in data:
                 record.setdefault("exchange", "IEX")

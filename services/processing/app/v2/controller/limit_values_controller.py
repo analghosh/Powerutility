@@ -26,9 +26,9 @@ class LimitController:
             logger.error(f"LimitController.latest_paginated error: {str(e)}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch latest with pagination")
 
-    async def latest_all(self, filters: Dict[str, Any], date_filter: str = None) -> Dict[str, Any]:
+    async def latest_all(self, filters: Dict[str, Any], date_filter: str = None, exchange: str = None) -> Dict[str, Any]:
         try:
-            return await self.service.latest_all(filters, date_filter)
+            return await self.service.latest_all(filters, date_filter, exchange)
         except Exception as e:
             logger.error(f"LimitController.latest_all error: {str(e)}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to fetch all latest data")
