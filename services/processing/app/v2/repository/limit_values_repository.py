@@ -35,7 +35,8 @@ class LimitValuesRepository:
                     ("id", 1),
                     ("market", 1),
                     ("category", 1),
-                    ("area", 1)
+                    ("area", 1),
+                    ("exchange", 1)
                 ],
                 unique=True,
                 name="limit_values_unique_idx"
