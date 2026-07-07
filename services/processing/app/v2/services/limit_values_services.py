@@ -19,7 +19,7 @@ from ..repository.limit_workflow_repository import limit_workflow_repository
 from ...core.config import settings
 
 from libs.audit_queue.simple_logger import AuditLogger
-from libs.utils.csv_date_parse import parse_csv_scheduled_at, parse_schedule_date_filter
+from libs.utils.csv_date_parse import parse_csv_scheduled_at, parse_schedule_date_filter, parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
@@ -827,7 +827,9 @@ class LimitService:
                 scheduled_at_raw = approval.get("scheduled_at")
                 if scheduled_at_raw is None:
                     raise ValueError("Approval document is missing scheduled_at")
-                scheduled_at = parse_csv_scheduled_at(scheduled_at_raw)
+                # scheduled_at comes from the DB, where find_one serializes BSON
+                # datetimes to ISO strings — parse ungated by CSV upload flags
+                scheduled_at = parse_ingestion_date(scheduled_at_raw)
 
                 key = {
                     "block": approval["block"],
