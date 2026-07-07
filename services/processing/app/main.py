@@ -90,6 +90,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure dc_sg TTL index: {e}")
 
+    # Ensure unique + query indexes on limit_values (previously created lazily, only on approve())
+    try:
+        from .v2.repository.limit_values_repository import limit_values_repository
+        await limit_values_repository.ensure_collection_exists(
+            limit_values_repository.collection_name
+        )
+    except Exception as e:
+        logger.error(f"Failed to ensure limit_values indexes: {e}")
+
     # One-time migration: encrypt plaintext BearerTokens in exchange_config
     try:
         from .v2.migrations.encrypt_bearer_tokens import run_encrypt_bearer_tokens_migration
