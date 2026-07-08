@@ -37,8 +37,9 @@ class ExchangeAPIClient:
         self.bid_type = bid_type
         # Standard timeout for read-only calls (asset details, delivery dates, etc.)
         self.timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
-        # Longer read timeout for bid submission — IEX exchange API can take >30s to process
-        self.submit_timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)
+        # Longer read timeout for bid submission — IEX exchange API (esp. GDAM)
+        # can take minutes to process; wait up to 5 minutes before timing out
+        self.submit_timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
         self.bearer_token = bearer_token
         
         # Cache for API responses
