@@ -242,7 +242,8 @@ class DAMBiddingServices:
 
         pipelines = {
             "forecasted_price": make_base_pipeline(f"{active_market}_forecasted_price"),
-            "buffer_value": make_base_pipeline("Buffer"),
+            # Buffer is stored under two id conventions across flows
+            "buffer_value": make_base_pipeline({"$in": ["Buffer", "Buffer_Price"]}),
             "ceiling_price": make_base_pipeline("Ceiling_Price", {"category": "Limits"}),
             "nminusone_quantum": make_base_pipeline("n_1", {"category": "Limits"}),
             "noc_buy_value": make_base_pipeline("noc_buy", {"category": "Limits"}),
@@ -1075,7 +1076,8 @@ class DAMBiddingServices:
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
-                                "id": "Buffer",
+                                # Buffer is stored under two id conventions across flows
+                                "id": {"$in": ["Buffer", "Buffer_Price"]},
                                 "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
