@@ -6,7 +6,7 @@ import json
 import httpx
 from fastapi import HTTPException
 
-from services.processing.app.v2.iex.masterApi import ExchangeAPIClient
+from services.processing.app.v2.iex.masterApi import ExchangeAPIClient, select_delivery_date_record
 from services.processing.app.v2.repository.exchange_config_repository import exchange_config_repository
 from services.processing.app.v2.repository.exchange_bid_detail_repository import exchange_bid_detail_repository
 from services.processing.app.v2.repository.rtm_single_bid_data_for_approval_repository import RTMSingleBidDataForApprovalRepository
@@ -25,7 +25,6 @@ class RTMTransactionService:
         self.bid_trade_serve_repo = BidTradeServeRepository()
         self._api_client: Optional[ExchangeAPIClient] = None
 
-    
     async def submit_sequential_bid(
         self,
         current_user: TokenPayload,
@@ -69,13 +68,12 @@ class RTMTransactionService:
             bid_type="single-bid"
         )
 
-        # 3. Fetch Delivery Dates & select T/T+1
+        # 3. Fetch Delivery Dates & select the record matching the bid date
         delivery_dates_resp = await api_client.get_delivery_dates(bid_type="single-bid")
         delivery_date_list = delivery_dates_resp.get("DeliveryDates", [])
-        
+
         today = datetime.now().date()
-        tomorrow = today + timedelta(days=1)
-        
+
         bidding_date_str = bid_data.get("bidingDate", "") or bid_data.get("schedule_date", "")
         try:
             if "-" in bidding_date_str and len(bidding_date_str.split("-")[0]) == 2:
@@ -83,18 +81,15 @@ class RTMTransactionService:
             else:
                 bidding_date = datetime.strptime(bidding_date_str, "%Y-%m-%d").date()
         except (ValueError, AttributeError):
-            logger.warning(f"Could not parse bidingDate '{bidding_date_str}', defaulting to T")
+            logger.warning(f"Could not parse bidingDate '{bidding_date_str}', defaulting to today")
             bidding_date = today
-        
-        delivery_date_id = "T+1" if bidding_date == tomorrow else "T"
-        logger.info(f"[Sequential] Bidding date: {bidding_date}, selected delivery date ID: {delivery_date_id}")
-        
-        selected_date_record = next((d for d in delivery_date_list if d.get("DeliveryDateId") == delivery_date_id), None)
+
+        selected_date_record = select_delivery_date_record(delivery_date_list, bidding_date)
         if not selected_date_record:
-            raise ValueError(f"Delivery Date '{delivery_date_id}' not found in exchange response")
-            
+            raise ValueError(f"No exchange delivery date matches bid date {bidding_date}")
+
         delivery_date_timestamp = selected_date_record.get("DeliveryDate")
-        logger.info(f"[Sequential] Selected delivery date: {delivery_date_id} (timestamp: {delivery_date_timestamp})")
+        logger.info(f"[Sequential] Bidding date: {bidding_date}, selected delivery date: {selected_date_record.get('DeliveryDateId')} (timestamp: {delivery_date_timestamp})")
         
         # 4. BidCreationpost
         bid_creation_result = await self.rtm_bidding_service.BidCreationpost(
@@ -470,11 +465,9 @@ class RTMTransactionService:
         delivery_dates_resp = await api_client.get_delivery_dates(bid_type="single-bid")
         delivery_date_list = delivery_dates_resp.get("DeliveryDates", [])
         
-        # Determine which delivery date to use based on bidingDate from request
-        # If bidingDate is tomorrow, use "T+1"; otherwise use "T"
+        # Select the delivery date record matching the bidingDate from request
         today = datetime.now().date()
-        tomorrow = today + timedelta(days=1)
-        
+
         bidding_date_str = bid_data.get("bidingDate", "") or bid_data.get("schedule_date", "")
         try:
             # Try DD-MM-YYYY format first (bidingDate), then YYYY-MM-DD (schedule_date)
@@ -483,18 +476,15 @@ class RTMTransactionService:
             else:
                 bidding_date = datetime.strptime(bidding_date_str, "%Y-%m-%d").date()
         except (ValueError, AttributeError):
-            logger.warning(f"Could not parse bidingDate '{bidding_date_str}', defaulting to T")
+            logger.warning(f"Could not parse bidingDate '{bidding_date_str}', defaulting to today")
             bidding_date = today
-        
-        delivery_date_id = "T+1" if bidding_date == tomorrow else "T"
-        logger.info(f"Bidding date: {bidding_date}, today: {today}, selected delivery date ID: {delivery_date_id}")
-        
-        selected_date_record = next((d for d in delivery_date_list if d.get("DeliveryDateId") == delivery_date_id), None)
+
+        selected_date_record = select_delivery_date_record(delivery_date_list, bidding_date)
         if not selected_date_record:
-            raise ValueError(f"Delivery Date '{delivery_date_id}' not found in exchange response")
-            
+            raise ValueError(f"No exchange delivery date matches bid date {bidding_date}")
+
         delivery_date_timestamp = selected_date_record.get("DeliveryDate")  # Timestamp
-        logger.info(f"Selected delivery date: {delivery_date_id} (timestamp: {delivery_date_timestamp})")
+        logger.info(f"Bidding date: {bidding_date}, selected delivery date: {selected_date_record.get('DeliveryDateId')} (timestamp: {delivery_date_timestamp})")
         
         # 4. Generate Bid Data Payload (BidCreationpost)
         # Calling internal service to generate the bid block array
@@ -1088,32 +1078,25 @@ class RTMTransactionService:
         )
         isLiveConnection = config.get("isLiveConnection", False) 
         
-        # 3. Get delivery date
-        # If schedule_date is tomorrow, use "T+1"; otherwise use "T"
+        # 3. Get delivery date matching schedule_date (defaults to today)
         delivery_dates_resp = await api_client.get_delivery_dates(bid_type="single-bid")
         delivery_date_list = delivery_dates_resp.get("DeliveryDates", [])
-        
-        today = datetime.now().date()
-        tomorrow = today + timedelta(days=1)
-        
-        delivery_date_id = "T"
+
+        target_date = datetime.now().date()
         if schedule_date:
             try:
-                sched_date = datetime.strptime(schedule_date, "%Y-%m-%d").date()
-                if sched_date == tomorrow:
-                    delivery_date_id = "T+1"
-                    logger.info(f"Schedule date ({sched_date}) is tomorrow, using T+1")
+                target_date = datetime.strptime(schedule_date, "%Y-%m-%d").date()
             except (ValueError, AttributeError):
-                logger.warning(f"Could not parse schedule_date '{schedule_date}', defaulting to T")
-        
-        selected_date_record = next((d for d in delivery_date_list if d.get("DeliveryDateId") == delivery_date_id), None)
+                logger.warning(f"Could not parse schedule_date '{schedule_date}', defaulting to today")
+
+        selected_date_record = select_delivery_date_record(delivery_date_list, target_date)
         if not selected_date_record:
-            raise ValueError(f"Delivery Date '{delivery_date_id}' not found in exchange response")
+            raise ValueError(f"No exchange delivery date matches {target_date}")
         delivery_date_timestamp = selected_date_record.get("DeliveryDate")
         delivery_dt = datetime.fromtimestamp(delivery_date_timestamp, tz=timezone.utc)
         delivery_date_str = delivery_dt.strftime("%Y-%m-%d")
-        
-        logger.info(f"Withdraw using delivery date: {delivery_date_id} ({delivery_date_str})")
+
+        logger.info(f"Withdraw using delivery date: {selected_date_record.get('DeliveryDateId')} ({delivery_date_str})")
         
         bid_area_id = config.get("BidAreaId", "N1")
         
@@ -1409,14 +1392,14 @@ class RTMTransactionService:
             delivery_dates_resp = await api_client.get_delivery_dates(bid_type="single-bid")
             delivery_date_list = delivery_dates_resp.get("DeliveryDates", [])
             
-            # If current time < 22:30, use "T" (today); otherwise use "T+1" (tomorrow)
+            # Bidding targets today's delivery until 22:30, then rolls to tomorrow
             current_time = datetime.now()
             cutoff_time = current_time.replace(hour=22, minute=30, second=0, microsecond=0)
-            delivery_date_id = "T" if current_time < cutoff_time else "T+1"
-            
-            selected_date_record = next((d for d in delivery_date_list if d.get("DeliveryDateId") == delivery_date_id), None)
+            target_date = current_time.date() if current_time < cutoff_time else current_time.date() + timedelta(days=1)
+
+            selected_date_record = select_delivery_date_record(delivery_date_list, target_date)
             if not selected_date_record:
-                raise ValueError(f"Delivery Date '{delivery_date_id}' not found in exchange response")
+                raise ValueError(f"No exchange delivery date matches {target_date}")
             delivery_date = selected_date_record.get("DeliveryDate")
         
         # 4. Fetch trade book
@@ -1484,14 +1467,14 @@ class RTMTransactionService:
             delivery_dates_resp = await api_client.get_delivery_dates(bid_type="single-bid")
             delivery_date_list = delivery_dates_resp.get("DeliveryDates", [])
             
-            # If current time < 22:30, use "T" (today); otherwise use "T+1" (tomorrow)
+            # Bidding targets today's delivery until 22:30, then rolls to tomorrow
             current_time = datetime.now()
             cutoff_time = current_time.replace(hour=22, minute=30, second=0, microsecond=0)
-            delivery_date_id = "T" if current_time < cutoff_time else "T+1"
-            
-            selected_date_record = next((d for d in delivery_date_list if d.get("DeliveryDateId") == delivery_date_id), None)
+            target_date = current_time.date() if current_time < cutoff_time else current_time.date() + timedelta(days=1)
+
+            selected_date_record = select_delivery_date_record(delivery_date_list, target_date)
             if not selected_date_record:
-                raise ValueError(f"Delivery Date '{delivery_date_id}' not found in exchange response")
+                raise ValueError(f"No exchange delivery date matches {target_date}")
             delivery_date = selected_date_record.get("DeliveryDate")
         
         return await self._fetch_price_quantity_data(api_client, delivery_date, correlation_id)

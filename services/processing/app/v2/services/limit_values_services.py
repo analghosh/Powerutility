@@ -36,6 +36,7 @@ CSV_TO_DB_MAP = {
     "NOC Buy": "noc_buy",
     "NOC Sell": "noc_sell",
     "Min Sell Price": "minsellprice",
+    "Must Sell Percent (%)": "Must_Sell_Percent",
     "OCF Premium/Discount Price": "ocfPremiumDiscountPrice",
     "OCF Max OCF Qty": "ocfMaxOCFQty",
     # "Forecasted Price" is handled dynamically
@@ -326,20 +327,20 @@ class LimitService:
 
             # Pivot
             pivot_df = df.pivot(index=["Date", "Market", "Block", "Exchange"], columns="ID_Header", values="Value")
-            
+
             # Reset index
             pivot_df = pivot_df.reset_index()
-            
+
             # Ensure specific column order if possible, or at least fixed columns first
             cols = list(pivot_df.columns)
             # Remove index cols from list to re-order
             for c in ["Date", "Market", "Block", "Exchange"]:
                 if c in cols: cols.remove(c)
-            
+
             # Sort remaining columns based on user preference if needed, or alpha?
             # User list: Buffer Price, N-1, Ceiling Price, NOC Buy, Forecasted Price, Min Sell Price, NOC Sell
             # Let's try to order them nicely if they exist
-            preferred_order = ["Ceiling Price", "Buffer Price", "N-1", "NOC Buy", "NOC Sell", "Forecasted Price", "Min Sell Price"]
+            preferred_order = ["Ceiling Price", "Buffer Price", "N-1", "NOC Buy", "NOC Sell", "Forecasted Price", "Min Sell Price", "Must Sell Percent (%)"]
             ordered_cols = []
             for p in preferred_order:
                 if p in cols:

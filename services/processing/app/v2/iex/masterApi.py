@@ -6,7 +6,7 @@ Client for external exchange APIs: Asset Details, Delivery Dates, Single Bid sub
 import httpx
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from services.processing.app.v2.repository.integration_api_log_repository import integration_api_log_repository
 
 logger = logging.getLogger(__name__)
@@ -1067,6 +1067,31 @@ class ExchangeAPIClient:
         """Clear cached API responses"""
         self._asset_details_cache = None
         self._delivery_date_cache = None
+
+
+def select_delivery_date_record(
+    delivery_date_list: List[Dict[str, Any]], target_date
+) -> Optional[Dict[str, Any]]:
+    """
+    Pick the exchange delivery date record whose DeliveryDate timestamp
+    (midnight UTC of the delivery day) falls on target_date.
+
+    IEX does not roll its "T"/"T+1" labels at midnight — the RTM list rolls
+    around 00:30 — so selecting by label sends bids placed between 00:00 and
+    00:30 to the previous day's delivery date. Matching on the actual
+    timestamp is correct regardless of when the labels roll.
+    """
+    for record in delivery_date_list:
+        raw_ts = record.get("DeliveryDate")
+        if raw_ts is None:
+            continue
+        try:
+            record_date = datetime.fromtimestamp(int(raw_ts), tz=timezone.utc).date()
+        except (ValueError, TypeError, OSError):
+            continue
+        if record_date == target_date:
+            return record
+    return None
 
 
 def block_to_time_period(block: int) -> tuple:
