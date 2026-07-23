@@ -276,10 +276,10 @@ class ExchangeAPIClient:
         # I'll rely on market_type. If RTM needs different path suffix, we can adjust here.
         # Assuming consistency for now:
         url = f"{self.base_url}/{self.market_type}/api/v2/singlebid/ocf"
-        if self.market_type == 'rtm':
-             # RTM might not have /ocf suffix or might be different
-             # User mentioned "again call post api" for RTM. 
-             # Assuming common V2 structure: /rtm/api/v2/singlebid
+        if self.market_type in ('rtm', 'hpdam'):
+             # RTM and HPDAM use the plain (non-OCF) single-bid endpoint.
+             # HP-DAM API 2.0: OCF & Max OCF quantity are not sent, so the request
+             # goes to /hpdam/api/v2/singlebid (not /singlebid/ocf).
              url = f"{self.base_url}/{self.market_type}/api/v2/singlebid"
 
         headers = self._get_headers()

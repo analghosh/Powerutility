@@ -231,37 +231,29 @@ class HPDAMTransactionService:
                     logger.warning(f"Skipping time slot {time_slot} - no actual volume data")
                     continue
 
-                # Ensure boundary prices (0 and 10000) are always included
-                # For Buy: Price 0 = max qty, Price 10000 = 0
-                # For Sell: Price 0 = 0, Price 10000 = max qty (negative)
+                # Ensure boundary prices (0 and 20000) are always included.
+                # HP-DAM price limit is Rs 20,000/MWh (vs 10,000 for DAM), per IEX HP-DAM API 2.0.
+                # For Buy: Price 0 = max qty, Price 20000 = 0
+                # For Sell: Price 0 = 0, Price 20000 = max qty (negative)
                 existing_prices = {pq["Price"] for pq in pq_array}
-                
+
                 if 0 not in existing_prices:
                     if buy_sell == "B":
                         pq_array.insert(0, {"Price": 0, "Quantity": max_qty})
                     else:  # Sell
                         pq_array.insert(0, {"Price": 0, "Quantity": 0})
-                
-                if 10000 not in existing_prices:
-                    if buy_sell == "B":
-                        pq_array.append({"Price": 10000, "Quantity": 0})
-                    else:  # Sell
-                        pq_array.append({"Price": 10000, "Quantity": -max_qty})
 
-                # Get OCF values for this block
-                ocf = ocf_values_map.get(block, {
-                    "PremiumDiscountPrice": 0,
-                    "MaxOCFQty": 0,
-                    "OCFOpted": "N"
-                })
-                
+                if 20000 not in existing_prices:
+                    if buy_sell == "B":
+                        pq_array.append({"Price": 20000, "Quantity": 0})
+                    else:  # Sell
+                        pq_array.append({"Price": 20000, "Quantity": -max_qty})
+
+                # HP-DAM API 2.0: OCF & Maximum OCF quantity parameters are NOT sent.
                 bid_detail = {
                     "FromPeriodId": from_period,
                     "ToPeriodId": to_period,
                     "BuySell": buy_sell,
-                    "OCFOpted": ocf["OCFOpted"],
-                    "PremiumDiscountPrice": ocf["PremiumDiscountPrice"],
-                    "MaxOCFQty": ocf["MaxOCFQty"],
                     "PQData": pq_array
                 }
                 
