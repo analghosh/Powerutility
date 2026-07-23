@@ -222,6 +222,12 @@ class GDAMTransactionService:
                 if not pq_array:
                     continue
 
+                # GDAM is a renewable purchase (Buy only). If a block resolves to Sell,
+                # skip it entirely — only Buy ("B") blocks are submitted to the exchange.
+                if buy_sell != "B":
+                    logger.info(f"Skipping GDAM time slot {time_slot} - resolved to Sell (buy_sell={buy_sell}), only Buy bids are submitted")
+                    continue
+
                 # Calculate max_qty from actual volume data
                 max_qty = max(abs(pq["Quantity"]) for pq in pq_array) if pq_array else 0
                 
@@ -255,10 +261,12 @@ class GDAMTransactionService:
                     "OCFOpted": "N"
                 })
                 
+                # NOTE: GDAM sends BuySell at the top level of the request body
+                # (Type = "Renewable Purchase", BuySell = "B"), so it is intentionally
+                # omitted from each BidDetails item here.
                 bid_detail = {
                     "FromPeriodId": from_period,
                     "ToPeriodId": to_period,
-                    "BuySell": buy_sell,
                     "OCFOpted": ocf["OCFOpted"],
                     "PremiumDiscountPrice": ocf["PremiumDiscountPrice"],
                     "MaxOCFQty": ocf["MaxOCFQty"],
@@ -436,6 +444,10 @@ class GDAMTransactionService:
             "ParticipantId": config.get("ParticipantId", ""),
             "PortfolioId": config.get("PortfolioId", ""),
             "InitiatedBy": config.get("LoginUserId", ""),
+            # GDAM (Green DAM) is always a renewable purchase, so BuySell is fixed to "B"
+            # and lives at the top level of the request (not per BidDetails item).
+            "Type": "Renewable Purchase",
+            "BuySell": "B",
             "BidDetails": bid_details
         }
         
