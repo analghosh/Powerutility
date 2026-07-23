@@ -278,10 +278,14 @@ class CronManager(BaseCronManager):
             "scrape_raw_data_processor": self._execute_scrape_raw_data_processor_job,
             # Bid Status Sync Jobs
             "dam_bid_status_sync": self.bid_status_sync_processor.execute_dam_sync,
+            "gdam_bid_status_sync": self.bid_status_sync_processor.execute_gdam_sync,
+            "hpdam_bid_status_sync": self.bid_status_sync_processor.execute_hpdam_sync,
             "rtm_bid_status_sync": self.bid_status_sync_processor.execute_rtm_sync,
-            
+
             # Single Bid Book Sync Jobs
             "dam_single_bid_book_sync": self.single_bid_book_processor.execute_dam_cron,
+            "gdam_single_bid_book_sync": self.single_bid_book_processor.execute_gdam_cron,
+            "hpdam_single_bid_book_sync": self.single_bid_book_processor.execute_hpdam_cron,
             "rtm_single_bid_book_sync": self.single_bid_book_processor.execute_rtm_cron,
             # Block Bid Book Sync Jobs
             "rtm_block_bid_book_sync": self.block_bid_book_processor.execute_cron_job,
@@ -482,6 +486,20 @@ class CronManager(BaseCronManager):
                 "enabled": True,
                 "timezone": settings.CRON_TIMEZONE
             },
+            {
+                "job_type": "gdam_single_bid_book_sync",
+                "name": "GDAM Single Bid Book Sync",
+                "schedule": "0,30 14-16 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "hpdam_single_bid_book_sync",
+                "name": "HPDAM Single Bid Book Sync",
+                "schedule": "0,30 14-16 * * *",
+                "enabled": True,
+                "timezone": settings.CRON_TIMEZONE
+            },
             # DSM and RTM Calculation Jobs
             {
                 "job_type": "dsm_rate_calculation",
@@ -618,6 +636,20 @@ class CronManager(BaseCronManager):
             {
                 "job_type": "dam_bid_status_sync",
                 "name": "DAM Bid Status Sync",
+                "schedule": "0,30 14-15 * * *",
+                "enabled": False,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "gdam_bid_status_sync",
+                "name": "GDAM Bid Status Sync",
+                "schedule": "0,30 14-15 * * *",
+                "enabled": False,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                "job_type": "hpdam_bid_status_sync",
+                "name": "HPDAM Bid Status Sync",
                 "schedule": "0,30 14-15 * * *",
                 "enabled": False,
                 "timezone": settings.CRON_TIMEZONE
