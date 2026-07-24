@@ -55,6 +55,8 @@ from services.scheduler.app.processors.demand_serve_pipeline_processor import De
 from services.scheduler.app.processors.exchange_dsm_processor import ExchangeDsmProcessor
 from services.scheduler.app.processors.rtm_bid_lapse_processor import RTMBidLapseProcessor
 from services.scheduler.app.processors.dam_bid_capture_processor import DAMBidCaptureProcessor
+from services.scheduler.app.processors.gdam_bid_capture_processor import GDAMBidCaptureProcessor
+from services.scheduler.app.processors.hpdam_bid_capture_processor import HPDAMBidCaptureProcessor
 from services.scheduler.app.processors.rtm_bid_capture_processor import RTMBidCaptureProcessor
 from services.scheduler.app.services.peak_demand_service import peak_demand_service
 from services.scheduler.app.utils.log_capture import context_aware_handler
@@ -126,6 +128,8 @@ class CronManager(BaseCronManager):
         self.exchange_dsm_processor = ExchangeDsmProcessor() # Add Exchange DSM processor
         self.rtm_bid_lapse_processor = RTMBidLapseProcessor() # Add RTM Bid Lapse processor
         self.dam_bid_capture_processor = DAMBidCaptureProcessor()
+        self.gdam_bid_capture_processor = GDAMBidCaptureProcessor()
+        self.hpdam_bid_capture_processor = HPDAMBidCaptureProcessor()
         self.rtm_bid_capture_processor = RTMBidCaptureProcessor()
         
         # New HPX Exchange Trade Processor
@@ -307,6 +311,8 @@ class CronManager(BaseCronManager):
             "rtm_block_bid_lapse_processing": self.rtm_bid_lapse_processor.execute_block_bid_lapse_job,
             "dam_bid_capture_snapshot": self.dam_bid_capture_processor.execute_cron_job,
             "dam_bid_capture_approval": self.dam_bid_capture_processor.execute_block_capture_job,
+            "gdam_bid_capture_approval": self.gdam_bid_capture_processor.execute_block_capture_job,
+            "hpdam_bid_capture_approval": self.hpdam_bid_capture_processor.execute_block_capture_job,
             "rtm_bid_capture_approval": self.rtm_bid_capture_processor.execute_block_capture_job,
         }
         return job_functions.get(job_type)
