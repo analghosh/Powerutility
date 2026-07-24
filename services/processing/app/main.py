@@ -135,9 +135,11 @@ from .v2.api.router.new_dam_bidding_routes import (
     public_router as new_dam_bidding_public_router,
 )
 from .v2.api.router.new_gdam_bidding_routes import (
+    router as new_gdam_bidding_router,
     public_router as new_gdam_bidding_public_router,
 )
 from .v2.api.router.new_hpdam_bidding_routes import (
+    router as new_hpdam_bidding_router,
     public_router as new_hpdam_bidding_public_router,
 )
 from .v2.api.router.renewable_routes import router as renewable_routes
@@ -164,6 +166,7 @@ from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
 from .v2.api.router.exchange_config_routes import router as exchange_config_router
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
+from .v2.api.router.power_exchange_parameter_routes import router as power_exchange_parameter_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -317,7 +320,9 @@ v2_app.include_router(new_rtm_bidding_router)
 v2_app.include_router(new_rtm_bidding_public_router)
 v2_app.include_router(new_dam_bidding_router)
 v2_app.include_router(new_dam_bidding_public_router)
+v2_app.include_router(new_gdam_bidding_router)
 v2_app.include_router(new_gdam_bidding_public_router)
+v2_app.include_router(new_hpdam_bidding_router)
 v2_app.include_router(new_hpdam_bidding_public_router)
 v2_app.include_router(renewable_routes)
 v2_app.include_router(dam_scheduling_router)
@@ -343,6 +348,7 @@ v2_app.include_router(exchange_dsm_router)
 v2_app.include_router(exchange_config_router)
 v2_app.include_router(realtimemarket_router)
 v2_app.include_router(cron_orchestrator_router)
+v2_app.include_router(power_exchange_parameter_router)
 
 
 

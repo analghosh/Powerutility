@@ -599,7 +599,9 @@ class HPDAMBiddingServices:
         self.time_block_collection = settings.MONGODB_TIME_BLOCK_COLLECTION
         self.supply_repo = SupplyServeRepository()
         self.exchange_config_repo = ExchangeConfigRepository()
-        self.single_bid_data_for_approval_repo = DAMSingleBidDataForApprovalRepository(collection_name="dam_single_bid_data_for_approval")
+        self.single_bid_data_for_approval_repo = DAMSingleBidDataForApprovalRepository(
+            settings.MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION
+        )
         self.dam_product_hardcoded_data_repo = DAMProductHardCodedDataRepository()
         self.plants_list_repo = MasterPlantsRepository()
         self.limit_values_repo = LimitValuesRepository()
@@ -613,7 +615,7 @@ class HPDAMBiddingServices:
         self.damtradebookresponse = DAMTradeBookResponseRepository()
         self.dispatch_schedule_model = DispatchScheduleRepository()
         self.price_quantity_response = PriceQuantityResponseRepository()
-        # Note: Uses same collection as single_bid_data_for_approval_repo (dam_single_bid_data_for_approval)
+        # Note: Uses same collection as single_bid_data_for_approval_repo (hpdam_single_bid_data_for_approval)
         self.plant_data_for_approval_model = self.single_bid_data_for_approval_repo
         self.dam_single_bid_response = DAMSingleBidResponseRepository()
         self.decision_dam_block_bid_iex_response = DecisionDamBlockBidIexResponseRepository()
@@ -633,18 +635,10 @@ class HPDAMBiddingServices:
         # Integration API Log repository
         self.integration_api_log_repo = IntegrationApiLogRepository()
         self.capture_serve_repo = CaptureServeTableDataRepository(
-            collection_name=getattr(
-                settings,
-                "MONGODB_DAM_BID_CAPTURE_COLLECTION",
-                "dam_bid_capture",
-            )
+            settings.MONGODB_HPDAM_BID_CAPTURE_COLLECTION
         )
         self.manual_capture_serve_repo = CaptureServeTableDataRepository(
-            collection_name=getattr(
-                settings,
-                "MONGODB_DAM_BID_CAPTURE_MANUAL_COLLECTION",
-                "dam_bid_capture_manual",
-            )
+            settings.MONGODB_HPDAM_BID_CAPTURE_MANUAL_COLLECTION
         )
 
         # Assume getSessionfrom() returns a list of session time strings like ["00:30", "01:00", ...]
@@ -2174,7 +2168,7 @@ class HPDAMBiddingServices:
                     loop = asyncio.get_running_loop()
                     publish_fn = partial(
                         JobPublisher().publish_job_trigger,
-                        job_type="dam_bid_capture_approval",
+                        job_type="hpdam_bid_capture_approval",
                         source_service="processing",
                         payload={"captures": capture_tasks},
                         correlation_id=getattr(current_user, "correlation_id", None) if current_user else None,
@@ -2182,7 +2176,7 @@ class HPDAMBiddingServices:
                     published = await loop.run_in_executor(None, publish_fn)
                     if not published:
                         logger.warning(
-                            "DAM bid capture job not published (RabbitMQ off or error); running capture inline"
+                            "HPDAM bid capture job not published (RabbitMQ off or error); running capture inline"
                         )
                         for task in capture_tasks:
                             await self.apply_capture_task(task)
@@ -3581,8 +3575,8 @@ class HPDAMBiddingServices:
                 datebid, servere_detail["user_id"]
             )
             
-            # Enhance AllExcSigleBidDatas with data from dam_single_bid_data_for_approval
-            # Get approval data from dam_single_bid_data_for_approval collection
+            # Enhance AllExcSigleBidDatas with data from hpdam_single_bid_data_for_approval
+            # Get approval data from hpdam_single_bid_data_for_approval collection
             approval_data = await self.single_bid_data_for_approval_repo.get_approval_data_by_date(datebid)
             
             # Helper function to convert time_block string to from_period_code
