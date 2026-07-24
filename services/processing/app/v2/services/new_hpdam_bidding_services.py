@@ -46,9 +46,13 @@ from libs.messaging.job_publisher import JobPublisher
 
 logger = logging.getLogger(__name__)
 
-def bidPriceNOC():
-    """Equivalent of PHP's bidPriceNOC() constant."""
-    return 10000
+async def bidPriceNOC():
+    """Fetch hpdam_bid_price from parameters; fallback to 20000."""
+    try:
+        return await parameter_service.get_bid_price("HPDAM")
+    except Exception as e:
+        logger.warning(f"Failed to fetch hpdam_bid_price from parameters: {e}")
+        return 20000
 
 
 def to_float(v):
@@ -2125,7 +2129,7 @@ class HPDAMBiddingServices:
                         plant_key = plvalue
                         if plvalue == "0":
                             plant_key = f"A-{plvalue}"
-                        elif plvalue == bidPriceNOC():  # assuming bidPriceNOC() returns a string
+                        elif plvalue == await bidPriceNOC():  # assuming bidPriceNOC() returns comparable plant/price sentinel
                             plant_key = f"Z-{plvalue}"
 
                         # Initialize dictionary if not exists
@@ -2266,7 +2270,7 @@ class HPDAMBiddingServices:
                 buyary = {}
                 for idx, bid_price in enumerate(request[f"bid_price_{blno_index}", []]):
                     bid_volume = request[f"bid_volume_{blno_index}", []][idx]
-                    if bid_price not in [bidPriceNOC(), "0", ""] and bid_volume != "0":
+                    if bid_price not in [await bidPriceNOC(), "0", ""] and bid_volume != "0":
                         buyary[bid_price] = bid_volume
                         finalbuyarraysorted[bid_price] = bid_volume
                 # sort descending by price
@@ -2279,12 +2283,12 @@ class HPDAMBiddingServices:
         for blkey, blvalue in buybiddataarray.items():
             for price_str, vol in blvalue.items():
                 price = float(price_str)
-                if price_str not in ["0", bidPriceNOC()]:
+                if price_str not in ["0", await bidPriceNOC()]:
                     buypricekeys.append(price)
                     incresingprbuy2.append(price + 1)
 
         finalpricearraybuy = sorted(set(buypricekeys + incresingprbuy2))
-        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [bidPriceNOC()])))
+        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [await bidPriceNOC()])))
 
         # Step 3: Build bidblockarray
         bidblockarray = {}
@@ -2350,7 +2354,7 @@ class HPDAMBiddingServices:
 
                         if not matched:
                             # At the max price point (NOC), fill with the maximum bid volume
-                            fill_vol = max_volume if pricevalue == bidPriceNOC() else ""
+                            fill_vol = max_volume if pricevalue == await bidPriceNOC() else ""
                             pRarrayf = {
                                 "bid_plant_name": f"Buy_{counterkey}",
                                 "bid_price": pricevalue,
@@ -2900,11 +2904,11 @@ class HPDAMBiddingServices:
 
                         # Same logic for plvalue23
                         if int(float(plvalue22)) != 0:
-                            # Prevent exceeding bidPriceNOC() (10000) maximum
+                            # Prevent exceeding bidPriceNOC() maximum
                             price_val = float(plvalue22)
-                            ########################################## commented out to prevent exceeding bidPriceNOC() (10000) maximum ##########################################
-                            if price_val >= bidPriceNOC():
-                                plvalue23 = bidPriceNOC()  # Cap at 10000
+                            ########################################## commented out to prevent exceeding bidPriceNOC() maximum ##########################################
+                            if price_val >= await bidPriceNOC():
+                                plvalue23 = await bidPriceNOC()  # Cap at bidPriceNOC()
                             else:
                                 plvalue23 = price_val + 1
                         else:
@@ -2922,7 +2926,7 @@ class HPDAMBiddingServices:
                     for plkey22, plvalue22 in enumerate(price_list):
 
                         # Skip empty OR bidPriceNOC()
-                        if plvalue22 == "" or plvalue22 == bidPriceNOC():
+                        if plvalue22 == "" or plvalue22 == await bidPriceNOC():
                             continue
 
                         # Validate numeric
@@ -3013,7 +3017,7 @@ class HPDAMBiddingServices:
         # sort($finalpricearray);
         # -----------------------------------------------------------------------
 
-        finalpricearray.append(bidPriceNOC())
+        finalpricearray.append(await bidPriceNOC())
 
         # PHP sort() → numeric ascending sort
         # If mixed types, convert safely
@@ -3095,13 +3099,13 @@ class HPDAMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Find the volume at the max price point, excluding bidPriceNOC (10000).
+                    # Find the volume at the max price point, excluding bidPriceNOC.
                     # "10000" (str) != 10000 (int) in Python, so it is not filtered at
                     # collection time — we explicitly exclude it here.
                     max_price_volume = 0.0
                     max_price_float = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < bidPriceNOC()]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) < await bidPriceNOC()]
                         if valid_keys:
                             max_price_key = max(valid_keys, key=lambda x: float(x))
                             max_price_float = float(max_price_key)
