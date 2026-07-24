@@ -48,6 +48,13 @@ DEFAULT_BID_CONFIGURATION = {
 
 BID_CONFIGURATION_KEY = "bid_configuration"
 
+# Default NOC / ceiling bid prices per market (auto-created if missing).
+DEFAULT_BID_PRICES = {
+    "dam_bid_price": 10000,
+    "gdam_bid_price": 10000,
+    "hpdam_bid_price": 20000,
+}
+
 
 class ParameterService:
     """Service for parameter operations"""
@@ -176,6 +183,7 @@ class ParameterService:
             Dictionary with parameters and metadata
         """
         try:
+            await self.ensure_bid_price_defaults()
             return await parameter_repository.get_all_parameters(
                 skip=skip,
                 limit=limit,
@@ -262,6 +270,71 @@ class ParameterService:
         except Exception as e:
             logger.error(f"Error in parameter service delete: {e}")
             raise
+
+    # ------------------------------------------------------------------
+    # Bid price defaults (parameter master)
+    # ------------------------------------------------------------------
+
+    async def ensure_bid_price_defaults(self) -> Dict[str, Any]:
+        """
+        Ensure dam_bid_price / gdam_bid_price / hpdam_bid_price exist in
+        the parameters collection. Creates missing keys with defaults only;
+        does not overwrite existing values.
+        """
+        created: Dict[str, Any] = {}
+        for para_key, para_value in DEFAULT_BID_PRICES.items():
+            existing = await parameter_repository.get_parameter_by_key(para_key)
+            if existing:
+                continue
+            await parameter_repository.create_parameter(
+                {
+                    "para_key": para_key,
+                    "para_value": para_value,
+                    "description": (
+                        f"Default NOC/ceiling bid price for "
+                        f"{para_key.replace('_bid_price', '').upper()}"
+                    ),
+                }
+            )
+            created[para_key] = para_value
+            logger.info(
+                "Auto-created parameter '%s' with default value %s",
+                para_key,
+                para_value,
+            )
+        return created
+
+    async def get_bid_price(self, market: str) -> int:
+        """
+        Return the configured bid price for a market (DAM / GDAM / HPDAM).
+        Ensures defaults exist, then reads from parameters.
+        """
+        await self.ensure_bid_price_defaults()
+        key_map = {
+            "DAM": "dam_bid_price",
+            "GDAM": "gdam_bid_price",
+            "HPDAM": "hpdam_bid_price",
+        }
+        market_key = str(market).strip().upper()
+        para_key = key_map.get(market_key)
+        if not para_key:
+            raise ValueError(
+                f"Invalid market '{market}'. Allowed: {sorted(key_map)}"
+            )
+        record = await parameter_repository.get_parameter_by_key(para_key)
+        default = DEFAULT_BID_PRICES[para_key]
+        if not record or record.get("para_value") is None:
+            return int(default)
+        try:
+            return int(record["para_value"])
+        except (TypeError, ValueError):
+            logger.warning(
+                "Invalid para_value for %s: %r; falling back to %s",
+                para_key,
+                record.get("para_value"),
+                default,
+            )
+            return int(default)
 
     # ------------------------------------------------------------------
     # Bid configuration (parameter master)
