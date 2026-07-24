@@ -106,6 +106,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"BearerToken encryption migration failed: {e}")
 
+    # Ensure default bid-price parameters exist (dam/gdam/hpdam)
+    try:
+        from .v2.services.parameter_service import parameter_service
+        created = await parameter_service.ensure_bid_price_defaults()
+        if created:
+            logger.info(f"Auto-created bid price parameters: {created}")
+    except Exception as e:
+        logger.error(f"Failed to ensure bid price parameter defaults: {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down EPMS Processing Service...")

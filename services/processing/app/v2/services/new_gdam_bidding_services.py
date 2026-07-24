@@ -46,9 +46,13 @@ from libs.messaging.job_publisher import JobPublisher
 
 logger = logging.getLogger(__name__)
 
-def bidPriceNOC():
-    """Equivalent of PHP's bidPriceNOC() constant."""
-    return 10000
+async def bidPriceNOC():
+    """Fetch gdam_bid_price from parameters; fallback to 10000."""
+    try:
+        return await parameter_service.get_bid_price("GDAM")
+    except Exception as e:
+        logger.warning(f"Failed to fetch gdam_bid_price from parameters: {e}")
+        return 10000
 
 
 def to_float(v):
@@ -56,6 +60,52 @@ def to_float(v):
         return float(v)
     except (ValueError, TypeError):
         return 0.0
+
+
+def extract_ocf_config(request_data: dict, block_no: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Read ocf-config from request. Pattern: {allocation%}_{O|S}_{premium_or_discount}.
+    O = OCF (third part is premium/discount), S = Standalone.
+    Accepts per-block keys or a shared ocf-config value.
+    Returns (normalized_value_or_empty, error_message_or_None).
+    """
+    raw = (
+        request_data.get(f"ocf-config_blk_{block_no}")
+        or request_data.get(f"ocf_config_blk_{block_no}")
+        or request_data.get(f"ocf_config_{block_no}")
+        or request_data.get("ocf-config")
+        or request_data.get("ocf_config")
+        or request_data.get("ocf")
+    )
+    if raw is None or str(raw).strip() == "":
+        return "", None
+
+    value = str(raw).strip()
+    parts = value.split("_")
+    if len(parts) != 3:
+        return None, (
+            f"Invalid ocf-config '{value}' for block {block_no}. "
+            "Expected format: {{allocation%}}_{{O|S}}_{{premium_or_discount}} "
+            "e.g. 60_O_14 or 20_S_0"
+        )
+
+    alloc, mode, prem = parts
+    mode_u = mode.upper()
+    if mode_u not in ("O", "S"):
+        return None, (
+            f"Invalid ocf-config mode '{mode}' for block {block_no}. "
+            "Second part must be O (OCF) or S (Standalone)"
+        )
+    try:
+        float(alloc)
+        float(prem)
+    except ValueError:
+        return None, (
+            f"Invalid ocf-config '{value}' for block {block_no}. "
+            "Allocation percent and premium/discount must be numeric"
+        )
+    return f"{alloc}_{mode_u}_{prem}", None
+
 
 class GDAMBiddingServices:
     def __init__(self):
@@ -2020,6 +2070,10 @@ class GDAMBiddingServices:
 
 
                 # Build dbarray for this block
+                ocf_config, ocf_error = extract_ocf_config(request_data, blno[1])
+                if ocf_error:
+                    return {"status": "error", "code": 400, "message": ocf_error}
+
                 current_time = datetime.now().strftime("%H:%M")
                 timestamp = int(time.time())
                 dbarray[keys] = {
@@ -2046,6 +2100,8 @@ class GDAMBiddingServices:
                     "created_by": "",
                     "created_time": "",
                     "Ex_split_string": request_data[f"Exsplitstringblk_{blno[1]}"],
+                    "ocf": ocf_config,
+                    "ocf_config": ocf_config,
                     "remark": "",
                     "buy_sell_bid": request_data[f"buy_sell_bid_type_{blno[1]}"]
                 }
@@ -2125,7 +2181,7 @@ class GDAMBiddingServices:
                         plant_key = plvalue
                         if plvalue == "0":
                             plant_key = f"A-{plvalue}"
-                        elif plvalue == bidPriceNOC():  # assuming bidPriceNOC() returns a string
+                        elif plvalue == await bidPriceNOC():  # assuming bidPriceNOC() returns comparable plant/price sentinel
                             plant_key = f"Z-{plvalue}"
 
                         # Initialize dictionary if not exists
@@ -2266,7 +2322,7 @@ class GDAMBiddingServices:
                 buyary = {}
                 for idx, bid_price in enumerate(request[f"bid_price_{blno_index}", []]):
                     bid_volume = request[f"bid_volume_{blno_index}", []][idx]
-                    if bid_price not in [bidPriceNOC(), "0", ""] and bid_volume != "0":
+                    if bid_price not in [await bidPriceNOC(), "0", ""] and bid_volume != "0":
                         buyary[bid_price] = bid_volume
                         finalbuyarraysorted[bid_price] = bid_volume
                 # sort descending by price
@@ -2279,12 +2335,12 @@ class GDAMBiddingServices:
         for blkey, blvalue in buybiddataarray.items():
             for price_str, vol in blvalue.items():
                 price = float(price_str)
-                if price_str not in ["0", bidPriceNOC()]:
+                if price_str not in ["0", await bidPriceNOC()]:
                     buypricekeys.append(price)
                     incresingprbuy2.append(price + 1)
 
         finalpricearraybuy = sorted(set(buypricekeys + incresingprbuy2))
-        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [bidPriceNOC()])))
+        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [await bidPriceNOC()])))
 
         # Step 3: Build bidblockarray
         bidblockarray = {}
@@ -2350,7 +2406,7 @@ class GDAMBiddingServices:
 
                         if not matched:
                             # At the max price point (NOC), fill with the maximum bid volume
-                            fill_vol = max_volume if pricevalue == bidPriceNOC() else ""
+                            fill_vol = max_volume if pricevalue == await bidPriceNOC() else ""
                             pRarrayf = {
                                 "bid_plant_name": f"Buy_{counterkey}",
                                 "bid_price": pricevalue,
@@ -2737,6 +2793,9 @@ class GDAMBiddingServices:
                             block['approved_time'] = data[j]['approved_time']
                             block['buy_sell_bid'] = data[j]['buy_sell_bid']
                             block['_id'] = data[j].get('_id')
+                            block['Ex_split_string'] = data[j].get('Ex_split_string', '')
+                            block['ocf'] = data[j].get('ocf_config') or data[j].get('ocf', '')
+                            block['ocf_config'] = block['ocf']
                             # Increment block index
                             bl += 1
                         else :
@@ -2819,6 +2878,8 @@ class GDAMBiddingServices:
                             block['_id'] = data[j].get('_id')  # safe get
                             block['Remarks'] = data[j].get('remark', '')
                             block['Ex_split_string'] = data[j].get('Ex_split_string', '')
+                            block['ocf'] = data[j].get('ocf_config') or data[j].get('ocf', '')
+                            block['ocf_config'] = block['ocf']
 
                             # Selected demand type (from external dict)
                             block['selected_demand_type'] = ""
@@ -2900,11 +2961,11 @@ class GDAMBiddingServices:
 
                         # Same logic for plvalue23
                         if int(float(plvalue22)) != 0:
-                            # Prevent exceeding bidPriceNOC() (10000) maximum
+                            # Prevent exceeding bidPriceNOC() maximum
                             price_val = float(plvalue22)
-                            ########################################## commented out to prevent exceeding bidPriceNOC() (10000) maximum ##########################################
-                            if price_val >= bidPriceNOC():
-                                plvalue23 = bidPriceNOC()  # Cap at 10000
+                            ########################################## commented out to prevent exceeding bidPriceNOC() maximum ##########################################
+                            if price_val >= await bidPriceNOC():
+                                plvalue23 = await bidPriceNOC()  # Cap at bidPriceNOC()
                             else:
                                 plvalue23 = price_val + 1
                         else:
@@ -2922,7 +2983,7 @@ class GDAMBiddingServices:
                     for plkey22, plvalue22 in enumerate(price_list):
 
                         # Skip empty OR bidPriceNOC()
-                        if plvalue22 == "" or plvalue22 == bidPriceNOC():
+                        if plvalue22 == "" or plvalue22 == await bidPriceNOC():
                             continue
 
                         # Validate numeric
@@ -3013,7 +3074,7 @@ class GDAMBiddingServices:
         # sort($finalpricearray);
         # -----------------------------------------------------------------------
 
-        finalpricearray.append(bidPriceNOC())
+        finalpricearray.append(await bidPriceNOC())
 
         # PHP sort() → numeric ascending sort
         # If mixed types, convert safely
@@ -3101,7 +3162,7 @@ class GDAMBiddingServices:
                     max_price_volume = 0.0
                     max_price_float = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < bidPriceNOC()]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) < await bidPriceNOC()]
                         if valid_keys:
                             max_price_key = max(valid_keys, key=lambda x: float(x))
                             max_price_float = float(max_price_key)
@@ -3126,6 +3187,11 @@ class GDAMBiddingServices:
                 pDetailarray.setdefault("reference_number", {})[timeblock_key] = request_dict["reference_number"][timeblock_key]
                 pDetailarray.setdefault("bid_status", {})[timeblock_key] = request_dict["bid_status"][timeblock_key]
                 pDetailarray.setdefault("approve_by", {})[timeblock_key] = request_dict["approve_by"][timeblock_key]
+                ocf_config_val, _ = extract_ocf_config(request_dict, blno[1])
+                pDetailarray.setdefault("ocf_config", {})[timeblock_key] = ocf_config_val or ""
+                pDetailarray.setdefault("Ex_split_string", {})[timeblock_key] = request_dict.get(
+                    f"Ex_split_string_{blno[1]}", ""
+                )
 
         bidblockarrayExWise = {}
 
@@ -3717,6 +3783,14 @@ class GDAMBiddingServices:
                 
                 if "Ex_split_string" not in all_exc_single_bid_datas[period_key] and approval_record.get("Ex_split_string"):
                     all_exc_single_bid_datas[period_key]["Ex_split_string"] = approval_record["Ex_split_string"]
+
+                if "ocf" not in all_exc_single_bid_datas[period_key] and approval_record.get("ocf"):
+                    all_exc_single_bid_datas[period_key]["ocf"] = approval_record["ocf"]
+
+                if "ocf_config" not in all_exc_single_bid_datas[period_key]:
+                    ocf_cfg = approval_record.get("ocf_config") or approval_record.get("ocf")
+                    if ocf_cfg:
+                        all_exc_single_bid_datas[period_key]["ocf_config"] = ocf_cfg
                 
                 if "remark" not in all_exc_single_bid_datas[period_key] and approval_record.get("remark"):
                     all_exc_single_bid_datas[period_key]["remark"] = approval_record["remark"]
