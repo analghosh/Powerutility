@@ -6,7 +6,7 @@ Client for external exchange APIs: Asset Details, Delivery Dates, Single Bid sub
 import httpx
 import logging
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timezone
 from services.processing.app.v2.repository.integration_api_log_repository import integration_api_log_repository
 
 logger = logging.getLogger(__name__)
@@ -37,8 +37,9 @@ class ExchangeAPIClient:
         self.bid_type = bid_type
         # Standard timeout for read-only calls (asset details, delivery dates, etc.)
         self.timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
-        # Longer read timeout for bid submission — IEX exchange API can take >30s to process
-        self.submit_timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)
+        # Longer read timeout for bid submission — IEX exchange API (esp. GDAM)
+        # can take minutes to process; wait up to 5 minutes before timing out
+        self.submit_timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
         self.bearer_token = bearer_token
         
         # Cache for API responses
@@ -275,10 +276,10 @@ class ExchangeAPIClient:
         # I'll rely on market_type. If RTM needs different path suffix, we can adjust here.
         # Assuming consistency for now:
         url = f"{self.base_url}/{self.market_type}/api/v2/singlebid/ocf"
-        if self.market_type == 'rtm':
-             # RTM might not have /ocf suffix or might be different
-             # User mentioned "again call post api" for RTM. 
-             # Assuming common V2 structure: /rtm/api/v2/singlebid
+        if self.market_type in ('rtm', 'hpdam'):
+             # RTM and HPDAM use the plain (non-OCF) single-bid endpoint.
+             # HP-DAM API 2.0: OCF & Max OCF quantity are not sent, so the request
+             # goes to /hpdam/api/v2/singlebid (not /singlebid/ocf).
              url = f"{self.base_url}/{self.market_type}/api/v2/singlebid"
 
         headers = self._get_headers()
@@ -1066,6 +1067,31 @@ class ExchangeAPIClient:
         """Clear cached API responses"""
         self._asset_details_cache = None
         self._delivery_date_cache = None
+
+
+def select_delivery_date_record(
+    delivery_date_list: List[Dict[str, Any]], target_date
+) -> Optional[Dict[str, Any]]:
+    """
+    Pick the exchange delivery date record whose DeliveryDate timestamp
+    (midnight UTC of the delivery day) falls on target_date.
+
+    IEX does not roll its "T"/"T+1" labels at midnight — the RTM list rolls
+    around 00:30 — so selecting by label sends bids placed between 00:00 and
+    00:30 to the previous day's delivery date. Matching on the actual
+    timestamp is correct regardless of when the labels roll.
+    """
+    for record in delivery_date_list:
+        raw_ts = record.get("DeliveryDate")
+        if raw_ts is None:
+            continue
+        try:
+            record_date = datetime.fromtimestamp(int(raw_ts), tz=timezone.utc).date()
+        except (ValueError, TypeError, OSError):
+            continue
+        if record_date == target_date:
+            return record
+    return None
 
 
 def block_to_time_period(block: int) -> tuple:

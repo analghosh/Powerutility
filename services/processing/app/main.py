@@ -90,6 +90,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure dc_sg TTL index: {e}")
 
+    # Ensure unique + query indexes on limit_values (previously created lazily, only on approve())
+    try:
+        from .v2.repository.limit_values_repository import limit_values_repository
+        await limit_values_repository.ensure_collection_exists(
+            limit_values_repository.collection_name
+        )
+    except Exception as e:
+        logger.error(f"Failed to ensure limit_values indexes: {e}")
+
     # One-time migration: encrypt plaintext BearerTokens in exchange_config
     try:
         from .v2.migrations.encrypt_bearer_tokens import run_encrypt_bearer_tokens_migration
@@ -149,6 +158,7 @@ from .v2.api.router.job_execution_routes import router as job_execution_router
 from .v2.api.router.supply_manual_routes import router as supply_manual_router
 from .v2.api.router.demand_manual_routes import router as demand_manual_router
 from .v2.api.router.power_optimization_routes import router as power_optimization_router
+from .v2.api.router.power_exchange_routes import router as power_exchange_router
 from .v2.api.router.iex_api_detail_routes import router as iex_api_detail_router
 from .v2.api.router.api_key_management_routes import router as api_key_management_router 
 from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
@@ -156,6 +166,7 @@ from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
 from .v2.api.router.exchange_config_routes import router as exchange_config_router
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
+from .v2.api.router.power_exchange_parameter_routes import router as power_exchange_parameter_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -329,6 +340,7 @@ v2_app.include_router(job_execution_router)
 v2_app.include_router(supply_manual_router)
 v2_app.include_router(demand_manual_router)
 v2_app.include_router(power_optimization_router)
+v2_app.include_router(power_exchange_router)
 v2_app.include_router(iex_api_detail_router)
 v2_app.include_router(api_key_management_router)
 v2_app.include_router(exchange_trade_router)
@@ -336,6 +348,7 @@ v2_app.include_router(exchange_dsm_router)
 v2_app.include_router(exchange_config_router)
 v2_app.include_router(realtimemarket_router)
 v2_app.include_router(cron_orchestrator_router)
+v2_app.include_router(power_exchange_parameter_router)
 
 
 
@@ -376,32 +389,28 @@ async def auth_middleware(request: Request, call_next):
         v2_paths.append(f"{base_path}/api/v2/")
     
     # Define paths to exclude from authentication (swagger docs, health, etc.)
+    # NOTE: gdam/hpdam public paths intentionally NOT excluded here — like
+    # dam-bidding/public, they must be validated by this middleware so
+    # request.state.current_user is set for the routes' get_current_user
+    # dependency (local JWT fallback fails due to cross-service secrets).
     exclude_paths = [
         "/api/v2/health",
         "/api/v2/docs",
         "/api/v2/redoc",
         "/api/v2/openapi.json",
-        "/api/v2/gdam-bidding/public",
-        "/gdam-bidding/public",
-        "/api/v2/hpdam-bidding/public",
-        "/hpdam-bidding/public",
         # Exclude power optimization - it uses HMAC authentication instead of JWT
         "/api/v2/power-optimization",  # Matches /api/v2/power-optimization/*
         "/api/v2/power-optimization/",  # Also match with trailing slash
         "/api/v2/power-optimization/power-optimization-input",  # Explicit match
     ]
-    
+
     # Add base path prefixed versions for server environments
     if base_path:
         exclude_paths.extend([
             f"{base_path}/api/v2/health",
             f"{base_path}/api/v2/docs",
-            f"{base_path}/api/v2/redoc", 
+            f"{base_path}/api/v2/redoc",
             f"{base_path}/api/v2/openapi.json",
-            f"{base_path}/api/v2/gdam-bidding/public",
-            f"{base_path}/gdam-bidding/public",
-            f"{base_path}/api/v2/hpdam-bidding/public",
-            f"{base_path}/hpdam-bidding/public",
             # CRITICAL: Add BASE_PATH-prefixed power-optimization paths for server
             f"{base_path}/api/v2/power-optimization",  # Matches /processing/api/v2/power-optimization/*
             f"{base_path}/api/v2/power-optimization/",  # With trailing slash

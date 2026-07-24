@@ -42,6 +42,7 @@ from services.processing.app.v2.repository.base_repository import GenericReposit
 
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
+from ..repository.power_exchange_repository import power_exchange_repository
 from libs.messaging.job_publisher import JobPublisher
 
 logger = logging.getLogger(__name__)
@@ -90,8 +91,40 @@ class DAMBiddingServices:
             logger.warning(f"Failed to get active exchange for {market}: {e}")
         return "IEX"
 
+    async def _get_power_exchange_active_market(self) -> Optional[str]:
+        """
+        Read the active day-ahead market from the power_exchange config record
+        (key "active_exchange", value DAM/GDAM/HPDAM). Returns None when the
+        record is absent or holds an unknown value.
+        """
+        try:
+            record = await power_exchange_repository.find_one_async(
+                power_exchange_repository.collection_name,
+                {"key": "active_exchange"},
+            )
+            if record:
+                value = str(record.get("value") or record.get("market") or "").upper()
+                if value in ("DAM", "GDAM", "HPDAM"):
+                    return value
+                logger.warning(
+                    f"power_exchange active_exchange has unknown value '{value}'; ignoring"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to read active market from power_exchange: {e}")
+        return None
+
     async def _get_active_markets(self) -> List[str]:
-        """Get list of active markets for single-bid-table from parameter."""
+        """
+        Get list of active markets for single-bid-table.
+        Priority:
+        1. power_exchange config record (key "active_exchange")
+        2. active markets parameter (legacy fallback)
+        3. Default DAM
+        """
+        power_exchange_market = await self._get_power_exchange_active_market()
+        if power_exchange_market:
+            return [power_exchange_market]
+
         try:
             markets = await parameter_service.get_active_markets()
             if markets:
@@ -138,19 +171,20 @@ class DAMBiddingServices:
     ) -> Dict[str, Any]:
         """
         Rename limit-values fields in single-bid-table rows so response keys
-        follow the pattern {activeExchange}_{activeMarket}_{fieldname}.
+        carry the exchange they were sourced from, following the pattern
+        {exchange_lowercase}_{original_fieldname} (e.g. iex_dam_nminusone_quantum).
         """
         if not data or not isinstance(data, dict):
             return data
 
-        prefix = f"{active_exchange}_{active_market}_"
+        prefix = f"{active_exchange.lower()}_"
         limit_field_map = {
-            "dam_forecasted_price": f"{prefix}forecasted_price",
+            "dam_forecasted_price": f"{prefix}dam_forecasted_price",
             "ceiling_price": f"{prefix}ceiling_price",
-            "dam_buffer_value": f"{prefix}buffer_value",
-            "dam_nminusone_quantum": f"{prefix}nminusone_quantum",
-            "dam_noc_buy_value": f"{prefix}noc_buy_value",
-            "dam_noc_sell_value": f"{prefix}noc_sell_value",
+            "dam_buffer_value": f"{prefix}dam_buffer_value",
+            "dam_nminusone_quantum": f"{prefix}dam_nminusone_quantum",
+            "dam_noc_buy_value": f"{prefix}dam_noc_buy_value",
+            "dam_noc_sell_value": f"{prefix}dam_noc_sell_value",
         }
 
         table_data = data.get("table_data")
@@ -208,7 +242,8 @@ class DAMBiddingServices:
 
         pipelines = {
             "forecasted_price": make_base_pipeline(f"{active_market}_forecasted_price"),
-            "buffer_value": make_base_pipeline("Buffer"),
+            # Buffer is stored under two id conventions across flows
+            "buffer_value": make_base_pipeline({"$in": ["Buffer", "Buffer_Price"]}),
             "ceiling_price": make_base_pipeline("Ceiling_Price", {"category": "Limits"}),
             "nminusone_quantum": make_base_pipeline("n_1", {"category": "Limits"}),
             "noc_buy_value": make_base_pipeline("noc_buy", {"category": "Limits"}),
@@ -252,7 +287,7 @@ class DAMBiddingServices:
                 from_block,
                 to_block,
             )
-            prefix = f"{active_exchange}_{additional_market}_"
+            prefix = f"{active_exchange.lower()}_{additional_market.lower()}_"
             for plkey, block_rows in table_data.items():
                 if not isinstance(block_rows, dict):
                     continue
@@ -1041,7 +1076,8 @@ class DAMBiddingServices:
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
-                                "id": "Buffer",
+                                # Buffer is stored under two id conventions across flows
+                                "id": {"$in": ["Buffer", "Buffer_Price"]},
                                 "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -1577,6 +1613,7 @@ class DAMBiddingServices:
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
 
+            self._apply_active_limit_prefix(data, active_exchange, active_market)
             await self._add_additional_market_limit_values(
                 data,
                 active_markets,

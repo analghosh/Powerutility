@@ -16,7 +16,7 @@ from ..repository.decision_dam_block_bid_iex_response_repository import Decision
 from ..repository.exchange_config_repository import ExchangeConfigRepository
 from ..repository.integration_api_log_repository import IntegrationApiLogRepository
 from ..repository.limit_values_repository import LimitValuesRepository
-from ..iex.masterApi import ExchangeAPIClient
+from ..iex.masterApi import ExchangeAPIClient, select_delivery_date_record
 
 logger = logging.getLogger(__name__)
 
@@ -287,20 +287,18 @@ class BlockBidServices:
         biddedQtyDecimal = asset_details_list[0].get("OrderQtyDecimal", 10) if asset_details_list else 10
         delivery_date_list = delivery_dates_resp.get("DeliveryDates", [])
 
-        today    = datetime.now().date()
-        tomorrow = today + timedelta(days=1)
+        today = datetime.now().date()
         try:
             biding_date_obj = datetime.strptime(biding_date, "%Y-%m-%d").date()
         except ValueError:
             biding_date_obj = today
 
-        delivery_date_id = "T+1" if biding_date_obj == tomorrow else "T"
-        selected_date = next((d for d in delivery_date_list if d.get("DeliveryDateId") == delivery_date_id), None)
+        selected_date = select_delivery_date_record(delivery_date_list, biding_date_obj)
         if not selected_date:
-            raise HTTPException(status_code=404, detail=f"Delivery date '{delivery_date_id}' not found from exchange")
+            raise HTTPException(status_code=404, detail=f"No exchange delivery date matches bid date {biding_date_obj}")
 
         delivery_date_ts = selected_date.get("DeliveryDate")
-        logger.info(f"DeliveryDate fetched from exchange: {delivery_date_id} → {delivery_date_ts}")
+        logger.info(f"DeliveryDate fetched from exchange: {selected_date.get('DeliveryDateId')} → {delivery_date_ts}")
 
         # 4. Approved bids
         bids = await self.block_bid_repo.get_approved_bids(biding_date, market_type="RTM")

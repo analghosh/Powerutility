@@ -1046,6 +1046,48 @@ class SupplyProcessor(BaseProcessor):
             logger.error(f"Error creating DCSgEntity for {raw_item.get('plant_id')} / {raw_item.get('approval_no')}: {str(e)}", exc_info=True)
             return None
 
+    async def _get_active_plant_ids(self) -> Optional[set]:
+        """
+        Distinct plant_ids that currently exist in plant_master (as strings).
+
+        A plant deleted from plant_master still leaves behind historical dc_sg
+        rows, which must not be rolled forward into supply_serve. Returns None
+        if the lookup fails so callers can fall back to the previous behaviour
+        instead of dropping every plant.
+        """
+        try:
+            plants = await self.plant_repository.collection.find(
+                {}, {"plant_id": 1}
+            ).to_list(length=10000)
+            return {str(p.get("plant_id")) for p in plants if p.get("plant_id")}
+        except Exception as e:
+            logger.error(f"Error fetching active plant_ids from plant_master: {e}")
+            return None
+
+    async def _purge_deleted_plants_from_supply(self, plant_ids: set, allowed_dates: set) -> None:
+        """
+        Remove supply_serve rows for plants that no longer exist in plant_master,
+        limited to the sync window (allowed_dates). This clears stale rows that a
+        deleted plant left behind on earlier runs so it disappears from the list.
+        """
+        if not plant_ids or not allowed_dates:
+            return
+        try:
+            # Normalise to date objects (allowed_dates may hold date or datetime).
+            norm_dates = {d.date() if isinstance(d, datetime) else d for d in allowed_dates}
+            start = datetime.combine(min(norm_dates), datetime.min.time())
+            end = datetime.combine(max(norm_dates), datetime.max.time())
+            result = await self.supply_repository.serve_collection.delete_many({
+                "plant_id": {"$in": list(plant_ids)},
+                "scheduled_at": {"$gte": start, "$lte": end},
+            })
+            logger.info(
+                f"Purged {result.deleted_count} supply_serve row(s) for deleted "
+                f"plant(s) {plant_ids} in window {min(allowed_dates)}..{max(allowed_dates)}"
+            )
+        except Exception as e:
+            logger.error(f"Error purging supply_serve rows for deleted plants: {e}")
+
     async def _process_dc_sg_to_supply_serve(
         self,
         metadata: Dict[str, Any],
@@ -1087,14 +1129,29 @@ class SupplyProcessor(BaseProcessor):
             # Use target_dates if provided, otherwise default to window
             allowed_dates = set(target_dates) if target_dates else set(supply_window_dates)
             logger.info(f"DEBUG: Allowed dates for sync: {allowed_dates}")
-            
+
+            # Plants still present in plant_master. A plant deleted from the master
+            # keeps stale dc_sg rows; those must not be rolled forward into
+            # supply_serve, otherwise a deleted plant keeps showing in the list.
+            active_plants = await self._get_active_plant_ids()
+            if active_plants is not None:
+                logger.info(f"Active plants in plant_master: {len(active_plants)}")
+            deleted_plant_ids = set()
+
             rejected_count = 0
             for rec in staged_records:
                 scheduled_at = rec.get("scheduled_at")
-                if not scheduled_at: 
+                if not scheduled_at:
                     continue
                 record_date = scheduled_at.date()
-                
+
+                # Skip records for plants deleted from plant_master.
+                if active_plants is not None:
+                    pid = str(rec.get("plant_id"))
+                    if pid not in active_plants:
+                        deleted_plant_ids.add(pid)
+                        continue
+
                 # If target_dates is specifically passed (like [today, tomorrow]), strict filter
                 if target_dates:
                      if record_date not in allowed_dates:
@@ -1261,6 +1318,12 @@ class SupplyProcessor(BaseProcessor):
                  if res_hist.get("error_count", 0) > 0 and res_hist.get("inserted_count", 0) == 0:
                      hist_success = False
                      logger.error(f"Stage 2 Historical Insert Errors: {res_hist.get('errors')}")
+
+            # Clear out any supply_serve rows a now-deleted plant left behind on
+            # earlier runs so it no longer appears in the supply list.
+            if active_plants is not None and deleted_plant_ids:
+                logger.info(f"Deleted plant(s) skipped during sync: {deleted_plant_ids}")
+                await self._purge_deleted_plants_from_supply(deleted_plant_ids, allowed_dates)
 
             return serve_success and hist_success
 

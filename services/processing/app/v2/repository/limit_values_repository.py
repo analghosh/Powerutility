@@ -19,42 +19,76 @@ class LimitValuesRepository:
         self.repository = GenericRepository()
         self.collection_name = getattr(settings, 'MONGODB_LIMIT_VALUES_COLLECTION', 'limit_values')
 
+    # All indexes this collection must have. Changing a spec here is enough:
+    # ensure_collection_exists drops and rebuilds any index whose definition
+    # in the database no longer matches.
+    INDEXES = [
+        # Compound unique index for the business key
+        {
+            "name": "limit_values_unique_idx",
+            "keys": [
+                ("scheduled_at", 1),
+                ("block", 1),
+                ("id", 1),
+                ("market", 1),
+                ("category", 1),
+                ("area", 1),
+                ("exchange", 1),
+            ],
+            "unique": True,
+        },
+        # Index for efficient querying by date
+        {
+            "name": "scheduled_at_desc_idx",
+            "keys": [("scheduled_at", -1)],
+            "unique": False,
+        },
+        # Index for querying by id/block
+        {
+            "name": "id_block_idx",
+            "keys": [("id", 1), ("block", 1)],
+            "unique": False,
+        },
+    ]
+
     async def ensure_collection_exists(self, collection_name: str):
         """
-        Ensures the collection exists and has the required indexes.
+        Ensures the collection has every index defined in INDEXES.
+        If an index exists under the same name but with a stale definition,
+        it is dropped and rebuilt (createIndex cannot modify an existing
+        index — it fails with IndexKeySpecsConflict).
         """
         try:
-            # Check if collection exists (optional, could just ensure indexes)
-            # Create indexes
-            # Compound unique index for the business key
-            await self.repository.create_index(
-                collection_name,
-                [
-                    ("scheduled_at", 1),
-                    ("block", 1),
-                    ("id", 1),
-                    ("market", 1),
-                    ("category", 1),
-                    ("area", 1),
-                    ("exchange", 1)
-                ],
-                unique=True,
-                name="limit_values_unique_idx"
-            )
-            
-            # Index for efficient querying by date
-            await self.repository.create_index(
-                collection_name,
-                [("scheduled_at", -1)],
-                name="scheduled_at_desc_idx"
-            )
-            
-            # Index for querying by id/block
-            await self.repository.create_index(
-                collection_name,
-                [("id", 1), ("block", 1)],
-                name="id_block_idx"
-            )
+            collection = self.repository.db[collection_name]
+
+            existing = {}
+            try:
+                existing = await collection.index_information()
+            except Exception as e:
+                logger.error(f"Failed to inspect indexes on {collection_name}: {e}")
+
+            for spec in self.INDEXES:
+                name, keys, unique = spec["name"], spec["keys"], spec["unique"]
+
+                current = existing.get(name)
+                if current is not None:
+                    current_keys = [(k, int(v)) for k, v in current.get("key", [])]
+                    current_unique = bool(current.get("unique", False))
+                    if current_keys == keys and current_unique == unique:
+                        continue  # up to date
+                    logger.warning(
+                        f"Dropping stale index {name} on {collection_name}: "
+                        f"existing spec {current_keys} (unique={current_unique}) "
+                        f"!= expected {keys} (unique={unique})"
+                    )
+                    await collection.drop_index(name)
+
+                await self.repository.create_index(
+                    collection_name,
+                    keys,
+                    unique=unique,
+                    name=name
+                )
 
         except Exception as e:
             logger.error(f"Failed to ensure collection {collection_name}: {e}")
