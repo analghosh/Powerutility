@@ -339,7 +339,9 @@ class HPDAMTransactionService:
         asset_details = asset_details_list[0] if asset_details_list else {}
         asset_id = asset_details.get("AssetId", "INDIA")
         lowerDPR = asset_details.get("LowerDPR", 0)
-        upperDPR = asset_details.get("UpperDPR", 10000)
+        # HP-DAM price limit is Rs 20,000/MWh; exchange Asset Master supplies the
+        # authoritative UpperDPR, this is only the fallback when it is absent.
+        upperDPR = asset_details.get("UpperDPR", 20000)
         biddedQtyDecimal = asset_details.get("OrderQtyDecimal", 10)
         delivery_date = delivery_response.get("DeliveryDate", 0)
         if not delivery_date:
