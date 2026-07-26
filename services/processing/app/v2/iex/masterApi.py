@@ -382,25 +382,26 @@ class ExchangeAPIClient:
         page_number = 0
         page_size = 0
         
+        # Market-aware: dam/gdam/hpdam each expose their own singlebid endpoint.
         url = (
-            f"{self.base_url}/dam/api/v2/singlebid/"
+            f"{self.base_url}/{self.market_type}/api/v2/singlebid/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{product_id},"
             f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
-        
-        logger.info(f"Fetching DAM single bids from: {url}")
-        
+
+        logger.info(f"Fetching {self.market_type.upper()} single bids from: {url}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "single-bid", "getSingleBidDam")
+
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "single-bid", "getSingleBidDam")
             
             response.raise_for_status()
             
@@ -426,9 +427,10 @@ class ExchangeAPIClient:
         Returns:
             { Status: str, StatusMessage: str, TransactionId: str }
         """
-        url = f"{self.base_url}/dam/api/v2/singlebid/cancelall"
+        # Market-aware: cancelling GDAM/HPDAM bids must not hit the DAM endpoint.
+        url = f"{self.base_url}/{self.market_type}/api/v2/singlebid/cancelall"
         headers = self._get_headers()
-        
+
         request_body = {
             "DeliveryDate": delivery_date,
             "AssetId": asset_id,
@@ -437,19 +439,19 @@ class ExchangeAPIClient:
             "ParticipantId": self.participant_id,
             "PortfolioId": self.portfolio_id
         }
-        
-        logger.info(f"Canceling all DAM bids: {url}")
+
+        logger.info(f"Canceling all {self.market_type.upper()} bids: {url}")
         logger.debug(f"Cancel request body: {request_body}")
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.put(url, json=request_body, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, request_body, headers, data, "dam", "single-bid", "cancelAllDamBid", delivery_date)
+
+            await self._log_to_db(url, request_body, headers, data, self.market_type, "single-bid", "cancelAllDamBid", delivery_date)
             
             response.raise_for_status()
             
@@ -672,25 +674,26 @@ class ExchangeAPIClient:
             - BidType: 'S' for Single Bid, 'B' for Block Bid
             - OCFSourceBidCategory: For carried forward DAM bid from GDAM (Renewable/Solar)
         """
+        # Market-aware: dam/gdam/hpdam each expose their own trades endpoint.
         url = (
-            f"{self.base_url}/dam/api/v2/trades/"
+            f"{self.base_url}/{self.market_type}/api/v2/trades/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{from_period},{to_period},"
             f"{buy_sell},{bid_area_id},{trade_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
-        
-        logger.info(f"Fetching DAM trade book from: {url}")
-        
+
+        logger.info(f"Fetching {self.market_type.upper()} trade book from: {url}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "trade-book", "getDamTradeBook")
+
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "trade-book", "getDamTradeBook")
             
             response.raise_for_status()
             
@@ -725,23 +728,24 @@ class ExchangeAPIClient:
               - BuyQty: Number - Buy Quantity
               - SellQty: Number - Sell Quantity
         """
+        # Market-aware: dam/gdam/hpdam each expose their own pqresults endpoint.
         url = (
-            f"{self.base_url}/dam/api/v2/pqresults/"
+            f"{self.base_url}/{self.market_type}/api/v2/pqresults/"
             f"{self.login_user_id},{self.participant_id},{delivery_date}"
         )
         headers = self._get_headers()
-        
-        logger.info(f"Fetching DAM price quantity from: {url}")
-        
+
+        logger.info(f"Fetching {self.market_type.upper()} price quantity from: {url}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "price-quantity", "getDamPriceQuantity")
+
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "price-quantity", "getDamPriceQuantity")
             
             response.raise_for_status()
             
