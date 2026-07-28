@@ -67,6 +67,9 @@ class SubmitForApprovalRequest(BaseModel):
     number_of_bids: List[Union[str, int]] = []
     exchange: List[str]
     selected_for: List[str]
+    ocf: Optional[List[Optional[Union[str, int, float]]]] = None  # DAM only
+    ocf_config: Optional[List[Optional[Union[str, int, float]]]] = None  # DAM only
+
 class WithdrawRequest(BaseModel):
     bid_id: str
     remark: str = ""
