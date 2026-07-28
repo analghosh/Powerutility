@@ -3898,6 +3898,7 @@ class DAMBiddingServices:
                     continue
                 
                 # Create block bid data structure matching AllExcBlockBidDatas format
+                ocf_val = block_bid_record.get("ocf_config") or block_bid_record.get("ocf", "")
                 block_bid_mapped = {
                     "from_period_code": from_period_code,
                     "to_period_code": to_period_code,
@@ -3920,6 +3921,8 @@ class DAMBiddingServices:
                     "reason": block_bid_record.get("reason", ""),
                     "trade_session": int(block_bid_record.get("trade_session", 0)),
                     "market_type": block_bid_record.get("market_type", "DAM"),
+                    "ocf": ocf_val,
+                    "ocf_config": ocf_val,
                     "_id": block_bid_record.get("_id")
                 }
                 

@@ -102,6 +102,16 @@ class BlockBidServices:
                 "ex_split_string": f"IEX-{request['iex_price'][i]}_PXIL-{request['pxil_price'][i]}",
                 "revision_no": revision_no,
             }
+            # DAM only: persist ocf / ocf_config from parallel request arrays
+            if market_type == "DAM":
+                ocf_list = request.get("ocf") or []
+                ocf_config_list = request.get("ocf_config") or []
+                ocf_config_val = ocf_config_list[i] if i < len(ocf_config_list) else None
+                ocf_val = ocf_list[i] if i < len(ocf_list) else None
+                chosen = ocf_config_val if ocf_config_val not in (None, "") else ocf_val
+                ocf_stored = str(chosen) if chosen not in (None, "") else ""
+                record["ocf"] = ocf_stored
+                record["ocf_config"] = ocf_stored
             data.append(record)
             time_block_range.append(time_block)
 
