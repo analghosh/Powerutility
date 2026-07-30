@@ -3156,15 +3156,19 @@ class HPDAMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Find the volume at the max price point, excluding bidPriceNOC.
-                    # "10000" (str) != 10000 (int) in Python, so it is not filtered at
-                    # collection time — we explicitly exclude it here.
+                    # Find the volume at the max price point below bidPriceNOC.
+                    # HPDAM's ceiling (20000) sits above the tail price points the UI
+                    # sends with zero volume, so prefer the highest price that carries
+                    # an actual volume and fall back to the plain ceiling filter.
                     max_price_volume = 0.0
                     max_price_float = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < await bidPriceNOC()]
-                        if valid_keys:
-                            max_price_key = max(valid_keys, key=lambda x: float(x))
+                        noc_price = await bidPriceNOC()
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) < noc_price]
+                        priced_keys = [k for k in valid_keys if to_float(blk_buydata[k]) != 0.0]
+                        candidate_keys = priced_keys or valid_keys
+                        if candidate_keys:
+                            max_price_key = max(candidate_keys, key=lambda x: float(x))
                             max_price_float = float(max_price_key)
                             max_price_volume = to_float(blk_buydata[max_price_key])
 
