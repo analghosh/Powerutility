@@ -391,6 +391,42 @@ async def submit_single_bid(
 
 
 @register_route(
+    "post",
+    "/cancel-bid",
+    summary="Cancel GDAM Single Bid",
+    response_description="GDAM Bid Cancellation Response",
+    response_model=Dict[str, Any]
+)
+async def cancel_gdam_bid(
+    response: Response,
+    current_user: TokenPayload = Depends(get_current_user)
+):
+    """
+    Cancel all GDAM Single Bids for today's delivery date.
+
+    This is the portfolio-wide withdrawal for GDAM: every bid on the delivery
+    date is cancelled together (exchange `singlebid/cancelall`), there is no
+    per-time-block cancellation for the day-ahead markets.
+
+    Flow:
+    1. Get delivery date from exchange
+    2. Check for existing bids
+    3. Cancel all if found
+    4. Return cancellation result
+    """
+    correlation_id = str(uuid.uuid4())
+
+    # Set response header
+    response.headers["X-Correlation-ID"] = correlation_id
+
+    result = await gdam_transaction_controller.cancel_bid(
+        correlation_id=correlation_id
+    )
+
+    return result
+
+
+@register_route(
     "get",
     "/single-bid/bid-submission-detail",
     summary="Get GDAM bid submission details",
