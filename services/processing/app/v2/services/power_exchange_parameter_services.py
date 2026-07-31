@@ -7,6 +7,7 @@ logger = logging.getLogger(__name__)
 
 VALID_EXCHANGES = {"iex", "hpx", "pxil"}
 VALID_MARKETS   = {"rtm", "dam", "gdam", "hpdam"}
+VALID_BUY_SELL  = {"buy", "sell", "both"}
 VALID_BID_TYPES = {"single_bid", "block_bid", "both"}
 VALID_OCF       = {"ocf", "standalone"}
 
@@ -28,6 +29,12 @@ class PowerExchangeParameterService:
         if market_lower not in VALID_MARKETS:
             raise ValueError(f"Invalid market '{market}'. Must be one of {VALID_MARKETS}")
         data["market"] = market_lower
+
+        buy_sell = data.get("buy_sell")
+        if buy_sell is not None:
+            if buy_sell.lower() not in VALID_BUY_SELL:
+                raise ValueError(f"Invalid buy_sell '{buy_sell}'. Must be one of {VALID_BUY_SELL}")
+            data["buy_sell"] = buy_sell.lower()
 
         bid_type = data.get("bid_type")
         if bid_type is not None:
@@ -143,11 +150,17 @@ class PowerExchangeParameterService:
             merged = {
                 "exchange":          update_data.get("exchange")          or existing.get("exchange"),
                 "market":            update_data.get("market")            or existing.get("market"),
+                "buy_sell":          update_data.get("buy_sell")          or existing.get("buy_sell"),
                 "bid_type":          update_data.get("bid_type")          or existing.get("bid_type"),
                 "allocation_percent": update_data.get("allocation_percent") if "allocation_percent" in update_data else existing.get("allocation_percent"),
                 "ocf_standalone":    update_data.get("ocf_standalone")    or existing.get("ocf_standalone"),
             }
             self._validate_parameter_data(merged)
+
+            # apply normalized values from validation back onto the update payload
+            for key in ("exchange", "market", "buy_sell", "bid_type", "ocf_standalone"):
+                if key in update_data and merged.get(key) is not None:
+                    update_data[key] = merged[key]
 
             # check if exchange+market combo would conflict with another doc
             if "exchange" in update_data or "market" in update_data:
