@@ -2135,7 +2135,7 @@ class HPDAMBiddingServices:
                     }
 
                 plcounter = 0
-                buy_sell_type = request_data[f"buy_sell_bid_type_{blno[1]}"]
+                buy_sell_type = str(request_data.get(f"buy_sell_bid_type_{blno[1]}", "")).strip().lower()
                 
                 if buy_sell_type != "buy":  
                     dbarray[keys]["Plants"] = {}   # Initialize Plants dictionary
@@ -2207,7 +2207,8 @@ class HPDAMBiddingServices:
                     # print(dbarray)
                 else:
                     # Buy side handling if selected action type is with_cut_off
-                    if request_data["selected_action_type"] == "with_cut_off":
+                    action_type = str(request_data.get("selected_action_type", "")).strip().lower()
+                    if action_type == "with_cut_off":
                         buyinsert = await self.submit_for_approval_post_data_buy(request_data, blno[1])
                     else:
                         # If selected action type is not with_cut_off, then submit for approval without cutoff
@@ -2300,6 +2301,7 @@ class HPDAMBiddingServices:
         """
         buybiddataarray = {}
         finalbuyarraysorted = {}
+        noc = to_float(await bidPriceNOC())
         
         # Helper function to get block date - extract from time_block_range if time_block_dates missing
         def get_block_date(index):
@@ -2320,11 +2322,18 @@ class HPDAMBiddingServices:
 
             if blockno == blno_index:
                 buyary = {}
-                for idx, bid_price in enumerate(request[f"bid_price_{blno_index}", []]):
-                    bid_volume = request[f"bid_volume_{blno_index}", []][idx]
-                    if bid_price not in [await bidPriceNOC(), "0", ""] and bid_volume != "0":
-                        buyary[bid_price] = bid_volume
-                        finalbuyarraysorted[bid_price] = bid_volume
+                prices = request.get(f"bid_price_{blno_index}", []) or []
+                volumes = request.get(f"bid_volume_{blno_index}", []) or []
+                for idx, bid_price in enumerate(prices):
+                    if idx >= len(volumes) or bid_price in (None, ""):
+                        continue
+                    price_f = to_float(bid_price)
+                    vol_f = to_float(volumes[idx])
+                    # Drop NOC / zero price / zero volume (tolerate "0.0", 0, int NOC, etc.)
+                    if price_f == 0 or price_f == noc or vol_f == 0:
+                        continue
+                    buyary[price_f] = vol_f
+                    finalbuyarraysorted[price_f] = vol_f
                 # sort descending by price
                 buybiddataarray[blno_index] = dict(sorted(buyary.items(), key=lambda x: float(x[0]), reverse=True))
 
@@ -2335,12 +2344,12 @@ class HPDAMBiddingServices:
         for blkey, blvalue in buybiddataarray.items():
             for price_str, vol in blvalue.items():
                 price = float(price_str)
-                if price_str not in ["0", await bidPriceNOC()]:
+                if price != 0 and price != noc:
                     buypricekeys.append(price)
                     incresingprbuy2.append(price + 1)
 
         finalpricearraybuy = sorted(set(buypricekeys + incresingprbuy2))
-        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [await bidPriceNOC()])))
+        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [noc])))
 
         # Step 3: Build bidblockarray
         bidblockarray = {}
@@ -2350,9 +2359,9 @@ class HPDAMBiddingServices:
             blockdate = get_block_date(timeblock_key)
 
             if blockno == blno_index:
-                buypriceary = list(buybiddataarray.get(blno_index, {}).values())
+                buypriceary = [to_float(v) for v in buybiddataarray.get(blno_index, {}).values()]
                 counterkey = 0
-                max_volume = max([float(v) for v in buybiddataarray.get(blno_index, {}).values()], default=0)
+                max_volume = max(buypriceary, default=0)
 
                 for pricevalue in finalpricearray:
                     pRarrayf = {}
@@ -2406,7 +2415,7 @@ class HPDAMBiddingServices:
 
                         if not matched:
                             # At the max price point (NOC), fill with the maximum bid volume
-                            fill_vol = max_volume if pricevalue == await bidPriceNOC() else ""
+                            fill_vol = max_volume if pricevalue == noc else ""
                             pRarrayf = {
                                 "bid_plant_name": f"Buy_{counterkey}",
                                 "bid_price": pricevalue,
@@ -2442,6 +2451,16 @@ class HPDAMBiddingServices:
                 if len(time_range_parts) >= 3:
                     return [time_range_parts[2]]  # Return as list to match expected format
             return [""]
+
+        def format_biding_date(raw: str) -> str:
+            if not raw:
+                return ""
+            for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
+                try:
+                    return datetime.strptime(raw, fmt).date().isoformat()
+                except ValueError:
+                    continue
+            return raw
         
         # Step 1: Build buybiddataarray
         for plkey, plvalue in enumerate(request["time_block_range"]):
@@ -2451,15 +2470,20 @@ class HPDAMBiddingServices:
 
             if blockno == blno_index:
                 buyary = {}
-                for idx, bid_price in enumerate(request.get(f"bid_price_{blno_index}", [])):
-                    bid_volume = request.get(f"bid_volume_{blno_index}", [])[idx]
-                    # No filtering for bidPriceNOC, zero, or empty
-                    buyary[bid_price] = bid_volume
-                    finalbuyarraysorted[bid_price] = bid_volume
+                prices = request.get(f"bid_price_{blno_index}", []) or []
+                volumes = request.get(f"bid_volume_{blno_index}", []) or []
+                for idx, bid_price in enumerate(prices):
+                    if idx >= len(volumes) or bid_price in (None, ""):
+                        continue
+                    # No filtering for bidPriceNOC, zero, or empty — keep UI ladder as-is
+                    price_f = to_float(bid_price)
+                    vol_f = to_float(volumes[idx])
+                    buyary[price_f] = vol_f
+                    finalbuyarraysorted[price_f] = vol_f
                 # Sort descending by price
                 buybiddataarray[blno_index] = dict(sorted(buyary.items(), key=lambda x: float(x[0]), reverse=True))
 
-        # Step 2: Prepare final price array
+        # Step 2: Prepare final price array (no P+1 steps — PHP no-cut-off)
         buypricekeys = []
         for blvalue in buybiddataarray.values():
             for price_str in blvalue.keys():
@@ -2476,10 +2500,11 @@ class HPDAMBiddingServices:
             blockdate = get_block_date(timeblock_key)
 
             if blockno == blno_index:
-                buypriceary = list(buybiddataarray.get(blno_index, {}).values())
+                buypriceary = [to_float(v) for v in buybiddataarray.get(blno_index, {}).values()]
                 counterkey = 0
                 max_price_in_array = max((p for p in finalpricearray if p != 0), default=0)
-                max_volume = max([float(v) for v in buybiddataarray.get(blno_index, {}).values()], default=0)
+                max_volume = max(buypriceary, default=0)
+                biding_date = format_biding_date(blockdate[0])
 
                 for pricevalue in finalpricearray:
                     pRarrayf = {}
@@ -2492,7 +2517,7 @@ class HPDAMBiddingServices:
                             "bid_volume": float(min_volume),
                             "bid_default_volume": float(min_volume),
                             "sell_buy_bid_type": "buy",
-                            "biding_date": datetime.strptime(blockdate[0], "%d-%m-%Y").date().isoformat(),
+                            "biding_date": biding_date,
                             "bid_plant_category": "buy",
                             "dam_forecast_Price": float(request["dam_forecast_range"][timeblock_key])
                         }
@@ -2501,35 +2526,18 @@ class HPDAMBiddingServices:
                         for plkey, plvalue in buybiddataarray.get(blno_index, {}).items():
                             plvalue_f = float(plvalue)
                             if pricevalue == float(plkey):
-                                # At the max price point, fill with the maximum bid volume
-                                fill_vol = max_volume if pricevalue == max_price_in_array else plvalue_f
                                 pRarrayf = {
                                     "bid_plant_name": f"Buy_{counterkey}",
                                     "bid_price": float(pricevalue),
                                     "bid_default_price": float(pricevalue),
-                                    "bid_volume": fill_vol,
-                                    "bid_default_volume": fill_vol,
+                                    "bid_volume": plvalue_f,
+                                    "bid_default_volume": plvalue_f,
                                     "sell_buy_bid_type": "buy",
-                                    "biding_date": datetime.strptime(blockdate[0], "%d-%m-%Y").date().isoformat(),
+                                    "biding_date": biding_date,
                                     "bid_plant_category": "buy",
                                     "dam_forecast_Price": float(request["dam_forecast_range"][timeblock_key])
                                 }
                                 buypriceary = [v for v in buypriceary if v != plvalue_f]
-                                matched = True
-                                break
-                            elif pricevalue == float(plkey) + 1:
-                                min_vol = min(buypriceary) if buypriceary else 0
-                                pRarrayf = {
-                                    "bid_plant_name": f"Buy_{counterkey}",
-                                    "bid_price": float(pricevalue),
-                                    "bid_default_price": float(pricevalue),
-                                    "bid_volume": float(min_vol),
-                                    "bid_default_volume": float(min_vol),
-                                    "sell_buy_bid_type": "buy",
-                                    "biding_date": datetime.strptime(blockdate[0], "%d-%m-%Y").date().isoformat(),
-                                    "bid_plant_category": "buy",
-                                    "dam_forecast_Price": float(request["dam_forecast_range"][timeblock_key])
-                                }
                                 matched = True
                                 break
 
@@ -2543,7 +2551,7 @@ class HPDAMBiddingServices:
                                 "bid_volume": fill_vol,
                                 "bid_default_volume": fill_vol,
                                 "sell_buy_bid_type": "buy",
-                                "biding_date": datetime.strptime(blockdate[0], "%d-%m-%Y").date().isoformat(),
+                                "biding_date": biding_date,
                                 "bid_plant_category": "buy",
                                 "dam_forecast_Price": float(request["dam_forecast_range"][timeblock_key])
                             }
@@ -2552,7 +2560,7 @@ class HPDAMBiddingServices:
                     counterkey += 1
 
         return bidblockarray
-    
+
     @staticmethod
     def _parse_schedule_date(schedule_date: str) -> datetime:
         """

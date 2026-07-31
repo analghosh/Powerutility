@@ -11,20 +11,20 @@ logger = logging.getLogger(__name__)
 # rtm -> standalone, dam/gdam/hpdam -> ocf (as per business rules)
 DEFAULT_POWER_EXCHANGE_PARAMETERS = [
     # IEX
-    {"exchange": "iex",  "market": "rtm",   "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
-    {"exchange": "iex",  "market": "dam",   "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
-    {"exchange": "iex",  "market": "gdam",  "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
-    {"exchange": "iex",  "market": "hpdam", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
+    {"exchange": "iex",  "market": "rtm",   "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
+    {"exchange": "iex",  "market": "dam",   "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
+    {"exchange": "iex",  "market": "gdam",  "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
+    {"exchange": "iex",  "market": "hpdam", "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
     # HPX
-    {"exchange": "hpx",  "market": "rtm",   "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
-    {"exchange": "hpx",  "market": "dam",   "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
-    {"exchange": "hpx",  "market": "gdam",  "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
-    {"exchange": "hpx",  "market": "hpdam", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
+    {"exchange": "hpx",  "market": "rtm",   "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
+    {"exchange": "hpx",  "market": "dam",   "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
+    {"exchange": "hpx",  "market": "gdam",  "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
+    {"exchange": "hpx",  "market": "hpdam", "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
     # PXIL
-    {"exchange": "pxil", "market": "rtm",   "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
-    {"exchange": "pxil", "market": "dam",   "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
-    {"exchange": "pxil", "market": "gdam",  "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
-    {"exchange": "pxil", "market": "hpdam", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
+    {"exchange": "pxil", "market": "rtm",   "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
+    {"exchange": "pxil", "market": "dam",   "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
+    {"exchange": "pxil", "market": "gdam",  "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "ocf",        "premium_discount": "premium"},
+    {"exchange": "pxil", "market": "hpdam", "buy_sell": "buy", "bid_type": "single_bid", "allocation_percent": 100.0, "ocf_standalone": "standalone", "premium_discount": "premium"},
 ]
 
 
