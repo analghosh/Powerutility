@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 class PowerExchangeParameterCreate(BaseModel):
     exchange: str = Field(..., description="iex / hpx / pxil")
     market: str = Field(..., description="rtm / dam / gdam / hpdam")
+    buy_sell: Optional[str] = Field(None, description="buy / sell / both")
     bid_type: Optional[str] = Field(None, description="single_bid / block_bid / both")
     allocation_percent: Optional[float] = Field(None, ge=0, le=100, strict=True)
     ocf_standalone: Optional[str] = Field(None, description="ocf / standalone")
@@ -31,6 +32,7 @@ class PowerExchangeParameterCreate(BaseModel):
             "example": {
                 "exchange": "iex",
                 "market": "rtm",
+                "buy_sell": "buy",
                 "bid_type": "single_bid",
                 "allocation_percent": 100,
                 "ocf_standalone": "standalone",
@@ -43,6 +45,7 @@ class PowerExchangeParameterCreate(BaseModel):
 class PowerExchangeParameterUpdate(BaseModel):
     exchange: Optional[str] = None
     market: Optional[str] = Field(None, description="rtm / dam / gdam / hpdam")
+    buy_sell: Optional[str] = Field(None, description="buy / sell / both")
     bid_type: Optional[str] = Field(None, description="single_bid / block_bid / both")
     allocation_percent: Optional[float] = Field(None, ge=0, le=100, strict=True)
     ocf_standalone: Optional[str] = Field(None, description="ocf / standalone")
@@ -51,6 +54,7 @@ class PowerExchangeParameterUpdate(BaseModel):
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
+                "buy_sell": "buy",
                 "bid_type": "block_bid",
                 "allocation_percent": 75,
                 "ocf_standalone": "standalone"
@@ -63,6 +67,7 @@ class PowerExchangeParameterResponse(BaseModel):
     id: Optional[str] = Field(None, alias="_id")
     exchange: str
     market: str
+    buy_sell: Optional[str] = None
     bid_type: Optional[str] = None
     allocation_percent: Optional[float] = None
     ocf_standalone: Optional[str] = None
