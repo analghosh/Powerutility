@@ -1475,7 +1475,7 @@ class RTMBiddingServices:
                     }
 
                 plcounter = 0
-                buy_sell_type = str(request_data.get(f"buy_sell_bid_type_{blno[1]}", "")).strip().lower()
+                buy_sell_type = request_data[f"buy_sell_bid_type_{blno[1]}"]
                 
                 if buy_sell_type != "buy":  
                     dbarray[keys]["Plants"] = {}   # Initialize Plants dictionary
@@ -1547,12 +1547,16 @@ class RTMBiddingServices:
                     # print(dbarray)
                 else:
                     # Buy side handling if selected action type is with_cut_off
-                    action_type = str(request_data.get("selected_action_type", "")).strip().lower()
-                    if action_type == "with_cut_off":
+                    if request_data["selected_action_type"] == "with_cut_off":
                         buyinsert = await self.submit_for_approval_post_data_buy(request_data, blno[1])
+
                     else:
                         # If selected action type is not with_cut_off, then submit for approval without cutoff
                         buyinsert = await self.submit_for_approval_post_data_buy_no_cutoff(request_data, blno[1])
+                        # Early return skips insert_many/publish; still persist bid capture for this block (parity with in-loop _ensure).
+                        if capture_bid and capture_tasks:
+                            await self.apply_capture_task(capture_tasks[-1])
+                        return buyinsert
                     dbarray[keys]["Plants"] = buyinsert
 
             
@@ -1632,7 +1636,6 @@ class RTMBiddingServices:
         """
         buybiddataarray = {}
         finalbuyarraysorted = {}
-        noc = to_float(bidPriceNOC())
         
         # Helper function to get block date - extract from time_block_range if time_block_dates missing
         def get_block_date(index):
@@ -1653,18 +1656,11 @@ class RTMBiddingServices:
 
             if blockno == blno_index:
                 buyary = {}
-                prices = request.get(f"bid_price_{blno_index}", []) or []
-                volumes = request.get(f"bid_volume_{blno_index}", []) or []
-                for idx, bid_price in enumerate(prices):
-                    if idx >= len(volumes) or bid_price in (None, ""):
-                        continue
-                    price_f = to_float(bid_price)
-                    vol_f = to_float(volumes[idx])
-                    # Drop NOC / zero price / zero volume (tolerate "0.0", 0, int NOC, etc.)
-                    if price_f == 0 or price_f == noc or vol_f == 0:
-                        continue
-                    buyary[price_f] = vol_f
-                    finalbuyarraysorted[price_f] = vol_f
+                for idx, bid_price in enumerate(request[f"bid_price_{blno_index}", []]):
+                    bid_volume = request[f"bid_volume_{blno_index}", []][idx]
+                    if bid_price not in [bidPriceNOC(), "0", ""] and bid_volume != "0":
+                        buyary[bid_price] = bid_volume
+                        finalbuyarraysorted[bid_price] = bid_volume
                 # sort descending by price
                 buybiddataarray[blno_index] = dict(sorted(buyary.items(), key=lambda x: float(x[0]), reverse=True))
 
@@ -1675,12 +1671,12 @@ class RTMBiddingServices:
         for blkey, blvalue in buybiddataarray.items():
             for price_str, vol in blvalue.items():
                 price = float(price_str)
-                if price != 0 and price != noc:
+                if price_str not in ["0", bidPriceNOC()]:
                     buypricekeys.append(price)
                     incresingprbuy2.append(price + 1)
 
         finalpricearraybuy = sorted(set(buypricekeys + incresingprbuy2))
-        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [noc])))
+        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [bidPriceNOC()])))
 
         # Step 3: Build bidblockarray
         bidblockarray = {}
@@ -1690,9 +1686,8 @@ class RTMBiddingServices:
             blockdate = get_block_date(timeblock_key)
 
             if blockno == blno_index:
-                buypriceary = [to_float(v) for v in buybiddataarray.get(blno_index, {}).values()]
+                buypriceary = list(buybiddataarray.get(blno_index, {}).values())
                 counterkey = 0
-                max_volume = max(buypriceary, default=0)
 
                 for pricevalue in finalpricearray:
                     pRarrayf = {}
@@ -1745,14 +1740,12 @@ class RTMBiddingServices:
                                 break
 
                         if not matched:
-                            # At the max price point (NOC), fill with the maximum bid volume
-                            fill_vol = max_volume if pricevalue == noc else ""
                             pRarrayf = {
                                 "bid_plant_name": f"Buy_{counterkey}",
                                 "bid_price": pricevalue,
                                 "bid_default_price": pricevalue,
-                                "bid_volume": fill_vol,
-                                "bid_default_volume": fill_vol,
+                                "bid_volume": "",
+                                "bid_default_volume": "",
                                 "sell_buy_bid_type": "buy",
                                 "biding_date": blockdate[0],
                                 "bid_plant_category": "buy",
@@ -1782,16 +1775,6 @@ class RTMBiddingServices:
                 if len(time_range_parts) >= 3:
                     return [time_range_parts[2]]  # Return as list to match expected format
             return [""]
-
-        def format_biding_date(raw: str) -> str:
-            if not raw:
-                return ""
-            for fmt in ("%d-%m-%Y", "%Y-%m-%d"):
-                try:
-                    return datetime.strptime(raw, fmt).date().isoformat()
-                except ValueError:
-                    continue
-            return raw
         
         # Step 1: Build buybiddataarray
         for plkey, plvalue in enumerate(request["time_block_range"]):
@@ -1801,20 +1784,15 @@ class RTMBiddingServices:
 
             if blockno == blno_index:
                 buyary = {}
-                prices = request.get(f"bid_price_{blno_index}", []) or []
-                volumes = request.get(f"bid_volume_{blno_index}", []) or []
-                for idx, bid_price in enumerate(prices):
-                    if idx >= len(volumes) or bid_price in (None, ""):
-                        continue
-                    # No filtering for bidPriceNOC, zero, or empty — keep UI ladder as-is
-                    price_f = to_float(bid_price)
-                    vol_f = to_float(volumes[idx])
-                    buyary[price_f] = vol_f
-                    finalbuyarraysorted[price_f] = vol_f
+                for idx, bid_price in enumerate(request.get(f"bid_price_{blno_index}", [])):
+                    bid_volume = request.get(f"bid_volume_{blno_index}", [])[idx]
+                    # No filtering for bidPriceNOC, zero, or empty
+                    buyary[bid_price] = bid_volume
+                    finalbuyarraysorted[bid_price] = bid_volume
                 # Sort descending by price
                 buybiddataarray[blno_index] = dict(sorted(buyary.items(), key=lambda x: float(x[0]), reverse=True))
 
-        # Step 2: Prepare final price array (no P+1 steps — PHP no-cut-off)
+        # Step 2: Prepare final price array
         buypricekeys = []
         for blvalue in buybiddataarray.values():
             for price_str in blvalue.keys():
@@ -1831,11 +1809,8 @@ class RTMBiddingServices:
             blockdate = get_block_date(timeblock_key)
 
             if blockno == blno_index:
-                buypriceary = [to_float(v) for v in buybiddataarray.get(blno_index, {}).values()]
+                buypriceary = list(buybiddataarray.get(blno_index, {}).values())
                 counterkey = 0
-                max_price_in_array = max((p for p in finalpricearray if p != 0), default=0)
-                max_volume = max(buypriceary, default=0)
-                biding_date = format_biding_date(blockdate[0])
 
                 for pricevalue in finalpricearray:
                     pRarrayf = {}
@@ -1848,7 +1823,7 @@ class RTMBiddingServices:
                             "bid_volume": float(min_volume),
                             "bid_default_volume": float(min_volume),
                             "sell_buy_bid_type": "buy",
-                            "biding_date": biding_date,
+                            "biding_date": datetime.datetime.strptime(blockdate[0], "%Y-%m-%d").date().isoformat(),
                             "bid_plant_category": "buy",
                             "rtm_forecast_Price": float(request["rtm_forecast_range"][timeblock_key])
                         }
@@ -1864,25 +1839,38 @@ class RTMBiddingServices:
                                     "bid_volume": plvalue_f,
                                     "bid_default_volume": plvalue_f,
                                     "sell_buy_bid_type": "buy",
-                                    "biding_date": biding_date,
+                                    "biding_date": datetime.datetime.strptime(blockdate[0], "%Y-%m-%d").date().isoformat(),
                                     "bid_plant_category": "buy",
                                     "rtm_forecast_Price": float(request["rtm_forecast_range"][timeblock_key])
                                 }
                                 buypriceary = [v for v in buypriceary if v != plvalue_f]
                                 matched = True
                                 break
+                            elif pricevalue == float(plkey) + 1:
+                                min_vol = min(buypriceary) if buypriceary else 0
+                                pRarrayf = {
+                                    "bid_plant_name": f"Buy_{counterkey}",
+                                    "bid_price": float(pricevalue),
+                                    "bid_default_price": float(pricevalue),
+                                    "bid_volume": float(min_vol),
+                                    "bid_default_volume": float(min_vol),
+                                    "sell_buy_bid_type": "buy",
+                                    "biding_date": datetime.datetime.strptime(blockdate[0], "%Y-%m-%d").date().isoformat(),
+                                    "bid_plant_category": "buy",
+                                    "rtm_forecast_Price": float(request["rtm_forecast_range"][timeblock_key])
+                                }
+                                matched = True
+                                break
 
                         if not matched:
-                            # At the max price point, fill with the maximum bid volume
-                            fill_vol = max_volume if pricevalue == max_price_in_array else 0
                             pRarrayf = {
                                 "bid_plant_name": f"Buy_{counterkey}",
                                 "bid_price": float(pricevalue),
                                 "bid_default_price": float(pricevalue),
-                                "bid_volume": fill_vol,
-                                "bid_default_volume": fill_vol,
+                                "bid_volume": 0,
+                                "bid_default_volume": 0,
                                 "sell_buy_bid_type": "buy",
-                                "biding_date": biding_date,
+                                "biding_date": datetime.datetime.strptime(blockdate[0], "%Y-%m-%d").date().isoformat(),
                                 "bid_plant_category": "buy",
                                 "rtm_forecast_Price": float(request["rtm_forecast_range"][timeblock_key])
                             }
@@ -1891,7 +1879,7 @@ class RTMBiddingServices:
                     counterkey += 1
 
         return bidblockarray
-
+    
     @staticmethod
     def _parse_schedule_date(schedule_date: str) -> datetime:
         """
