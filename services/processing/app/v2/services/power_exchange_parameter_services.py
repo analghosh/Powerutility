@@ -10,6 +10,7 @@ VALID_MARKETS   = {"rtm", "dam", "gdam", "hpdam"}
 VALID_BUY_SELL  = {"buy", "sell", "both"}
 VALID_BID_TYPES = {"single_bid", "block_bid", "both"}
 VALID_OCF       = {"ocf", "standalone"}
+DEFAULT_MAX_OCF = 100.0
 
 
 class PowerExchangeParameterService:
@@ -58,6 +59,20 @@ class PowerExchangeParameterService:
             if market_lower == "rtm" and ocf_lower != "standalone":
                 raise ValueError("ocf_standalone must be 'standalone' when market is 'rtm'")
             data["ocf_standalone"] = ocf_lower
+
+        # max_ocf is DAM-only; always present for DAM (default 100), range 0-100
+        max_ocf = data.get("max_ocf")
+        if market_lower == "dam":
+            if max_ocf is None:
+                data["max_ocf"] = DEFAULT_MAX_OCF
+            else:
+                if not isinstance(max_ocf, (int, float)) or isinstance(max_ocf, bool):
+                    raise ValueError("max_ocf must be a number")
+                if not (0 <= max_ocf <= 100):
+                    raise ValueError("max_ocf must be between 0 and 100")
+                data["max_ocf"] = float(max_ocf)
+        elif max_ocf is not None:
+            raise ValueError("max_ocf is only allowed when market is 'dam'")
 
     async def create_parameter(self, parameter_data: Dict[str, Any]) -> Dict[str, Any]:
         try:
@@ -154,6 +169,7 @@ class PowerExchangeParameterService:
                 "bid_type":          update_data.get("bid_type")          or existing.get("bid_type"),
                 "allocation_percent": update_data.get("allocation_percent") if "allocation_percent" in update_data else existing.get("allocation_percent"),
                 "ocf_standalone":    update_data.get("ocf_standalone")    or existing.get("ocf_standalone"),
+                "max_ocf":           update_data.get("max_ocf") if "max_ocf" in update_data else existing.get("max_ocf"),
             }
             self._validate_parameter_data(merged)
 
@@ -161,6 +177,14 @@ class PowerExchangeParameterService:
             for key in ("exchange", "market", "buy_sell", "bid_type", "ocf_standalone"):
                 if key in update_data and merged.get(key) is not None:
                     update_data[key] = merged[key]
+
+            # DAM always persists max_ocf (defaulted if missing on legacy docs)
+            if merged.get("market") == "dam":
+                if "max_ocf" in update_data or existing.get("max_ocf") is None:
+                    update_data["max_ocf"] = merged["max_ocf"]
+            elif "max_ocf" in update_data:
+                # non-DAM: do not store max_ocf
+                update_data.pop("max_ocf", None)
 
             # check if exchange+market combo would conflict with another doc
             if "exchange" in update_data or "market" in update_data:
