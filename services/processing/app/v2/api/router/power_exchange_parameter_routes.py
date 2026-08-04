@@ -26,17 +26,19 @@ class PowerExchangeParameterCreate(BaseModel):
     allocation_percent: Optional[float] = Field(None, ge=0, le=100, strict=True)
     ocf_standalone: Optional[str] = Field(None, description="ocf / standalone")
     premium_discount: Optional[str] = None
+    max_ocf: Optional[float] = Field(None, ge=0, le=100, strict=True, description="Max OCF % (DAM only, 0-100)")
 
     model_config = ConfigDict(
         json_schema_extra={
             "example": {
                 "exchange": "iex",
-                "market": "rtm",
+                "market": "dam",
                 "buy_sell": "buy",
                 "bid_type": "single_bid",
                 "allocation_percent": 100,
-                "ocf_standalone": "standalone",
-                "premium_discount": "premium"
+                "ocf_standalone": "ocf",
+                "premium_discount": "premium",
+                "max_ocf": 100
             }
         }
     )
@@ -50,6 +52,7 @@ class PowerExchangeParameterUpdate(BaseModel):
     allocation_percent: Optional[float] = Field(None, ge=0, le=100, strict=True)
     ocf_standalone: Optional[str] = Field(None, description="ocf / standalone")
     premium_discount: Optional[str] = None
+    max_ocf: Optional[float] = Field(None, ge=0, le=100, strict=True, description="Max OCF % (DAM only, 0-100)")
 
     model_config = ConfigDict(
         json_schema_extra={
@@ -57,7 +60,8 @@ class PowerExchangeParameterUpdate(BaseModel):
                 "buy_sell": "buy",
                 "bid_type": "block_bid",
                 "allocation_percent": 75,
-                "ocf_standalone": "standalone"
+                "ocf_standalone": "standalone",
+                "max_ocf": 80
             }
         }
     )
@@ -72,6 +76,7 @@ class PowerExchangeParameterResponse(BaseModel):
     allocation_percent: Optional[float] = None
     ocf_standalone: Optional[str] = None
     premium_discount: Optional[str] = None
+    max_ocf: Optional[float] = None
     is_deleted: Optional[bool] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
