@@ -112,7 +112,8 @@ async def submit_for_approval_post_data(
         description=(
             "Submit bid approval data. Optional: manual_capture_bid=true for manual capture. "
             "Optional ocf-config (or per-block ocf-config_blk_{n}): "
-            "{allocation%}_{O|S}_{premium_or_discount} e.g. 60_O_14 or 20_S_0. Stored as `ocf`."
+            "{allocation%}_{O|S}_{premium_or_discount} e.g. 60_O_14 or 20_S_0. "
+            "Buy bids also store ocf_premium_discount (3rd part) as int. Stored as `ocf`."
         ),
     ),
     current_user: TokenPayload = Depends(get_current_user),

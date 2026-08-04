@@ -167,7 +167,7 @@ async def bid_creation_post(
         description=(
             "Bid data for multiple blocks. Include Ex_split_string_{blockNo} and "
             "optional ocf_config_{blockNo} (or ocf_config) as "
-            "{allocation%}_{O|S}_{premium_or_discount}."
+            "{allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}]."
         ),
     ),
 ):
@@ -189,7 +189,8 @@ async def submit_for_approval_post_data(
         description=(
             "Submit bid approval data. Optional: manual_capture_bid=true for manual capture. "
             "Optional ocf-config (or per-block ocf-config_blk_{n}): "
-            "{allocation%}_{O|S}_{premium_or_discount} e.g. 60_O_14 or 20_S_0. Stored as `ocf`."
+            "{allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}] e.g. 60_O_14, 20_S_0, "
+            "or 60_O_14_100 (buy: stores ocf_premium_discount and max_ocf_qty). Stored as `ocf`."
         ),
     ),
     current_user: TokenPayload = Depends(get_current_user),

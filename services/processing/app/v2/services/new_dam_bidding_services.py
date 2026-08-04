@@ -65,8 +65,10 @@ def to_float(v):
 
 def extract_ocf_config(request_data: dict, block_no: str) -> Tuple[Optional[str], Optional[str]]:
     """
-    Read ocf-config from request. Pattern: {allocation%}_{O|S}_{premium_or_discount}.
+    Read ocf-config from request.
+    Pattern: {allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}].
     O = OCF (third part is premium/discount), S = Standalone.
+    Optional 4th part (max_ocf_qty) is used for DAM buy bids.
     Accepts per-block keys or a shared ocf-config value.
     Returns (normalized_value_or_empty, error_message_or_None).
     """
@@ -83,14 +85,16 @@ def extract_ocf_config(request_data: dict, block_no: str) -> Tuple[Optional[str]
 
     value = str(raw).strip()
     parts = value.split("_")
-    if len(parts) != 3:
+    if len(parts) not in (3, 4):
         return None, (
             f"Invalid ocf-config '{value}' for block {block_no}. "
             "Expected format: {{allocation%}}_{{O|S}}_{{premium_or_discount}} "
-            "e.g. 60_O_14 or 20_S_0"
+            "or {{allocation%}}_{{O|S}}_{{premium_or_discount}}_{{max_ocf_qty}} "
+            "e.g. 60_O_14, 20_S_0, or 60_O_14_100"
         )
 
-    alloc, mode, prem = parts
+    alloc, mode, prem = parts[0], parts[1], parts[2]
+    max_ocf_qty = parts[3] if len(parts) == 4 else None
     mode_u = mode.upper()
     if mode_u not in ("O", "S"):
         return None, (
@@ -100,11 +104,15 @@ def extract_ocf_config(request_data: dict, block_no: str) -> Tuple[Optional[str]
     try:
         float(alloc)
         float(prem)
+        if max_ocf_qty is not None:
+            float(max_ocf_qty)
     except ValueError:
         return None, (
             f"Invalid ocf-config '{value}' for block {block_no}. "
-            "Allocation percent and premium/discount must be numeric"
+            "Allocation percent, premium/discount, and max_ocf_qty must be numeric"
         )
+    if max_ocf_qty is not None:
+        return f"{alloc}_{mode_u}_{prem}_{max_ocf_qty}", None
     return f"{alloc}_{mode_u}_{prem}", None
 
 
@@ -2158,6 +2166,13 @@ class DAMBiddingServices:
                     "remark": "",
                     "buy_sell_bid": request_data[f"buy_sell_bid_type_{blno[1]}"]
                 }
+                buy_sell_type = request_data[f"buy_sell_bid_type_{blno[1]}"]
+                if buy_sell_type == "buy" and ocf_config:
+                    ocf_parts = ocf_config.split("_")
+                    if len(ocf_parts) >= 3:
+                        dbarray[keys]["ocf_premium_discount"] = int(float(ocf_parts[2]))
+                    if len(ocf_parts) >= 4:
+                        dbarray[keys]["max_ocf_qty"] = int(float(ocf_parts[3]))
                 if rldc_revision_no is not None:
                     dbarray[keys]["rldc_revision_no"] = rldc_revision_no
                 
@@ -2188,7 +2203,6 @@ class DAMBiddingServices:
                     }
 
                 plcounter = 0
-                buy_sell_type = request_data[f"buy_sell_bid_type_{blno[1]}"]
                 
                 if buy_sell_type != "buy":  
                     dbarray[keys]["Plants"] = {}   # Initialize Plants dictionary
