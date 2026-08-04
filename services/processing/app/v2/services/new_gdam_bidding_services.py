@@ -2105,6 +2105,11 @@ class GDAMBiddingServices:
                     "remark": "",
                     "buy_sell_bid": request_data[f"buy_sell_bid_type_{blno[1]}"]
                 }
+                buy_sell_type = str(request_data.get(f"buy_sell_bid_type_{blno[1]}", "")).strip().lower()
+                if buy_sell_type == "buy" and ocf_config:
+                    ocf_parts = ocf_config.split("_")
+                    if len(ocf_parts) >= 3:
+                        dbarray[keys]["ocf_premium_discount"] = int(float(ocf_parts[2]))
                 if rldc_revision_no is not None:
                     dbarray[keys]["rldc_revision_no"] = rldc_revision_no
                 
@@ -2135,7 +2140,6 @@ class GDAMBiddingServices:
                     }
 
                 plcounter = 0
-                buy_sell_type = str(request_data.get(f"buy_sell_bid_type_{blno[1]}", "")).strip().lower()
                 
                 if buy_sell_type != "buy":  
                     dbarray[keys]["Plants"] = {}   # Initialize Plants dictionary
