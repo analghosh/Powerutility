@@ -2616,6 +2616,8 @@ class HPDAMBiddingServices:
                 ]
             }
 
+            # Highest revision per block, then keep only the global max revision
+            # so leftover blocks from older full-day submissions are excluded.
             pipeline = [
                 {
                     "$match": match_criteria
@@ -2632,6 +2634,26 @@ class HPDAMBiddingServices:
                 {
                     "$replaceRoot": {"newRoot": "$doc"}
                 },
+                {
+                    "$group": {
+                        "_id": None,
+                        "max_rev": {"$max": "$revision_no"},
+                        "docs": {"$push": "$$ROOT"}
+                    }
+                },
+                {
+                    "$project": {
+                        "docs": {
+                            "$filter": {
+                                "input": "$docs",
+                                "as": "d",
+                                "cond": {"$eq": ["$$d.revision_no", "$max_rev"]}
+                            }
+                        }
+                    }
+                },
+                {"$unwind": "$docs"},
+                {"$replaceRoot": {"newRoot": "$docs"}},
                 {
                     "$sort": {
                         "block_no": 1
