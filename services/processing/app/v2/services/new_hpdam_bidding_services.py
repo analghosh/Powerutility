@@ -14,6 +14,7 @@ from libs.core.jwt_validator import TokenPayload
 from services.processing.app.core.config import settings
 
 from ..services.parameter_service import parameter_service
+from ..helpers.approval_messages import partial_message, success_message
 from ..repository.supply_serve_repository import SupplyServeRepository
 # from ..repository.serve_supply_table_repository import serveSupplyTableRepository
 from ..repository.new_dam_single_bid_data_for_approval_repository import DAMSingleBidDataForApprovalRepository
@@ -2616,6 +2617,8 @@ class HPDAMBiddingServices:
                 ]
             }
 
+            # Highest revision per block, then keep only the global max revision
+            # so leftover blocks from older full-day submissions are excluded.
             pipeline = [
                 {
                     "$match": match_criteria
@@ -2632,6 +2635,26 @@ class HPDAMBiddingServices:
                 {
                     "$replaceRoot": {"newRoot": "$doc"}
                 },
+                {
+                    "$group": {
+                        "_id": None,
+                        "max_rev": {"$max": "$revision_no"},
+                        "docs": {"$push": "$$ROOT"}
+                    }
+                },
+                {
+                    "$project": {
+                        "docs": {
+                            "$filter": {
+                                "input": "$docs",
+                                "as": "d",
+                                "cond": {"$eq": ["$$d.revision_no", "$max_rev"]}
+                            }
+                        }
+                    }
+                },
+                {"$unwind": "$docs"},
+                {"$replaceRoot": {"newRoot": "$docs"}},
                 {
                     "$sort": {
                         "block_no": 1
@@ -3331,11 +3354,11 @@ class HPDAMBiddingServices:
             if error_count > 0:
                 message = f"Update failed for {error_count} bid(s)"
             elif updated_count == total:
-                message = "All bids updated successfully"
+                message = success_message(updated)
             elif updated_count == 0:
                 message = "No bids updated — all were already processed"
             else:
-                message = f"Partial update: {updated_count} updated, {skipped_count} skipped"
+                message = partial_message(updated, skipped_count)
 
             return {
                 "result": updated_count > 0 and error_count == 0,
