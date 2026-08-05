@@ -61,17 +61,28 @@ class DAMBlockBidController:
                 detail="Failed to update DAM block bid status.",
             )
 
-    async def submit_to_exchange(self, biding_date: str, submitted_by: str = "", correlation_id: str = "") -> Dict[str, Any]:
-        """Submit approved DAM block bids to IEX exchange (cancel-then-resubmit if duplicate exists)."""
+    async def submit_to_exchange(
+        self,
+        biding_date: str,
+        submitted_by: str = "",
+        correlation_id: str = "",
+        market: str = "DAM",
+    ) -> Dict[str, Any]:
+        """
+        Submit approved DAM/GDAM block bids to IEX exchange
+        (cancel-then-resubmit if a duplicate period already exists).
+        """
         try:
-            return await self.block_bid_service.submit_dam_to_exchange(biding_date, submitted_by, correlation_id)
+            return await self.block_bid_service.submit_dam_to_exchange(
+                biding_date, submitted_by, correlation_id, market=market
+            )
         except HTTPException:
             raise
         except Exception:
-            logger.exception("Error submitting DAM block bids to exchange")
+            logger.exception(f"Error submitting {market} block bids to exchange")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail="Failed to submit DAM block bids to exchange.",
+                detail=f"Failed to submit {market} block bids to exchange.",
             )
 
     async def mark_withdrawal(self, post_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -92,8 +103,10 @@ class DAMBlockBidController:
                 detail="Failed to mark DAM block bid for withdrawal.",
             )
 
-    async def cancel_on_exchange(self, post_data: Dict[str, Any], correlation_id: str = "") -> Dict[str, Any]:
-        """Cancel DAM block bids on IEX exchange for given order_ids."""
+    async def cancel_on_exchange(
+        self, post_data: Dict[str, Any], correlation_id: str = "", market: str = "DAM"
+    ) -> Dict[str, Any]:
+        """Cancel DAM/GDAM block bids on IEX exchange for given order_ids."""
         order_ids    = post_data.get("order_ids", [])
         biding_date  = post_data.get("schedule_date", "")
         cancelled_by = post_data.get("username", "")
@@ -105,6 +118,7 @@ class DAMBlockBidController:
                 biding_date=biding_date,
                 cancelled_by=cancelled_by,
                 correlation_id=correlation_id,
+                market=market,
             )
         except HTTPException:
             raise

@@ -24,6 +24,11 @@ logger = logging.getLogger(__name__)
 # Valid values: "Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"
 VALID_ORDER_STATUSES = {"Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"}
 
+# Day-ahead markets share one block-bid flow — no trade session, and IEX exposes an
+# identical block-bid API for each under its own path prefix (DAM 2.2 §9.15,
+# GDAM 2.1 §6 item 13). RTM has a different contract and its own flow.
+DAY_AHEAD_BLOCK_MARKETS = {"DAM", "GDAM"}
+
 
 class BlockBidServices:
     def __init__(self, collection_name: str = "block_bid_current_data"):
@@ -56,11 +61,11 @@ class BlockBidServices:
         from_list    = request.get("from", [])
         trade_sessions_raw = request.get("trade_session", []) or []
         trade_sessions = []
-        # DAM block bid has no session concept — use trade_session=0
+        # Day-ahead block bids have no session concept — use trade_session=0
         for i in range(len(from_list)):
             market_type = market_type_list[i].upper()
 
-            if market_type == "DAM":
+            if market_type in DAY_AHEAD_BLOCK_MARKETS:
                 session = 0
             else:
                 session = (
@@ -102,8 +107,11 @@ class BlockBidServices:
                 "ex_split_string": f"IEX-{request['iex_price'][i]}_PXIL-{request['pxil_price'][i]}",
                 "revision_no": revision_no,
             }
-            # DAM only: persist ocf / ocf_config from parallel request arrays
-            if market_type == "DAM":
+            # Day-ahead only: persist ocf / ocf_config from parallel request arrays.
+            # Read the market for THIS row — `market_type` from the loop above holds
+            # only the last row's value, which is wrong for a mixed-market request.
+            row_market_type = market_type_list[i].upper() if i < len(market_type_list) else ""
+            if row_market_type in DAY_AHEAD_BLOCK_MARKETS:
                 ocf_list = request.get("ocf") or []
                 ocf_config_list = request.get("ocf_config") or []
                 ocf_config_val = ocf_config_list[i] if i < len(ocf_config_list) else None
@@ -710,10 +718,17 @@ class BlockBidServices:
         except Exception:
             return 1
 
-    async def _get_ocf_values_for_block(self, delivery_date_ts: int, block: int) -> Dict[str, Any]:
+    async def _get_ocf_values_for_block(
+        self, delivery_date_ts: int, block: int, market: str = "DAM"
+    ) -> Dict[str, Any]:
         """
         Fetch OCF Premium/Discount Price and Max OCF Qty from limit_values for a given block.
         Mirrors dam_transaction_service._get_ocf_values logic for block bid context.
+
+        Args:
+            market: "DAM" or "GDAM" — limit_values are stored per market, so this
+                    must match the market being submitted or the wrong market's
+                    OCF numbers get attached to the bid.
         """
         dt = datetime.fromtimestamp(delivery_date_ts, tz=timezone.utc)
         scheduled_at_str = dt.strftime("%Y-%m-%d")
@@ -724,7 +739,7 @@ class BlockBidServices:
                 "id": "ocfPremiumDiscountPrice",
                 "block": block,
                 "category": "Limits",
-                "market": "DAM",
+                "market": market,
                 "scheduled_at": {"$regex": f"^{scheduled_at_str}"},
             },
         )
@@ -734,7 +749,7 @@ class BlockBidServices:
                 "id": "ocfMaxOCFQty",
                 "block": block,
                 "category": "Limits",
-                "market": "DAM",
+                "market": market,
                 "scheduled_at": {"$regex": f"^{scheduled_at_str}"},
             },
         )
@@ -749,12 +764,23 @@ class BlockBidServices:
             "MaxOCFQty": max_qty_value,
         }
 
-    async def submit_dam_to_exchange(self, biding_date: str, submitted_by: str = "", correlation_id: str = "") -> Dict[str, Any]:
+    async def submit_dam_to_exchange(
+        self,
+        biding_date: str,
+        submitted_by: str = "",
+        correlation_id: str = "",
+        market: str = "DAM",
+    ) -> Dict[str, Any]:
         """
-        Submit all Approved DAM block bids for biding_date to IEX exchange.
+        Submit all Approved DAM/GDAM block bids for biding_date to IEX exchange.
+
+        Args:
+            market: "DAM" or "GDAM". Both expose an identical block-bid API under
+                    their own path prefix (DAM 2.2 §9.15, GDAM 2.1 §6 item 13), so
+                    a single flow serves both.
 
         Flow (IEX DAM API v2.2, Section 9.15):
-          1. Load exchange config (block, DAM)
+          1. Load exchange config (block, market)
           2. Fetch AssetId via get_asset_details()
           3. Fetch DeliveryDate Unix timestamp via get_delivery_dates()
           4. Fetch approved DAM bids from block_bid_current_data
@@ -767,9 +793,9 @@ class BlockBidServices:
          10. Bulk insert into dicision_dam_block_bid_iex_response
         """
         # 1. Exchange config
-        config = await self.exchange_config_repo.get_bidType_market_active_config("block", "DAM")
+        config = await self.exchange_config_repo.get_bidType_market_active_config("block", market)
         if not config:
-            raise HTTPException(status_code=503, detail="No active DAM block bid exchange configuration found")
+            raise HTTPException(status_code=503, detail=f"No active {market} block bid exchange configuration found")
 
         base_url       = config.get("baseUrl", "")
         user_id        = config.get("LoginUserId", "")
@@ -785,7 +811,7 @@ class BlockBidServices:
             portfolio_id=portfolio_id,
             bearer_token=bearer_token,
             correlation_id=correlation_id,
-            market_type="dam",
+            market_type=market.lower(),
             bid_type="block-bid",
         )
 
@@ -796,34 +822,34 @@ class BlockBidServices:
                 api_client.get_delivery_dates(bid_type="block-bid"),
             )
         except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail="Exchange API timed out fetching DAM asset/delivery info.")
+            raise HTTPException(status_code=504, detail=f"Exchange API timed out fetching {market} asset/delivery info.")
         except httpx.HTTPStatusError as e:
             raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error: {e.response.text}")
         except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to reach DAM exchange API: {type(e).__name__}: {e}")
+            raise HTTPException(status_code=502, detail=f"Failed to reach {market} exchange API: {type(e).__name__}: {e}")
 
         asset_details_list = asset_response.get("AssetDetails", [])
         asset_id = asset_details_list[0].get("AssetId", "") if asset_details_list else ""
         biddedQtyDecimal = float(asset_details_list[0].get("OrderQtyDecimal", 10)) if asset_details_list else 10.0
-        logger.info(f"DAM block bid: AssetId={asset_id}, QtyDecimal={biddedQtyDecimal}")
+        logger.info(f"{market} block bid: AssetId={asset_id}, QtyDecimal={biddedQtyDecimal}")
 
         # DAM exchange returns a single object {DeliveryDateId, DeliveryDate} (not wrapped in a list)
         delivery_date_ts = delivery_dates_resp.get("DeliveryDate")
         if not delivery_date_ts:
-            raise HTTPException(status_code=404, detail="DeliveryDate not found from DAM exchange")
-        logger.info(f"DAM block bid: DeliveryDate={delivery_date_ts}")
+            raise HTTPException(status_code=404, detail=f"DeliveryDate not found from {market} exchange")
+        logger.info(f"{market} block bid: DeliveryDate={delivery_date_ts}")
 
         # 4. Approved DAM bids
-        bids = await self.block_bid_repo.get_approved_bids(biding_date, market_type="DAM")
+        bids = await self.block_bid_repo.get_approved_bids(biding_date, market_type=market)
         if not bids:
-            raise HTTPException(status_code=404, detail=f"No approved DAM block bids found for {biding_date}")
+            raise HTTPException(status_code=404, detail=f"No approved {market} block bids found for {biding_date}")
 
         # 5. Cancel-then-resubmit: fetch existing bids on exchange, cancel any with matching (from, to)
         try:
             existing_resp = await api_client.get_dam_block_bids(delivery_date=delivery_date_ts)
             existing_bids = existing_resp.get("BlockBidDetails", [])
         except Exception as ex:
-            logger.warning(f"Could not fetch existing DAM block bids (will skip cancel step): {ex}")
+            logger.warning(f"Could not fetch existing {market} block bids (will skip cancel step): {ex}")
             existing_bids = []
 
         # Build set of (from, to) periods we are about to submit
@@ -852,22 +878,30 @@ class BlockBidServices:
                         )
                         if cancel_resp.get("Status") == "Success":
                             cancelled_order_ids.add(ex_order_id)
-                            logger.info(f"Cancelled existing DAM block bid OrderId={ex_order_id} before resubmit")
+                            logger.info(f"Cancelled existing {market} block bid OrderId={ex_order_id} before resubmit")
                         else:
-                            logger.warning(f"Could not cancel existing DAM block bid OrderId={ex_order_id}: {cancel_resp}")
+                            logger.warning(f"Could not cancel existing {market} block bid OrderId={ex_order_id}: {cancel_resp}")
                     except Exception as ce:
-                        logger.warning(f"Error cancelling existing DAM block bid OrderId={ex_order_id}: {ce}")
+                        logger.warning(f"Error cancelling existing {market} block bid OrderId={ex_order_id}: {ce}")
 
-        # 6. Build BidDetails[] — DAM block bid has no Session field
+        # 6. Build BidDetails[] — DAM/GDAM block bid has no Session field
         now = datetime.now()
-        day_str = now.strftime("%d")
-        user_id_prefix = str(user_id)[:5].ljust(5)
 
-        # Fetch DAM block bid reference count
+        # BidRef must follow the Bid Reference ID Generation logic (DAM 2.2 §14.1):
+        # for a User login it is the 5-character User ID followed by the exchange's
+        # running block-bid count incremented by one, max 9 characters total, and
+        # unique per block-bid entry transaction.
+        user_id_prefix = str(user_id)[:5].strip()
+
+        # Fetch block bid reference count. The response key is BlockBidRefCount
+        # (DAM 2.2 §11.8) — reading a non-existent key silently restarted the
+        # counter at 0 on every submission, so consecutive submissions reused the
+        # same BidRef values and the exchange rejected them as duplicates.
         try:
             ref_count_resp = await api_client.get_dam_block_bid_ref_count()
-            bid_ref_start = ref_count_resp.get("DAMBlockBidRefCount", 0)
-        except Exception:
+            bid_ref_start = int(ref_count_resp.get("BlockBidRefCount", 0) or 0)
+        except Exception as ref_err:
+            logger.warning(f"Could not fetch {market} block bid ref count, starting from 0: {ref_err}")
             bid_ref_start = 0
 
         bid_details: List[Dict[str, Any]] = []
@@ -890,31 +924,40 @@ class BlockBidServices:
             from_period_id = bid.get("from", "00:00")
             to_period_id   = bid.get("to", "00:00")
 
-            # OCF values are looked up per start-block of the time range
+            # OCF values are looked up per start-block of the time range, from the
+            # market's own limit_values. A block with a premium/discount or a max
+            # OCF quantity carries OCF; anything else is a standalone block bid.
             start_block = self._time_to_block(from_period_id)
             try:
-                ocf = await self._get_ocf_values_for_block(delivery_date_ts, start_block)
-            except Exception:
+                ocf = await self._get_ocf_values_for_block(delivery_date_ts, start_block, market)
+            except Exception as ocf_err:
+                logger.warning(
+                    f"OCF lookup failed for {market} block {start_block}, "
+                    f"submitting as standalone: {ocf_err}"
+                )
                 ocf = {"OCFOpted": "N", "PremiumDiscountPrice": 0, "MaxOCFQty": 0}
 
             num_bids = int(bid.get("number_of_bids", 1))
             for _ in range(num_bids):
                 blck_count += 1
-                bid_ref_id = f"{user_id_prefix}{day_str}{bid_ref_start + blck_count}"
+                bid_ref_id = f"{user_id_prefix}{bid_ref_start + blck_count}"[:9]
+                # PremiumDiscountPrice and MaxOCFQty are always present: the spec
+                # (DAM 2.2 §12.27) defines them as zero when OCF is not opted, and
+                # this is the /blockbid/ocf endpoint, so omitting them for standalone
+                # bids made the exchange reject the whole submission.
                 detail: Dict[str, Any] = {
-                    "FromPeriodId": from_period_id,
-                    "ToPeriodId":   to_period_id,
-                    "OCFOpted":     ocf["OCFOpted"],
-                    "BuySell":      buy_sell,
-                    "Price":        int(bid.get("bid_price", 0)),
-                    "Quantity":     int(quantity_exchange),
-                    "BidRef":       bid_ref_id,
-                    "LinkedBidRef": "",
-                    "LinkType":     "",
+                    "FromPeriodId":          from_period_id,
+                    "ToPeriodId":            to_period_id,
+                    "OCFOpted":              ocf["OCFOpted"],
+                    "PremiumDiscountPrice":  ocf["PremiumDiscountPrice"] if ocf["OCFOpted"] == "Y" else 0,
+                    "MaxOCFQty":             ocf["MaxOCFQty"] if ocf["OCFOpted"] == "Y" else 0,
+                    "BuySell":               buy_sell,
+                    "Price":                 int(bid.get("bid_price", 0)),
+                    "Quantity":              int(quantity_exchange),
+                    "BidRef":                bid_ref_id,
+                    "LinkedBidRef":          "",
+                    "LinkType":              "",
                 }
-                if ocf["OCFOpted"] == "Y":
-                    detail["PremiumDiscountPrice"] = ocf["PremiumDiscountPrice"]
-                    detail["MaxOCFQty"]            = ocf["MaxOCFQty"]
                 bid_details.append(detail)
 
         request_body = {
@@ -932,17 +975,17 @@ class BlockBidServices:
         try:
             response_data = await api_client.submit_dam_block_bid(request_body)
         except Exception as e:
-            logger.error(f"DAM exchange API error during block bid submission: {str(e)}")
+            logger.error(f"{market} exchange API error during block bid submission: {str(e)}")
             raise HTTPException(status_code=502, detail=f"Exchange API error: {str(e)}")
 
         transaction_id = response_data.get("TransactionId") if isinstance(response_data, dict) else None
         submit_status  = response_data.get("Status", "Unknown") if isinstance(response_data, dict) else "Unknown"
 
         if submit_status != "Success" or not transaction_id:
-            logger.error(f"DAM block bid submission failed — full exchange response: {response_data}")
+            logger.error(f"{market} block bid submission failed — full exchange response: {response_data}")
             raise HTTPException(status_code=502, detail={"exchange_response": response_data})
 
-        logger.info(f"DAM block bid submitted: TransactionId={transaction_id}, waiting for bid details...")
+        logger.info(f"{market} block bid submitted: TransactionId={transaction_id}, waiting for bid details...")
 
         # 8. Wait 4 seconds then fetch per-bid order details
         await asyncio.sleep(4)
@@ -954,11 +997,11 @@ class BlockBidServices:
                 bid_type="block-bid",
             )
         except Exception as e:
-            logger.warning(f"get_bid_details failed after DAM submission (TransactionId={transaction_id}): {e}")
+            logger.warning(f"get_bid_details failed after {market} submission (TransactionId={transaction_id}): {e}")
             bid_details_response = {}
 
-        # 9. Mark approved DAM bids → Submitted
-        await self.block_bid_repo.bulk_update_status(biding_date, "Approved", "Submitted", market_type="DAM")
+        # 9. Mark approved bids → Submitted
+        await self.block_bid_repo.bulk_update_status(biding_date, "Approved", "Submitted", market_type=market)
 
         # 10. Map BlockBidDetails → store in iex_response
         dam_bid_details = bid_details_response.get("BlockBidDetails", []) if isinstance(bid_details_response, dict) else []
@@ -986,7 +1029,7 @@ class BlockBidServices:
                     "from":        from_time,
                     "to":          to_time,
                     "status":      "Submitted",
-                    "market_type": "DAM",
+                    "market_type": market,
                 },
                 {"$set": set_fields},
             )
@@ -1014,16 +1057,16 @@ class BlockBidServices:
                 "inserted_date":     biding_date,
                 "created_by":        submitted_by,
                 "created_time":      now.strftime("%d-%m-%Y %H:%M:%S"),
-                "market_type":       "DAM",
+                "market_type":       market,
             })
 
         if response_docs:
             await self.dam_iex_response_repo.bulk_insert_response_docs(response_docs)
 
-        logger.info(f"DAM block bid submission complete: TransactionId={transaction_id}, {len(response_docs)} bids, status={final_status}")
+        logger.info(f"{market} block bid submission complete: TransactionId={transaction_id}, {len(response_docs)} bids, status={final_status}")
         return {
             "status": "success",
-            "message": f"DAM Bid {final_status} in exchange!",
+            "message": f"{market} Bid {final_status} in exchange!",
             "transaction_id": transaction_id,
             "bids_submitted": len(response_docs),
         }
@@ -1034,22 +1077,23 @@ class BlockBidServices:
         biding_date: str,
         cancelled_by: str = "",
         correlation_id: str = "",
+        market: str = "DAM",
     ) -> Dict[str, Any]:
         """
-        Cancel submitted DAM block bids on IEX exchange for each order_id.
+        Cancel submitted DAM/GDAM block bids on IEX exchange for each order_id.
 
         Flow:
-          1. Load DAM block bid exchange config
+          1. Load block bid exchange config for the market
           2. For each order_id fetch last_updated_time from dicision_dam_block_bid_iex_response
-          3. PUT to /dam/api/v2/blockbid/cancel
+          3. PUT to /{market}/api/v2/blockbid/cancel
           4. On success: update dicision_dam_block_bid_iex_response status → Cancelled
         """
         if not order_ids:
             raise HTTPException(status_code=400, detail="order_ids list is required")
 
-        config = await self.exchange_config_repo.get_bidType_market_active_config("block", "DAM")
+        config = await self.exchange_config_repo.get_bidType_market_active_config("block", market)
         if not config:
-            raise HTTPException(status_code=503, detail="No active DAM block bid exchange configuration found")
+            raise HTTPException(status_code=503, detail=f"No active {market} block bid exchange configuration found")
 
         base_url       = config.get("baseUrl", "")
         user_id        = config.get("LoginUserId", "")
@@ -1071,7 +1115,7 @@ class BlockBidServices:
             portfolio_id=portfolio_id,
             bearer_token=bearer_token,
             correlation_id=correlation_id,
-            market_type="dam",
+            market_type=market.lower(),
             bid_type="block-bid",
         )
 
@@ -1081,7 +1125,7 @@ class BlockBidServices:
             try:
                 iex_doc = await self.dam_iex_response_repo.get_by_order_id(order_id)
                 if not iex_doc:
-                    item["message"] = f"No DAM exchange response doc found for order_id={order_id}"
+                    item["message"] = f"No {market} exchange response doc found for order_id={order_id}"
                     logger.warning(item["message"])
                     results.append(item)
                     continue
@@ -1104,21 +1148,21 @@ class BlockBidServices:
                     )
                     item["success"] = True
                     item["message"] = "Cancelled successfully on exchange"
-                    logger.info(f"DAM block bid order_id={order_id} cancelled on exchange by {cancelled_by}")
+                    logger.info(f"{market} block bid order_id={order_id} cancelled on exchange by {cancelled_by}")
                 else:
                     item["message"] = exchange_response.get("StatusMessage", exchange_response.get("message", "Exchange returned error"))
-                    logger.warning(f"DAM exchange cancellation failed for order_id={order_id}: {exchange_response}")
+                    logger.warning(f"{market} exchange cancellation failed for order_id={order_id}: {exchange_response}")
 
             except Exception as e:
                 item["message"] = str(e)
-                logger.error(f"Error cancelling DAM order_id={order_id}: {e}")
+                logger.error(f"Error cancelling {market} order_id={order_id}: {e}")
 
             results.append(item)
 
         success_count = sum(1 for r in results if r["success"])
         return {
             "success": success_count > 0,
-            "message": f"{success_count}/{len(order_ids)} DAM bids cancelled on exchange",
+            "message": f"{success_count}/{len(order_ids)} {market} bids cancelled on exchange",
             "results": results,
         }
 

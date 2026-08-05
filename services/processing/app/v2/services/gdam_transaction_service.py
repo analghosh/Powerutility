@@ -292,7 +292,8 @@ class GDAMTransactionService:
         Args:
             current_user: Current authenticated user
             bid_data: Dictionary containing bid data for BidCreationpost (prices, volumes, etc)
-            ocf_toggle: If True, fetch OCF values from limit_values
+            ocf_toggle: Accepted for payload compatibility, no longer gates OCF.
+                        OCF is taken from the per-block limit_values data every time.
             bid_area_id: Bid area ID (if provided, overrides config)
             correlation_id: Request correlation ID
             
@@ -367,63 +368,51 @@ class GDAMTransactionService:
         
         logger.info(f"Asset: {asset_id}, DeliveryDate: {delivery_date}, bidding_date: {bidding_date}")
         
-        # 4. Check for existing bids and cancel if found
+        # 4. Withdraw every existing bid, then submit the new revision.
+        # iDAM treats one submission as ONE bid no matter how many of the 96 blocks
+        # it carries, so revision N must completely replace revision N-1. This runs
+        # unconditionally: the previous "look up existing bids, cancel only if the
+        # lookup found some" guard let stale blocks survive whenever the lookup
+        # missed them (bid placed under a different bid area, paging, or a swallowed
+        # error), leaving revision N-1 merged with revision N on the exchange.
         effective_bid_area_id = bid_area_id or config.get("BidAreaId", "S2")
-        logger.info(f"Checking for existing DAM bids with BidAreaId: {effective_bid_area_id}")
-        
+        logger.info(f"Withdrawing all existing GDAM bids before submission (BidAreaId: {effective_bid_area_id})")
+
         try:
-            existing_bids = await api_client.get_single_bid_dam(
+            cancel_result = await api_client.cancel_all_dam_bid(
                 delivery_date=delivery_date,
-                product_id="ALL",
+                asset_id=asset_id,
                 bid_area_id=effective_bid_area_id
             )
-            
-            total_record = existing_bids.get("TotalRecord", 0)
-            single_bid_details = existing_bids.get("SingleBidDetails", [])
-            
-            if total_record > 0 or len(single_bid_details) > 0:
-                logger.info(f"Found {total_record} existing bids, canceling before new submission")
-                
-                cancel_result = await api_client.cancel_all_dam_bid(
-                    delivery_date=delivery_date,
-                    asset_id=asset_id,
-                    bid_area_id=effective_bid_area_id
-                )
-                
-                if cancel_result.get("Status") != "Success":
-                    logger.warning(f"Bid cancellation returned non-success status: {cancel_result}")
-                    # Continue with submission anyway - user may want this behavior
-                
-                logger.info(f"Successfully cancelled existing bids: {cancel_result.get('TransactionId', 'N/A')}")
-                # Update DB status to cancelled for old records
-                try:
-                    await self.gdam_single_bid_repo.update_many(
-                        {
-                            "bid_date": bidding_date,
-                            "bid_status": {"$in": ["submitted"]}
-                        },
-                        {"$set": {"bid_status": "withdrawal_bid", "exchangeStatus": "Cancelled"}}
-                    )
-                except Exception as db_err:
-                    logger.warning(f"Failed to update DB status to cancelled during pre-submission clear: {db_err}")
+
+            if cancel_result.get("Status") != "Success":
+                logger.warning(f"Pre-submission cancel-all returned non-success status: {cancel_result}")
             else:
-                logger.info("No existing bids found, proceeding with submission")
-                
+                logger.info(f"Withdrew all existing bids: {cancel_result.get('TransactionId', 'N/A')}")
+
+            # Update DB status to cancelled for old records
+            try:
+                await self.gdam_single_bid_repo.update_many(
+                    {
+                        "bid_date": bidding_date,
+                        "bid_status": {"$in": ["submitted"]}
+                    },
+                    {"$set": {"bid_status": "withdrawal_bid", "exchangeStatus": "Cancelled"}}
+                )
+            except Exception as db_err:
+                logger.warning(f"Failed to update DB status to cancelled during pre-submission clear: {db_err}")
+
         except httpx.HTTPStatusError as e:
-            logger.warning(f"Error checking/canceling existing bids: {e.response.text}. Proceeding with submission.")
+            logger.warning(f"Pre-submission cancel-all failed [{e.response.status_code}]: {e.response.text}. Proceeding with submission.")
         except Exception as e:
-            logger.warning(f"Error checking/canceling existing bids: {str(e)}. Proceeding with submission.")
-        
-        # 5. Prepare OCF values map
-        if ocf_toggle:
-            # Single bulk DB query replaces 96 sequential queries (was ~2-3s, now <100ms)
-            logger.info("OCF toggle is ON, fetching all OCF values in bulk")
-            ocf_values_map = await self._get_all_ocf_values(delivery_date)
-        else:
-            # Default OCF values when toggle is off — build directly, no DB needed
-            default_ocf = {"PremiumDiscountPrice": 0, "MaxOCFQty": 0, "OCFOpted": "N"}
-            ocf_values_map = {block: default_ocf for block in range(1, 97)}
-        
+            logger.warning(f"Pre-submission cancel-all failed: {str(e)}. Proceeding with submission.")
+
+        # 5. Prepare OCF values map.
+        # OCF is driven by the per-block data captured at bid creation, never by a
+        # global flag: a block carries OCF when limit_values holds a premium/discount
+        # or a max OCF quantity for it, and is standalone otherwise.
+        ocf_values_map = await self._get_all_ocf_values(delivery_date)
+
         # 6. Transform bid data with Quantity validation
         bid_details = self._transform_bid_block_to_api_format(
             bid_block_array, 
@@ -591,9 +580,11 @@ class GDAMTransactionService:
                 "bidded": bidded_qty,
                 "orderId": detail.get("OrderId"),
             }
-            # Mirror rejected status locally so listing endpoints reflect the rejection.
-            if exchange_order_status == "Rejected":
-                update_data["bid_status"] = "exchange_rejected"
+            # bid_status is deliberately left untouched. The workflow status stays
+            # whatever the approval flow set; a rejection by the exchange is not a
+            # workflow state. The raw exchange verdict is still recorded above in
+            # exchangeStatus, so nothing is lost — only the "Rejected by Exchange"
+            # bid status the business asked us to drop.
 
             db_update = self.gdam_single_bid_repo.update_one(
                 {
