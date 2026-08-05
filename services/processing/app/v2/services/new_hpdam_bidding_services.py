@@ -1961,6 +1961,8 @@ class HPDAMBiddingServices:
             dbarray = {}
             capture_tasks: List[Dict[str, Any]] = []
             revision_by_date: Dict[str, Optional[int]] = {}
+            # One shared next revision per schedule date for the whole submit batch
+            next_revision_by_date: Dict[str, int] = {}
             
             requested_by_user = "unknown"
             if current_user:
@@ -1997,11 +1999,13 @@ class HPDAMBiddingServices:
                 date_obj = datetime.strptime(dates[0], "%d-%m-%Y")  # parse string to datetime
                 formatted_date = date_obj.strftime("%Y-%m-%d")      # normalize to "YYYY-MM-DD"
 
-                # Get latest revision for this specific date + start_time
-                # Use the block's scheduled date (formatted_date) instead of today's date
-                getRevision = await self.single_bid_data_for_approval_repo.getPlantDataForApprovalbytime(
-                    formatted_date, bltimefull[0]
-                )
+                # Shared next revision for all blocks on this date in this submit
+                if formatted_date not in next_revision_by_date:
+                    max_rev = await self.single_bid_data_for_approval_repo.get_max_revision_for_date(
+                        formatted_date
+                    )
+                    next_revision_by_date[formatted_date] = (int(max_rev) + 1) if max_rev else 1
+                bid_revision = next_revision_by_date[formatted_date]
                 
                 # Delete existing record if exists
                 check_exist_row = await self.dam_currect_selected_forecast_log_repo.getData(int(blno[1]),  dates[0])  # type: ignore
@@ -2029,7 +2033,6 @@ class HPDAMBiddingServices:
 
                 if not session_block:
                     return {"status": "error", "code": 400, "message": f"No session mapping for {bltimefull[0]}"}
-                bid_revision = (int(getRevision) + 1) if getRevision else 1
                 if formatted_date not in revision_by_date:
                     revision_by_date[formatted_date] = await self.supply_repo.get_first_sg_source_revision_for_date(
                         formatted_date
@@ -2087,7 +2090,7 @@ class HPDAMBiddingServices:
                     "start_time": bltimefull[0],
                     "end_time": bltimefull[1],
                     "block_no": int(blno[1]),
-                    "revision_no": int(getRevision) + 1 if getRevision else 1,
+                    "revision_no": bid_revision,
                     "bid_type": "single",
                     "session_block": int(session_block),
                     "member_id": iex_participant_id,
