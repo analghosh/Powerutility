@@ -64,6 +64,49 @@ class DAMSingleBidDataForApprovalRepository(GenericRepository):
             return result[0].get("revision_no", 0)
         return 0
 
+    async def get_max_revision_for_date(self, date: str) -> int:
+        """
+        Return the highest revision_no for a given date across DAM, GDAM, and
+        HPDAM approval collections so all three markets share one revision sequence.
+        """
+        try:
+            match_stage = {
+                "$match": {
+                    "$or": [
+                        {"bid_date": date},
+                        {"inserted_date": date},
+                        {"schedule_date": date},
+                    ]
+                }
+            }
+            group_stage = {"$group": {"_id": None, "max_rev": {"$max": "$revision_no"}}}
+            pipeline = [match_stage, group_stage]
+
+            collection_names = [
+                settings.MONGODB_DAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION,
+                settings.MONGODB_GDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION,
+                settings.MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION,
+            ]
+
+            max_rev = 0
+            for collection_name in collection_names:
+                try:
+                    cursor = self.db[collection_name].aggregate(pipeline)
+                    result = await cursor.to_list(length=1)
+                    if result and result[0].get("max_rev") is not None:
+                        max_rev = max(max_rev, int(result[0]["max_rev"]))
+                except Exception as coll_err:
+                    logger.warning(
+                        "Failed to get max revision from %s for date %s: %s",
+                        collection_name,
+                        date,
+                        str(coll_err),
+                    )
+            return max_rev
+        except Exception as e:
+            logger.error("Failed to get cross-market max revision for date %s: %s", date, str(e))
+            return 0
+
     async def find_by_filters(self, filters: Dict[str, Any], projection: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
         """
         Find documents by filters with optional projection.
