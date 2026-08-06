@@ -50,9 +50,19 @@ BID_CONFIGURATION_KEY = "bid_configuration"
 
 # Default NOC / ceiling bid prices per market (auto-created if missing).
 DEFAULT_BID_PRICES = {
+    "rtm_bid_price": 10000,
     "dam_bid_price": 10000,
     "gdam_bid_price": 10000,
     "hpdam_bid_price": 20000,
+}
+
+# "Maximum Buy Bid Price" toggles per market (auto-created if missing).
+# Disabled by default: enabling lets users bid at the Maximum Exchange Bid Price.
+DEFAULT_MAX_BUY_BID_PRICE_FLAGS = {
+    "rtm_max_buy_bid_price": False,
+    "gdam_max_buy_bid_price": False,
+    "dam_max_buy_bid_price": False,
+    "hpdam_max_buy_bid_price": False,
 }
 
 
@@ -184,6 +194,7 @@ class ParameterService:
         """
         try:
             await self.ensure_bid_price_defaults()
+            await self.ensure_max_buy_bid_price_defaults()
             return await parameter_repository.get_all_parameters(
                 skip=skip,
                 limit=limit,
@@ -277,9 +288,9 @@ class ParameterService:
 
     async def ensure_bid_price_defaults(self) -> Dict[str, Any]:
         """
-        Ensure dam_bid_price / gdam_bid_price / hpdam_bid_price exist in
-        the parameters collection. Creates missing keys with defaults only;
-        does not overwrite existing values.
+        Ensure rtm_bid_price / dam_bid_price / gdam_bid_price / hpdam_bid_price
+        exist in the parameters collection. Creates missing keys with defaults
+        only; does not overwrite existing values.
         """
         created: Dict[str, Any] = {}
         for para_key, para_value in DEFAULT_BID_PRICES.items():
@@ -304,13 +315,44 @@ class ParameterService:
             )
         return created
 
+    async def ensure_max_buy_bid_price_defaults(self) -> Dict[str, Any]:
+        """
+        Ensure the per-market "Maximum Buy Bid Price" toggles exist in the
+        parameters collection. Creates missing keys disabled; never overwrites
+        an existing value.
+        """
+        created: Dict[str, Any] = {}
+        for para_key, para_value in DEFAULT_MAX_BUY_BID_PRICE_FLAGS.items():
+            existing = await parameter_repository.get_parameter_by_key(para_key)
+            if existing:
+                continue
+            market = para_key.replace("_max_buy_bid_price", "").upper()
+            await parameter_repository.create_parameter(
+                {
+                    "para_key": para_key,
+                    "para_value": para_value,
+                    "description": (
+                        f"Allow {market} Buy Bids at the Maximum Exchange Bid Price "
+                        f"when the Ceiling Price equals it"
+                    ),
+                }
+            )
+            created[para_key] = para_value
+            logger.info(
+                "Auto-created parameter '%s' with default value %s",
+                para_key,
+                para_value,
+            )
+        return created
+
     async def get_bid_price(self, market: str) -> int:
         """
-        Return the configured bid price for a market (DAM / GDAM / HPDAM).
+        Return the configured bid price for a market (RTM / DAM / GDAM / HPDAM).
         Ensures defaults exist, then reads from parameters.
         """
         await self.ensure_bid_price_defaults()
         key_map = {
+            "RTM": "rtm_bid_price",
             "DAM": "dam_bid_price",
             "GDAM": "gdam_bid_price",
             "HPDAM": "hpdam_bid_price",
