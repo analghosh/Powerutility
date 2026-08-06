@@ -168,6 +168,43 @@ class DAMTransactionService:
             "OCFOpted": "Y",
         }
 
+    @staticmethod
+    def _compress_pq_curve(pq_array: List[Dict[str, Any]], max_points: int = 100) -> List[Dict[str, Any]]:
+        """
+        Drop the PQ points that sit *inside* a run of identical quantity.
+
+        Bid creation builds one price point per distinct price across the whole
+        day (~150) and stamps that same ladder onto every block, but IEX caps
+        PQData at 100 entries per block (DAM 2.2 §12.25, GDAM 2.1 §12.9). Almost
+        all of those points are redundant — a block whose quantity never changes
+        is a two-point curve written out 150 times.
+
+        Only the interior of a flat run is removed; the first and last point of
+        every run are kept. The curve is therefore identical whether the exchange
+        reads PQData as a step function or interpolates between the points.
+        """
+        if len(pq_array) <= 2:
+            return pq_array
+
+        compressed = [pq_array[0]]
+        for i in range(1, len(pq_array) - 1):
+            prev_qty = pq_array[i - 1]["Quantity"]
+            curr_qty = pq_array[i]["Quantity"]
+            next_qty = pq_array[i + 1]["Quantity"]
+            # Keep the point unless it is flanked by the same quantity on both
+            # sides, i.e. unless it lies strictly inside a flat segment.
+            if not (curr_qty == prev_qty and curr_qty == next_qty):
+                compressed.append(pq_array[i])
+        compressed.append(pq_array[-1])
+
+        if len(compressed) > max_points:
+            logger.error(
+                f"PQData still has {len(compressed)} points after compression, over the "
+                f"{max_points} the exchange accepts — the bid curve genuinely has that many "
+                "steps and will be rejected. Not truncating: dropping points would change the bid."
+            )
+        return compressed
+
     def _validate_round_quantity(self, quantity: float, order_qty_decimal: int) -> int:
         """
         Validate and truncate quantity to integer.
@@ -314,7 +351,7 @@ class DAMTransactionService:
                     "OCFOpted": ocf_opted,
                     "PremiumDiscountPrice": ocf["PremiumDiscountPrice"] if ocf_opted == "Y" else 0,
                     "MaxOCFQty": max_ocf_qty,
-                    "PQData": pq_array
+                    "PQData": self._compress_pq_curve(pq_array)
                 }
 
                 bid_details.append(bid_detail)
