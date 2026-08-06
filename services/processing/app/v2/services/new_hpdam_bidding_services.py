@@ -56,6 +56,17 @@ async def bidPriceNOC():
         return 20000
 
 
+async def maxBuyBidPriceEnabled():
+    """Fetch hpdam_max_buy_bid_price from parameters; fallback to disabled."""
+    try:
+        return await parameter_service.is_max_buy_bid_price_enabled("HPDAM")
+    except Exception as e:
+        logger.warning(
+            f"Failed to fetch hpdam_max_buy_bid_price from parameters: {e}"
+        )
+        return False
+
+
 def to_float(v):
     try:
         return float(v)
@@ -3186,11 +3197,25 @@ class HPDAMBiddingServices:
                     # HPDAM's ceiling (20000) sits above the tail price points the UI
                     # sends with zero volume, so prefer the highest price that carries
                     # an actual volume and fall back to the plain ceiling filter.
+                    # With the "Maximum Buy Bid Price" parameter enabled the NOC price
+                    # point itself may carry volume. The UI only offers that row when
+                    # the block's Ceiling Price equals the NOC price. It is admitted
+                    # only when a volume was actually entered there — an empty row must
+                    # not become the max price and zero the whole ladder.
                     max_price_volume = 0.0
                     max_price_float = 0.0
                     if blk_buydata:
                         noc_price = await bidPriceNOC()
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < noc_price]
+                        allow_noc_price = await maxBuyBidPriceEnabled()
+                        valid_keys = [
+                            k for k in blk_buydata.keys()
+                            if float(k) < noc_price
+                            or (
+                                allow_noc_price
+                                and float(k) == noc_price
+                                and to_float(blk_buydata[k]) != 0.0
+                            )
+                        ]
                         priced_keys = [k for k in valid_keys if to_float(blk_buydata[k]) != 0.0]
                         candidate_keys = priced_keys or valid_keys
                         if candidate_keys:

@@ -378,6 +378,29 @@ class ParameterService:
             )
             return int(default)
 
+    async def is_max_buy_bid_price_enabled(self, market: str) -> bool:
+        """
+        Return the "Maximum Buy Bid Price" toggle for a market
+        (RTM / DAM / GDAM / HPDAM). Ensures defaults exist, then reads from
+        parameters. Disabled on any unreadable value.
+        """
+        await self.ensure_max_buy_bid_price_defaults()
+        market_key = str(market).strip().upper()
+        para_key = f"{market_key.lower()}_max_buy_bid_price"
+        if para_key not in DEFAULT_MAX_BUY_BID_PRICE_FLAGS:
+            raise ValueError(
+                f"Invalid market '{market}'. Allowed: ['DAM', 'GDAM', 'HPDAM', 'RTM']"
+            )
+        record = await parameter_repository.get_parameter_by_key(para_key)
+        if not record:
+            return bool(DEFAULT_MAX_BUY_BID_PRICE_FLAGS[para_key])
+        value = record.get("para_value")
+        if isinstance(value, bool):
+            return value
+        # The Parameters page writes booleans, but a hand-edited record may hold
+        # the string form.
+        return str(value).strip().lower() == "true"
+
     # ------------------------------------------------------------------
     # Bid configuration (parameter master)
     # ------------------------------------------------------------------

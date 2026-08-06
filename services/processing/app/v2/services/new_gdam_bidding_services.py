@@ -56,6 +56,17 @@ async def bidPriceNOC():
         return 10000
 
 
+async def maxBuyBidPriceEnabled():
+    """Fetch gdam_max_buy_bid_price from parameters; fallback to disabled."""
+    try:
+        return await parameter_service.is_max_buy_bid_price_enabled("GDAM")
+    except Exception as e:
+        logger.warning(
+            f"Failed to fetch gdam_max_buy_bid_price from parameters: {e}"
+        )
+        return False
+
+
 def to_float(v):
     try:
         return float(v)
@@ -3197,10 +3208,25 @@ class GDAMBiddingServices:
                     # Find the volume at the max price point, excluding bidPriceNOC (10000).
                     # "10000" (str) != 10000 (int) in Python, so it is not filtered at
                     # collection time — we explicitly exclude it here.
+                    # Exception: with the "Maximum Buy Bid Price" parameter enabled the
+                    # NOC price point itself may carry volume. The UI only offers that
+                    # row when the block's Ceiling Price equals the NOC price. It is
+                    # admitted only when a volume was actually entered there — an empty
+                    # row must not become the max price and zero the whole ladder.
                     max_price_volume = 0.0
                     max_price_float = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < await bidPriceNOC()]
+                        noc_price = await bidPriceNOC()
+                        allow_noc_price = await maxBuyBidPriceEnabled()
+                        valid_keys = [
+                            k for k in blk_buydata.keys()
+                            if float(k) < noc_price
+                            or (
+                                allow_noc_price
+                                and float(k) == noc_price
+                                and to_float(blk_buydata[k]) != 0.0
+                            )
+                        ]
                         if valid_keys:
                             max_price_key = max(valid_keys, key=lambda x: float(x))
                             max_price_float = float(max_price_key)
