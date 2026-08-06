@@ -482,11 +482,30 @@ class GDAMTransactionService:
             logger.error(f"Submission error: {err_msg}")
             raise HTTPException(status_code=500, detail=f"Submission failed: {err_msg}")
         
+        # The exchange answers 200 OK even when it rejects the bid — the verdict is
+        # in the body. Without this check a rejected submission looked successful
+        # and the bids were marked "submitted" while nothing reached the market.
+        submit_status = submit_response.get("Status") if isinstance(submit_response, dict) else None
+        if submit_status != "Success":
+            status_message = submit_response.get("StatusMessage", "") if isinstance(submit_response, dict) else str(submit_response)
+            logger.error(
+                f"GDAM bid rejected by exchange [Status={submit_status}] — full response: {submit_response}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "Exchange rejected the bid submission.",
+                    "exchange_status": submit_status,
+                    "exchange_message": status_message,
+                    "transaction_id": submit_response.get("TransactionId") if isinstance(submit_response, dict) else None,
+                },
+            )
+
         transaction_id = submit_response.get("TransactionId")
         if not transaction_id:
              logger.warning("No TransactionId in submit response, cannot fetch details.")
              return submit_response
-             
+
         # Format dates for aggregation
         # bidding_date already extracted above
         
