@@ -60,77 +60,100 @@ class GDAMTransactionService:
         
         return self._api_client
 
-    async def _get_all_ocf_values(self, delivery_date: int) -> Dict[int, Dict[str, Any]]:
+    async def _get_all_ocf_values(self, bidding_date: str) -> Dict[int, Dict[str, Any]]:
         """
-        Fetch OCF values for ALL 96 blocks in a single DB query (replaces 96 sequential queries).
+        Build the per-block OCF map for a bid date from the approval records.
+
+        OCF is chosen by the trader per block on the bid sheet and travels with the
+        bid through submit-for-approval, landing on each gdam_single_bid_data_for_approval
+        document as `ocf_config` in the form:
+
+            {allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}]
+
+        e.g. "60_O_20_7.92" → 60% allocation, OCF opted, premium 20, max OCF qty 7.92.
+        "S" in the second position means standalone, i.e. no OCF for that block.
+        GDAM has no MaxOCFQty at all (GDAM 2.1 §12.9 defines only OCFOpted and
+        PremiumDiscountPrice per block), so any 4th segment is ignored here.
+
+        The latest revision wins, matching the revision the bid itself is built from.
 
         Args:
-            delivery_date: Unix timestamp of delivery date
+            bidding_date: Bid date in "YYYY-MM-DD" form (the delivery date being bid for)
 
         Returns:
             Dict mapping block number (1-96) → {PremiumDiscountPrice, MaxOCFQty, OCFOpted}
         """
-        dt = datetime.fromtimestamp(delivery_date, tz=timezone.utc)
-        scheduled_at_str = dt.strftime("%Y-%m-%d")
+        logger.info(f"Fetching per-block OCF config for bid date {bidding_date}")
 
-        logger.info(f"Fetching all OCF values for date {scheduled_at_str} in bulk")
+        # Highest revision per block, in one round trip.
+        pipeline = [
+            {"$match": {"bid_date": bidding_date}},
+            {"$sort": {"block_no": 1, "revision_no": -1}},
+            {"$group": {"_id": "$block_no", "doc": {"$first": "$$ROOT"}}},
+            {"$replaceRoot": {"newRoot": "$doc"}},
+        ]
+        docs = await self.gdam_single_bid_repo.aggregate(pipeline)
 
-        # Active exchange for limit_values filtering
-        exchange_config = await self.exchange_config_repo.get_bidType_market_active_config("single", "GDAM") or {}
-        active_exchange = exchange_config.get("exchange", "IEX")
+        ocf_map: Dict[int, Dict[str, Any]] = {
+            block: {"PremiumDiscountPrice": 0, "MaxOCFQty": 0, "OCFOpted": "N"}
+            for block in range(1, 97)
+        }
 
-        # Single query: fetch all OCF rows for this date (both id types, all blocks)
-        # First try with active exchange filter; fall back to legacy docs without exchange field.
-        all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
-            "limit_values",
-            filters={
-                "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
-                "category": "Limits",
-                "market": "GDAM",
-                "exchange": active_exchange,
-                "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
-            }
+        opted_blocks = 0
+        for doc in docs:
+            block = doc.get("block_no")
+            if not isinstance(block, int) or not 1 <= block <= 96:
+                continue
+            parsed = self._parse_ocf_config(doc, include_max_qty=False)
+            ocf_map[block] = parsed
+            if parsed["OCFOpted"] == "Y":
+                opted_blocks += 1
+
+        logger.info(
+            f"OCF config resolved for {bidding_date}: {len(docs)} approval docs → "
+            f"{opted_blocks}/96 blocks with OCF opted"
         )
-        if not all_ocf_rows:
-            logger.info(
-                f"No OCF limit_values found for active exchange '{active_exchange}'; "
-                "falling back to legacy/default (no exchange) documents."
-            )
-            all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
-                "limit_values",
-                filters={
-                    "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
-                    "category": "Limits",
-                    "market": "GDAM",
-                    "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
-                }
-            )
-
-        # Build per-block maps
-        premium_map: Dict[int, float] = {}
-        max_qty_map: Dict[int, float] = {}
-
-        for row in all_ocf_rows:
-            block = row.get("block")
-            val = row.get("values", 0) or 0
-            if row.get("id") == "ocfPremiumDiscountPrice":
-                premium_map[block] = val
-            elif row.get("id") == "ocfMaxOCFQty":
-                max_qty_map[block] = val
-
-        # Build full map for blocks 1-96
-        ocf_map: Dict[int, Dict[str, Any]] = {}
-        for block in range(1, 97):
-            premium = premium_map.get(block, 0)
-            max_qty = max_qty_map.get(block, 0)
-            ocf_map[block] = {
-                "PremiumDiscountPrice": premium,
-                "MaxOCFQty": max_qty,
-                "OCFOpted": "Y" if (premium != 0 or max_qty != 0) else "N"
-            }
-
-        logger.info(f"OCF bulk fetch complete: {len(all_ocf_rows)} rows → 96 blocks mapped")
         return ocf_map
+
+    @staticmethod
+    def _parse_ocf_config(doc: Dict[str, Any], include_max_qty: bool = True) -> Dict[str, Any]:
+        """
+        Turn one approval document's ocf_config into exchange OCF fields.
+
+        Falls back to the pre-parsed ocf_premium_discount / max_ocf_qty fields that
+        submit-for-approval stores for buy bids when the raw string is absent.
+        Anything unparseable is treated as standalone rather than guessed at — an
+        wrong premium on a live bid is worse than no OCF.
+        """
+        standalone = {"PremiumDiscountPrice": 0, "MaxOCFQty": 0, "OCFOpted": "N"}
+
+        raw = doc.get("ocf_config") or doc.get("ocf") or ""
+        parts = [p.strip() for p in str(raw).split("_")] if raw else []
+
+        # Second segment carries the mode: O = OCF, S = Standalone.
+        if len(parts) < 3 or parts[1].upper() != "O":
+            return standalone
+
+        def _num(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        premium = _num(doc.get("ocf_premium_discount")) if doc.get("ocf_premium_discount") is not None else _num(parts[2])
+
+        max_qty = 0.0
+        if include_max_qty:
+            if doc.get("max_ocf_qty") is not None:
+                max_qty = _num(doc.get("max_ocf_qty"))
+            elif len(parts) >= 4:
+                max_qty = _num(parts[3])
+
+        return {
+            "PremiumDiscountPrice": premium,
+            "MaxOCFQty": max_qty,
+            "OCFOpted": "Y",
+        }
 
     def _validate_round_quantity(self, quantity: float, order_qty_decimal: int) -> int:
         """
@@ -269,7 +292,6 @@ class GDAMTransactionService:
                     "ToPeriodId": to_period,
                     "OCFOpted": ocf["OCFOpted"],
                     "PremiumDiscountPrice": ocf["PremiumDiscountPrice"],
-                    "MaxOCFQty": ocf["MaxOCFQty"],
                     "PQData": pq_array
                 }
                 
@@ -408,10 +430,9 @@ class GDAMTransactionService:
             logger.warning(f"Pre-submission cancel-all failed: {str(e)}. Proceeding with submission.")
 
         # 5. Prepare OCF values map.
-        # OCF is driven by the per-block data captured at bid creation, never by a
-        # global flag: a block carries OCF when limit_values holds a premium/discount
-        # or a max OCF quantity for it, and is standalone otherwise.
-        ocf_values_map = await self._get_all_ocf_values(delivery_date)
+        # OCF is driven by the per-block ocf_config the trader set on the bid sheet
+        # and that travelled through submit-for-approval — never by a global flag.
+        ocf_values_map = await self._get_all_ocf_values(bidding_date)
 
         # 6. Transform bid data with Quantity validation
         bid_details = self._transform_bid_block_to_api_format(
