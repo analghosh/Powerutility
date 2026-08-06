@@ -3182,14 +3182,15 @@ class HPDAMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Use volume from the highest priced (non-zero) point at or below NOC.
-                    # HPDAM's ceiling (20000) often sits above UI tail points sent with
-                    # zero volume — prefer a non-zero key, then fill through NOC so the
-                    # cap price is not left at 0.
+                    # Fill prices < NOC from highest non-zero price below NOC (old logic).
+                    # At NOC: use payload volume only when NOC is present (incl. 0);
+                    # otherwise leave NOC at 0.
                     noc = float(await bidPriceNOC())
+                    noc_keys = [k for k in blk_buydata.keys() if float(k) == noc]
+                    noc_in_payload = bool(noc_keys)
                     max_price_volume = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) <= noc]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) < noc]
                         priced_keys = [k for k in valid_keys if to_float(blk_buydata[k]) != 0.0]
                         candidate_keys = priced_keys or valid_keys
                         if candidate_keys:
@@ -3197,7 +3198,16 @@ class HPDAMBiddingServices:
                             max_price_volume = to_float(blk_buydata[max_price_key])
 
                     for prikey, pricevalue in enumerate(finalpricearray):
-                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= noc else 0.0
+                        pv = float(pricevalue)
+                        if pv == noc:
+                            fill_vol = (
+                                round(to_float(blk_buydata[noc_keys[0]]), 1)
+                                if noc_in_payload else 0.0
+                            )
+                        elif pv < noc:
+                            fill_vol = round(max_price_volume, 1)
+                        else:
+                            fill_vol = 0.0
                         pRarrayf = {
                             "RTMPrice": pricevalue,
                             "Volume": fill_vol,
