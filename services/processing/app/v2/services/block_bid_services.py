@@ -718,50 +718,47 @@ class BlockBidServices:
         except Exception:
             return 1
 
-    async def _get_ocf_values_for_block(
-        self, delivery_date_ts: int, block: int, market: str = "DAM"
-    ) -> Dict[str, Any]:
+    @staticmethod
+    def _parse_ocf_config(bid: Dict[str, Any], include_max_qty: bool = True) -> Dict[str, Any]:
         """
-        Fetch OCF Premium/Discount Price and Max OCF Qty from limit_values for a given block.
-        Mirrors dam_transaction_service._get_ocf_values logic for block bid context.
+        Turn a block bid's ocf_config into exchange OCF fields.
+
+        OCF is chosen by the trader per block on the bid sheet and stored on the
+        block_bid_current_data record at submit-for-approval time, in the form:
+
+            {allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}]
+
+        e.g. "60_O_20_7.92" → 60% allocation, OCF opted, premium 20, max OCF qty 7.92.
+        "S" in the second position means standalone, i.e. no OCF for that block.
 
         Args:
-            market: "DAM" or "GDAM" — limit_values are stored per market, so this
-                    must match the market being submitted or the wrong market's
-                    OCF numbers get attached to the bid.
+            include_max_qty: False for GDAM — MaxOCFQty does not exist in the GDAM
+                             spec (GDAM 2.1 §12.27), so any 4th segment is ignored.
+
+        Anything unparseable is treated as standalone rather than guessed at — a
+        wrong premium on a live bid is worse than no OCF.
         """
-        dt = datetime.fromtimestamp(delivery_date_ts, tz=timezone.utc)
-        scheduled_at_str = dt.strftime("%Y-%m-%d")
+        standalone = {"OCFOpted": "N", "PremiumDiscountPrice": 0, "MaxOCFQty": 0}
 
-        premium_result = await self.limit_values_repo.get_all_data_with_filters(
-            "limit_values",
-            filters={
-                "id": "ocfPremiumDiscountPrice",
-                "block": block,
-                "category": "Limits",
-                "market": market,
-                "scheduled_at": {"$regex": f"^{scheduled_at_str}"},
-            },
-        )
-        max_qty_result = await self.limit_values_repo.get_all_data_with_filters(
-            "limit_values",
-            filters={
-                "id": "ocfMaxOCFQty",
-                "block": block,
-                "category": "Limits",
-                "market": market,
-                "scheduled_at": {"$regex": f"^{scheduled_at_str}"},
-            },
-        )
+        raw = bid.get("ocf_config") or bid.get("ocf") or ""
+        parts = [p.strip() for p in str(raw).split("_")] if raw else []
 
-        premium_value = (premium_result[0].get("values", 0) or 0) if premium_result else 0
-        max_qty_value = (max_qty_result[0].get("values", 0) or 0) if max_qty_result else 0
-        ocf_opted = "Y" if (premium_value != 0 or max_qty_value != 0) else "N"
+        # Second segment carries the mode: O = OCF, S = Standalone.
+        if len(parts) < 3 or parts[1].upper() != "O":
+            return standalone
+
+        def _num(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        max_qty = _num(parts[3]) if (include_max_qty and len(parts) >= 4) else 0.0
 
         return {
-            "OCFOpted": ocf_opted,
-            "PremiumDiscountPrice": premium_value,
-            "MaxOCFQty": max_qty_value,
+            "OCFOpted": "Y",
+            "PremiumDiscountPrice": _num(parts[2]),
+            "MaxOCFQty": max_qty,
         }
 
     async def submit_dam_to_exchange(
@@ -924,18 +921,10 @@ class BlockBidServices:
             from_period_id = bid.get("from", "00:00")
             to_period_id   = bid.get("to", "00:00")
 
-            # OCF values are looked up per start-block of the time range, from the
-            # market's own limit_values. A block with a premium/discount or a max
-            # OCF quantity carries OCF; anything else is a standalone block bid.
-            start_block = self._time_to_block(from_period_id)
-            try:
-                ocf = await self._get_ocf_values_for_block(delivery_date_ts, start_block, market)
-            except Exception as ocf_err:
-                logger.warning(
-                    f"OCF lookup failed for {market} block {start_block}, "
-                    f"submitting as standalone: {ocf_err}"
-                )
-                ocf = {"OCFOpted": "N", "PremiumDiscountPrice": 0, "MaxOCFQty": 0}
+            # OCF comes from the ocf_config the trader set on this very bid, not from
+            # a separate lookup — same source and format as the single bid flow.
+            # GDAM has no MaxOCFQty (GDAM 2.1 §12.27), DAM does (DAM 2.2 §12.27).
+            ocf = self._parse_ocf_config(bid, include_max_qty=(market == "DAM"))
 
             num_bids = int(bid.get("number_of_bids", 1))
             for _ in range(num_bids):
@@ -949,8 +938,7 @@ class BlockBidServices:
                     "FromPeriodId":          from_period_id,
                     "ToPeriodId":            to_period_id,
                     "OCFOpted":              ocf["OCFOpted"],
-                    "PremiumDiscountPrice":  ocf["PremiumDiscountPrice"] if ocf["OCFOpted"] == "Y" else 0,
-                    "MaxOCFQty":             ocf["MaxOCFQty"] if ocf["OCFOpted"] == "Y" else 0,
+                    "PremiumDiscountPrice":  ocf["PremiumDiscountPrice"],
                     "BuySell":               buy_sell,
                     "Price":                 int(bid.get("bid_price", 0)),
                     "Quantity":              int(quantity_exchange),
@@ -958,6 +946,8 @@ class BlockBidServices:
                     "LinkedBidRef":          "",
                     "LinkType":              "",
                 }
+                if market == "DAM":
+                    detail["MaxOCFQty"] = ocf["MaxOCFQty"]
                 bid_details.append(detail)
 
         request_body = {
