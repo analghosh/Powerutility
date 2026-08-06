@@ -3008,8 +3008,7 @@ class HPDAMBiddingServices:
 
                     for plkey22, plvalue22 in enumerate(price_list):
 
-                        # Skip empty OR bidPriceNOC()
-                        if plvalue22 == "" or plvalue22 == await bidPriceNOC():
+                        if plvalue22 in ["", None]:
                             continue
 
                         # Validate numeric
@@ -3026,6 +3025,7 @@ class HPDAMBiddingServices:
                         else:
                             volume_val = ""   # PHP would give NULL → ""
 
+                        # Keep NOC so buy fill can use its volume at the cap.
                         price_key = plvalue22
 
                         buyary[price_key] = volume_val
@@ -3182,26 +3182,22 @@ class HPDAMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Find the volume at the max price point below bidPriceNOC.
-                    # HPDAM's ceiling (20000) sits above the tail price points the UI
-                    # sends with zero volume, so prefer the highest price that carries
-                    # an actual volume and fall back to the plain ceiling filter.
+                    # Use volume from the highest priced (non-zero) point at or below NOC.
+                    # HPDAM's ceiling (20000) often sits above UI tail points sent with
+                    # zero volume — prefer a non-zero key, then fill through NOC so the
+                    # cap price is not left at 0.
+                    noc = float(await bidPriceNOC())
                     max_price_volume = 0.0
-                    max_price_float = 0.0
                     if blk_buydata:
-                        noc_price = await bidPriceNOC()
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < noc_price]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) <= noc]
                         priced_keys = [k for k in valid_keys if to_float(blk_buydata[k]) != 0.0]
                         candidate_keys = priced_keys or valid_keys
                         if candidate_keys:
                             max_price_key = max(candidate_keys, key=lambda x: float(x))
-                            max_price_float = float(max_price_key)
                             max_price_volume = to_float(blk_buydata[max_price_key])
 
-                    # Fill volume for all price points up to and including the max price.
-                    # Price points above the max price remain 0.
                     for prikey, pricevalue in enumerate(finalpricearray):
-                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= max_price_float else 0.0
+                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= noc else 0.0
                         pRarrayf = {
                             "RTMPrice": pricevalue,
                             "Volume": fill_vol,
