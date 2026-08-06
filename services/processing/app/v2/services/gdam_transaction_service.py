@@ -134,15 +134,19 @@ class GDAMTransactionService:
         if len(parts) < 3 or parts[1].upper() != "O":
             return standalone
 
-        def _num(value: Any) -> float:
+        def _num(value: Any) -> int:
+            # IEX documents these as "Number" but the API binds them to
+            # System.Int32: a float — even a whole one like 20.0 — comes back as
+            # 400 "could not be converted to System.Int32". Truncate like
+            # submit-for-approval does when it stores ocf_premium_discount.
             try:
-                return float(value)
+                return int(float(value))
             except (TypeError, ValueError):
-                return 0.0
+                return 0
 
         premium = _num(doc.get("ocf_premium_discount")) if doc.get("ocf_premium_discount") is not None else _num(parts[2])
 
-        max_qty = 0.0
+        max_qty = 0
         if include_max_qty:
             if doc.get("max_ocf_qty") is not None:
                 max_qty = _num(doc.get("max_ocf_qty"))
