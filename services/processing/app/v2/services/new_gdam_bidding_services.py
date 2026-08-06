@@ -3194,19 +3194,30 @@ class GDAMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Use volume from the highest price at or below NOC (incl. when
-                    # present). Fill that volume through NOC so the NOC price point is
-                    # not left at 0 when the ladder ends below NOC or includes it.
+                    # Fill prices < NOC from highest price below NOC (old logic).
+                    # At NOC: use payload volume only when NOC is present (incl. 0);
+                    # otherwise leave NOC at 0.
                     noc = float(await bidPriceNOC())
+                    noc_keys = [k for k in blk_buydata.keys() if float(k) == noc]
+                    noc_in_payload = bool(noc_keys)
                     max_price_volume = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) <= noc]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) < noc]
                         if valid_keys:
                             max_price_key = max(valid_keys, key=lambda x: float(x))
                             max_price_volume = to_float(blk_buydata[max_price_key])
 
                     for prikey, pricevalue in enumerate(finalpricearray):
-                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= noc else 0.0
+                        pv = float(pricevalue)
+                        if pv == noc:
+                            fill_vol = (
+                                round(to_float(blk_buydata[noc_keys[0]]), 1)
+                                if noc_in_payload else 0.0
+                            )
+                        elif pv < noc:
+                            fill_vol = round(max_price_volume, 1)
+                        else:
+                            fill_vol = 0.0
                         pRarrayf = {
                             "RTMPrice": pricevalue,
                             "Volume": fill_vol,
