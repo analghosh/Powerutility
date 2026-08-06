@@ -142,14 +142,25 @@ class DAMTransactionService:
             except (TypeError, ValueError):
                 return 0
 
+        def _raw(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
         premium = _num(doc.get("ocf_premium_discount")) if doc.get("ocf_premium_discount") is not None else _num(parts[2])
 
-        max_qty = 0
+        # MaxOCFQty keeps full precision here — it is scaled by OrderQtyDecimal
+        # before being sent, so truncating now would lose the fractional MW
+        # (7.92 MW must reach the exchange as 79, not 70). The raw ocf_config
+        # segment is preferred over the stored max_ocf_qty, which submit-for-
+        # approval already rounded to a whole number.
+        max_qty = 0.0
         if include_max_qty:
-            if doc.get("max_ocf_qty") is not None:
-                max_qty = _num(doc.get("max_ocf_qty"))
-            elif len(parts) >= 4:
-                max_qty = _num(parts[3])
+            if len(parts) >= 4:
+                max_qty = _raw(parts[3])
+            elif doc.get("max_ocf_qty") is not None:
+                max_qty = _raw(doc.get("max_ocf_qty"))
 
         return {
             "PremiumDiscountPrice": premium,
@@ -279,17 +290,33 @@ class DAMTransactionService:
                     "MaxOCFQty": 0,
                     "OCFOpted": "N"
                 })
-                
+
+                ocf_opted = ocf["OCFOpted"]
+                # MaxOCFQty is a quantity, so it travels in the same units as every
+                # PQData Quantity — scaled by OrderQtyDecimal. Sending the raw MW
+                # figure got "Invalid Max OCF Quantity" back from the exchange.
+                max_ocf_qty = int(ocf["MaxOCFQty"] * biddedQtyDecimal) if ocf_opted == "Y" else 0
+
+                # DAM 2.2 §12.25 defines MaxOCFQty as zero only when OCF is NOT
+                # opted, so "Y" with nothing to carry forward is not a legal
+                # combination — send the block as standalone instead.
+                if ocf_opted == "Y" and max_ocf_qty <= 0:
+                    logger.warning(
+                        f"Block {block} has OCF opted but no max OCF quantity; "
+                        "submitting it as standalone."
+                    )
+                    ocf_opted = "N"
+
                 bid_detail = {
                     "FromPeriodId": from_period,
                     "ToPeriodId": to_period,
                     "BuySell": buy_sell,
-                    "OCFOpted": ocf["OCFOpted"],
-                    "PremiumDiscountPrice": ocf["PremiumDiscountPrice"],
-                    "MaxOCFQty": ocf["MaxOCFQty"],
+                    "OCFOpted": ocf_opted,
+                    "PremiumDiscountPrice": ocf["PremiumDiscountPrice"] if ocf_opted == "Y" else 0,
+                    "MaxOCFQty": max_ocf_qty,
                     "PQData": pq_array
                 }
-                
+
                 bid_details.append(bid_detail)
         
         return bid_details
@@ -469,11 +496,30 @@ class DAMTransactionService:
             logger.error(f"Submission error: {err_msg}")
             raise HTTPException(status_code=500, detail=f"Submission failed: {err_msg}")
         
+        # The exchange answers 200 OK even when it rejects the bid — the verdict is
+        # in the body. Without this check a rejected submission looked successful
+        # and the bids were marked "submitted" while nothing reached the market.
+        submit_status = submit_response.get("Status") if isinstance(submit_response, dict) else None
+        if submit_status != "Success":
+            status_message = submit_response.get("StatusMessage", "") if isinstance(submit_response, dict) else str(submit_response)
+            logger.error(
+                f"DAM bid rejected by exchange [Status={submit_status}] — full response: {submit_response}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "Exchange rejected the bid submission.",
+                    "exchange_status": submit_status,
+                    "exchange_message": status_message,
+                    "transaction_id": submit_response.get("TransactionId") if isinstance(submit_response, dict) else None,
+                },
+            )
+
         transaction_id = submit_response.get("TransactionId")
         if not transaction_id:
              logger.warning("No TransactionId in submit response, cannot fetch details.")
              return submit_response
-             
+
         # Format dates for aggregation
         # bidding_date already extracted above
         
