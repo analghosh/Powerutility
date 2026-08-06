@@ -302,8 +302,18 @@ class ExchangeAPIClient:
             await self._log_to_db(url, bid_request, headers, data, self.market_type, "single-bid", "submitSingleBid", bid_request.get("DeliveryDate"))
 
             response.raise_for_status()
-            
-            logger.info("Single bid submitted successfully")
+
+            # A 200 only means the exchange accepted the HTTP call; it reports
+            # acceptance or rejection of the bid itself in the body, so log what
+            # it actually said rather than claiming success.
+            body_status = data.get("Status") if isinstance(data, dict) else None
+            if body_status == "Success":
+                logger.info("Single bid accepted by exchange")
+            else:
+                logger.warning(
+                    f"Single bid returned HTTP 200 but exchange Status={body_status}: "
+                    f"{data.get('StatusMessage') if isinstance(data, dict) else data}"
+                )
             return data if isinstance(data, dict) else {}
 
     async def submit_block_bid(self, bid_request: Dict[str, Any]) -> Dict[str, Any]:
