@@ -3020,8 +3020,7 @@ class GDAMBiddingServices:
 
                     for plkey22, plvalue22 in enumerate(price_list):
 
-                        # Skip empty OR bidPriceNOC()
-                        if plvalue22 == "" or plvalue22 == await bidPriceNOC():
+                        if plvalue22 in ["", None]:
                             continue
 
                         # Validate numeric
@@ -3038,6 +3037,7 @@ class GDAMBiddingServices:
                         else:
                             volume_val = ""   # PHP would give NULL → ""
 
+                        # Keep NOC so buy fill can use its volume at the cap.
                         price_key = plvalue22
 
                         buyary[price_key] = volume_val
@@ -3194,22 +3194,19 @@ class GDAMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Find the volume at the max price point, excluding bidPriceNOC (10000).
-                    # "10000" (str) != 10000 (int) in Python, so it is not filtered at
-                    # collection time — we explicitly exclude it here.
+                    # Use volume from the highest price at or below NOC (incl. when
+                    # present). Fill that volume through NOC so the NOC price point is
+                    # not left at 0 when the ladder ends below NOC or includes it.
+                    noc = float(await bidPriceNOC())
                     max_price_volume = 0.0
-                    max_price_float = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < await bidPriceNOC()]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) <= noc]
                         if valid_keys:
                             max_price_key = max(valid_keys, key=lambda x: float(x))
-                            max_price_float = float(max_price_key)
                             max_price_volume = to_float(blk_buydata[max_price_key])
 
-                    # Fill volume for all price points up to and including the max price.
-                    # Price points above the max price remain 0.
                     for prikey, pricevalue in enumerate(finalpricearray):
-                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= max_price_float else 0.0
+                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= noc else 0.0
                         pRarrayf = {
                             "RTMPrice": pricevalue,
                             "Volume": fill_vol,
