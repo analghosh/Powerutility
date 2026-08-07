@@ -353,12 +353,19 @@ async def submit_block_bid_to_exchange(
 @router.get("/bid-submission-detail", summary="Get block bid submission details")
 async def get_block_bid_submission_details(
     schedule_date: str = Query(..., description="Bidding date in YYYY-MM-DD format"),
+    market_type: Optional[str] = Query(
+        None,
+        description="Optional market filter: rtm, dam, gdam, or hpdam. Omit to return all.",
+    ),
 ):
     """
-    Get block bid submission details grouped by correlation_id for a given date.
-    Reads from iex_integration_apilog (bid_type=block-bid, method=submitBlockBid).
+    Get block bid submission details for a given date.
+    Reads from iex_integration_apilog (bid_type=block-bid).
+    Includes RTM (submitBlockBid) and DAM/GDAM/HPDAM (submitDamBlockBid) submissions.
     """
-    return await rtm_bidding_controller.get_block_bid_submission_details(schedule_date)
+    return await rtm_bidding_controller.get_block_bid_submission_details(
+        schedule_date, market_type
+    )
 
 
 @router.get("/bid-book", summary="Get block bid book (exchange responses)")

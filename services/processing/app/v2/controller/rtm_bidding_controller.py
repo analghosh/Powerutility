@@ -720,9 +720,11 @@ class RTMBiddingController:
                 detail="Failed to generate IEX Excel file."
             )
 
-    async def get_block_bid_submission_details(self, date_str: str) -> Dict[str, Any]:
+    async def get_block_bid_submission_details(
+        self, date_str: str, market_type: Optional[str] = None
+    ) -> Dict[str, Any]:
         try:
-            data = await self.block_bid_service.get_bid_submission_details(date_str)
+            data = await self.block_bid_service.get_bid_submission_details(date_str, market_type)
             return {"data": data}
         except HTTPException:
             raise
