@@ -8,6 +8,11 @@ from ..repository.base_repository import GenericRepository
 from ...core.config import settings
 logger = logging.getLogger(__name__)
 
+# A trading day is 96 blocks of 15 minutes; block n covers (n-1)*15 .. n*15 minutes
+BLOCK_INTERVAL_MINUTES = 15
+BLOCKS_PER_DAY = 96
+MINUTES_IN_DAY = BLOCK_INTERVAL_MINUTES * BLOCKS_PER_DAY
+
 def convert_objectid(obj):
     if isinstance(obj, dict):
         return {k: convert_objectid(v) for k, v in obj.items()}
@@ -209,29 +214,123 @@ class BlockBidCurrentDataRepository(GenericRepository):
             return []
 
 
+    @staticmethod
+    def clock_to_minutes(time_str: Any) -> Optional[int]:
+        """
+        Convert a "HH:MM" clock string to minutes since midnight (0-1440).
+
+        "24:00" is accepted and returns 1440, since block bids use it to mean
+        end-of-day. Returns None for anything unparseable or out of range.
+        """
+        try:
+            hour_str, minute_str = str(time_str).strip().split(":")[:2]
+            hour, minute = int(hour_str), int(minute_str)
+        except (AttributeError, ValueError):
+            return None
+        if not (0 <= hour <= 24 and 0 <= minute <= 59):
+            return None
+        total = hour * 60 + minute
+        return total if total <= MINUTES_IN_DAY else None
+
+    @staticmethod
+    def block_to_time_block_label(block_no: int) -> str:
+        """
+        Convert a block number (1-96) to its "HH:MM-HH:MM" label.
+
+        Mirrors ``get_fifteen_full_time_block_id`` in the bidding services, including
+        its special case that block 96 ends "00:00" rather than "24:00".
+        """
+        start = (block_no - 1) * BLOCK_INTERVAL_MINUTES
+        end = block_no * BLOCK_INTERVAL_MINUTES
+        return (
+            f"{start // 60:02d}:{start % 60:02d}-"
+            f"{(end // 60) % 24:02d}:{end % 60:02d}"
+        )
+
+    @classmethod
+    def expand_time_range_to_block_labels(
+        cls,
+        from_time: Any,
+        to_time: Any,
+        time_block: Any = None,
+    ) -> List[str]:
+        """
+        Expand a block bid's clock range into the 15-minute block labels it covers.
+
+        The range is start-inclusive and end-exclusive, so "07:00"-"11:00" covers
+        blocks 29-44 ("07:00-07:15" .. "10:45-11:00"), not block 28 ("06:45-07:00").
+        An end of "00:00" or "24:00" means midnight, i.e. through block 96. A range
+        that ends before it starts is treated as wrapping past midnight.
+
+        ``from_time`` / ``to_time`` fall back to splitting the stored ``time_block``
+        span string on "-", matching what the approval screen does client-side.
+        Returns an empty list when nothing usable can be parsed.
+        """
+        if (from_time in (None, "") or to_time in (None, "")) and time_block:
+            parts = str(time_block).split("-")
+            if len(parts) == 2:
+                from_time = from_time or parts[0].strip()
+                to_time = to_time or parts[1].strip()
+
+        start_minutes = cls.clock_to_minutes(from_time)
+        end_minutes = cls.clock_to_minutes(to_time)
+        if start_minutes is None or end_minutes is None:
+            return []
+        if start_minutes == end_minutes:
+            # Zero-length range covers nothing; without this guard the wrap branch
+            # below would spread it across the whole day.
+            return []
+
+        start_block = start_minutes // BLOCK_INTERVAL_MINUTES + 1
+        if start_block > BLOCKS_PER_DAY:
+            # from == "24:00": the range starts after the last block of the day
+            return []
+        # End is exclusive, so it names the last block covered. Midnight is the end
+        # of block 96 rather than the start of block 1.
+        end_block = (
+            BLOCKS_PER_DAY
+            if end_minutes in (0, MINUTES_IN_DAY)
+            else end_minutes // BLOCK_INTERVAL_MINUTES
+        )
+
+        if end_block >= start_block:
+            block_numbers = range(start_block, end_block + 1)
+        else:
+            block_numbers = list(range(start_block, BLOCKS_PER_DAY + 1)) + list(
+                range(1, end_block + 1)
+            )
+        return [cls.block_to_time_block_label(block) for block in block_numbers]
+
     async def get_approved_block_bid_quantities_by_time_block(
         self,
         biding_date: str,
         market_type: str = "RTM"
     ) -> Dict[str, float]:
         """
-        Sum block-bid quantity for every matched document, grouped by ``time_block``.
-        Includes status ``Approved`` and ``Submitted``; every matching row contributes
-        (no revision de-duplication). If ``number_of_bids`` > 1, quantum is multiplied
-        by ``number_of_bids`` to get quantity per row.
+        Sum block-bid quantity per 15-minute block for every matched document.
+
+        Only status ``Submitted`` / ``submitted`` counts. Quantity per row is
+        ``quantum × number_of_bids``; every matching row contributes (no revision
+        de-duplication).
+
+        A block bid is stored under the span the trader entered (``time_block`` of
+        "07:00-11:00"), so each row is expanded across the 15-minute blocks it covers
+        and overlapping bids are summed. Keys are 15-minute labels, matching the
+        lookup the bidding services perform per block.
 
         Args:
             biding_date: Schedule date in YYYY-MM-DD format
             market_type: Market type (RTM, DAM, etc.). Defaults to "RTM"
 
         Returns:
-            Dictionary mapping time_block (e.g., "19:00-19:15") to total quantum
+            Dictionary mapping a 15-minute time block (e.g., "19:00-19:15") to the
+            total quantum covering it
 
         Note:
             For DAM, only ``trade_session`` 0 (or null / missing) is included — same as
             ``insert_block_bid`` (DAM has no multi-session split). RTM sums all sessions
-            that share the same clock ``time_block`` string. If old revision rows remain
-            in the collection, they are all summed unless filtered elsewhere.
+            whose ranges cover the same block. If old revision rows remain in the
+            collection, they are all summed unless filtered elsewhere.
         """
         try:
             match_filter: Dict[str, Any] = {
@@ -248,6 +347,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {
                     "$project": {
                         "time_block": 1,
+                        "from": 1,
+                        "to": 1,
                         "quantum": 1,
                         "number_of_bids": {"$ifNull": ["$number_of_bids", 1]},
                         "calculated_quantity": {
@@ -266,37 +367,51 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 },
                 {
                     "$group": {
-                        "_id": "$time_block",
+                        "_id": {
+                            "from": "$from",
+                            "to": "$to",
+                            "time_block": "$time_block",
+                        },
                         "total_quantum": {"$sum": "$calculated_quantity"},
-                    }
-                },
-                {
-                    "$project": {
-                        "_id": 0,
-                        "time_block": "$_id",
-                        "total_quantum": 1,
                     }
                 },
             ]
 
             results = await self.aggregate(pipeline)
 
-            quantities_dict = {}
+            quantities_dict: Dict[str, float] = {}
+            unparsed_ranges = []
             for result in results:
-                time_block = result.get("time_block", "")
+                group_key = result.get("_id") or {}
                 total_quantum = float(result.get("total_quantum", 0))
-                if time_block:
-                    quantities_dict[time_block] = total_quantum
+                block_labels = self.expand_time_range_to_block_labels(
+                    group_key.get("from"),
+                    group_key.get("to"),
+                    group_key.get("time_block"),
+                )
+                if not block_labels:
+                    unparsed_ranges.append(group_key.get("time_block"))
+                    continue
+                for label in block_labels:
+                    # Overlapping bids accumulate onto the same block
+                    quantities_dict[label] = quantities_dict.get(label, 0.0) + total_quantum
+
+            if unparsed_ranges:
+                logger.warning(
+                    f"Skipped {len(unparsed_ranges)} block bid row group(s) with an "
+                    f"unusable time range on {biding_date}, market_type {market_type}: "
+                    f"{unparsed_ranges}"
+                )
 
             logger.info(
-                f"Retrieved block bid quantities (all matched Approved/Submitted rows) for "
+                f"Retrieved block bid quantities (all matched Submitted rows) for "
                 f"{len(quantities_dict)} time blocks on {biding_date}, market_type {market_type}"
             )
             if quantities_dict:
-                logger.debug(f"Block bid time blocks: {list(quantities_dict.keys())}")
+                logger.debug(f"Block bid time blocks: {sorted(quantities_dict.keys())}")
             else:
                 logger.warning(
-                    f"No Approved/Submitted block bids found for date {biding_date}, "
+                    f"No Submitted block bids found for date {biding_date}, "
                     f"market_type {market_type}."
                 )
             return quantities_dict
