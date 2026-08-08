@@ -2184,11 +2184,15 @@ Replace lines 200-209 (the second placeholder, currently **inside** the loop) by
             # *username* rather than an id -- verified in live data ("admin", "mukul",
             # "ptcindia", "Ashutosh"). created_by is not modified by the update, so reading
             # it afterwards is safe.
-            maker_usernames = await self.block_bid_repo.get_creators(
-                [u["id"] for u in updated]
-            )
             if updated:
                 try:
+                    # Inside the guard: a Mongo hiccup here must not propagate. The
+                    # method's outer handler ends in a bare `raise`, so an unguarded
+                    # failure would report the approval as failed AFTER the bids were
+                    # already updated -- inviting a duplicate approval on decided bids.
+                    maker_usernames = await self.block_bid_repo.get_creators(
+                        [u["id"] for u in updated]
+                    )
                     market = str(request.get("market_type") or "RTM").upper()
                     status_label = updated[0]["status"]
                     await notify(
