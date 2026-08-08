@@ -212,20 +212,13 @@ class BlockBidServices:
                         "reason": "Bid is no longer pending (already processed by another approver)",
                     })
 
-            # After the loop: one notification for the whole action.
-            #
-            # The makers must be looked up separately: updatedata_if_pending returns only a
-            # bool (block_bid_current_data_repository.py:142-148), and created_by holds a
-            # *username* rather than an id -- verified in live data ("admin", "mukul",
-            # "ptcindia", "Ashutosh"). created_by is not modified by the update, so reading
-            # it afterwards is safe.
-            maker_usernames = await self.block_bid_repo.get_creators(
-                [u["id"] for u in updated]
-            )
+            # After the loop: one notification for the whole action. The makers are
+            # looked up via _get_maker_usernames_safe (best-effort, see its docstring).
             if updated:
                 try:
                     market = str(request.get("market_type") or "RTM").upper()
                     status_label = updated[0]["status"]
+                    maker_usernames = await self._get_maker_usernames_safe(updated)
                     await notify(
                         "block_bid.status_changed",
                         {
@@ -275,6 +268,27 @@ class BlockBidServices:
         except Exception as e:
             logger.error(f"Failed to get pending approvals in : {str(e)}")
             raise
+
+    async def _get_maker_usernames_safe(self, updated: List[Dict[str, Any]]) -> List[str]:
+        """Best-effort maker lookup for the status-change notification.
+
+        updatedata_if_pending returns only a bool, and created_by holds a *username*
+        rather than an id -- verified in live data ("admin", "mukul", "ptcindia",
+        "Ashutosh") -- so the makers must be looked up separately via get_creators.
+        created_by is not modified by the update, so reading it afterwards is safe.
+
+        A failure here (e.g. a Mongo hiccup) must not fail the already-completed bid
+        decision, and must not stop the approvers from being notified -- so it is
+        best-effort: log and return an empty list rather than raising. The caller still
+        emits the notification with an empty maker_usernames list in that case.
+        """
+        try:
+            return await self.block_bid_repo.get_creators(
+                [u["id"] for u in updated]
+            )
+        except Exception:
+            logger.exception("Failed to look up bid makers for status-change notification")
+            return []
 
     async def submit_to_exchange(self, biding_date: str, submitted_by: str = "", correlation_id: str = "") -> Dict[str, Any]:
         """
