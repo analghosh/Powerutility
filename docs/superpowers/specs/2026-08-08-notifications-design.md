@@ -182,10 +182,30 @@ POST /api/v2/notifications/read-all
 `EventSource` cannot set an `Authorization` header, and the client stores tokens in
 sessionStorage with no cookie auth anywhere (`client/src/utils/authTokens.js:63,83`).
 
-The client therefore POSTs to `/notifications/ticket` with its normal Bearer JWT and
-receives a random, single-use ticket held in Redis with a 30-second TTL. It then opens
-`EventSource('/api/v2/notifications/stream?ticket=…')`. The server consumes the ticket on
-connect and resolves the user from it.
+The client therefore POSTs to `/notifications/ticket` with its normal Bearer JWT, using
+the same `Depends(get_user_context)` every processing route already uses, and receives a
+random single-use ticket held in Redis with a 30-second TTL:
+
+```python
+ticket = secrets.token_urlsafe(32)
+await redis.setex(f"notif:ticket:{ticket}", 30, json.dumps({
+    "user_id": user_context["user_id"],
+    "token":   token,          # retained for the revocation re-check below
+    "exp":     user_context["exp"],
+}))
+```
+
+It then opens `EventSource('/api/v2/notifications/stream?ticket=…')`. The server consumes
+the ticket atomically on connect, so a replayed ticket fails:
+
+```python
+raw = await redis.getdel(f"notif:ticket:{ticket}")   # GETDEL requires Redis 6.2+
+if not raw:
+    raise HTTPException(401)                          # expired, or already used
+```
+
+The deployed Redis version needs confirming; below 6.2 this becomes a Lua script or a
+`MULTI` block, since a non-atomic `GET` then `DEL` reintroduces the replay window.
 
 The value that reaches nginx access logs is therefore already dead by the time anyone
 reads them, and is not the access token. Introducing cookie auth was rejected: it would
@@ -262,8 +282,28 @@ a closed laptop lid or a dropped VPN. The client runs a 45-second watchdog again
 
 **Token expiry mid-stream.** Access tokens last 30 minutes; a stream outlives that. The
 server caps stream lifetime at the JWT's remaining `exp` and closes cleanly; the client
-mints a fresh ticket with a refreshed token and reconnects. Otherwise a logged-out or
-revoked user keeps receiving notifications straight past the Redis blacklist.
+mints a fresh ticket with a refreshed token and reconnects.
+
+**Revocation mid-stream.** The `exp` cap handles expiry but *not* logout. A user who logs
+out two minutes into a 30-minute token would otherwise keep receiving notifications for
+the remaining 28. The stream therefore re-checks the blacklist on every heartbeat, using
+the retained token from the ticket payload:
+
+```python
+# libs/core/jwt_validator.py:209-212, via the async client rather than the sync one
+if await redis.sismember("jwt_blacklist", token):
+    break   # close the stream
+```
+
+Revocation then takes effect within 25 seconds, at a cost of one `SISMEMBER` per
+connection per heartbeat.
+
+Two pre-existing properties of that blacklist are inherited rather than introduced here,
+and are worth raising separately. `jwt_blacklist` is a plain Redis set whose members carry
+no individual TTL, so it grows without bound. And `is_token_blacklisted` returns `False`
+when Redis is unreachable (`jwt_validator.py:213-214`), meaning revocation **fails open** —
+during a Redis outage, revoked tokens are treated as valid. That is true of every
+authenticated endpoint today, not only this one.
 
 ## Failure modes
 
@@ -286,6 +326,7 @@ action truly succeeded and only the notification was lost.
 | Redis down | Documents still written to Mongo. No live push. Client falls back to polling `/unread-count` every 30s; bell stays correct, popups stop being instant. |
 | Mongo write fails | Logged. Business request unaffected. Notification lost. |
 | Ticket expired or reused | 401 → client mints once more, then exponential backoff |
+| Redis unreachable during a heartbeat blacklist check | Fails open, per existing `jwt_validator.py:213-214`. Stream stays up; a revoked token is not detected until Redis returns. |
 | Processing restart | `sync` frame on reconnect rebuilds state |
 | Audience query fails | Logged. No notification. Never blocks. |
 
@@ -297,7 +338,8 @@ action truly succeeded and only the notification was lost.
 | Targeting | Role/permission-derived, fan-out on write | Reuses existing RBAC, no new subscription concept, per-user read state is trivial. Explicit recipient lists were rejected because each of the emit sites would re-implement "who are the checkers" and drift silently. |
 | Transport | SSE | Nothing needs to travel browser→server over the socket. Plain HTTP, no protocol upgrade, native auto-reconnect. WebSocket carries the same auth constraint plus a hand-written reconnect path and an nginx `Upgrade` block. |
 | Host | Processing, 8003 | Fewest deployment units on a box we do not control. A separate service fixes only 1 of the 4 scaling walls (see below) and none of the config-level ones. |
-| Stream auth | Redis single-use ticket | Bounded log exposure without introducing a second auth mechanism. |
+| Stream auth | Redis single-use ticket, consumed with `GETDEL` | Bounded log exposure without introducing a second auth mechanism. What reaches the logs is opaque and already dead. |
+| Revocation | Blacklist re-check on every heartbeat | The `exp` cap alone leaves a logged-out user receiving notifications for up to 30 minutes. Re-checking bounds that to 25 seconds for one `SISMEMBER` per connection per heartbeat. |
 | Retention | 90 days TTL | Covers a trading quarter and any month-end dispute. `audit_db` remains the authoritative trail; this collection is not a substitute. |
 | Collapsing | None — one per action | Each submission is a distinct decision for a checker. Collapsing makes an already-read item silently unread and destroys "when was I told". |
 | Multi-tab | SharedWorker | The 6-tab limit triggers at realistic usage, and its failure mode — a tab hanging with no error — is very hard to diagnose from a user report. |
@@ -381,6 +423,11 @@ That is workable and matches how the screen already behaves, but it is a genuine
 maker-checker control: nothing in the permission model prevents a maker approving their
 own bid. Only application-level actor subtraction would.
 
+**`jwt_blacklist` hygiene.** It is a plain Redis set with no per-member TTL, so it grows
+without bound, and `is_token_blacklisted` fails open when Redis is unreachable
+(`libs/core/jwt_validator.py:209-214`). Both affect every authenticated endpoint today.
+This design inherits them; it does not worsen them.
+
 **pandas on the event loop.** The fix is pushing CPU-bound work off the loop
 (`await asyncio.to_thread(...)`) across roughly five service files. It benefits every
 endpoint on 8003, costs no deployment surface, and is independent of where the stream
@@ -392,7 +439,9 @@ Unit and integration tests are written first, per TDD, and watched to fail.
 
 - **pytest** — audience resolution per rule; actor subtraction; template rendering;
   action-level count (96 blocks yields 1 document, not 96); TTL index present; sync frame
-  returns the latest 50 with an `unreadCount` computed independently of that limit
+  returns the latest 50 with an `unreadCount` computed independently of that limit; a
+  ticket is rejected on second use; a blacklisted token closes the stream at the next
+  heartbeat
 - **`node --test`** — slice reducers; `sync` replaces while `notification` prepends;
   dedupe by `_id`; watchdog fires on a missed heartbeat; SharedWorker fan-out to two ports
 - **Integration** — emit produces N documents, publishes to Redis, and the SSE endpoint
