@@ -67,26 +67,39 @@ class NotificationEmitter:
 
         ids = await self.repository.insert_many_for(notifications)
 
-        # Durably stored above. A publish failure costs liveness, never the record.
-        try:
-            await publish(
-                self.redis_client,
-                recipients,
-                {
-                    "_id": ids[0] if ids else None,
-                    "event_key": event_key,
-                    "title": title,
-                    "body": body,
-                    "payload": dict(context),
-                    "link": link,
-                    "actor": actor_doc,
-                    "severity": event.severity.value,
-                    "read_at": None,
-                    "created_at": created_at.isoformat(),
-                },
-            )
-        except Exception:
-            logger.exception("Notification published failed for %s", event_key)
+        # Published per recipient, not as a single broadcast: the payload is not
+        # identical across recipients -- each must carry their own document _id.
+        # insert_many_for preserves order, so ids[i] belongs to recipients[i]; a
+        # shared broadcast would give every recipient but the first a foreign _id,
+        # which mark_read (filtering on {"_id": ..., "user_id": user_id}) can never
+        # match, silently orphaning their notification forever. At this scale the
+        # extra round trips are negligible and correctness matters more. Each
+        # publish is wrapped individually so one recipient's failure cannot abort
+        # delivery to the rest -- the Mongo write above is already durable either way.
+        for user_id, notification_id in zip(recipients, ids):
+            try:
+                await publish(
+                    self.redis_client,
+                    [user_id],
+                    {
+                        "_id": notification_id,
+                        "event_key": event_key,
+                        "title": title,
+                        "body": body,
+                        "payload": dict(context),
+                        "link": link,
+                        "actor": actor_doc,
+                        "severity": event.severity.value,
+                        "read_at": None,
+                        "created_at": created_at.isoformat(),
+                    },
+                )
+            except Exception:
+                logger.exception(
+                    "Notification publish failed for %s recipient %s",
+                    event_key,
+                    user_id,
+                )
 
         return ids
 
