@@ -1698,7 +1698,11 @@ def test_sse_frame_has_event_data_and_a_blank_line_terminator():
 def test_sse_data_is_single_line_json_so_the_frame_cannot_be_split():
     frame = format_sse("sync", {"items": [{"body": "line one\nline two"}]})
     body = frame.split("data: ", 1)[1]
-    assert body.count("\n") == 3  # the escaped newline is \\n, not a real one
+    # Two newlines: the frame terminator only. The newline inside the payload is
+    # escaped by json.dumps into the two characters backslash-n, so it never
+    # appears as a real newline that would split the SSE frame.
+    assert body.count("\n") == 2
+    assert body.strip().count("\n") == 0
     assert json.loads(body.strip())["items"][0]["body"] == "line one\nline two"
 
 
