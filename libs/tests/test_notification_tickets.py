@@ -1,13 +1,17 @@
 import json
+from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException
 
 from services.processing.app.v2.api.router.notification_routes import (
     TICKET_TTL_SECONDS,
     consume_ticket,
     mint_ticket,
+    require_authenticated,
     ticket_key,
 )
+from services.processing.app.v2.dependencies import get_user_context
 
 
 class _FakeRedis:
@@ -70,3 +74,53 @@ async def test_corrupt_payload_returns_none_rather_than_raising():
     redis = _FakeRedis()
     redis.store[ticket_key("t1")] = "not json"
     assert await consume_ticket(redis, "t1") is None
+
+
+def test_require_authenticated_rejects_anonymous_user_id():
+    with pytest.raises(HTTPException) as exc_info:
+        require_authenticated({"user_id": "anonymous"})
+    assert exc_info.value.status_code == 401
+
+
+def test_require_authenticated_rejects_missing_user_id():
+    with pytest.raises(HTTPException) as exc_info:
+        require_authenticated({})
+    assert exc_info.value.status_code == 401
+
+
+def test_require_authenticated_rejects_null_user_id():
+    with pytest.raises(HTTPException) as exc_info:
+        require_authenticated({"user_id": None})
+    assert exc_info.value.status_code == 401
+
+
+def test_require_authenticated_rejects_empty_string_user_id():
+    with pytest.raises(HTTPException) as exc_info:
+        require_authenticated({"user_id": ""})
+    assert exc_info.value.status_code == 401
+
+
+def test_require_authenticated_returns_user_id_as_str_for_real_user():
+    result = require_authenticated({"user_id": "694e8ac4e5342637ee485d8f"})
+    assert result == "694e8ac4e5342637ee485d8f"
+    assert isinstance(result, str)
+
+
+def test_require_authenticated_rejects_real_get_user_context_for_unauthenticated_requests():
+    """Contract pinning test: require_authenticated and get_user_context must agree
+    on what "unauthenticated" looks like. If the sentinel value in dependencies.py
+    (currently "anonymous") changes, this test will fail rather than silently
+    granting access to unauthenticated users.
+    """
+    # Create a minimal stub request with no authenticated user
+    request = SimpleNamespace(
+        state=SimpleNamespace(current_user=None, correlation_id=None)
+    )
+
+    # Call the real get_user_context to get unauthenticated context
+    unauthenticated_context = get_user_context(request)
+
+    # require_authenticated must reject it with 401
+    with pytest.raises(HTTPException) as exc_info:
+        require_authenticated(unauthenticated_context)
+    assert exc_info.value.status_code == 401
