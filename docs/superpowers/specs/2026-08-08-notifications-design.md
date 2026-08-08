@@ -83,6 +83,67 @@ stream to its own service later is a `main.py` and a deployment change, not a re
 awaited inside an SSE loop. The new module uses `redis.asyncio`, from the same already
 installed package. No new dependency.
 
+### What Redis is and is not doing here
+
+Redis never talks to the browser. It carries a message from the worker that emitted it to
+the worker holding the recipient's connection, and nothing more.
+
+```
+route (worker 2) → notify()
+                     ├─ resolve audience from auth_db RBAC
+                     ├─ write N docs to Mongo        ← source of truth
+                     └─ PUBLISH epms:notifications   ← internal hop only
+                   → every worker's subscriber receives it
+                   → worker 1 holds user X's stream → writes the SSE frame
+                   → browser receives  event: notification
+```
+
+Mongo is the durable store; Redis is transport between processes and holder of tickets and
+the blacklist; SSE is the only thing the browser touches. With Redis down, documents are
+still written and still reach users on refresh or via the polling fallback — only the
+instant push stops.
+
+### Why Redis pub/sub rather than RabbitMQ
+
+RabbitMQ is already a processing dependency — `dependencies.py:41` builds an `AuditLogger`
+over it, and the bidding services publish capture jobs through it. So availability is not
+the reason. It stays exactly where it is, serving audit and scheduler jobs, for which its
+configuration is correct. Four reasons it is the wrong tool for this particular job:
+
+**1. The delivery semantics are wrong, and fail silently.** A RabbitMQ queue delivers each
+message to exactly one consumer. With `--workers 4` sharing a queue, a notification reaches
+one worker; if the recipient's connection lives on another, it is **dropped with no error**.
+Getting it right needs a fanout exchange plus an exclusive auto-delete queue per process,
+tied to process lifecycle. The existing topology has no fanout
+(`rabbitmq_manager.py:96-110` declares `topic` for audit, `direct` for jobs, `direct` for
+DLQ), so this means new topology inside a manager shared by audit and the scheduler.
+
+Redis `SUBSCRIBE` broadcasts to every subscriber by default — exactly the required
+semantics, in one line. Note this is the *same silent multi-worker failure* the fan-out
+design exists to prevent; RabbitMQ would reintroduce it.
+
+**2. `pika` is synchronous.** `rabbitmq_manager.py:2,90` imports `pika` and uses
+`pika.BlockingConnection`; `pika==1.3.2` is pinned and `aio_pika` appears nowhere. A
+blocking consumer inside the SSE process would stall the event loop — the same defect
+recorded as wall 3 below. Avoiding it needs either a background thread bridging into the
+loop via `run_coroutine_threadsafe`, or a second AMQP client in the codebase.
+`redis.asyncio` ships in the already-installed `redis>=4.5.0`.
+
+**3. Its guarantees are already paid for by Mongo.** Quorum queues, DLQ, acks and the
+MongoDB fallback (`rabbitmq_config.py:35-46`) are right for audit records, where a lost
+message is a lost trail. Here the document is durably in Mongo *before* publish, so a
+dropped pub/sub message is repaired by the next reconnect's sync frame. Unneeded guarantees
+are extra moving parts, not free insurance.
+
+**4. The Redis connection is already open** for ticket consumption and the per-heartbeat
+blacklist check. Fan-out adds no new connection.
+
+Where RabbitMQ would be the better choice: if notifications ever need delivery guarantees
+independent of Mongo, such as an email or SMS channel with no durable log to reconcile
+against. "Why are there two messaging systems" is a fair objection, but neither component
+is new — Redis already carries cache, the JWT blacklist and tickets — so consolidating to
+one is not available in either direction.
+
 ## Data model
 
 ### Collection `epms.notifications` — one document per recipient per event
@@ -383,6 +444,7 @@ while the bell stays correct. A degraded feature instead of an incident.
 | Targeting | Role/permission-derived, fan-out on write | Reuses existing RBAC, no new subscription concept, per-user read state is trivial. Explicit recipient lists were rejected because each of the emit sites would re-implement "who are the checkers" and drift silently. |
 | Transport | SSE | Nothing needs to travel browser→server over the socket. Plain HTTP, no protocol upgrade, native auto-reconnect. WebSocket carries the same auth constraint plus a hand-written reconnect path and an nginx `Upgrade` block. |
 | Host | Processing, 8003 | Fewest deployment units on a box we do not control. A separate service fixes only 1 of the 4 scaling walls (see below) and none of the config-level ones. |
+| Fan-out | Redis pub/sub, not RabbitMQ | A RabbitMQ queue delivers to one consumer, so a second worker would silently drop notifications; `pika` is synchronous and would block the SSE event loop; and its durability guarantees are already provided by the Mongo write that precedes the publish. RabbitMQ stays for audit and scheduler jobs. |
 | Stream auth | Redis single-use ticket, consumed with `GETDEL` | Bounded log exposure without introducing a second auth mechanism. What reaches the logs is opaque and already dead. |
 | Revocation | Blacklist re-check on every heartbeat | The `exp` cap alone leaves a logged-out user receiving notifications for up to 30 minutes. Re-checking bounds that to 25 seconds for one `SISMEMBER` per connection per heartbeat. |
 | Retention | 90 days TTL | Covers a trading quarter and any month-end dispute. `audit_db` remains the authoritative trail; this collection is not a substitute. |
