@@ -85,10 +85,26 @@ def format_sse(event: str, data: Dict[str, Any]) -> str:
 
 
 def format_heartbeat() -> str:
-    """An SSE comment. Keeps nginx and any proxy from reaping an idle stream;
-    without it a quiet stream dies once a minute and the feature looks broken
-    exactly during the periods it exists to cover."""
-    return ": ping\n\n"
+    """A named SSE event ("ping"), not a comment.
+
+    The conventional SSE keep-alive is a comment line (starting with ':'),
+    and that was tried first here -- but the WHATWG event-stream parser
+    ignores comment lines entirely. They never reach EventSource's JS
+    listeners, not even as a generic "message" event, so a comment-only
+    heartbeat is completely unobservable to the client. Combined with the
+    fact that EventSource.onerror does NOT fire when the underlying socket
+    dies silently (a closed laptop lid, a dropped VPN, a NAT timeout with no
+    TCP FIN/RST), a comment-form heartbeat leaves the client with no signal
+    at all when the connection is truly dead: nothing arrives, nothing
+    errors, and the bell just goes quiet until the page is reloaded.
+
+    A named event keeps nginx/any proxy from reaping an idle stream exactly
+    as well as a comment would -- it is bytes on the wire either way -- but
+    it is also something `EventSource.addEventListener("ping", ...)` can
+    see, so the client can pet a watchdog on it and notice a socket that has
+    gone silently dead instead of only ever noticing on the next page load.
+    """
+    return format_sse("ping", {})
 
 
 def blacklist_key(token: str) -> str:

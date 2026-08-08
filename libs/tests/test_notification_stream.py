@@ -37,8 +37,20 @@ def test_sse_data_is_single_line_json_so_the_frame_cannot_be_split():
     assert json.loads(body.strip())["items"][0]["body"] == "line one\nline two"
 
 
-def test_heartbeat_is_a_comment_the_browser_ignores():
-    assert format_heartbeat() == ": ping\n\n"
+def test_heartbeat_is_a_named_sse_event():
+    assert format_heartbeat() == format_sse("ping", {})
+
+
+def test_heartbeat_is_not_a_bare_comment_so_a_client_can_observe_it():
+    """A comment line (starting with ':') is invisible to EventSource
+    listeners per the WHATWG event-stream parser -- it never fires any JS
+    event, not even a generic "message". A client with no observable
+    heartbeat and no onerror on a silently-dead socket has no way at all to
+    notice the stream has died. The heartbeat must be a real, named event a
+    client can listen for, not the conventional bare comment."""
+    frame = format_heartbeat()
+    assert not frame.startswith(":")
+    assert frame.startswith("event: ping\n")
 
 
 def test_heartbeat_interval_leaves_margin_under_nginx_60s_default():
@@ -180,7 +192,7 @@ async def test_revocation_is_rechecked_on_a_time_basis_even_when_the_queue_never
     for _ in range(8):
         await queue.put({"title": "n"})
         frame = await gen.asend(None)
-        assert frame.startswith("event: notification") or frame == ": ping\n\n"
+        assert frame.startswith("event: notification") or frame.startswith("event: ping")
         await asyncio.sleep(0.02)
 
     # Revoke, then keep the stream busy and confirm it still closes -- proving
@@ -194,7 +206,7 @@ async def test_revocation_is_rechecked_on_a_time_basis_even_when_the_queue_never
         except StopAsyncIteration:
             stream_closed = True
             break
-        assert frame.startswith("event: notification") or frame == ": ping\n\n"
+        assert frame.startswith("event: notification") or frame.startswith("event: ping")
         await asyncio.sleep(0.02)
 
     assert stream_closed, "stream never closed after revocation on a busy queue"
