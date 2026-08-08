@@ -50,7 +50,7 @@ later without an HTTP hop.
 | `events.py` | The registry. One entry per event type: key, title/body template, audience rule, severity, deep link. The only file that changes when an event is added. |
 | `audience.py` | Resolves an audience rule to concrete `user_id`s against auth_db RBAC. Isolated so it is unit-testable without emitting. |
 | `emitter.py` | `await notify(event_key, context, actor)` — resolve audience, write N docs, publish to Redis. The single entry point callers use. |
-| `repository.py` | Mongo access, matching the shape of existing `libs/repository/*_repository.py` files. That directory has no base class; each repository is standalone, so this one is too. |
+| `repository.py` | Mongo access, subclassing `libs.database.base_repository.BaseRepository` as `libs/repository/parameter_repository.py` does — it supplies `self.collection` as an `AsyncIOMotorCollection` from `(collection_name, mongodb_uri, database_name)`. |
 | `models.py` | Pydantic `Notification`. |
 
 ### Host: processing service, port 8003
@@ -168,6 +168,25 @@ one is not available in either direction.
 a few bytes per document and guarantees that editing a template later cannot silently
 rewrite what a user was historically told — which matters in a maker-checker trail.
 
+### Rendered fields carry attacker-controlled text — never use `dangerouslySetInnerHTML`
+
+`title` and `body` interpolate `actor_name`, which comes from `username`, and `remark`,
+which is free text typed by a user. The live UAT database contains **100 usernames and 3
+role names holding stored XSS payloads** — `<script>alert(1)</script>`,
+`UPD <img src=x onerror=…>`, and similar — evidently left behind by a scanner run against
+user and role creation.
+
+Notifications would therefore become a **new real-time delivery path for attacker-supplied
+strings**, pushed to every recipient of an event. React's default escaping makes this safe,
+so the rule is simply that it must stay that way: **no `dangerouslySetInnerHTML` anywhere
+in the notification bell, toast, or page**, however tempting it is for bolding a market
+name. The client already has two such sinks elsewhere
+(`MarketMetricsTable.jsx:318`, `BidStatusPage.jsx:1121`), so the pattern is present in the
+codebase and will be reached for.
+
+Input validation on username and role creation is a separate matter to raise with PTC —
+it is how 100 payloads came to be stored.
+
 ### Indexes
 
 ```
@@ -206,9 +225,36 @@ The entry above is illustrative. The agreed catalogue is decided separately.
 
 | Rule | Resolves to |
 |---|---|
-| `HasPermission("dam_block_bid:write")` | users whose role grants that permission, via `menu_role.permissions` → `role_id` → users |
+| `HasPermission("dam_block_bid_approval:read")` | users whose role grants that permission — see the resolution chain below |
 | `SpecificUsers([...])` | e.g. notifying the maker of an approve/reject outcome |
 | `Everyone()` | system-wide operational events, later |
+
+### Resolution chain, verified against live UAT data
+
+The obvious query — `users.find({"permissions": "…"})` — **returns nothing**. The
+denormalised `permissions` field exists on all 815 user documents and is empty on every
+one of them. `users.roles` holds role **names**, not ids. The working chain is:
+
+```python
+names = roles.find({"permissions": perm}, {"name": 1})          # → ["admin", "operator", …]
+users.find({"roles": {"$in": names},
+            "is_active": True,
+            "is_deleted": {"$ne": True}})
+```
+
+**No `:write` permission exists for any bid screen.** Every role — admin, superadmin,
+viewer, checker, user, operator — carries only `:read`. So audiences key off the approval
+screen's read permission (`{market}_block_bid_approval:read`), which is the closest real
+proxy for "is a checker on this market" and is the only thing present in live data.
+
+**Known consequence: this is currently very broad.** `dam_block_bid_approval:read`
+resolves to **115 of ~115 active users**, because the `viewer` and `user` roles both hold
+it. RTM is narrower at 41. In practice the first cut notifies nearly everyone. Narrowing
+is a one-line registry change — swapping the rule for `SpecificRoles([...])` or a tighter
+permission — and should be revisited once PTC confirms who the real checkers are.
+
+The `checker` role exists with 53 permissions but **zero users**, and its permission set is
+identical to `operator`. It confers nothing today.
 
 RBAC shape this relies on, confirmed in
 `services/auth/app/models/menu_role.py:6-13`:
@@ -605,6 +651,18 @@ can only mean *everyone holding write on that market, minus the actor*.
 That is workable and matches how the screen already behaves, but it is a genuine gap in a
 maker-checker control: nothing in the permission model prevents a maker approving their
 own bid. Only application-level actor subtraction would.
+
+**Stored XSS in UAT data.** 100 usernames and 3 role names in the live database contain
+scanner payloads (`<script>alert(1)</script>` and similar), meaning user and role creation
+accepts unvalidated markup. Notifications inherit this by interpolating usernames into
+rendered text; the mitigation on this side is the no-`dangerouslySetInnerHTML` rule above,
+but the input validation gap belongs with PTC.
+
+**RBAC permissions are read-only in practice.** No `:write` or `:approve` permission exists
+for any bid screen, and `dam_block_bid_approval:read` resolves to 115 of ~115 active users
+because `viewer` and `user` both hold it. The permission model does not currently express
+who may approve anything. The `checker` role exists, has zero users, and is a duplicate of
+`operator`.
 
 **`jwt_blacklist` hygiene.** It is a plain Redis set with no per-member TTL, so it grows
 without bound, and `is_token_blacklisted` fails open when Redis is unreachable
