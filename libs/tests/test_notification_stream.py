@@ -4,6 +4,8 @@ import time
 
 import pytest
 
+from fastapi import HTTPException
+
 import services.processing.app.v2.api.router.notification_routes as notification_routes
 from libs.notifications.pubsub import ConnectionRegistry
 from services.processing.app.v2.api.router.notification_routes import (
@@ -167,6 +169,134 @@ async def test_revocation_is_rechecked_on_a_time_basis_even_when_the_queue_never
 
     assert stream_closed, "stream never closed after revocation on a busy queue"
     assert registry.queues_for("u1") == []
+
+
+class _AlwaysReadyQueue:
+    """A .get() that resolves before asyncio.wait_for's timeout branch can
+    ever be taken, regardless of the timeout value -- including exactly 0.
+
+    A plain coroutine-based fake (or a real asyncio.Queue with an item
+    pre-loaded) is not good enough here: asyncio.wait_for has a fast path for
+    timeout <= 0 that checks `fut.done()` immediately, before a freshly
+    created Task has ever had a chance to run its first step. That is what
+    made the round-1 regression test's timing race real rather than
+    theoretical -- a near-zero wait_budget could occasionally beat an
+    already-queued item. Returning an *already-completed* Future sidesteps
+    Task scheduling entirely, so delivery always wins, deterministically.
+    """
+
+    def __init__(self, item=None):
+        self._item = item if item is not None else {"title": "n"}
+
+    def get(self):
+        fut = asyncio.get_running_loop().create_future()
+        fut.set_result(self._item)
+        return fut
+
+
+@pytest.mark.asyncio
+async def test_revocation_is_rechecked_even_when_delivery_always_wins_the_race(
+    monkeypatch,
+):
+    """Gap-1 fix from round 2: the sibling busy-queue test above can pass
+    even if the time-based `due_for_check` gating alone is reverted to the
+    old except-branch-only form, because its near-zero wait_budget only
+    *sometimes* loses the race against an already-queued item. This test
+    removes that race entirely -- delivery always wins, every iteration --
+    so the only thing that can make the stream close is the time-based
+    check firing on its own schedule."""
+    monkeypatch.setattr(notification_routes, "HEARTBEAT_SECONDS", 0.05)
+
+    queue = _AlwaysReadyQueue()
+    registry = ConnectionRegistry()
+    registry.add("u1", queue)
+    repository = _FakeRepository()
+    request = _FakeRequest()
+    redis = _RevocableRedis()
+    redis.revoke("jwt-abc")  # already revoked before the stream opens
+
+    gen = notification_routes.stream_events(
+        request,
+        redis,
+        registry,
+        repository,
+        user_id="u1",
+        token="jwt-abc",
+        deadline=time.time() + 3600,
+        queue=queue,
+    )
+
+    await gen.asend(None)  # sync frame
+
+    start = time.monotonic()
+    stream_closed = False
+    # Bounded by real elapsed time, not an iteration count: delivery never
+    # waits, so how many iterations fit in one heartbeat interval depends on
+    # this machine's per-iteration overhead, not a number chosen up front.
+    while time.monotonic() - start < 2.0:
+        try:
+            await gen.asend(None)
+        except StopAsyncIteration:
+            stream_closed = True
+            break
+
+    assert stream_closed, (
+        "stream never closed even though the token was revoked and delivery "
+        "always won the race -- the time-based revocation check did not fire"
+    )
+    assert registry.queues_for("u1") == []
+
+
+# --- Gap 2: a session with no usable token must not open a stream ----------
+
+
+class _FakeAppState:
+    def __init__(self):
+        self.notification_redis = _RevocableRedis()
+        self.notification_registry = ConnectionRegistry()
+        self.notification_repository = _FakeRepository()
+
+
+class _FakeApp:
+    def __init__(self):
+        self.state = _FakeAppState()
+
+
+class _FakeStreamRequest:
+    """Enough of a Request to drive the /stream route handler directly."""
+
+    def __init__(self):
+        self.app = _FakeApp()
+        self.disconnected = False
+
+    async def is_disconnected(self):
+        return self.disconnected
+
+
+@pytest.mark.asyncio
+async def test_stream_route_rejects_a_session_with_no_usable_token(monkeypatch):
+    """A stream whose session carries no token can never be checked against
+    the revocation blacklist (is_revoked's `if token and ...` guard skips the
+    check entirely), so it must be refused up front rather than allowed to
+    open as an unrevocable stream. Covers both an empty-string token and a
+    session that omits the "token" key altogether."""
+
+    async def _consume_with_empty_token(redis_client, ticket):
+        return {"user_id": "u1", "token": "", "exp": time.time() + 3600}
+
+    async def _consume_with_missing_token(redis_client, ticket):
+        return {"user_id": "u1", "exp": time.time() + 3600}
+
+    for fake_consume in (_consume_with_empty_token, _consume_with_missing_token):
+        monkeypatch.setattr(notification_routes, "consume_ticket", fake_consume)
+        request = _FakeStreamRequest()
+
+        with pytest.raises(HTTPException) as exc_info:
+            await notification_routes.stream(request, ticket="whatever")
+
+        assert exc_info.value.status_code == 401
+        # No queue should have been registered for a rejected session.
+        assert request.app.state.notification_registry.queues_for("u1") == []
 
 
 # --- Finding 2: a missing/zero/unparseable exp must still bound lifetime ---

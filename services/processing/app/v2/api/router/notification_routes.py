@@ -209,6 +209,13 @@ async def stream(request: Request, ticket: str = Query(...)):
 
     user_id = session["user_id"]
     token = session.get("token", "")
+    if not token:
+        # A session with no usable token can never be checked against the
+        # revocation blacklist -- is_revoked's `if token and ...` guard would
+        # silently skip every check for the stream's whole lifetime. Reject
+        # at the point the session is unpacked rather than establishing a
+        # stream that can never be revoked.
+        raise HTTPException(status_code=401, detail="Invalid or expired ticket")
     deadline = compute_stream_deadline(session.get("exp"))
 
     queue = new_stream_queue()
