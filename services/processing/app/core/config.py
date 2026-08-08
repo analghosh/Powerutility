@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     # Database Configuration
     MONGODB_URI: str = "mongodb://localhost:27017" 
     MONGODB_DATABASE: str = "epms"  # Default, overridden by .env
-    AUDIT_DB_NAME: str = "audit_db" 
+    AUDIT_DB_NAME: str = "audit_db"
+    AUTH_DB_NAME: str = "auth_db"   # overridden by .env
     MONGODB_AUTH_COLLECTION: str = "users"
     MONGODB_SESSIONS_COLLECTION: str = "sessions"
     MONGODB_AUDIT_COLLECTION: str = "audit_logs"

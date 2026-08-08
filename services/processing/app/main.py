@@ -3,6 +3,7 @@ EPMS Processing Service - Clean Structure
 Maintains essential functionality with clean router organization
 """
 
+import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +11,7 @@ from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBearer
 from pydantic import BaseModel
 import logging
+import redis.asyncio as aioredis
 from starlette.responses import JSONResponse
 
 from .core.config import settings
@@ -20,6 +22,12 @@ from .v2.services.health_service import processing_health_service
 
 # Configure logging with correlation ID support
 from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware, SecurityHeadersMiddleware
+
+# Notifications subsystem (Redis pub/sub + Mongo repository, wired at startup below)
+from libs.notifications.audience import AuthDirectory
+from libs.notifications.emitter import NotificationEmitter, set_emitter
+from libs.notifications.pubsub import ConnectionRegistry, run_subscriber
+from libs.notifications.repository import NotificationRepository
 
 # Import V2 authentication middleware
 from .v2.middleware.auth import V2AuthMiddleware
@@ -115,9 +123,110 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure bid price parameter defaults: {e}")
 
+    # Notifications subsystem: Redis-backed SSE ticket/pubsub + Mongo repository.
+    #
+    # State is set on BOTH `app` and `v2_app`, not just `app`. `v2_app` is a
+    # separate FastAPI instance mounted at /api/v2 (`app.mount("/api/v2",
+    # v2_app)` below); every notification route lives on v2_app
+    # (`v2_app.include_router(notification_router)`). Starlette's dispatch
+    # sets `scope["app"] = v2_app` once the mount hands the request off, so
+    # inside those routes `request.app is v2_app`, not `app` -- `request.app.state`
+    # would otherwise KeyError, because v2_app has no lifespan of its own (a
+    # mounted sub-app's lifespan events are never dispatched by its parent).
+    # This `lifespan` function, registered on the outer `app`, is the only
+    # startup hook that actually runs, so it must populate both `.state`s with
+    # the same objects. Verified against a live boot: initially wiring only
+    # app.state produced a 500 (KeyError: 'notification_repository') on every
+    # authenticated request while unauthenticated requests still looked fine
+    # (401 from AuthMiddleware, which runs before routing) -- exactly the kind
+    # of gap that stays invisible until someone tests with a real token.
+    #
+    # This whole block is wrapped in one try/except -- unlike the smaller
+    # try/excepts above -- because every piece here (Redis client, repository,
+    # ensure_indexes, the auth directory, the emitter, the subscriber task) is
+    # interdependent: a partial setup would leave state half-wired, which is
+    # harder to reason about than "notifications degraded, state attributes
+    # default to None". Every other EPMS screen depends on this process
+    # staying up, so a Redis or Mongo hiccup here must degrade notifications,
+    # not prevent the service from booting. Endpoints under /notifications
+    # will error (not silently succeed) if state is None -- they still
+    # enforce require_authenticated first, so unauthenticated callers keep
+    # getting 401 either way.
+    #
+    # ensure_indexes() is called here, at startup, never at import time: an
+    # unawaited create_index in a constructor that runs at import is what
+    # caused the Motor event-loop misbind elsewhere in this codebase.
+    for target_state in (app.state, v2_app.state):
+        target_state.notification_redis = None
+        target_state.notification_registry = None
+        target_state.notification_repository = None
+        target_state.notification_stop = None
+        target_state.notification_task = None
+    try:
+        notification_redis = aioredis.Redis(
+            host=settings.REDIS_HOST,
+            port=settings.REDIS_PORT,
+            decode_responses=True,
+        )
+        registry = ConnectionRegistry()
+
+        repository = NotificationRepository(settings.MONGODB_URI, settings.MONGODB_DATABASE)
+        await repository.ensure_indexes()
+
+        auth_db = repository.client[settings.AUTH_DB_NAME]
+        directory = AuthDirectory(
+            users_collection=auth_db["users"], roles_collection=auth_db["roles"]
+        )
+        set_emitter(
+            NotificationEmitter(repository, directory, notification_redis)
+        )
+
+        notification_stop = asyncio.Event()
+        notification_task = asyncio.create_task(
+            run_subscriber(notification_redis, registry, notification_stop)
+        )
+
+        for target_state in (app.state, v2_app.state):
+            target_state.notification_redis = notification_redis
+            target_state.notification_registry = registry
+            target_state.notification_repository = repository
+            target_state.notification_stop = notification_stop
+            target_state.notification_task = notification_task
+        logger.info("Notifications subsystem started")
+    except Exception as e:
+        logger.error(f"Failed to start notifications subsystem; notifications degraded: {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down EPMS Processing Service...")
+
+    # Notifications subsystem shutdown. Must not raise -- a shutdown handler
+    # that raises can hang a redeploy -- so every step is independently
+    # guarded and a missing piece (subsystem never started) is a silent no-op.
+    # Reads from app.state; v2_app.state holds the same objects (set together
+    # above), so there is nothing extra to close there.
+    try:
+        set_emitter(None)
+    except Exception as e:
+        logger.error(f"Failed to clear notification emitter: {e}")
+
+    if app.state.notification_stop is not None:
+        try:
+            app.state.notification_stop.set()
+        except Exception as e:
+            logger.error(f"Failed to signal notification subscriber to stop: {e}")
+
+    if app.state.notification_task is not None:
+        try:
+            app.state.notification_task.cancel()
+        except Exception as e:
+            logger.error(f"Failed to cancel notification subscriber task: {e}")
+
+    if app.state.notification_redis is not None:
+        try:
+            await app.state.notification_redis.aclose()
+        except Exception as e:
+            logger.error(f"Failed to close notification redis client: {e}")
 
 
 # Import V2 routers
@@ -176,6 +285,7 @@ from .v2.api.router.exchange_config_routes import router as exchange_config_rout
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
 from .v2.api.router.power_exchange_parameter_routes import router as power_exchange_parameter_router
+from .v2.api.router.notification_routes import router as notification_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -269,8 +379,16 @@ exclude_paths = [
     "/api/v2/power-optimization/power-optimization-input",  # Explicit match
     "/power-optimization",  # Relative path (for mounted app)
     "/power-optimization/",  # Relative path with trailing slash
+    # Exclude the notification SSE stream - EventSource cannot set an
+    # Authorization header, so it authenticates with a short-lived ticket
+    # (see notification_routes.py) instead of a Bearer token. Every other
+    # /notifications/* route is unaffected: this is an exact literal, not a
+    # prefix of "/api/v2/notifications" itself.
+    "/api/v2/notifications/stream",
+    "/notifications/stream",  # Relative path (for mounted app)
     # Note: V2 API routes now require authentication - use valid JWT tokens
-    # Exception: power-optimization uses HMAC authentication
+    # Exception: power-optimization uses HMAC authentication, notifications
+    # stream uses a ticket
 ]
 
 # Add v1 paths to exclude list only if v1 API is enabled
@@ -358,6 +476,7 @@ v2_app.include_router(exchange_config_router)
 v2_app.include_router(realtimemarket_router)
 v2_app.include_router(cron_orchestrator_router)
 v2_app.include_router(power_exchange_parameter_router)
+v2_app.include_router(notification_router)
 
 
 
@@ -411,6 +530,12 @@ async def auth_middleware(request: Request, call_next):
         "/api/v2/power-optimization",  # Matches /api/v2/power-optimization/*
         "/api/v2/power-optimization/",  # Also match with trailing slash
         "/api/v2/power-optimization/power-optimization-input",  # Explicit match
+        # Exclude the notification SSE stream - EventSource cannot set an
+        # Authorization header, so it authenticates with a short-lived ticket
+        # (see notification_routes.py) instead of a Bearer token. This is an
+        # exact literal, not a prefix of "/api/v2/notifications" itself, so
+        # every other /notifications/* route still requires a Bearer token.
+        "/api/v2/notifications/stream",
     ]
 
     # Add base path prefixed versions for server environments
@@ -424,6 +549,7 @@ async def auth_middleware(request: Request, call_next):
             f"{base_path}/api/v2/power-optimization",  # Matches /processing/api/v2/power-optimization/*
             f"{base_path}/api/v2/power-optimization/",  # With trailing slash
             f"{base_path}/api/v2/power-optimization/power-optimization-input",  # Explicit match
+            f"{base_path}/api/v2/notifications/stream",  # BASE_PATH-prefixed notification stream
         ])
     
     # Allow OPTIONS requests to pass through for CORS preflight

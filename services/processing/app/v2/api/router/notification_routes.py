@@ -233,3 +233,64 @@ async def stream(request: Request, ticket: str = Query(...)):
                                         # location block is missed
         },
     )
+
+
+@router.post("/ticket")
+async def create_ticket(
+    request: Request, user_context: Dict[str, Any] = Depends(get_user_context)
+):
+    user_id = require_authenticated(user_context)
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header[7:] if auth_header.lower().startswith("bearer ") else ""
+    exp = (user_context.get("user") or {}).get("exp")
+
+    ticket = await mint_ticket(
+        request.app.state.notification_redis, user_id, token, exp
+    )
+    return {"ticket": ticket, "expires_in": TICKET_TTL_SECONDS}
+
+
+@router.get("")
+async def list_notifications(
+    request: Request,
+    limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    user_id = require_authenticated(user_context)
+    repository = request.app.state.notification_repository
+    return {
+        "items": await repository.list_for_user(user_id, limit=limit, skip=skip),
+        "unreadCount": await repository.unread_count(user_id),
+    }
+
+
+@router.get("/unread-count")
+async def unread_count(
+    request: Request, user_context: Dict[str, Any] = Depends(get_user_context)
+):
+    user_id = require_authenticated(user_context)
+    count = await request.app.state.notification_repository.unread_count(user_id)
+    return {"unreadCount": count}
+
+
+@router.post("/read-all")
+async def read_all(
+    request: Request, user_context: Dict[str, Any] = Depends(get_user_context)
+):
+    user_id = require_authenticated(user_context)
+    updated = await request.app.state.notification_repository.mark_all_read(user_id)
+    return {"updated": updated}
+
+
+@router.post("/{notification_id}/read")
+async def mark_read(
+    request: Request,
+    notification_id: str,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    user_id = require_authenticated(user_context)
+    ok = await request.app.state.notification_repository.mark_read(
+        user_id, notification_id
+    )
+    return {"updated": bool(ok)}
