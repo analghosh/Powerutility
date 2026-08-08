@@ -914,7 +914,7 @@ Copy chosen deliberately from the vendor's own abandoned placeholders at `block_
 # libs/tests/test_notification_events.py
 import pytest
 
-from libs.notifications.audience import HasPermission, SpecificUsers
+from libs.notifications.audience import HasPermission
 from libs.notifications.events import REGISTRY, get_event
 from libs.notifications.models import Severity
 
@@ -930,13 +930,6 @@ def test_block_bid_status_changed_is_informational_not_actionable():
     event = REGISTRY["block_bid.status_changed"]
     assert event.severity == Severity.INFO
     assert isinstance(event.audience, HasPermission)
-
-
-def test_specific_users_is_available_for_maker_targeted_events():
-    """Not used by the current registry, but the rule must exist for the
-    approve/reject-notifies-the-maker event once bid ownership is threaded
-    through. Guards against the import being dropped."""
-    assert SpecificUsers(["u1"]) is not None
 
 
 def test_titles_are_templated_never_hardcoded_to_one_market():
@@ -1027,7 +1020,7 @@ def get_event(key: str) -> EventType:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `python -m pytest libs/tests/test_notification_events.py -v`
-Expected: PASS, 7 tests
+Expected: PASS, 6 tests
 
 - [ ] **Step 5: Commit**
 
@@ -1349,7 +1342,7 @@ Expected: PASS, 7 tests
 - [ ] **Step 5: Run the whole notification suite**
 
 Run: `python -m pytest libs/tests/ -k notification -v`
-Expected: PASS, 28 tests
+Expected: PASS, 30 tests
 
 - [ ] **Step 6: Commit**
 
@@ -2251,7 +2244,7 @@ import notificationsReducer from "./slices/notificationsSlice";
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd client && node --test src/store/slices/notificationsSlice.test.js`
-Expected: PASS, 7 tests
+Expected: PASS, 6 tests
 
 - [ ] **Step 5: Commit**
 
