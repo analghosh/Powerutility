@@ -212,34 +212,11 @@ class BlockBidServices:
                         "reason": "Bid is no longer pending (already processed by another approver)",
                     })
 
-            # After the loop: one notification for the whole action. The makers are
-            # looked up via _get_maker_usernames_safe (best-effort, see its docstring).
+            # After the loop: one notification per distinct market spanned by the
+            # updated bids (never per bid). See _notify_status_change for why market
+            # and schedule_date come from the bids, not the request.
             if updated:
-                try:
-                    market = str(request.get("market_type") or "RTM").upper()
-                    status_label = updated[0]["status"]
-                    maker_usernames = await self._get_maker_usernames_safe(updated)
-                    await notify(
-                        "block_bid.status_changed",
-                        {
-                            "market_type": market,
-                            "approval_market": approval_permission_market(market),
-                            "submission_path": submission_screen_path(market),
-                            "status_lower": status_label.lower(),
-                            "maker_usernames": maker_usernames,
-                            "bid_count": len(updated),
-                            "schedule_date": request.get("schedule_date")
-                            or request.get("biding_date")
-                            or "",
-                        },
-                        actor={
-                            "user_id": request.get("user_id"),
-                            "username": request.get("current_user")
-                            or request.get("username"),
-                        },
-                    )
-                except Exception:
-                    logger.exception("Notification emit failed for block bid status change")
+                await self._notify_status_change(updated, request)
 
             total = len(updated) + len(skipped)
             updated_count = len(updated)
@@ -269,26 +246,71 @@ class BlockBidServices:
             logger.error(f"Failed to get pending approvals in : {str(e)}")
             raise
 
-    async def _get_maker_usernames_safe(self, updated: List[Dict[str, Any]]) -> List[str]:
-        """Best-effort maker lookup for the status-change notification.
+    async def _notify_status_change(self, updated: List[Dict[str, Any]], request: Dict[str, Any]) -> None:
+        """Emit one block_bid.status_changed notification per distinct market spanned
+        by the just-updated bids.
 
-        updatedata_if_pending returns only a bool, and created_by holds a *username*
-        rather than an id -- verified in live data ("admin", "mukul", "ptcindia",
-        "Ashutosh") -- so the makers must be looked up separately via get_creators.
-        created_by is not modified by the update, so reading it afterwards is safe.
+        market_type and schedule_date must come from the bid documents, not the
+        request: UpdateStatusRequest (block_bid_routes.py) carries neither field, and
+        the RTM/DAM approval screen that submits it never sends either -- so falling
+        back to request.get("market_type") mislabelled every DAM/GDAM/HPDAM decision
+        as RTM, notifying the wrong approvers entirely, and schedule_date always
+        rendered empty. get_bid_decision_context reads both from the bids themselves,
+        which unlike the request cannot be absent.
 
-        A failure here (e.g. a Mongo hiccup) must not fail the already-completed bid
-        decision, and must not stop the approvers from being notified -- so it is
-        best-effort: log and return an empty list rather than raising. The caller still
-        emits the notification with an empty maker_usernames list in that case.
+        A batch can span more than one market (the API accepts arbitrary ids even
+        though the UI only ever submits one market at a time), so this emits once per
+        distinct market found, each carrying only that market's bid count and makers
+        -- never a single notification mislabelling a mixed batch. If no market is
+        found at all, no notification is sent rather than guessing a default: a
+        missing notification is recoverable, a wrong one sent to the wrong approvers
+        is not.
+
+        Nothing here may fail the bid decision already persisted by the caller: a
+        lookup failure is caught and simply skips notifying (log and return), and each
+        per-market notify() failure is caught independently so one market's failure
+        can't stop another market's notification from going out.
         """
         try:
-            return await self.block_bid_repo.get_creators(
+            market_groups = await self.block_bid_repo.get_bid_decision_context(
                 [u["id"] for u in updated]
             )
         except Exception:
-            logger.exception("Failed to look up bid makers for status-change notification")
-            return []
+            logger.exception("Failed to look up bid decision context for notification")
+            return
+
+        if not market_groups:
+            logger.info(
+                "No market found for the updated bids; skipping status-change notification"
+            )
+            return
+
+        status_label = updated[0]["status"]
+        actor = {
+            "user_id": request.get("user_id"),
+            "username": request.get("current_user") or request.get("username"),
+        }
+
+        for group in market_groups:
+            market = group["market_type"]
+            try:
+                await notify(
+                    "block_bid.status_changed",
+                    {
+                        "market_type": market,
+                        "approval_market": approval_permission_market(market),
+                        "submission_path": submission_screen_path(market),
+                        "status_lower": status_label.lower(),
+                        "maker_usernames": group["maker_usernames"],
+                        "bid_count": group["bid_count"],
+                        "schedule_date": group["biding_date"],
+                    },
+                    actor=actor,
+                )
+            except Exception:
+                logger.exception(
+                    "Notification emit failed for block bid status change (market=%s)", market
+                )
 
     async def submit_to_exchange(self, biding_date: str, submitted_by: str = "", correlation_id: str = "") -> Dict[str, Any]:
         """
