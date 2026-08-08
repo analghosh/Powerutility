@@ -302,8 +302,18 @@ class ExchangeAPIClient:
             await self._log_to_db(url, bid_request, headers, data, self.market_type, "single-bid", "submitSingleBid", bid_request.get("DeliveryDate"))
 
             response.raise_for_status()
-            
-            logger.info("Single bid submitted successfully")
+
+            # A 200 only means the exchange accepted the HTTP call; it reports
+            # acceptance or rejection of the bid itself in the body, so log what
+            # it actually said rather than claiming success.
+            body_status = data.get("Status") if isinstance(data, dict) else None
+            if body_status == "Success":
+                logger.info("Single bid accepted by exchange")
+            else:
+                logger.warning(
+                    f"Single bid returned HTTP 200 but exchange Status={body_status}: "
+                    f"{data.get('StatusMessage') if isinstance(data, dict) else data}"
+                )
             return data if isinstance(data, dict) else {}
 
     async def submit_block_bid(self, bid_request: Dict[str, Any]) -> Dict[str, Any]:
@@ -895,7 +905,8 @@ class ExchangeAPIClient:
         """
         Submit DAM block bid to exchange API (OCF variant).
 
-        API: POST {baseUrl}/dam/api/v2/blockbid/ocf  (IEX DAM API v2.2, Section 9.15)
+        API: POST {baseUrl}/{marketType}/api/v2/blockbid/ocf
+             (IEX DAM API v2.2 §9.15; IEX GDAM API 2.1 §6 item 13 — same shape)
 
         Args:
             bid_request: PascalCase body per v2.2 spec:
@@ -906,13 +917,13 @@ class ExchangeAPIClient:
         Returns:
             {TransactionId, Status, StatusMessage}
         """
-        url = f"{self.base_url}/dam/api/v2/blockbid/ocf"
+        url = f"{self.base_url}/{self.market_type}/api/v2/blockbid/ocf"
         headers = self._get_headers()
 
         import json as _json
-        logger.info(f"Submitting DAM block bid to: {url}")
+        logger.info(f"Submitting {self.market_type.upper()} block bid to: {url}")
         logger.info(
-            f"DAM Block bid curl equivalent: "
+            f"{self.market_type.upper()} Block bid curl equivalent: "
             f"curl -X POST '{url}' "
             f"-H 'Authorization: Bearer {self.bearer_token}' "
             f"-H 'Content-Type: application/json' "
@@ -931,15 +942,15 @@ class ExchangeAPIClient:
 
             await self._log_to_db(
                 url, bid_request, headers, data,
-                "dam", "block-bid", "submitDamBlockBid",
+                self.market_type, "block-bid", "submitDamBlockBid",
                 bid_request.get("DeliveryDate")
             )
 
             if not response.is_success:
-                logger.error(f"DAM block bid submission failed [{response.status_code}]: {data}")
+                logger.error(f"{self.market_type.upper()} block bid submission failed [{response.status_code}]: {data}")
                 return {"Status": "Failed", "StatusMessage": data}
 
-            logger.info(f"DAM block bid submitted successfully: {data}")
+            logger.info(f"{self.market_type.upper()} block bid submitted successfully: {data}")
             return data if isinstance(data, dict) else {"Status": "Failed", "StatusMessage": data}
 
     async def cancel_dam_block_bid(
@@ -951,7 +962,8 @@ class ExchangeAPIClient:
         """
         Cancel a submitted DAM block bid on the exchange.
 
-        API: PUT {baseUrl}/dam/api/v2/blockbid/cancel  (IEX DAM API v2.2)
+        API: PUT {baseUrl}/{marketType}/api/v2/blockbid/cancel
+             (IEX DAM API v2.2; IEX GDAM API 2.1 §6 item 15 — same shape)
 
         Request Body:
             OrderId, UserId, ParticipantId, PortfolioId, LastUpdatedTime
@@ -959,7 +971,7 @@ class ExchangeAPIClient:
         Response:
             {TransactionId, Status ("Success"/"Failed"), StatusMessage}
         """
-        url = f"{self.base_url}/dam/api/v2/blockbid/cancel"
+        url = f"{self.base_url}/{self.market_type}/api/v2/blockbid/cancel"
         headers = self._get_headers()
 
         request_body = {
@@ -970,7 +982,7 @@ class ExchangeAPIClient:
             "LastUpdatedTime": last_updated_time,
         }
 
-        logger.info(f"Cancelling DAM block bid order_id={order_id} at: {url}")
+        logger.info(f"Cancelling {self.market_type.upper()} block bid order_id={order_id} at: {url}")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.put(url, json=request_body, headers=headers)
@@ -984,7 +996,7 @@ class ExchangeAPIClient:
 
             await self._log_to_db(
                 url, request_body, headers, data,
-                "dam", "block-bid", "cancelDamBlockBid",
+                self.market_type, "block-bid", "cancelDamBlockBid",
                 delivery_date
             )
 
@@ -995,15 +1007,15 @@ class ExchangeAPIClient:
         """
         Fetch DAM block bid reference count from exchange API.
 
-        API: GET {baseUrl}/dam/api/v2/blockbid/bidrefcount/{LoginUserId},{ParticipantId}
+        API: GET {baseUrl}/{marketType}/api/v2/blockbid/bidrefcount/{LoginUserId},{ParticipantId}
 
         Returns:
-            Bid reference count response (field: DAMBlockBidRefCount)
+            Bid reference count response (field: BlockBidRefCount — see DAM 2.2 §11.8)
         """
-        url = f"{self.base_url}/dam/api/v2/blockbid/bidrefcount/{self.login_user_id},{self.participant_id}"
+        url = f"{self.base_url}/{self.market_type}/api/v2/blockbid/bidrefcount/{self.login_user_id},{self.participant_id}"
         headers = self._get_headers()
 
-        logger.info(f"Fetching DAM block bid ref count from: {url}")
+        logger.info(f"Fetching {self.market_type.upper()} block bid ref count from: {url}")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
@@ -1013,11 +1025,11 @@ class ExchangeAPIClient:
             except Exception:
                 data = response.text
 
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "block-bid", "getDamBidReferenceId")
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "block-bid", "getDamBidReferenceId")
 
             response.raise_for_status()
 
-            logger.info(f"DAM block bid ref count fetched: {data}")
+            logger.info(f"{self.market_type.upper()} block bid ref count fetched: {data}")
             return data if isinstance(data, dict) else {}
 
     async def get_dam_block_bids(
@@ -1036,20 +1048,20 @@ class ExchangeAPIClient:
         """
         Fetch existing DAM block bids for a delivery date.
 
-        API: GET {baseUrl}/dam/api/v2/blockbid/{LoginUserId},{ParticipantId},{DeliveryDate},{UserId},{PortfolioId},{FromPeriodId},{ToPeriodId},{BuySell},{BidAreaId},{Status},{ExceptionId},{OrderId},{PageNumber},{PageSize}
+        API: GET {baseUrl}/{marketType}/api/v2/blockbid/{LoginUserId},{ParticipantId},{DeliveryDate},{UserId},{PortfolioId},{FromPeriodId},{ToPeriodId},{BuySell},{BidAreaId},{Status},{ExceptionId},{OrderId},{PageNumber},{PageSize}
 
         Returns:
             {DAMBlockBidDetails: [], TotalRecord: int}
         """
         url = (
-            f"{self.base_url}/dam/api/v2/blockbid/"
+            f"{self.base_url}/{self.market_type}/api/v2/blockbid/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{from_period},{to_period},"
             f"{buy_sell},{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
 
-        logger.info(f"Fetching existing DAM block bids from: {url}")
+        logger.info(f"Fetching existing {self.market_type.upper()} block bids from: {url}")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
