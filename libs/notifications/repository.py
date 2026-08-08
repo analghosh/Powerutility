@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 COLLECTION_NAME = "notifications"
 TTL_SECONDS = 7776000  # 90 days
+MAX_LIMIT = 200
 
 
 class NotificationRepository(BaseRepository):
@@ -44,11 +45,15 @@ class NotificationRepository(BaseRepository):
     async def list_for_user(
         self, user_id: str, limit: int = 50, skip: int = 0
     ) -> List[Dict[str, Any]]:
+        # Clamp limit to valid range and skip to non-negative
+        clamped_limit = max(1, min(limit, MAX_LIMIT))
+        clamped_skip = max(0, skip)
+
         cursor = (
             self.collection.find({"user_id": user_id})
             .sort("created_at", -1)
-            .skip(skip)
-            .limit(limit)
+            .skip(clamped_skip)
+            .limit(clamped_limit)
         )
         return [self._serialise(doc) async for doc in cursor]
 
@@ -58,6 +63,8 @@ class NotificationRepository(BaseRepository):
         )
 
     async def mark_read(self, user_id: str, notification_id: str) -> bool:
+        if not ObjectId.is_valid(notification_id):
+            return False
         result = await self.collection.update_one(
             {"_id": ObjectId(notification_id), "user_id": user_id, "read_at": None},
             {"$set": {"read_at": datetime.now()}},

@@ -84,3 +84,57 @@ async def test_insert_many_with_no_recipients_does_not_touch_mongo():
             raise AssertionError("must not be called for an empty audience")
 
     assert await _repo_with(_Exploding()).insert_many_for([]) == []
+
+
+@pytest.mark.asyncio
+async def test_mark_read_with_malformed_id_returns_false():
+    class _Coll:
+        def __init__(self):
+            self.update_called = False
+
+        async def update_one(self, filter, update):
+            self.update_called = True
+            raise AssertionError("update_one must not be called for invalid id")
+
+    coll = _Coll()
+    result = await _repo_with(coll).mark_read("u1", "not-an-object-id")
+
+    assert result is False
+    assert coll.update_called is False
+
+
+@pytest.mark.asyncio
+async def test_list_for_user_clamps_limit_and_skip():
+    class _Coll:
+        def __init__(self):
+            self.skip_value = None
+            self.limit_value = None
+
+        def find(self, filter):
+            return self
+
+        def sort(self, field, direction):
+            return self
+
+        def skip(self, value):
+            self.skip_value = value
+            return self
+
+        def limit(self, value):
+            self.limit_value = value
+            return self
+
+        def __aiter__(self):
+            return self
+
+        async def __anext__(self):
+            raise StopAsyncIteration
+
+    coll = _Coll()
+    repo = _repo_with(coll)
+
+    # Test limit clamping (99999 should clamp to 200)
+    await repo.list_for_user("u1", limit=99999, skip=-5)
+
+    assert coll.limit_value == 200, f"Expected limit to be 200, got {coll.limit_value}"
+    assert coll.skip_value == 0, f"Expected skip to be 0, got {coll.skip_value}"
