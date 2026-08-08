@@ -915,7 +915,7 @@ Copy chosen deliberately from the vendor's own abandoned placeholders at `block_
 import pytest
 
 from libs.notifications.audience import HasPermission
-from libs.notifications.events import REGISTRY, get_event
+from libs.notifications.events import REGISTRY, approval_permission_market, get_event
 from libs.notifications.models import Severity
 
 
@@ -923,7 +923,22 @@ def test_block_bid_submitted_notifies_approval_screen_holders():
     event = get_event("block_bid.submitted_for_approval")
     assert isinstance(event.audience, HasPermission)
     assert event.severity == Severity.ACTION_REQUIRED
-    assert event.audience.permission == "{market_lower}_block_bid_approval:read"
+    assert event.audience.permission == "{approval_market}_block_bid_approval:read"
+
+
+def test_day_ahead_markets_share_the_dam_approval_permission():
+    """Only dam_ and rtm_ approval permissions exist in live data. Templating on the
+    market name would build gdam_/hpdam_ strings no role grants, so GDAM and HPDAM
+    would silently notify nobody."""
+    assert approval_permission_market("DAM") == "dam"
+    assert approval_permission_market("GDAM") == "dam"
+    assert approval_permission_market("HPDAM") == "dam"
+    assert approval_permission_market("RTM") == "rtm"
+
+
+def test_approval_permission_market_is_case_and_whitespace_tolerant():
+    assert approval_permission_market(" gdam ") == "dam"
+    assert approval_permission_market("") == ""
 
 
 def test_block_bid_status_changed_is_informational_not_actionable():
@@ -954,7 +969,7 @@ def test_block_bid_submitted_renders_for_every_day_ahead_market():
     for market in ("DAM", "GDAM", "HPDAM", "RTM"):
         title, body, link = event.render({
             "market_type": market,
-            "market_lower": market.lower(),
+            "approval_market": approval_permission_market(market),
             "actor_name": "A. Kumar",
             "bid_count": 3,
             "schedule_date": "2026-08-09",
@@ -991,13 +1006,30 @@ from typing import Dict
 from libs.notifications.audience import HasPermission
 from libs.notifications.models import EventType, Severity
 
+DAY_AHEAD_MARKETS = frozenset({"DAM", "GDAM", "HPDAM"})
+
+
+def approval_permission_market(market_type: str) -> str:
+    """Which market's approval permission gates this market's block bids.
+
+    DAM, GDAM and HPDAM are all approved on the one screen — /dam/dam-block-bid-approve,
+    which is the link every day-ahead entry below points at — so they share that screen's
+    permission. Verified against live data: only dam_block_bid_approval:read and
+    rtm_block_bid_approval:read exist. Templating the permission on the market name
+    directly would build gdam_/hpdam_ strings that no role grants, and those markets would
+    notify nobody with no error raised.
+    """
+    market = (market_type or "").strip().upper()
+    return "dam" if market in DAY_AHEAD_MARKETS else market.lower()
+
+
 REGISTRY: Dict[str, EventType] = {
     "block_bid.submitted_for_approval": EventType(
         key="block_bid.submitted_for_approval",
         severity=Severity.ACTION_REQUIRED,
         title="{market_type} block bid awaiting approval",
         body="{actor_name} submitted {bid_count} {market_type} block bid(s) for {schedule_date}.",
-        audience=HasPermission("{market_lower}_block_bid_approval:read"),
+        audience=HasPermission("{approval_market}_block_bid_approval:read"),
         link="/dam/dam-block-bid-approve?date={schedule_date}",
     ),
     "block_bid.status_changed": EventType(
@@ -1005,7 +1037,7 @@ REGISTRY: Dict[str, EventType] = {
         severity=Severity.INFO,
         title="{market_type} block bid {status_lower}",
         body="{actor_name} {status_lower} {bid_count} {market_type} block bid(s) for {schedule_date}.",
-        audience=HasPermission("{market_lower}_block_bid_approval:read"),
+        audience=HasPermission("{approval_market}_block_bid_approval:read"),
         link="/dam/dam-block-bid-submission-status?date={schedule_date}",
     ),
 }
@@ -1093,7 +1125,7 @@ def _emitter(ids, repo=None, redis=None):
 def _context():
     return {
         "market_type": "DAM",
-        "market_lower": "dam",
+        "approval_market": "dam",
         "bid_count": 3,
         "schedule_date": "2026-08-09",
     }
@@ -1988,6 +2020,7 @@ Add the import at the top of `block_bid_services.py`:
 
 ```python
 from libs.notifications import notify
+from libs.notifications.events import approval_permission_market
 ```
 
 Replace lines 124-134 (the `# Notification placeholder` block) with:
@@ -2001,7 +2034,7 @@ Replace lines 124-134 (the `# Notification placeholder` block) with:
                 "block_bid.submitted_for_approval",
                 {
                     "market_type": market,
-                    "market_lower": market.lower(),
+                    "approval_market": approval_permission_market(market),
                     "bid_count": len(data),
                     "schedule_date": formatted_date,
                 },
@@ -2026,7 +2059,7 @@ Replace lines 200-209 (the second placeholder, currently **inside** the loop) by
                         "block_bid.status_changed",
                         {
                             "market_type": market,
-                            "market_lower": market.lower(),
+                            "approval_market": approval_permission_market(market),
                             "status_lower": status_label.lower(),
                             "bid_count": len(updated),
                             "schedule_date": request.get("schedule_date")
