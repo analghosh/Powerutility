@@ -266,14 +266,47 @@ multiplier, pushing the fd and nginx ceilings further out at no cost.
 
 Tabs fall back to a direct `EventSource` where `SharedWorker` is unavailable.
 
+### No stream for a browser nobody is looking at
+
+Traders leave EPMS open all day, and at any moment most of those windows are not in
+focus. A stream held for a hidden tab costs exactly as much as one being watched and
+delivers nothing, because a toast in an invisible tab is invisible.
+
+```js
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") startIdleTimer(5 * 60_000);
+  else { cancelIdleTimer(); ensureConnected(); }
+});
+```
+
+This is free only because of the durable log. Reconnecting fires a `sync` frame that
+rebuilds the entire bell state, so closing and reopening loses no events. An ephemeral
+design could not do this.
+
+Combined with the SharedWorker, for 1,000 users averaging 3 tabs:
+
+```
+naive                        3,000 connections
++ SharedWorker               1,000
++ hidden-tab close (~60%)      400      ← 7.5× reduction
+```
+
+Known consequence: a hidden tab receives no live push until it is focused again. That is
+acceptable while notifications are in-page toasts and a bell badge. It stops being
+acceptable if desktop notifications via the Notification API are added later, since those
+are meant to reach a user who is *not* looking — that feature would need the idle timer
+reconsidered.
+
 ### Lifecycle
 
 ```
-login  →  POST /notifications/ticket (Bearer JWT)  →  EventSource(stream?ticket=…)
-       →  event: sync          → replace bell state
-       →  event: notification  → prepend + toast
-       →  : ping (every 25s)   → reset watchdog
-logout →  close()
+login       →  POST /notifications/ticket (Bearer JWT)  →  EventSource(stream?ticket=…)
+            →  event: sync          → replace bell state
+            →  event: notification  → prepend + toast
+            →  : ping (every 25s)   → reset watchdog
+hidden 5min →  close()
+visible     →  re-mint ticket, reconnect, sync
+logout      →  close()
 ```
 
 **Half-open sockets.** `EventSource.onerror` does not fire when a socket dies silently —
@@ -329,6 +362,18 @@ action truly succeeded and only the notification was lost.
 | Redis unreachable during a heartbeat blacklist check | Fails open, per existing `jwt_validator.py:213-214`. Stream stays up; a revoked token is not detected until Redis returns. |
 | Processing restart | `sync` frame on reconnect rebuilds state |
 | Audience query fails | Logged. No notification. Never blocks. |
+| Stream capacity threshold reached | New streams are refused with a distinct code and the client degrades to polling `/unread-count` every 30s. See below. |
+
+### Degrade rather than fall over
+
+The server tracks its open stream count. Above a configured threshold it refuses new
+streams with a distinct status the client recognises, and the client falls back to polling
+`/unread-count` every 30 seconds — the same fallback already used when Redis is down.
+
+The point is the shape of the failure at overload. Without this, exhausting the fd limit
+returns `EMFILE`, which takes down **every** endpoint on 8003, not just notifications, and
+typically spins the accept loop at full CPU. With it, overload means popups get slower
+while the bell stays correct. A degraded feature instead of an incident.
 
 ## Decisions
 
@@ -343,6 +388,9 @@ action truly succeeded and only the notification was lost.
 | Retention | 90 days TTL | Covers a trading quarter and any month-end dispute. `audit_db` remains the authoritative trail; this collection is not a substitute. |
 | Collapsing | None — one per action | Each submission is a distinct decision for a checker. Collapsing makes an already-read item silently unread and destroys "when was I told". |
 | Multi-tab | SharedWorker | The 6-tab limit triggers at realistic usage, and its failure mode — a tab hanging with no error — is very hard to diagnose from a user report. |
+| Hidden tabs | Close the stream after 5 minutes hidden | Roughly 2–5× fewer concurrent connections. Free because reconnect replays via the sync frame, and a toast in an invisible tab was never visible anyway. |
+| Upstream socket | Unix domain socket | Removes the ~28,000 ephemeral-port ceiling, which no fd or `worker_connections` tuning can move. |
+| Overload | Refuse new streams, client polls | Turns exhaustion from `EMFILE` — which takes down every endpoint on 8003 — into slower popups with a still-correct bell. |
 
 ## Deployment requirements
 
@@ -351,7 +399,7 @@ server-side and vendor-controlled. They must go in the deployment ask.
 
 ```nginx
 location /api/v2/notifications/stream {
-    proxy_pass http://127.0.0.1:8003;
+    proxy_pass http://unix:/run/epms-processing.sock;   # see note on ports below
     proxy_http_version 1.1;
     proxy_set_header Connection "";
     proxy_buffering off;          # without this the feature is entirely broken
@@ -375,6 +423,25 @@ LimitNOFILE=65535
 `proxy_buffering off` is the single most important line. With buffering enabled nginx
 holds the response until its buffer fills: the browser receives nothing, the connection
 appears healthy, and the feature looks completely dead. No unit test will catch it.
+
+**Unix domain socket rather than `127.0.0.1:8003`.** Proxying over loopback TCP consumes
+one ephemeral port per upstream connection, and `net.ipv4.ip_local_port_range` defaults to
+roughly 28,000 — a ceiling no amount of fd or `worker_connections` tuning moves. A Unix
+socket uses no ports at all and is marginally faster. If uvicorn must keep listening on a
+TCP port for other reasons, widen the range via sysctl instead:
+
+```
+net.ipv4.ip_local_port_range = 10240 65535
+```
+
+**Size the limits to actual RAM, not to the largest number available.** `LimitNOFILE` and
+`worker_connections` are ceilings that stop a bounded, loud, single-process failure
+(`EMFILE`, `Errno 24`) from becoming an unbounded, silent, box-wide one. Raised beyond what
+memory can back, the OOM killer selects by resident size — likely MongoDB or a uvicorn
+worker — and a systemd restart triggers a reconnect stampede straight back into OOM. On a
+4 GB box where Mongo, Redis and RabbitMQ are co-located, `LimitNOFILE=8192` with
+`worker_connections 2048` is the honest setting; the 65535/8192 figures above assume a box
+with headroom to match.
 
 ## Performance and scaling
 
@@ -401,9 +468,32 @@ Four walls, in the order they are hit:
    heartbeat against a 60-second timeout leaves roughly 35 seconds of headroom, so a
    3-second aggregation only means a 3-second-late popup.
 4. **Browser tab limit, 6.** Addressed by the SharedWorker above.
+5. **Ephemeral ports, ~28,000.** Only if `proxy_pass` uses loopback TCP. Removed entirely
+   by the Unix domain socket above.
 
 Walls 1 and 2 are configuration and should be applied regardless. Wall 3 is pre-existing
-and raised separately. Wall 4 is handled in this design.
+and raised separately. Walls 4 and 5 are handled in this design.
+
+### Connections are the resource, and this design spends few of them
+
+Walls 1, 2 and 5 exist only because SSE holds a connection for the life of a session.
+Ordinary requests cycle through the same budget in milliseconds; a stream occupies its
+slot for hours. That is the entire reason those ceilings matter here and have never
+mattered for the rest of EPMS.
+
+Rather than only raising the ceilings, the design lowers demand against them:
+
+| Measure | Effect |
+|---|---|
+| SharedWorker | ~3× fewer — one connection per browser, not per tab |
+| Hidden-tab close | ~2–5× fewer — no stream for a window nobody is watching |
+| Unix socket | removes the ephemeral-port ceiling outright |
+| Capacity fallback | overload degrades to polling instead of `EMFILE` |
+
+Compounded, roughly **7.5× fewer connections for the same users**. The untuned Ubuntu
+default of 768 then covers on the order of 1,900 users, and the tuned figure covers tens
+of thousands — well past any plausible PTC scale, with a graceful degradation path rather
+than a cliff beyond it.
 
 Unknowns that determine the real ceiling, none of which are in either repository: the EC2
 instance type and core count, the current nginx configuration, whether TLS and HTTP/2 are
@@ -443,7 +533,9 @@ Unit and integration tests are written first, per TDD, and watched to fail.
   ticket is rejected on second use; a blacklisted token closes the stream at the next
   heartbeat
 - **`node --test`** — slice reducers; `sync` replaces while `notification` prepends;
-  dedupe by `_id`; watchdog fires on a missed heartbeat; SharedWorker fan-out to two ports
+  dedupe by `_id`; watchdog fires on a missed heartbeat; SharedWorker fan-out to two ports;
+  the idle timer closes the stream after 5 minutes hidden and reconnects on visible; a
+  capacity refusal switches the client to polling
 - **Integration** — emit produces N documents, publishes to Redis, and the SSE endpoint
   yields the frame
 - **Browser, and this is the acceptance criterion** — two sessions side by side: user A
