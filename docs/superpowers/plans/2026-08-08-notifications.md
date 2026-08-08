@@ -121,7 +121,7 @@ def _event():
         title="{market_type} bid awaiting approval",
         body="{actor_name} submitted {bid_count} {market_type} bid(s) for {schedule_date}.",
         audience=_FixedAudience(),
-        link="/dam/dam-block-bid-approve?date={schedule_date}",
+        link="{approval_path}?date={schedule_date}",
     )
 
 
@@ -427,6 +427,27 @@ class AuthDirectory:
             )
         ]
 
+    async def user_ids_for_usernames(self, usernames: List[str]) -> List[str]:
+        """Resolve usernames to user ids.
+
+        Bid documents record their maker in `created_by` as a username string --
+        verified in live data: "admin", "mukul", "ptcindia", "Ashutosh" -- not as an
+        id, so those names must be resolved before they can be used as recipients.
+        """
+        if not usernames:
+            return []
+        return [
+            str(doc["_id"])
+            async for doc in self.users.find(
+                {
+                    "username": {"$in": list(usernames)},
+                    "is_active": True,
+                    "is_deleted": {"$ne": True},
+                },
+                {"_id": 1},
+            )
+        ]
+
     async def all_active_user_ids(self) -> List[str]:
         return [
             str(doc["_id"])
@@ -457,6 +478,44 @@ class SpecificUsers(Audience):
 
     async def resolve(self, context: Dict[str, Any]) -> List[str]:
         return list(self.user_ids)
+
+
+class UsernamesFromContext(Audience):
+    """Recipients the caller names by username in the event context.
+
+    Distinct from SpecificUsers, whose list is fixed when the registry is defined:
+    these names are only known at emit time, e.g. the makers of the bids being approved.
+    """
+
+    def __init__(self, context_key: str):
+        self.context_key = context_key
+
+    async def resolve(self, context: Dict[str, Any]) -> List[str]:
+        names = [n for n in (context.get(self.context_key) or []) if n]
+        if not names:
+            return []
+        directory: AuthDirectory = context[DIRECTORY_KEY]
+        return await directory.user_ids_for_usernames(names)
+
+
+class AnyOf(Audience):
+    """Union of several rules, order preserved and de-duplicated.
+
+    Some events have more than one interested party: an approval both tells the maker
+    their bid was decided and tells the other checkers it has been handled.
+    """
+
+    def __init__(self, *rules: Audience):
+        self.rules = rules
+
+    async def resolve(self, context: Dict[str, Any]) -> List[str]:
+        seen, ordered = set(), []
+        for rule in self.rules:
+            for user_id in await rule.resolve(context):
+                if user_id not in seen:
+                    seen.add(user_id)
+                    ordered.append(user_id)
+        return ordered
 
 
 class Everyone(Audience):
@@ -1003,7 +1062,7 @@ from __future__ import annotations
 
 from typing import Dict
 
-from libs.notifications.audience import HasPermission
+from libs.notifications.audience import AnyOf, HasPermission, UsernamesFromContext
 from libs.notifications.models import EventType, Severity
 
 DAY_AHEAD_MARKETS = frozenset({"DAM", "GDAM", "HPDAM"})
@@ -1023,6 +1082,24 @@ def approval_permission_market(market_type: str) -> str:
     return "dam" if market in DAY_AHEAD_MARKETS else market.lower()
 
 
+# Real client routes, verified against the router. The two markets do not share a
+# shape -- DAM is /dam/block-bid-approval but RTM is /rtm/rtm-block-bid-approval -- so
+# these cannot be produced by templating the market into one string.
+APPROVAL_SCREEN = {"dam": "/dam/block-bid-approval", "rtm": "/rtm/rtm-block-bid-approval"}
+SUBMISSION_SCREEN = {
+    "dam": "/dam/dam-block-bid-submission",
+    "rtm": "/rtm/rtm-block-bid-submission",
+}
+
+
+def approval_screen_path(market_type: str) -> str:
+    return APPROVAL_SCREEN[approval_permission_market(market_type)]
+
+
+def submission_screen_path(market_type: str) -> str:
+    return SUBMISSION_SCREEN[approval_permission_market(market_type)]
+
+
 REGISTRY: Dict[str, EventType] = {
     "block_bid.submitted_for_approval": EventType(
         key="block_bid.submitted_for_approval",
@@ -1030,15 +1107,18 @@ REGISTRY: Dict[str, EventType] = {
         title="{market_type} block bid awaiting approval",
         body="{actor_name} submitted {bid_count} {market_type} block bid(s) for {schedule_date}.",
         audience=HasPermission("{approval_market}_block_bid_approval:read"),
-        link="/dam/dam-block-bid-approve?date={schedule_date}",
+        link="{approval_path}?date={schedule_date}",
     ),
     "block_bid.status_changed": EventType(
         key="block_bid.status_changed",
         severity=Severity.INFO,
         title="{market_type} block bid {status_lower}",
         body="{actor_name} {status_lower} {bid_count} {market_type} block bid(s) for {schedule_date}.",
-        audience=HasPermission("{approval_market}_block_bid_approval:read"),
-        link="/dam/dam-block-bid-submission-status?date={schedule_date}",
+        audience=AnyOf(
+            UsernamesFromContext("maker_usernames"),
+            HasPermission("{approval_market}_block_bid_approval:read"),
+        ),
+        link="{submission_path}?date={schedule_date}",
     ),
 }
 
@@ -1964,7 +2044,34 @@ git commit -m "feat(notifications): add REST endpoints and service wiring"
 
 **Files:**
 - Modify: `services/processing/app/v2/services/block_bid_services.py:125-133` and `:200-209`
+- Modify: `services/processing/app/v2/repository/block_bid_current_data_repository.py` — add `get_creators`
 - Test: `libs/tests/test_block_bid_notification_emit.py`
+
+**Add this to `block_bid_current_data_repository.py`, beside `updatedata_if_pending`:**
+
+```python
+    async def get_creators(self, record_ids: List[str]) -> List[str]:
+        """Usernames that submitted the given bids.
+
+        Used to notify a maker that their bid was decided. `created_by` holds a username
+        rather than an id, and `updatedata_if_pending` returns only a bool, so the makers
+        cannot be recovered from the update itself.
+        """
+        if not record_ids:
+            return []
+        object_ids = [ObjectId(r) for r in record_ids if ObjectId.is_valid(r)]
+        if not object_ids:
+            return []
+        return sorted(
+            {
+                doc["created_by"]
+                async for doc in self.collection.find(
+                    {"_id": {"$in": object_ids}}, {"created_by": 1}
+                )
+                if doc.get("created_by")
+            }
+        )
+```
 
 **Interfaces:**
 - Consumes: `notify` (Task 6)
@@ -2020,7 +2127,11 @@ Add the import at the top of `block_bid_services.py`:
 
 ```python
 from libs.notifications import notify
-from libs.notifications.events import approval_permission_market
+from libs.notifications.events import (
+    approval_permission_market,
+    approval_screen_path,
+    submission_screen_path,
+)
 ```
 
 Replace lines 124-134 (the `# Notification placeholder` block) with:
@@ -2035,6 +2146,7 @@ Replace lines 124-134 (the `# Notification placeholder` block) with:
                 {
                     "market_type": market,
                     "approval_market": approval_permission_market(market),
+                    "approval_path": approval_screen_path(market),
                     "bid_count": len(data),
                     "schedule_date": formatted_date,
                 },
@@ -2051,6 +2163,15 @@ Replace lines 200-209 (the second placeholder, currently **inside** the loop) by
 
 ```python
             # After the loop: one notification for the whole action.
+            #
+            # The makers must be looked up separately: updatedata_if_pending returns only a
+            # bool (block_bid_current_data_repository.py:142-148), and created_by holds a
+            # *username* rather than an id -- verified in live data ("admin", "mukul",
+            # "ptcindia", "Ashutosh"). created_by is not modified by the update, so reading
+            # it afterwards is safe.
+            maker_usernames = await self.block_bid_repo.get_creators(
+                [u["id"] for u in updated]
+            )
             if updated:
                 try:
                     market = str(request.get("market_type") or "RTM").upper()
@@ -2060,7 +2181,9 @@ Replace lines 200-209 (the second placeholder, currently **inside** the loop) by
                         {
                             "market_type": market,
                             "approval_market": approval_permission_market(market),
+                            "submission_path": submission_screen_path(market),
                             "status_lower": status_label.lower(),
+                            "maker_usernames": maker_usernames,
                             "bid_count": len(updated),
                             "schedule_date": request.get("schedule_date")
                             or request.get("biding_date")
