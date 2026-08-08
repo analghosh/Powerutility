@@ -1206,6 +1206,7 @@ def _context():
     return {
         "market_type": "DAM",
         "approval_market": "dam",
+        "approval_path": "/dam/block-bid-approval",
         "bid_count": 3,
         "schedule_date": "2026-08-09",
     }
