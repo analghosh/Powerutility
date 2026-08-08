@@ -2563,8 +2563,14 @@ const MAX_BACKOFF_MS = 30000;
 /** Exponential with jitter. Jitter matters: without it every stream dropped by
  *  a deploy reconnects in the same millisecond. */
 export const nextBackoffMs = (attempt) => {
+  // Equal jitter: half the ceiling plus a random half. Adding jitter ON TOP of the
+  // ceiling and then clamping to the cap looks equivalent but is not -- past attempt 5
+  // the ceiling IS the cap, so the clamp removes the jitter entirely and every client
+  // waits exactly 30s. That is the synchronised stampede this exists to prevent, and it
+  // would appear only after a prolonged outage, when every client is at a high attempt
+  // count and the service is least able to cope.
   const ceiling = Math.min(MAX_BACKOFF_MS, BASE_BACKOFF_MS * 2 ** attempt);
-  return Math.min(MAX_BACKOFF_MS, ceiling + Math.random() * ceiling);
+  return ceiling / 2 + Math.random() * (ceiling / 2);
 };
 
 export const parseFrame = (event) => {
