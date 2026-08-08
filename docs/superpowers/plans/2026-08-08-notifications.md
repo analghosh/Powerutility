@@ -1377,25 +1377,35 @@ class NotificationEmitter:
         ids = await self.repository.insert_many_for(notifications)
 
         # Durably stored above. A publish failure costs liveness, never the record.
-        try:
-            await publish(
-                self.redis_client,
-                recipients,
-                {
-                    "_id": ids[0] if ids else None,
-                    "event_key": event_key,
-                    "title": title,
-                    "body": body,
-                    "payload": dict(context),
-                    "link": link,
-                    "actor": actor_doc,
-                    "severity": event.severity.value,
-                    "read_at": None,
-                    "created_at": created_at.isoformat(),
-                },
-            )
-        except Exception:
-            logger.exception("Notification published failed for %s", event_key)
+        #
+        # Published per recipient rather than as one broadcast: the payloads are NOT
+        # identical, because each recipient's push must carry their own document id.
+        # insert_many_for preserves order, so ids[i] belongs to recipients[i]. Sending
+        # one shared id would mean every other recipient's "mark read" matched nothing,
+        # since mark_read filters on both _id and user_id -- a silent no-op, not an error.
+        for recipient, notification_id in zip(recipients, ids):
+            try:
+                await publish(
+                    self.redis_client,
+                    [recipient],
+                    {
+                        "_id": notification_id,
+                        "event_key": event_key,
+                        "title": title,
+                        "body": body,
+                        "payload": dict(context),
+                        "link": link,
+                        "actor": actor_doc,
+                        "severity": event.severity.value,
+                        "read_at": None,
+                        "created_at": created_at.isoformat(),
+                    },
+                )
+            except Exception:
+                # One recipient's failure must not stop the rest.
+                logger.exception(
+                    "Notification publish failed for %s to %s", event_key, recipient
+                )
 
         return ids
 
