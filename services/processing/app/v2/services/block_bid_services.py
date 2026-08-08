@@ -17,6 +17,12 @@ from ..repository.exchange_config_repository import ExchangeConfigRepository
 from ..repository.integration_api_log_repository import IntegrationApiLogRepository
 from ..repository.limit_values_repository import LimitValuesRepository
 from ..iex.masterApi import ExchangeAPIClient, select_delivery_date_record
+from libs.notifications import notify
+from libs.notifications.events import (
+    approval_permission_market,
+    approval_screen_path,
+    submission_screen_path,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -121,17 +127,26 @@ class BlockBidServices:
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e))
 
-        # Notification placeholder
-        notification_data = {
-            "bid_status": "submitForApproval Block Bid",
-            "module_name": "Block Bid",
-            "title": "RTM Block Bid Submitted for Approval",
-            "description": "RTM Block bid submitted for approval of selected time blocks",
-            "time_block": time_block_range,
-            "submitted_time": now.strftime("%d-%m-%Y %H:%M"),
-            "notification_type": "bid_for_Approvel"
-        }
-        logger.info(f"Notification placeholder: {insert_result}")
+        # Notify every user who can see this market's approval screen.
+        # Action-level: one notification carrying the count, never one per bid.
+        try:
+            market = str(request.get("market_type", ["RTM"])[0]).upper()
+            await notify(
+                "block_bid.submitted_for_approval",
+                {
+                    "market_type": market,
+                    "approval_market": approval_permission_market(market),
+                    "approval_path": approval_screen_path(market),
+                    "bid_count": len(data),
+                    "schedule_date": formatted_date,
+                },
+                actor={
+                    "user_id": request.get("user_id"),
+                    "username": request.get("current_user") or request.get("username"),
+                },
+            )
+        except Exception:
+            logger.exception("Notification emit failed for block bid submission")
 
         if insert_result:
             return {"message": "Bid Submitted Successfully For Approval."}
@@ -197,16 +212,41 @@ class BlockBidServices:
                         "reason": "Bid is no longer pending (already processed by another approver)",
                     })
 
-                # ✅ Notification data
-                status_label = "Approved" if statuses[i] == "Approved" else "Rejected"
-                notification_data = {
-                    "value_status": statuses[i],
-                    "module_name": "Block Bid",
-                    "title": f"RTM Block Bid {status_label} by PTC",
-                    "description": f"RTM Block Bid {status_label} for , {remark}",
-                    "action": "#",
-                    "notification_type": "bid_for_approve_reject",
-                }
+            # After the loop: one notification for the whole action.
+            #
+            # The makers must be looked up separately: updatedata_if_pending returns only a
+            # bool (block_bid_current_data_repository.py:142-148), and created_by holds a
+            # *username* rather than an id -- verified in live data ("admin", "mukul",
+            # "ptcindia", "Ashutosh"). created_by is not modified by the update, so reading
+            # it afterwards is safe.
+            maker_usernames = await self.block_bid_repo.get_creators(
+                [u["id"] for u in updated]
+            )
+            if updated:
+                try:
+                    market = str(request.get("market_type") or "RTM").upper()
+                    status_label = updated[0]["status"]
+                    await notify(
+                        "block_bid.status_changed",
+                        {
+                            "market_type": market,
+                            "approval_market": approval_permission_market(market),
+                            "submission_path": submission_screen_path(market),
+                            "status_lower": status_label.lower(),
+                            "maker_usernames": maker_usernames,
+                            "bid_count": len(updated),
+                            "schedule_date": request.get("schedule_date")
+                            or request.get("biding_date")
+                            or "",
+                        },
+                        actor={
+                            "user_id": request.get("user_id"),
+                            "username": request.get("current_user")
+                            or request.get("username"),
+                        },
+                    )
+                except Exception:
+                    logger.exception("Notification emit failed for block bid status change")
 
             total = len(updated) + len(skipped)
             updated_count = len(updated)

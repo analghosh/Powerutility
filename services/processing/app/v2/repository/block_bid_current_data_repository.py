@@ -147,6 +147,28 @@ class BlockBidCurrentDataRepository(GenericRepository):
         )
         return result.matched_count > 0
 
+    async def get_creators(self, record_ids: List[str]) -> List[str]:
+        """Usernames that submitted the given bids.
+
+        Used to notify a maker that their bid was decided. `created_by` holds a username
+        rather than an id, and `updatedata_if_pending` returns only a bool, so the makers
+        cannot be recovered from the update itself.
+        """
+        if not record_ids:
+            return []
+        object_ids = [ObjectId(r) for r in record_ids if ObjectId.is_valid(r)]
+        if not object_ids:
+            return []
+        return sorted(
+            {
+                doc["created_by"]
+                async for doc in self.collection.find(
+                    {"_id": {"$in": object_ids}}, {"created_by": 1}
+                )
+                if doc.get("created_by")
+            }
+        )
+
     async def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Dict[str, Any]:
         """Update a single document matching the filter (e.g. to add exchange fields after submission)."""
         try:
