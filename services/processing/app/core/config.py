@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 6379
     REDIS_DB: int = 2
     REDIS_PASSWORD: str = ""
+    # Logical DB the auth service's logout path writes JWT blacklist keys to
+    # (services/auth/app/services/redis_blacklist.py). Same host/port as
+    # above, different db= -- matches auth's own REDIS_BLACKLIST_DB so a
+    # single .env value drives both services.
+    REDIS_BLACKLIST_DB: int = 1
     
     # File Storage — demand manual CSV uploads.
     # Default is relative to app working directory. Override in .env to an absolute

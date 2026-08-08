@@ -160,6 +160,7 @@ async def lifespan(app: FastAPI):
         target_state.notification_redis = None
         target_state.notification_registry = None
         target_state.notification_repository = None
+        target_state.notification_blacklist_redis = None
         target_state.notification_stop = None
         target_state.notification_task = None
     try:
@@ -181,6 +182,31 @@ async def lifespan(app: FastAPI):
             NotificationEmitter(repository, directory, notification_redis)
         )
 
+        # Blacklist client: a SEPARATE Redis connection, same host/port but a
+        # different logical database (REDIS_BLACKLIST_DB, .env value 1) --
+        # the one the auth service's logout path actually writes
+        # blacklist:access:{token} keys into (redis_blacklist.py). Deliberately
+        # not the same client as notification_redis above, which stays on its
+        # existing database for tickets and pub/sub only. Guarded on its own,
+        # independent of the try/except around it: a failure here must not
+        # take down tickets/pub-sub/REST, which don't depend on it. A None
+        # client makes is_revoked() (notification_routes.py) fail open --
+        # the same degraded posture already accepted for the rest of this
+        # subsystem -- not a hard failure.
+        notification_blacklist_redis = None
+        try:
+            notification_blacklist_redis = aioredis.Redis(
+                host=settings.REDIS_HOST,
+                port=settings.REDIS_PORT,
+                db=settings.REDIS_BLACKLIST_DB,
+                decode_responses=True,
+            )
+        except Exception as e:
+            logger.error(
+                f"Failed to create notification blacklist redis client; "
+                f"revocation checks degrade (fail open): {e}"
+            )
+
         notification_stop = asyncio.Event()
         notification_task = asyncio.create_task(
             run_subscriber(notification_redis, registry, notification_stop)
@@ -190,6 +216,7 @@ async def lifespan(app: FastAPI):
             target_state.notification_redis = notification_redis
             target_state.notification_registry = registry
             target_state.notification_repository = repository
+            target_state.notification_blacklist_redis = notification_blacklist_redis
             target_state.notification_stop = notification_stop
             target_state.notification_task = notification_task
         logger.info("Notifications subsystem started")
@@ -227,6 +254,12 @@ async def lifespan(app: FastAPI):
             await app.state.notification_redis.aclose()
         except Exception as e:
             logger.error(f"Failed to close notification redis client: {e}")
+
+    if app.state.notification_blacklist_redis is not None:
+        try:
+            await app.state.notification_blacklist_redis.aclose()
+        except Exception as e:
+            logger.error(f"Failed to close notification blacklist redis client: {e}")
 
 
 # Import V2 routers

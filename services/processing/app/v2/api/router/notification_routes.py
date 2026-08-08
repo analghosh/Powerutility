@@ -69,7 +69,6 @@ def require_authenticated(user_context: Dict[str, Any]) -> str:
 
 HEARTBEAT_SECONDS = 25
 SYNC_LIMIT = 50
-BLACKLIST_SET = "jwt_blacklist"
 MAX_STREAM_SECONDS = 1800  # 30 minutes, matching the access-token lifetime.
 # Conservative fallback whenever a ticket's exp is missing, zero, or
 # unparseable -- exp can legitimately be absent (it comes from the decoded
@@ -92,11 +91,35 @@ def format_heartbeat() -> str:
     return ": ping\n\n"
 
 
-async def is_revoked(redis_client, token: str) -> bool:
+def blacklist_key(token: str) -> str:
+    """The key the auth service's logout path actually writes.
+
+    services/auth/app/services/redis_blacklist.py:invalidate_access_token()
+    does `SETEX blacklist:access:{token} ttl user_id` on logout, in the Redis
+    logical db settings.REDIS_BLACKLIST_DB (matches settings.REDIS_BLACKLIST_DB
+    here) -- not the notifications db used for tickets/pub-sub, and not the
+    "jwt_blacklist" SET that libs/core/jwt_validator.py:blacklist_token() can
+    write to but that has zero call sites anywhere in this codebase.
+    """
+    return f"blacklist:access:{token}"
+
+
+async def is_revoked(blacklist_client, token: str) -> bool:
     """Fails open when Redis is unreachable, matching
-    libs/core/jwt_validator.py:213-214. Inherited behaviour, not introduced."""
+    libs/core/jwt_validator.py:213-214. Inherited behaviour, not introduced.
+
+    `blacklist_client` is a separate Redis connection on REDIS_BLACKLIST_DB
+    (see main.py's lifespan), not the notification_redis client used for
+    tickets/pub-sub -- they are different logical databases on the same
+    Redis server. A None client (blacklist subsystem failed to start, or
+    Redis briefly unavailable) fails open the same as a raising one: a
+    revoked token simply isn't caught mid-stream rather than the stream
+    endpoint breaking.
+    """
+    if blacklist_client is None:
+        return False
     try:
-        return bool(await redis_client.sismember(BLACKLIST_SET, token))
+        return bool(await blacklist_client.exists(blacklist_key(token)))
     except Exception:
         logger.error("Blacklist check failed; treating token as valid")
         return False
@@ -128,7 +151,7 @@ def new_stream_queue() -> "asyncio.Queue":
 
 async def stream_events(
     request: Request,
-    redis_client,
+    blacklist_client,
     registry,
     repository,
     user_id: str,
@@ -140,6 +163,12 @@ async def stream_events(
 
     Extracted from the route handler so it can be driven directly with fakes
     in tests, without a real ASGI request or app.state.
+
+    `blacklist_client` is only ever used for the revocation recheck below --
+    it is the separate Redis connection on REDIS_BLACKLIST_DB, not the
+    notification_redis client used for tickets/pub-sub (that one is consumed
+    entirely by the /stream route handler before this generator starts, to
+    resolve the ticket into a session).
 
     The revocation re-check runs on a time basis -- at least once every
     HEARTBEAT_SECONDS of wall-clock time -- regardless of whether a
@@ -186,7 +215,7 @@ async def stream_events(
             ) >= HEARTBEAT_SECONDS
             if due_for_check:
                 last_revocation_check = time.monotonic()
-                if token and await is_revoked(redis_client, token):
+                if token and await is_revoked(blacklist_client, token):
                     break
 
             if delivered:
@@ -200,6 +229,7 @@ async def stream_events(
 @router.get("/stream")
 async def stream(request: Request, ticket: str = Query(...)):
     redis_client = request.app.state.notification_redis
+    blacklist_client = request.app.state.notification_blacklist_redis
     registry = request.app.state.notification_registry
     repository = request.app.state.notification_repository
 
@@ -223,7 +253,7 @@ async def stream(request: Request, ticket: str = Query(...)):
 
     return StreamingResponse(
         stream_events(
-            request, redis_client, registry, repository, user_id, token, deadline, queue
+            request, blacklist_client, registry, repository, user_id, token, deadline, queue
         ),
         media_type="text/event-stream",
         headers={

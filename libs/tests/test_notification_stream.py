@@ -48,12 +48,29 @@ def test_heartbeat_interval_leaves_margin_under_nginx_60s_default():
 
 @pytest.mark.asyncio
 async def test_revoked_token_is_detected():
+    """The key checked must match what the auth service's logout path
+    actually writes (services/auth/app/services/redis_blacklist.py:
+    invalidate_access_token() -> SETEX blacklist:access:{token}), against a
+    SEPARATE Redis connection (the blacklist client, not notification_redis).
+    Hardcoded literal, not built via notification_routes.blacklist_key(), so
+    this test is grounded in the real contract rather than the module
+    testing itself. Real redis-py EXISTS returns an int, not a bool."""
+
     class _Redis:
-        async def sismember(self, key, member):
-            assert key == "jwt_blacklist"
-            return member == "revoked-token"
+        async def exists(self, key):
+            assert key == "blacklist:access:revoked-token"
+            return 1
 
     assert await is_revoked(_Redis(), "revoked-token") is True
+
+
+@pytest.mark.asyncio
+async def test_live_token_is_not_revoked():
+    class _Redis:
+        async def exists(self, key):
+            assert key == "blacklist:access:live-token"
+            return 0
+
     assert await is_revoked(_Redis(), "live-token") is False
 
 
@@ -62,10 +79,19 @@ async def test_revocation_check_fails_open_when_redis_is_down():
     """Matches existing jwt_validator.py:213-214 behaviour. Documented, not new."""
 
     class _BrokenRedis:
-        async def sismember(self, key, member):
+        async def exists(self, key):
             raise ConnectionError("redis down")
 
     assert await is_revoked(_BrokenRedis(), "any") is False
+
+
+@pytest.mark.asyncio
+async def test_revocation_check_fails_open_when_blacklist_client_is_none():
+    """Startup (main.py's lifespan) degrades the blacklist client to None,
+    rather than raising, when it cannot be constructed -- notifications-wide
+    fault tolerance choice from Task 9. is_revoked must treat that the same
+    as a raising client, not error out with AttributeError."""
+    assert await is_revoked(None, "any") is False
 
 
 # --- Fakes for driving stream_events() directly, without a real server -----
@@ -92,7 +118,10 @@ class _FakeRepository:
 
 
 class _RevocableRedis:
-    """sismember reports True only for tokens explicitly revoked via .revoke()."""
+    """Stands in for the blacklist client (not notification_redis) passed to
+    stream_events(). .exists() reports true only for tokens explicitly
+    revoked via .revoke(); the key-format assertion keeps every test that
+    uses this fake honest against the real blacklist:access:{token} contract."""
 
     def __init__(self):
         self._revoked = set()
@@ -100,9 +129,10 @@ class _RevocableRedis:
     def revoke(self, token):
         self._revoked.add(token)
 
-    async def sismember(self, key, member):
-        assert key == "jwt_blacklist"
-        return member in self._revoked
+    async def exists(self, key):
+        assert key.startswith("blacklist:access:")
+        token = key[len("blacklist:access:"):]
+        return int(token in self._revoked)
 
 
 # --- Finding 1: revocation must be re-checked on a time basis, not only ----
@@ -255,6 +285,10 @@ class _FakeAppState:
         self.notification_redis = _RevocableRedis()
         self.notification_registry = ConnectionRegistry()
         self.notification_repository = _FakeRepository()
+        # /stream reads this unconditionally (before the ticket is even
+        # checked), so it must exist even though this test never revokes
+        # anything.
+        self.notification_blacklist_redis = _RevocableRedis()
 
 
 class _FakeApp:
