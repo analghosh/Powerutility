@@ -11,6 +11,19 @@ from ....core.dependencies import get_audit_logger
 
 router = APIRouter(prefix="/block-bid", tags=["Block Bid V2"])
 
+# Day-ahead markets share one block-bid flow: IEX exposes an identical block-bid
+# API for each under its own path prefix (DAM 2.2 §9.15, GDAM 2.1 §6 item 13).
+# RTM has a different contract and keeps its own controller.
+#
+# HPDAM belongs here even though its exchange config does not exist yet: leaving it
+# out sent it to the RTM controller, which loads the RTM config and submits/cancels
+# against RTM bids. An explicit "no active HPDAM block bid exchange configuration"
+# is the correct answer; acting on another market's bids is not.
+#
+# TAM/GRTM/R-TAM/D-TAM appear in block_bid_current_data but have no block bid
+# exchange contract — do not add them here until one exists.
+DAY_AHEAD_BLOCK_MARKETS = {"DAM", "GDAM", "HPDAM"}
+
 # ── Legacy models (kept for backward compatibility) ──────────────────────────
 class PlantModel(BaseModel):
     bid_plant_name: str
