@@ -29,7 +29,9 @@ class ConnectionRegistry:
         self._by_user: Dict[str, List[asyncio.Queue]] = {}
 
     def add(self, user_id: str, queue: asyncio.Queue) -> None:
-        self._by_user.setdefault(user_id, []).append(queue)
+        queues = self._by_user.setdefault(user_id, [])
+        if queue not in queues:
+            queues.append(queue)
 
     def remove(self, user_id: str, queue: asyncio.Queue) -> None:
         queues = self._by_user.get(user_id)
@@ -64,9 +66,9 @@ async def run_subscriber(redis_client, registry: ConnectionRegistry, stop_event:
     worker count, not user count.
     """
     pubsub = redis_client.pubsub()
-    await pubsub.subscribe(CHANNEL)
-    logger.info("Notification subscriber listening on %s", CHANNEL)
     try:
+        await pubsub.subscribe(CHANNEL)
+        logger.info("Notification subscriber listening on %s", CHANNEL)
         while not stop_event.is_set():
             message = await pubsub.get_message(
                 ignore_subscribe_messages=True, timeout=1.0
@@ -82,7 +84,19 @@ async def run_subscriber(redis_client, registry: ConnectionRegistry, stop_event:
             notification = envelope.get("notification")
             for user_id in envelope.get("user_ids", []):
                 for queue in registry.queues_for(user_id):
-                    queue.put_nowait(notification)
+                    try:
+                        queue.put_nowait(notification)
+                    except Exception:
+                        logger.exception(
+                            "Failed to deliver notification to queue for user %s",
+                            user_id,
+                        )
     finally:
-        await pubsub.unsubscribe(CHANNEL)
-        await pubsub.close()
+        try:
+            await pubsub.unsubscribe(CHANNEL)
+        except Exception:
+            logger.exception("Error unsubscribing from notification channel")
+        try:
+            await pubsub.close()
+        except Exception:
+            logger.exception("Error closing pubsub connection")
