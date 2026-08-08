@@ -93,3 +93,23 @@ def test_no_registry_link_contains_dead_paths():
     for key, event in REGISTRY.items():
         assert "dam-block-bid-approve" not in event.link, f"{key} contains dead path"
         assert "submission-status" not in event.link, f"{key} contains dead path"
+
+
+def test_approval_screen_path_raises_for_unknown_market():
+    with pytest.raises(ValueError, match="TAM"):
+        approval_screen_path("TAM")
+
+
+def test_approval_screen_path_raises_for_empty_market():
+    with pytest.raises(ValueError, match=""):
+        approval_screen_path("")
+
+
+def test_submission_screen_path_raises_for_unknown_market():
+    with pytest.raises(ValueError, match="TAM"):
+        submission_screen_path("TAM")
+
+
+def test_submission_screen_path_raises_for_empty_market():
+    with pytest.raises(ValueError, match=""):
+        submission_screen_path("")

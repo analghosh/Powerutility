@@ -39,11 +39,23 @@ def approval_permission_market(market_type: str) -> str:
 
 
 def approval_screen_path(market_type: str) -> str:
-    return APPROVAL_SCREEN[approval_permission_market(market_type)]
+    key = approval_permission_market(market_type)
+    if key not in APPROVAL_SCREEN:
+        raise ValueError(
+            f"Unknown market type: {market_type!r}. "
+            f"Supported markets: DAM, GDAM, HPDAM, RTM"
+        )
+    return APPROVAL_SCREEN[key]
 
 
 def submission_screen_path(market_type: str) -> str:
-    return SUBMISSION_SCREEN[approval_permission_market(market_type)]
+    key = approval_permission_market(market_type)
+    if key not in SUBMISSION_SCREEN:
+        raise ValueError(
+            f"Unknown market type: {market_type!r}. "
+            f"Supported markets: DAM, GDAM, HPDAM, RTM"
+        )
+    return SUBMISSION_SCREEN[key]
 
 
 REGISTRY: Dict[str, EventType] = {
