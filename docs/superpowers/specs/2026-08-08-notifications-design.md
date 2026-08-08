@@ -459,6 +459,32 @@ while the bell stays correct. A degraded feature instead of an incident.
 None of these live in either repository; nginx, systemd, and PM2 configuration is all
 server-side and vendor-controlled. They must go in the deployment ask.
 
+**Confirmed scale: 50–60 concurrent users.** That splits this section in two.
+
+### Required at any scale — correctness, not capacity
+
+Only the `location` block below. `proxy_buffering off` in particular is non-negotiable:
+nginx defaults to buffering an upstream response and forwarding only once a buffer fills
+(~4KB across the default `proxy_buffers`). SSE frames are tiny and the response never
+ends, so with buffering on the browser receives nothing for hours while the connection
+looks healthy. This breaks identically at 1 user and at 10,000.
+
+`proxy_read_timeout` is softer: the 60s default is survivable because heartbeats arrive
+every 25s. Raising it buys margin — without it, a 35-second event-loop block (see wall 3)
+would drop every stream on the box at once.
+
+### Deferred at this scale — capacity only
+
+`LimitNOFILE`, `worker_connections`, `worker_rlimit_nofile` and the Unix domain socket are
+**not needed at 50–60 users.** Untuned defaults give roughly 768 concurrent connections,
+and the SharedWorker plus hidden-tab closing put real demand near 20–30. That is more than
+10× headroom.
+
+They are retained below because the failure mode if the ceiling is ever reached is
+`EMFILE`, which takes down every endpoint on 8003 rather than just notifications — so they
+belong in the deployment ask as a *recommendation*, flagged clearly as capacity work that
+can wait, not as a blocker for this feature.
+
 ```nginx
 location /api/v2/notifications/stream {
     proxy_pass http://unix:/run/epms-processing.sock;   # see note on ports below
@@ -507,9 +533,14 @@ with headroom to match.
 
 ## Performance and scaling
 
+**Confirmed target: 50–60 concurrent users.** With the SharedWorker that is 50–60
+connections before hidden-tab closing, and roughly 20–30 after — against an untuned
+ceiling of ~768. Everything below is contingency, not a constraint on this build.
+
 | Concurrent SSE connections | Assessment |
 |---|---|
-| ~100 (50 traders × 2 tabs) | Trivial. Well inside defaults. |
+| **50–60 (the actual target)** | **~13× inside untuned defaults. No tuning required.** |
+| ~100 (50 traders × 2 tabs, no SharedWorker) | Trivial. Well inside defaults. |
 | ~750–900 | First hard wall with default configuration. |
 | ~5,000–10,000 | Reachable per worker after the tuning above. Estimate, not a measurement. |
 | Beyond | `--workers N`. Already safe: every worker subscribes to Redis, so no sticky sessions. |
