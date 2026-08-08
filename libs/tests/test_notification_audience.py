@@ -1,10 +1,12 @@
 import pytest
 
 from libs.notifications.audience import (
+    AnyOf,
     AuthDirectory,
     Everyone,
     HasPermission,
     SpecificUsers,
+    UsernamesFromContext,
 )
 
 
@@ -83,3 +85,63 @@ async def test_everyone_returns_all_active():
 
     assert await Everyone().resolve({"_directory": directory}) == ["u1", "u2"]
     assert users.last_filter == {"is_active": True, "is_deleted": {"$ne": True}}
+
+
+@pytest.mark.asyncio
+async def test_any_of_unions_two_rules_preserves_order_and_deduplicates():
+    rule1 = SpecificUsers(["u1", "u2"])
+    rule2 = SpecificUsers(["u2", "u3"])
+
+    result = await AnyOf(rule1, rule2).resolve({})
+
+    assert result == ["u1", "u2", "u3"]
+
+
+@pytest.mark.asyncio
+async def test_usernames_from_context_returns_empty_when_key_missing():
+    users = _FakeCollection([{"_id": "should_not_query"}])
+    directory = AuthDirectory(users_collection=users, roles_collection=_FakeCollection([]))
+
+    result = await UsernamesFromContext("maker_usernames").resolve({"_directory": directory})
+
+    assert result == []
+    assert users.last_filter is None
+
+
+@pytest.mark.asyncio
+async def test_usernames_from_context_returns_empty_when_key_empty():
+    users = _FakeCollection([{"_id": "should_not_query"}])
+    directory = AuthDirectory(users_collection=users, roles_collection=_FakeCollection([]))
+
+    result = await UsernamesFromContext("maker_usernames").resolve(
+        {"_directory": directory, "maker_usernames": []}
+    )
+
+    assert result == []
+    assert users.last_filter is None
+
+
+@pytest.mark.asyncio
+async def test_user_ids_for_usernames_filters_on_active_and_deleted():
+    users = _FakeCollection([{"_id": "u1"}, {"_id": "u2"}])
+    directory = AuthDirectory(users_collection=users, roles_collection=_FakeCollection([]))
+
+    result = await directory.user_ids_for_usernames(["admin", "mukul"])
+
+    assert result == ["u1", "u2"]
+    assert users.last_filter == {
+        "username": {"$in": ["admin", "mukul"]},
+        "is_active": True,
+        "is_deleted": {"$ne": True},
+    }
+
+
+@pytest.mark.asyncio
+async def test_user_ids_for_usernames_returns_empty_for_empty_list():
+    users = _FakeCollection([{"_id": "should_not_query"}])
+    directory = AuthDirectory(users_collection=users, roles_collection=_FakeCollection([]))
+
+    result = await directory.user_ids_for_usernames([])
+
+    assert result == []
+    assert users.last_filter is None

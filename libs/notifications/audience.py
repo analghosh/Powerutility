@@ -51,6 +51,27 @@ class AuthDirectory:
             )
         ]
 
+    async def user_ids_for_usernames(self, usernames: List[str]) -> List[str]:
+        """Resolve usernames to user ids.
+
+        Bid documents record their maker in `created_by` as a username string --
+        verified in live data: "admin", "mukul", "ptcindia", "Ashutosh" -- not as an
+        id, so those names must be resolved before they can be used as recipients.
+        """
+        if not usernames:
+            return []
+        return [
+            str(doc["_id"])
+            async for doc in self.users.find(
+                {
+                    "username": {"$in": list(usernames)},
+                    "is_active": True,
+                    "is_deleted": {"$ne": True},
+                },
+                {"_id": 1},
+            )
+        ]
+
     async def all_active_user_ids(self) -> List[str]:
         return [
             str(doc["_id"])
@@ -87,3 +108,41 @@ class Everyone(Audience):
     async def resolve(self, context: Dict[str, Any]) -> List[str]:
         directory: AuthDirectory = context[DIRECTORY_KEY]
         return await directory.all_active_user_ids()
+
+
+class UsernamesFromContext(Audience):
+    """Recipients the caller names by username in the event context.
+
+    Distinct from SpecificUsers, whose list is fixed when the registry is defined:
+    these names are only known at emit time, e.g. the makers of the bids being approved.
+    """
+
+    def __init__(self, context_key: str):
+        self.context_key = context_key
+
+    async def resolve(self, context: Dict[str, Any]) -> List[str]:
+        names = [n for n in (context.get(self.context_key) or []) if n]
+        if not names:
+            return []
+        directory: AuthDirectory = context[DIRECTORY_KEY]
+        return await directory.user_ids_for_usernames(names)
+
+
+class AnyOf(Audience):
+    """Union of several rules, order preserved and de-duplicated.
+
+    Some events have more than one interested party: an approval both tells the maker
+    their bid was decided and tells the other checkers it has been handled.
+    """
+
+    def __init__(self, *rules: Audience):
+        self.rules = rules
+
+    async def resolve(self, context: Dict[str, Any]) -> List[str]:
+        seen, ordered = set(), []
+        for rule in self.rules:
+            for user_id in await rule.resolve(context):
+                if user_id not in seen:
+                    seen.add(user_id)
+                    ordered.append(user_id)
+        return ordered
