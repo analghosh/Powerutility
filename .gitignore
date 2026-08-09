@@ -59,3 +59,10 @@ dump/
 # OS
 .DS_Store
 Thumbs.db
+
+# Debug artefact from a hardcoded Windows path in
+# services/ingestion/app/processors/scrape_raw_data_processor.py:866 --
+# on macOS/Linux that literally creates a file named "d:\EPMS-Backend\...".
+# Rewritten on every IEX scrape, so deleting it does not help. The real fix
+# is removing that debug write; raised with the client.
+d:\\EPMS-Backend*
