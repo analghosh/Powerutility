@@ -192,9 +192,30 @@ async def stream_events(
     timeout branch alone means a stream that never goes idle for
     HEARTBEAT_SECONDS never re-checks the blacklist: exactly the busy-stream
     case the check exists to cover.
+
+    registry.add() is the first statement inside the try, deliberately paired
+    with the registry.remove() in the finally. It used to live in the /stream
+    route handler, next to the StreamingResponse construction -- but
+    Starlette's StreamingResponse.stream_response awaits
+    send({"type": "http.response.start"}) BEFORE it first iterates the body.
+    If that raises (the client is already gone), this generator's body never
+    starts, and aclose() on a never-started async generator does not run its
+    try/finally. The queue then stayed in the ConnectionRegistry for the life
+    of the process, silently absorbing pushes into a bounded queue nobody
+    drains. Registering here makes registration and removal impossible to
+    separate.
+
+    Nothing depends on the queue being registered before the response object
+    exists: the only reader is run_subscriber (libs/notifications/pubsub.py),
+    which delivers through registry.queues_for(). Registering before the sync
+    read below is also the correct order -- a notification arriving in the gap
+    is then both queued and present in the sync frame, and the client dedupes
+    by _id (notificationsSlice.js), whereas reading Mongo first would drop it
+    entirely.
     """
     last_revocation_check = time.monotonic()
     try:
+        registry.add(user_id, queue)
         items = await repository.list_for_user(user_id, limit=SYNC_LIMIT)
         unread = await repository.unread_count(user_id)
         yield format_sse("sync", {"items": items, "unreadCount": unread})
@@ -264,8 +285,10 @@ async def stream(request: Request, ticket: str = Query(...)):
         raise HTTPException(status_code=401, detail="Invalid or expired ticket")
     deadline = compute_stream_deadline(session.get("exp"))
 
+    # Registration happens inside stream_events' try, NOT here -- see that
+    # generator's docstring: a response that fails before its body is first
+    # iterated would otherwise leak this queue into the registry forever.
     queue = new_stream_queue()
-    registry.add(user_id, queue)
 
     return StreamingResponse(
         stream_events(

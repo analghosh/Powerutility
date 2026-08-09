@@ -164,10 +164,24 @@ async def lifespan(app: FastAPI):
         target_state.notification_stop = None
         target_state.notification_task = None
     try:
+        # Same connection settings every other Redis client in this codebase
+        # already passes (v2/services/rate_limit_service.py,
+        # v2/services/redis_nonce_service.py, auth's redis_blacklist.py).
+        # password: omitting it means notifications are the only subsystem
+        # that breaks the day someone sets `requirepass` -- run_subscriber
+        # would raise NOAUTH inside a task nobody awaits, while startup still
+        # logged success. The timeouts: without them a blackholed Redis makes
+        # POST /ticket and GET /stream block indefinitely, holding a worker,
+        # instead of failing in 5s.
         notification_redis = aioredis.Redis(
             host=settings.REDIS_HOST,
             port=settings.REDIS_PORT,
+            db=settings.REDIS_DB,
+            password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None,
             decode_responses=True,
+            socket_connect_timeout=5,
+            socket_timeout=5,
+            retry_on_timeout=True,
         )
         registry = ConnectionRegistry()
 
@@ -199,7 +213,11 @@ async def lifespan(app: FastAPI):
                 host=settings.REDIS_HOST,
                 port=settings.REDIS_PORT,
                 db=settings.REDIS_BLACKLIST_DB,
+                password=settings.REDIS_PASSWORD if settings.REDIS_PASSWORD else None,
                 decode_responses=True,
+                socket_connect_timeout=5,
+                socket_timeout=5,
+                retry_on_timeout=True,
             )
         except Exception as e:
             logger.error(

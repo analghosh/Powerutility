@@ -455,6 +455,65 @@ async def test_first_frame_is_the_sync_frame_carrying_items_and_unread_count():
     await gen.aclose()
 
 
+# --- Final review, finding 7: add and remove must be impossible to separate --
+
+
+@pytest.mark.asyncio
+async def test_a_generator_that_never_starts_leaves_nothing_in_the_registry():
+    """registry.add used to live in the /stream route handler, beside the
+    StreamingResponse construction. Starlette's StreamingResponse.stream_response
+    awaits send({"type": "http.response.start"}) BEFORE it first iterates the body,
+    so if that raises (client already gone) the generator body never starts -- and
+    aclose() on a never-started async generator does not run its try/finally. The
+    queue stayed registered for the life of the process, silently absorbing pushes
+    into a bounded queue nobody drains.
+
+    Registering as the first statement inside the generator's own try makes add and
+    remove impossible to separate: a generator that never runs registers nothing.
+    """
+    queue = new_stream_queue()
+    registry = ConnectionRegistry()
+
+    gen = notification_routes.stream_events(
+        _FakeRequest(),
+        _RevocableRedis(),
+        registry,
+        _FakeRepository(),
+        user_id="u1",
+        token="",
+        deadline=time.time() + 3600,
+        queue=queue,
+    )
+    # Never iterated -- exactly the case where http.response.start raised.
+    await gen.aclose()
+
+    assert registry.queues_for("u1") == []
+
+
+@pytest.mark.asyncio
+async def test_the_generator_registers_its_own_queue_once_it_starts():
+    queue = new_stream_queue()
+    registry = ConnectionRegistry()
+
+    gen = notification_routes.stream_events(
+        _FakeRequest(),
+        _RevocableRedis(),
+        registry,
+        _FakeRepository(),
+        user_id="u1",
+        token="",
+        deadline=time.time() + 3600,
+        queue=queue,
+    )
+
+    assert registry.queues_for("u1") == []  # nothing registered before it runs
+    await gen.asend(None)  # sync frame; registration happened before the Mongo read
+    assert registry.queues_for("u1") == [queue]
+
+    await gen.aclose()
+    assert registry.queues_for("u1") == []
+
+
 # --- Finding 3: the queue handed to the registry must be bounded -----------
 
 

@@ -25,10 +25,18 @@ def test_block_bid_status_changed_is_informational_not_actionable():
 
 
 def test_titles_are_templated_never_hardcoded_to_one_market():
-    """block_bid_services.py:128 hardcodes 'RTM' on a path serving four markets."""
+    """block_bid_services.py:128 hardcodes 'RTM' on a path serving four markets.
+
+    The vendor bug this guards against put "RTM" in the description as well as the
+    title ("RTM Block Bid Submitted for Approval" / "... RTM block bid(s) ..."), so
+    the body is checked too -- a title-only assertion would pass a registry whose
+    body still names one market on a path serving four.
+    """
     for key, event in REGISTRY.items():
-        assert "RTM" not in event.title, f"{key} hardcodes RTM"
-        assert "DAM" not in event.title, f"{key} hardcodes DAM"
+        assert "RTM" not in event.title, f"{key} hardcodes RTM in the title"
+        assert "DAM" not in event.title, f"{key} hardcodes DAM in the title"
+        assert "RTM" not in event.body, f"{key} hardcodes RTM in the body"
+        assert "DAM" not in event.body, f"{key} hardcodes DAM in the body"
 
 
 def test_every_registry_key_matches_its_event_key():

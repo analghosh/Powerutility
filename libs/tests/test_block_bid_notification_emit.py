@@ -3,6 +3,7 @@ import inspect
 
 import pytest
 
+from libs.notifications.events import REGISTRY
 from services.processing.app.v2.services import block_bid_services
 
 
@@ -276,4 +277,251 @@ async def test_no_market_found_skips_the_notification_without_raising(monkeypatc
 
     assert recorder.calls == []
     assert result["summary"]["updated_count"] == 1
+    assert "successfully" in result["message"].lower()
+
+
+# ── Final review, finding 4: join the template to the context that feeds it ───
+
+
+@pytest.mark.asyncio
+async def test_status_changed_renders_from_the_exact_context_the_service_builds(monkeypatch):
+    """Nothing else joins REGISTRY["block_bid.status_changed"] to the context that
+    actually reaches it: test_notification_events.py renders only
+    block_bid.submitted_for_approval, and every test above monkeypatches notify and
+    inspects the context without ever rendering with it.
+
+    So if status_lower, submission_path, approval_market, bid_count or schedule_date
+    drifts out of _notify_status_change's context, EventType.render raises KeyError,
+    the per-market `except Exception` in block_bid_services swallows it, and every
+    approval and rejection notification disappears with the whole suite green. This
+    renders the real registry entry with the real emitted context, so that drift
+    fails here instead of silently in production.
+    """
+    recorder = _NotifyRecorder()
+    monkeypatch.setattr(block_bid_services, "notify", recorder)
+
+    fake_repo = _DecisionContextRepo(groups=[
+        {
+            "market_type": "GDAM",
+            "bid_count": 4,
+            "maker_usernames": ["mukul"],
+            "biding_date": "2026-08-09",
+        }
+    ])
+    service = _make_service(fake_repo)
+
+    await service.update_block_bid_status(_APPROVE_ONE_BID_REQUEST)
+
+    assert len(recorder.calls) == 1
+    context = dict(recorder.calls[0]["context"])
+    # actor_name is the one placeholder the emitter itself supplies
+    # (NotificationEmitter.notify) rather than the call site; everything else on
+    # the template has to come from the context asserted above.
+    context["actor_name"] = recorder.calls[0]["actor"]["username"]
+
+    title, body, link = REGISTRY["block_bid.status_changed"].render(context)
+
+    assert title == "GDAM block bid approved"
+    assert body == "approver1 approved 4 GDAM block bid(s) for 2026-08-09."
+    assert link == "/dam/dam-block-bid-submission?date=2026-08-09"
+
+
+# ── Final review, finding 6: a mixed batch must not claim one status for all ──
+
+
+class _StatusAwareDecisionRepo(_DecisionContextRepo):
+    """get_bid_decision_context answers for the ids it is actually given.
+
+    _DecisionContextRepo returns the same groups for any id list, which cannot show
+    whether the caller split the batch. This one groups the ids it receives, exactly
+    as the real Mongo aggregation over those ids would -- so a caller that queries
+    once per status gets that status's own counts, and a caller that queries once for
+    the whole batch gets a single mixed group.
+    """
+
+    def __init__(self, bid_facts):
+        super().__init__()
+        self.bid_facts = bid_facts
+        self.id_lists = []
+
+    async def get_bid_decision_context(self, record_ids):
+        self.get_bid_decision_context_called = True
+        self.id_lists.append(list(record_ids))
+        grouped = {}
+        for record_id in record_ids:
+            facts = self.bid_facts[record_id]
+            group = grouped.setdefault(
+                facts["market_type"],
+                {
+                    "market_type": facts["market_type"],
+                    "bid_count": 0,
+                    "maker_usernames": facts["maker_usernames"],
+                    "biding_date": facts["biding_date"],
+                },
+            )
+            group["bid_count"] += 1
+        return list(grouped.values())
+
+
+def _decide_request(ids, statuses):
+    n = len(ids)
+    return {
+        "status": list(statuses),
+        "reason": ["ok"] * n,
+        "rej_reason": ["price too high"] * n,
+        "other_remark": [""] * n,
+        "other_remark_rej": [""] * n,
+        "id": list(ids),
+        "current_user": "approver1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_mixed_approve_reject_batch_tells_each_group_its_own_status(monkeypatch):
+    """status used to be `updated[0]["status"]` -- the first decided bid's status
+    applied to every notification in the batch. UpdateStatusRequest.status is a
+    List[Optional[str]], so a batch that approves some bids and rejects others told
+    the makers and every checker that all N bids were whatever the first one happened
+    to be, including in a maker's notification about their own bid."""
+    recorder = _NotifyRecorder()
+    monkeypatch.setattr(block_bid_services, "notify", recorder)
+
+    facts = {
+        "id-1": {"market_type": "RTM", "maker_usernames": ["mukul"], "biding_date": "2026-08-09"},
+        "id-2": {"market_type": "RTM", "maker_usernames": ["mukul"], "biding_date": "2026-08-09"},
+        "id-3": {"market_type": "RTM", "maker_usernames": ["mukul"], "biding_date": "2026-08-09"},
+    }
+    service = _make_service(_StatusAwareDecisionRepo(facts))
+
+    await service.update_block_bid_status(
+        _decide_request(["id-1", "id-2", "id-3"], ["Approved", "Rejected", "Rejected"])
+    )
+
+    assert len(recorder.calls) == 2
+    counts_by_status = {
+        call["context"]["status_lower"]: call["context"]["bid_count"]
+        for call in recorder.calls
+    }
+    assert counts_by_status == {"approved": 1, "rejected": 2}
+
+
+@pytest.mark.asyncio
+async def test_a_mixed_batch_spanning_two_markets_splits_on_both_market_and_status(monkeypatch):
+    """Grouping is on the (market, status) pair, not either one alone: four
+    notifications for two markets each carrying an approval and a rejection."""
+    recorder = _NotifyRecorder()
+    monkeypatch.setattr(block_bid_services, "notify", recorder)
+
+    facts = {
+        "rtm-ok": {"market_type": "RTM", "maker_usernames": ["mukul"], "biding_date": "2026-08-09"},
+        "rtm-no": {"market_type": "RTM", "maker_usernames": ["mukul"], "biding_date": "2026-08-09"},
+        "dam-ok": {"market_type": "DAM", "maker_usernames": ["admin"], "biding_date": "2026-08-09"},
+        "dam-no": {"market_type": "DAM", "maker_usernames": ["admin"], "biding_date": "2026-08-09"},
+    }
+    service = _make_service(_StatusAwareDecisionRepo(facts))
+
+    await service.update_block_bid_status(
+        _decide_request(
+            ["rtm-ok", "dam-ok", "rtm-no", "dam-no"],
+            ["Approved", "Approved", "Rejected", "Rejected"],
+        )
+    )
+
+    pairs = {
+        (call["context"]["market_type"], call["context"]["status_lower"]): call["context"]["bid_count"]
+        for call in recorder.calls
+    }
+    assert pairs == {
+        ("RTM", "approved"): 1,
+        ("DAM", "approved"): 1,
+        ("RTM", "rejected"): 1,
+        ("DAM", "rejected"): 1,
+    }
+
+
+# ── Final review, finding 5: the submit path must group by market too ─────────
+
+
+class _SubmitRepo:
+    """Stand-in for BlockBidCurrentDataRepository covering only the two methods
+    insert_block_bid calls."""
+
+    def __init__(self):
+        self.inserted = None
+
+    async def get_max_revisions(self, formatted_date, market_type, sessions):
+        return {}
+
+    async def insert_many(self, data):
+        self.inserted = list(data)
+        return True
+
+
+def _submit_request(markets):
+    """A submission whose parallel arrays span the given markets, one bid each.
+
+    market_type really is a List[str] parallel to the bid arrays
+    (SubmitForApprovalRequest), which is exactly why reading element [0] for the
+    whole batch was wrong.
+    """
+    n = len(markets)
+    return {
+        "dates": "09-08-2026",
+        "market_type": list(markets),
+        "from": ["00:00"] * n,
+        "to": ["00:15"] * n,
+        "trade_session": [0] * n,
+        "quantum": [10] * n,
+        "bid_price": [3000.0] * n,
+        "number_of_bids": [1] * n,
+        "type": "Buy",
+        "exchange": ["IEX"] * n,
+        "selected_for": ["IEX"] * n,
+        "iex_price": [3000] * n,
+        "pxil_price": [0] * n,
+        "current_user": "maker1",
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_multi_market_submission_emits_one_notification_per_market(monkeypatch):
+    """The submit path used to do `str(request.get("market_type", ["RTM"])[0]).upper()`
+    -- the first element labelling the whole batch -- so a multi-market submission
+    mislabelled every bid with one market's name and notified only that market's
+    approvers. It must group and emit like _notify_status_change does."""
+    recorder = _NotifyRecorder()
+    monkeypatch.setattr(block_bid_services, "notify", recorder)
+    service = _make_service(_SubmitRepo())
+
+    await service.insert_block_bid(_submit_request(["RTM", "DAM", "RTM"]))
+
+    assert len(recorder.calls) == 2
+    assert {call["event_key"] for call in recorder.calls} == {
+        "block_bid.submitted_for_approval"
+    }
+    counts_by_market = {
+        call["context"]["market_type"]: call["context"]["bid_count"]
+        for call in recorder.calls
+    }
+    assert counts_by_market == {"RTM": 2, "DAM": 1}
+    # Each notification must reach its OWN market's approvers, not one market's.
+    approval_by_market = {
+        call["context"]["market_type"]: call["context"]["approval_market"]
+        for call in recorder.calls
+    }
+    assert approval_by_market == {"RTM": "rtm", "DAM": "dam"}
+
+
+@pytest.mark.asyncio
+async def test_a_submission_with_no_market_emits_nothing_instead_of_defaulting_to_rtm(monkeypatch):
+    """The removed `["RTM"]` default meant a submission carrying no market at all
+    still notified RTM's approvers about bids that were not theirs."""
+    recorder = _NotifyRecorder()
+    monkeypatch.setattr(block_bid_services, "notify", recorder)
+    service = _make_service(_SubmitRepo())
+
+    result = await service.insert_block_bid(_submit_request([""]))
+
+    assert recorder.calls == []
+    # The bid itself still went in: the notification path can never fail a bid.
     assert "successfully" in result["message"].lower()

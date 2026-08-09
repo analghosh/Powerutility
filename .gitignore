@@ -38,8 +38,23 @@ htmlcov/
 *.pytest_cache/
 
 # Logs
+# *.log matches at any depth, not just the repo root, so a service that writes
+# its log beside its own module is covered too.
 logs/
 *.log
+*.log.*
+
+# Runtime data: uploads, exports and database dumps
+# Named explicitly because the blanket *.md / *.txt / *.json globs that used to
+# swallow these are gone (602c52e) -- they also hid real source files, and hid
+# stray debris like the "d:\EPMS-Backend\headers_debug.txt" this repo carried
+# for months. Directories only; no file-type globs.
+uploads/
+exports/
+export/
+dumps/
+dump/
+*.bson
 
 # OS
 .DS_Store
