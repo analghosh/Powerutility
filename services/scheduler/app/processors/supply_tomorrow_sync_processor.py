@@ -133,7 +133,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             plants = await self.plant_repository.collection.find(
                 {}, {"plant_id": 1}
             ).to_list(length=10000)
-            return {p.get("plant_id") for p in plants if p.get("plant_id")}
+            return {str(p.get("plant_id")) for p in plants if p.get("plant_id")}
         except Exception as e:
             logger.error(f"Error fetching active plant_ids from plant_master: {e}")
             return None
@@ -143,9 +143,10 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
         """
         True when the plant has DC records in `records` and every one is zero volume.
         """
+        plant_id_str = str(plant_id)
         dc_volumes = []
         for rec in records:
-            if rec.get("plant_id") != plant_id:
+            if str(rec.get("plant_id")) != plant_id_str:
                 continue
             if str(rec.get("dc_sg", "")).upper() != "DC":
                 continue
@@ -180,7 +181,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
 
             # ── 2. Distinct plant sets per date ───────────────────────────────────
             def plant_set(records):
-                return {r.get("plant_id") for r in records if r.get("plant_id")}
+                return {str(r.get("plant_id")) for r in records if r.get("plant_id")}
 
             plants_yesterday = plant_set(yesterday_records)
             plants_today     = plant_set(today_records)
@@ -252,7 +253,10 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                     f"{len(missing_plants)} plant(s) missing from {label}, "
                     f"copying from {best_date}: {missing_plants}"
                 )
-                missing_records = [r for r in best_records if r.get("plant_id") in missing_plants]
+                missing_records = [
+                    r for r in best_records
+                    if r.get("plant_id") and str(r.get("plant_id")) in missing_plants
+                ]
                 entities_to_fill = self._records_to_dc_sg_entities(missing_records, target_date, source_label)
 
                 if entities_to_fill:
@@ -273,7 +277,8 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             if active_plants is not None:
                 before = len(tomorrow_records)
                 tomorrow_records = [
-                    r for r in tomorrow_records if r.get("plant_id") in active_plants
+                    r for r in tomorrow_records
+                    if r.get("plant_id") and str(r.get("plant_id")) in active_plants
                 ]
                 dropped = before - len(tomorrow_records)
                 if dropped:

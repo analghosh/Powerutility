@@ -1516,6 +1516,22 @@ class SupplyProcessor(BaseProcessor):
             sg_records = await self.supply_repository.collection.find(
                 sg_filter_all
             ).to_list(length=10000)
+
+            # Skip plants deleted from plant_master so leftover supply_serve rows
+            # are not rewritten after delete.
+            active_plants = await self._get_active_plant_ids()
+            if active_plants is not None:
+                before_sg = len(sg_records)
+                sg_records = [
+                    rec for rec in sg_records
+                    if rec.get("plant_id") and str(rec.get("plant_id")) in active_plants
+                ]
+                skipped_sg = before_sg - len(sg_records)
+                if skipped_sg:
+                    logger.info(
+                        "Multiplier: skipped %d SG record(s) for plants not in plant_master",
+                        skipped_sg,
+                    )
             
             # Group SG records by Plant to process plant-wise (cleaner for logs and batching)
             # Map: plant_id -> list of records
@@ -1646,6 +1662,19 @@ class SupplyProcessor(BaseProcessor):
             dc_records = await self.supply_repository.collection.find(
                 dc_filter_all
             ).to_list(length=10000)
+
+            if active_plants is not None:
+                before_dc = len(dc_records)
+                dc_records = [
+                    rec for rec in dc_records
+                    if rec.get("plant_id") and str(rec.get("plant_id")) in active_plants
+                ]
+                skipped_dc = before_dc - len(dc_records)
+                if skipped_dc:
+                    logger.info(
+                        "Multiplier: skipped %d DC record(s) for plants not in plant_master",
+                        skipped_dc,
+                    )
             
             # Group DC records by Plant
             dc_by_plant = {}
