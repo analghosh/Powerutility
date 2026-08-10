@@ -114,8 +114,41 @@ class MasterPlantsService:
 
     async def delete_plant(self, plant_oid: str, actor: Dict[str, Any], request_info: Dict[str, Any]) -> bool:
         try:
+            # Capture plant_id before delete so we can clear staging for today/tomorrow.
+            existing = await self.repository.get_plant_by_id(plant_oid)
+            plant_id = (existing or {}).get("plant_id") if existing else None
+
             ok = await self.repository.delete_plant(plant_oid)
-            return ok
+            if not ok:
+                return False
+
+            if plant_id:
+                try:
+                    from ..repository.supply_manual_repository import supply_manual_repository
+                    deleted_count = await supply_manual_repository.delete_by_plant_for_today_tomorrow(
+                        str(plant_id).strip()
+                    )
+                    logger.info(
+                        "Plant delete cleanup | plant_oid=%s plant_id=%s dc_sg_deleted=%s",
+                        plant_oid,
+                        plant_id,
+                        deleted_count,
+                    )
+                except Exception as cleanup_err:
+                    # Plant master delete already succeeded; do not fail the API.
+                    logger.error(
+                        "Plant delete succeeded but dc_sg cleanup failed | plant_oid=%s plant_id=%s error=%s",
+                        plant_oid,
+                        plant_id,
+                        cleanup_err,
+                    )
+            else:
+                logger.warning(
+                    "Plant delete: no plant_id on document | plant_oid=%s — skipped dc_sg cleanup",
+                    plant_oid,
+                )
+
+            return True
         except Exception as e:
             raise
 

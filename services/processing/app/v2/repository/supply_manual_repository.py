@@ -212,6 +212,41 @@ class SupplyManualRepository(GenericRepository):
             logger.error(f"Failed to get records for sync: {str(e)}")
             return []
 
+    async def delete_by_plant_for_today_tomorrow(self, plant_id: str) -> int:
+        """
+        Delete dc_sg rows for a plant covering today and tomorrow only.
+
+        Used when a plant is removed from plant_master so staging cannot
+        re-sync or roll that plant forward. Does not touch supply_serve.
+        """
+        if not plant_id:
+            return 0
+        try:
+            today_start = datetime.now().replace(
+                hour=0, minute=0, second=0, microsecond=0
+            )
+            day_after_tomorrow = today_start + timedelta(days=2)
+            plant_id_str = str(plant_id).strip()
+            query = {
+                "plant_id": {"$in": [plant_id_str, plant_id]},
+                "scheduled_at": {"$gte": today_start, "$lt": day_after_tomorrow},
+            }
+            result = await self.collection.delete_many(query)
+            deleted = result.deleted_count
+            logger.info(
+                "Deleted %d dc_sg row(s) for plant_id=%s (today+tomorrow)",
+                deleted,
+                plant_id_str,
+            )
+            return deleted
+        except Exception as e:
+            logger.error(
+                "Failed to delete dc_sg rows for plant_id=%s: %s",
+                plant_id,
+                str(e),
+            )
+            raise
+
 
 # Singleton instance
 supply_manual_repository = SupplyManualRepository()
