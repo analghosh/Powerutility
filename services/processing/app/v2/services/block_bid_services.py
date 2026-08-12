@@ -1230,13 +1230,15 @@ class BlockBidServices:
 
     # ── Bid Submission Detail ──────────────────────────────────────────────────
 
-    async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
+    async def get_bid_submission_details(
+        self, date_str: str, market_type: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """
-        Return RTM block bid submission log for a date.
-        Source: iex_integration_apilog (bid_type="block-bid", method="submitBlockBid")
-        Grouped by correlation_id — one entry per exchange call.
+        Return block bid submission log for a date (RTM and DAM/GDAM).
+        Source: iex_integration_apilog (bid_type="block-bid").
+        One entry per exchange call.
         """
-        return await self.api_log_repo.get_block_bid_submission_details(date_str)
+        return await self.api_log_repo.get_block_bid_submission_details(date_str, market_type)
 
     # ── Bid-Book ───────────────────────────────────────────────────────────────
 
