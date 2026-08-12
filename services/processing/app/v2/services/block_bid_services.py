@@ -27,7 +27,37 @@ VALID_ORDER_STATUSES = {"Submitted", "Executed", "Rejected", "Cancelled", "Exclu
 # Day-ahead markets share one block-bid flow — no trade session, and IEX exposes an
 # identical block-bid API for each under its own path prefix (DAM 2.2 §9.15,
 # GDAM 2.1 §6 item 13). RTM has a different contract and its own flow.
-DAY_AHEAD_BLOCK_MARKETS = {"DAM", "GDAM"}
+DAY_AHEAD_BLOCK_MARKETS = {"DAM", "GDAM", "HPDAM"}
+
+# Standard block windows, per market annexure §14.3. A block bid whose period
+# exactly matches one of these is a "Standard" block and must carry the matching
+# BlockId; anything else is a custom range and sends BlockId blank.
+#
+# The windows are NOT the same across markets — DAM and HP-DAM start a quarter
+# past the hour, GDAM starts on the hour — so these tables must stay separate.
+STANDARD_BLOCKS: Dict[str, Dict[tuple, str]] = {
+    "DAM": {
+        ("00:15", "24:00"): "Base",
+        ("00:15", "06:00"): "Night Off-Peak",
+        ("07:15", "11:00"): "Morning Peak",
+        ("11:15", "17:00"): "Day Off-Peak",
+        ("17:15", "22:00"): "Evening Peak",
+    },
+    "HPDAM": {
+        ("00:15", "24:00"): "Base",
+        ("00:15", "06:00"): "Night Off-Peak",
+        ("07:15", "11:00"): "Morning Peak",
+        ("11:15", "17:00"): "Day Off-Peak",
+        ("17:15", "22:00"): "Evening Peak",
+    },
+    "GDAM": {
+        ("00:00", "24:00"): "Base",
+        ("00:00", "06:00"): "Night Off-Peak",
+        ("07:00", "11:00"): "Morning Peak",
+        ("11:00", "17:00"): "Day Off-Peak",
+        ("17:00", "22:00"): "Evening Peak",
+    },
+}
 
 
 class BlockBidServices:
@@ -919,6 +949,17 @@ class BlockBidServices:
             bid_type = bid.get("type", "Sell")
             buy_sell = "S" if bid_type == "Sell" else "B"
 
+            # GDAM is a renewable purchase and carries a single BuySell/Type for the
+            # whole request (GDAM 2.1 §9.15), so a Sell block cannot travel with the
+            # Buy ones — and the sell Types (Solar/Non-Solar/Hydro/Other) have no
+            # source in our data. Same rule the GDAM single bid flow already applies.
+            if market == "GDAM" and buy_sell != "B":
+                logger.info(
+                    f"Skipping GDAM block bid {bid.get('from')}-{bid.get('to')} — "
+                    "resolved to Sell, only Buy blocks are submitted."
+                )
+                continue
+
             iex_quantity = (quantum * iex_value) / 100
             quantity_exchange = iex_quantity * biddedQtyDecimal * (-1 if buy_sell == "S" else 1)
 
@@ -927,32 +968,53 @@ class BlockBidServices:
 
             # OCF comes from the ocf_config the trader set on this very bid, not from
             # a separate lookup — same source and format as the single bid flow.
-            # GDAM has no MaxOCFQty (GDAM 2.1 §12.27), DAM does (DAM 2.2 §12.27).
+            # DAM alone carries MaxOCFQty (DAM 2.2 §12.27); GDAM has no such field
+            # (§12.27) and HP-DAM has no OCF fields at all (§12.12).
             ocf = self._parse_ocf_config(bid, include_max_qty=(market == "DAM"))
 
             num_bids = int(bid.get("number_of_bids", 1))
             for _ in range(num_bids):
                 blck_count += 1
                 bid_ref_id = f"{user_id_prefix}{bid_ref_start + blck_count}"[:9]
-                # PremiumDiscountPrice and MaxOCFQty are always present: the spec
-                # (DAM 2.2 §12.27) defines them as zero when OCF is not opted, and
-                # this is the /blockbid/ocf endpoint, so omitting them for standalone
-                # bids made the exchange reject the whole submission.
+
                 detail: Dict[str, Any] = {
-                    "FromPeriodId":          from_period_id,
-                    "ToPeriodId":            to_period_id,
-                    "OCFOpted":              ocf["OCFOpted"],
-                    "PremiumDiscountPrice":  ocf["PremiumDiscountPrice"],
-                    "BuySell":               buy_sell,
-                    "Price":                 int(bid.get("bid_price", 0)),
-                    "Quantity":              int(quantity_exchange),
-                    "BidRef":                bid_ref_id,
-                    "LinkedBidRef":          "",
-                    "LinkType":              "",
+                    "FromPeriodId": from_period_id,
+                    "ToPeriodId":   to_period_id,
+                    "Price":        int(bid.get("bid_price", 0)),
+                    "Quantity":     int(quantity_exchange),
+                    "BidRef":       bid_ref_id,
+                    # Blank unless this period is one of the market's standard
+                    # blocks (§14.3) — the windows differ per market.
+                    "BlockId":      STANDARD_BLOCKS.get(market, {}).get(
+                        (from_period_id, to_period_id), ""
+                    ),
                 }
+
+                # OCF fields: present for DAM and GDAM, absent for HP-DAM.
+                # PremiumDiscountPrice is always sent when the market has OCF — the
+                # spec defines it as zero when not opted, and this is the /ocf
+                # endpoint, so omitting it for standalone bids fails the whole batch.
+                if market in ("DAM", "GDAM"):
+                    detail["OCFOpted"] = ocf["OCFOpted"]
+                    detail["PremiumDiscountPrice"] = ocf["PremiumDiscountPrice"]
                 if market == "DAM":
                     detail["MaxOCFQty"] = ocf["MaxOCFQty"]
+
+                # BuySell and the link fields are per-item for DAM (§12.27) and
+                # HP-DAM (§12.12). GDAM omits them: BuySell lives at the top level
+                # and its item spec has no LinkedBidRef/LinkType at all.
+                if market != "GDAM":
+                    detail["BuySell"] = buy_sell
+                    detail["LinkedBidRef"] = ""
+                    detail["LinkType"] = ""
+
                 bid_details.append(detail)
+
+        if not bid_details:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No {market} block bids left to submit for {biding_date}",
+            )
 
         request_body = {
             "DeliveryDate":  delivery_date_ts,
@@ -964,6 +1026,12 @@ class BlockBidServices:
             "InitiatedBy":   user_id,
             "BidDetails":    bid_details,
         }
+
+        # GDAM carries BuySell and Type for the whole request (GDAM 2.1 §9.15),
+        # mirroring its single bid entry. DAM and HP-DAM have neither.
+        if market == "GDAM":
+            request_body["BuySell"] = "B"
+            request_body["Type"] = "Renewable Purchase"
 
         # 7. POST to exchange
         try:

@@ -14,7 +14,7 @@ router = APIRouter(prefix="/block-bid", tags=["Block Bid V2"])
 # Day-ahead markets share one block-bid flow: IEX exposes an identical block-bid
 # API for each under its own path prefix (DAM 2.2 §9.15, GDAM 2.1 §6 item 13).
 # RTM has a different contract and keeps its own controller.
-DAY_AHEAD_BLOCK_MARKETS = {"DAM", "GDAM"}
+DAY_AHEAD_BLOCK_MARKETS = {"DAM", "GDAM", "HPDAM"}
 
 # ── Legacy models (kept for backward compatibility) ──────────────────────────
 class PlantModel(BaseModel):

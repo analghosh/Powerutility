@@ -450,6 +450,14 @@ class ExchangeAPIClient:
             "PortfolioId": self.portfolio_id
         }
 
+        # GDAM's cancel-all takes a Type that DAM and HP-DAM do not (GDAM 2.1 §9.9).
+        # Omitting it makes the exchange reject the cancellation; because a failed
+        # pre-submission cancel is deliberately non-fatal, the next submit then
+        # trips over the bid that was never withdrawn ("bid already exists").
+        # GDAM is a renewable purchase, matching the Type sent on submission.
+        if self.market_type == "gdam":
+            request_body["Type"] = "Renewable Purchase"
+
         logger.info(f"Canceling all {self.market_type.upper()} bids: {url}")
         logger.debug(f"Cancel request body: {request_body}")
 
@@ -464,8 +472,17 @@ class ExchangeAPIClient:
             await self._log_to_db(url, request_body, headers, data, self.market_type, "single-bid", "cancelAllDamBid", delivery_date)
             
             response.raise_for_status()
-            
-            logger.info(f"DAM cancel response: Status={data.get('Status') if isinstance(data, dict) else 'N/A'}")
+
+            cancel_status = data.get("Status") if isinstance(data, dict) else None
+            if cancel_status == "Success":
+                logger.info(f"{self.market_type.upper()} cancel-all succeeded: {data.get('TransactionId', 'N/A')}")
+            else:
+                # A rejected cancel-all is what leaves a stale bid on the exchange,
+                # so surface the exchange's own reason rather than just the status.
+                logger.error(
+                    f"{self.market_type.upper()} cancel-all REJECTED [Status={cancel_status}]: "
+                    f"{data.get('StatusMessage') if isinstance(data, dict) else data}"
+                )
             return data if isinstance(data, dict) else {"Status": "Failed", "StatusMessage": str(data)}
 
     async def get_single_bid_rtm(
@@ -917,7 +934,11 @@ class ExchangeAPIClient:
         Returns:
             {TransactionId, Status, StatusMessage}
         """
+        # DAM and GDAM take the time-block-wise OCF variant; HP-DAM has no OCF at
+        # all and exposes only the plain endpoint (HPDAM 2.0 §6 item 12, §9.15).
         url = f"{self.base_url}/{self.market_type}/api/v2/blockbid/ocf"
+        if self.market_type == "hpdam":
+            url = f"{self.base_url}/{self.market_type}/api/v2/blockbid"
         headers = self._get_headers()
 
         import json as _json
