@@ -156,6 +156,58 @@ class BlockBidCurrentDataRepository(GenericRepository):
         )
         return result.matched_count > 0
 
+    async def get_bid_decision_context(self, record_ids: List[str]) -> List[Dict[str, Any]]:
+        """Per-market maker/date context for the given bids, in a single query.
+
+        Used to build the status-change notification from the bids themselves rather
+        than from the approver's request: UpdateStatusRequest carries neither
+        market_type nor schedule_date (block_bid_routes.py), and the RTM/DAM approval
+        screen that submits it never sends either -- so a caller that fell back to
+        `request.get("market_type")` mislabelled every DAM/GDAM/HPDAM decision as RTM.
+        The bid documents are the authoritative source and, unlike the request, cannot
+        be absent: `market_type`, `biding_date` and `created_by` are all written at
+        insert time (`insert_block_bid`).
+
+        A single aggregation (not three separate lookups) groups the matched bids by
+        `market_type`, so a decision spanning more than one market comes back as more
+        than one group -- the caller can emit one notification per group instead of
+        mislabelling a mixed batch with a single market.
+
+        Returns one entry per distinct market_type found among the ids:
+            {"market_type": str, "bid_count": int, "maker_usernames": List[str],
+             "biding_date": str}
+        Documents with no market_type are excluded rather than grouped under a guess.
+        """
+        if not record_ids:
+            return []
+        object_ids = [ObjectId(r) for r in record_ids if ObjectId.is_valid(r)]
+        if not object_ids:
+            return []
+        pipeline = [
+            {"$match": {"_id": {"$in": object_ids}}},
+            {
+                "$group": {
+                    "_id": "$market_type",
+                    "bid_count": {"$sum": 1},
+                    "maker_usernames": {"$addToSet": "$created_by"},
+                    "biding_date": {"$first": "$biding_date"},
+                }
+            },
+        ]
+        groups = await self.aggregate(pipeline)
+        results: List[Dict[str, Any]] = []
+        for group in groups:
+            market = group.get("_id")
+            if not market:
+                continue
+            results.append({
+                "market_type": str(market).upper(),
+                "bid_count": group.get("bid_count", 0),
+                "maker_usernames": sorted(u for u in (group.get("maker_usernames") or []) if u),
+                "biding_date": group.get("biding_date") or "",
+            })
+        return results
+
     async def update_one(self, filter_query: Dict[str, Any], update_query: Dict[str, Any]) -> Dict[str, Any]:
         """Update a single document matching the filter (e.g. to add exchange fields after submission)."""
         try:

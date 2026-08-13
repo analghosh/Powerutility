@@ -39,4 +39,13 @@ HEALTHCHECK CMD curl --fail http://localhost:${PROCESSING_PORT}/health || exit 1
 EXPOSE ${PROCESSING_PORT}
 
 # 🔹 Start FastAPI app
-CMD ["sh", "-c", "uvicorn services.processing.app.main:app --host 0.0.0.0 --port ${PROCESSING_PORT} --workers 1 --root-path /processing"]
+#
+# --timeout-graceful-shutdown is required because this service holds SSE
+# connections open (/api/v2/notifications/stream, up to MAX_STREAM_SECONDS=1800).
+# uvicorn waits for every open connection before running the app's shutdown, and
+# that wait is unbounded by default -- so SIGTERM would leave this process alive,
+# still subscribed to Redis, long after its replacement had started. An in-app
+# stop event cannot fix it: the lifespan that would set the event only runs after
+# the wait it is meant to end. Measured: 1s to exit with no streams open, >60s
+# with streams and no timeout, 10s with it.
+CMD ["sh", "-c", "uvicorn services.processing.app.main:app --host 0.0.0.0 --port ${PROCESSING_PORT} --workers 1 --timeout-graceful-shutdown 10 --root-path /processing"]
