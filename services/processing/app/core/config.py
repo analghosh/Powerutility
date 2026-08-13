@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     # Database Configuration
     MONGODB_URI: str = "mongodb://localhost:27017" 
     MONGODB_DATABASE: str = "epms"  # Default, overridden by .env
-    AUDIT_DB_NAME: str = "audit_db" 
+    AUDIT_DB_NAME: str = "audit_db"
+    AUTH_DB_NAME: str = "auth_db"   # overridden by .env
     MONGODB_AUTH_COLLECTION: str = "users"
     MONGODB_SESSIONS_COLLECTION: str = "sessions"
     MONGODB_AUDIT_COLLECTION: str = "audit_logs"
@@ -47,6 +48,11 @@ class Settings(BaseSettings):
     REDIS_PORT: int = 6379
     REDIS_DB: int = 2
     REDIS_PASSWORD: str = ""
+    # Logical DB the auth service's logout path writes JWT blacklist keys to
+    # (services/auth/app/services/redis_blacklist.py). Same host/port as
+    # above, different db= -- matches auth's own REDIS_BLACKLIST_DB so a
+    # single .env value drives both services.
+    REDIS_BLACKLIST_DB: int = 1
     
     # File Storage — demand manual CSV uploads.
     # Default is relative to app working directory. Override in .env to an absolute

@@ -7,7 +7,16 @@ from libs.audit_queue.simple_logger import AuditLogger
 # from services.processing.app.services.block_bid_services import BlockBidServices
 from ..services.block_bid_services import block_bid_service
 from libs.core.jwt_validator import TokenPayload
+from libs.notifications.single_bid_emit import (
+    notify_single_bid_decisions,
+    notify_single_bid_submitted,
+)
 logger = logging.getLogger(__name__)
+
+# Emission lives in the controller rather than the service because
+# new_rtm_bidding_services.py is fenced by PTC India, and all four markets must
+# stay identical. See libs/notifications/single_bid_emit.py.
+MARKET = "RTM"
 
 
 class RTMBiddingController:
@@ -115,6 +124,14 @@ class RTMBiddingController:
                 capture_bid=True,
                 manual_capture_bid=manual_capture_bid,
             )
+            await notify_single_bid_submitted(
+                market_type=MARKET,
+                request=request,
+                actor={
+                    "user_id": getattr(current_user, "user_id", None),
+                    "username": getattr(current_user, "username", None),
+                },
+            )
             return {"data": data}
         except HTTPException:
             raise 
@@ -171,6 +188,18 @@ class RTMBiddingController:
         try:
             
             data = await self.rtm_bidding_service.submitForPreExchangeData(request, current_user, audit_logger)
+            # `updated`, never `request`: the service returns only the references
+            # whose modified_count was non-zero. Approving an already-decided bid
+            # is a silent no-op that still returns HTTP 200.
+            await notify_single_bid_decisions(
+                market_type=MARKET,
+                updated=(data or {}).get("updated"),
+                approval_repo=self.rtm_bidding_service.single_bid_data_for_approval_repo,
+                actor={
+                    "user_id": getattr(current_user, "user_id", None),
+                    "username": getattr(current_user, "username", None),
+                },
+            )
             return {"data": data}
         except HTTPException:
             raise 

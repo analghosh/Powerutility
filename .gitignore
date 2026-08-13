@@ -16,11 +16,6 @@ venv/
 .venv/
 env/
 .env/
-*.md
-
-*.txt
-*.json
-*.kiro
 
 # Environment and secrets
 .env
@@ -30,6 +25,7 @@ env/
 # IDE
 .vscode/
 .idea/
+*.kiro
 *.swp
 *.swo
 
@@ -42,9 +38,31 @@ htmlcov/
 *.pytest_cache/
 
 # Logs
+# *.log matches at any depth, not just the repo root, so a service that writes
+# its log beside its own module is covered too.
 logs/
 *.log
+*.log.*
+
+# Runtime data: uploads, exports and database dumps
+# Named explicitly because the blanket *.md / *.txt / *.json globs that used to
+# swallow these are gone (602c52e) -- they also hid real source files, and hid
+# stray debris like the "d:\EPMS-Backend\headers_debug.txt" this repo carried
+# for months. Directories only; no file-type globs.
+uploads/
+exports/
+export/
+dumps/
+dump/
+*.bson
 
 # OS
 .DS_Store
 Thumbs.db
+
+# Debug artefact from a hardcoded Windows path in
+# services/ingestion/app/processors/scrape_raw_data_processor.py:866 --
+# on macOS/Linux that literally creates a file named "d:\EPMS-Backend\...".
+# Rewritten on every IEX scrape, so deleting it does not help. The real fix
+# is removing that debug write; raised with the client.
+d:\\EPMS-Backend*
