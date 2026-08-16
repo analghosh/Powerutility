@@ -24,7 +24,8 @@ class UserCreateRequest(BaseModel):
     profile: Optional[Dict[str, Any]] = None
 
 class UserUpdateRequest(BaseModel):
-    username: Optional[str] = None
+    # username is deliberately not updatable: renaming the seeded super-admin frees
+    # the name and the startup seeder mints a second super-admin on the next restart.
     email: Optional[str] = None
     roles: Optional[List[str]] = None
     permissions: Optional[List[str]] = None
@@ -277,8 +278,6 @@ async def update_user(
 
         # Update user
         update_data = {}
-        if user_data.username is not None:
-            update_data['username'] = user_data.username
         if user_data.email is not None:
             update_data['email'] = user_data.email
         if user_data.profile is not None:
@@ -363,8 +362,8 @@ async def delete_user(
             raise HTTPException(status_code=404, detail="User not found")
 
         # Delete user
-        success = user_repo.delete_user(user_id)
-        
+        success = await user_repo.delete_user(user_id)
+
         if not success:
             raise HTTPException(status_code=500, detail="Failed to delete user")
         
