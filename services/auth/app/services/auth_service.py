@@ -348,9 +348,14 @@ class AuthService:
             user = await self.user_repo.get_user_by_id(user_id)
             if not user or not user.is_active:
                 return None
-            
-            # Generate new access token
-            user_dict = user.to_dict()
+
+            # Resolve roles and menu-derived permissions the same way login does. The raw
+            # user document carries an empty `permissions` list -- those live on the role --
+            # so building the token from it minted a session with no permissions at all.
+            # That was invisible while nothing checked them; with the route guards in place
+            # the first refresh would have 403'd the user out of their own session.
+            user_with_perms = await self.user_repo.get_user_with_permissions_by_id(user_id)
+            user_dict = (user_with_perms or user).to_dict()
             access_token = self.jwt_service.create_access_token(user_dict)
             
             # Log token refresh with PII protection
