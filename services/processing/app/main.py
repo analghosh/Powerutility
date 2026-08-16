@@ -176,6 +176,7 @@ from .v2.api.router.exchange_config_routes import router as exchange_config_rout
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
 from .v2.api.router.power_exchange_parameter_routes import router as power_exchange_parameter_router
+from libs.authz.route_guard import guard, assert_every_route_is_guarded
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -311,53 +312,76 @@ app.add_middleware(
 logger.info("🚫 V1 API endpoints disabled")
 
 # Include all V2 route modules in the V2 sub-application
-v2_app.include_router(dsm_overview_router)
-v2_app.include_router(market_overview_router)
-v2_app.include_router(graph_router)
-v2_app.include_router(demand_forecast_router)
-v2_app.include_router(dashboard_v2_router)
-v2_app.include_router(management_snapshot_v2_router)
-v2_app.include_router(rtm_scheduling_snapshot_v2_router)
-v2_app.include_router(price_group_router)
-v2_app.include_router(supply_router)
-v2_app.include_router(master_plant_router)
-v2_app.include_router(forecast_analysis)
-v2_app.include_router(limit_values_routers)
-v2_app.include_router(weather_router)
+# Every router below carries an authorization guard (VAPT F6). The resource name is the
+# one the auth service synthesises from the menu that owns the screen, so a role's menu
+# grants and its API permissions are the same fact. The action comes from the HTTP method
+# inside the guard: GET -> read, POST/PUT/PATCH -> write, DELETE -> delete, and the
+# checker-side endpoints -> approve. See libs/authz/route_guard.py.
+#
+# Two routers are deliberately unguarded, both because they never see a JWT user context:
+# power-optimization authenticates with HMAC, and the notification SSE stream with a
+# short-lived ticket. `assert_every_route_is_guarded()` below knows about them and fails
+# loudly if anything else joins them.
+#
+# The `*_public_router` mirrors carry the SAME handlers under /<market>-bidding/public.
+# Guarding the private router alone would leave "/public" as a one-word bypass, so they
+# take the identical guard.
+
+v2_app.include_router(dsm_overview_router, dependencies=[guard("dsm_overview")])
+v2_app.include_router(market_overview_router, dependencies=[guard("market_integrator")])
+v2_app.include_router(graph_router, dependencies=[guard("dashboard")])
+v2_app.include_router(demand_forecast_router, dependencies=[guard("demand_forecast")])
+v2_app.include_router(dashboard_v2_router, dependencies=[guard("dashboard")])
+v2_app.include_router(management_snapshot_v2_router, dependencies=[guard("management_snapshot")])
+v2_app.include_router(rtm_scheduling_snapshot_v2_router, dependencies=[guard("rtm_scheduling")])
+v2_app.include_router(price_group_router, dependencies=[guard(("price_groups", "masters"))])
+v2_app.include_router(supply_router, dependencies=[guard("supply")])
+v2_app.include_router(master_plant_router, dependencies=[guard(("plant_details", "masters"))])
+v2_app.include_router(forecast_analysis, dependencies=[guard("forecast_analysis")])
+v2_app.include_router(
+    limit_values_routers,
+    dependencies=[guard(("dam_limit_values", "rtm_limit_values", "ocf_limit_values", "masters"))],
+)
+v2_app.include_router(weather_router, dependencies=[guard(("weather", "forecast"))])
 # v2_app.include_router(rtm_bidding_router)
-v2_app.include_router(new_rtm_bidding_router)
-v2_app.include_router(new_rtm_bidding_public_router)
-v2_app.include_router(new_dam_bidding_router)
-v2_app.include_router(new_dam_bidding_public_router)
-v2_app.include_router(new_gdam_bidding_router)
-v2_app.include_router(new_gdam_bidding_public_router)
-v2_app.include_router(new_hpdam_bidding_router)
-v2_app.include_router(new_hpdam_bidding_public_router)
-v2_app.include_router(renewable_routes)
-v2_app.include_router(dam_scheduling_router)
-v2_app.include_router(block_bid_route)
-v2_app.include_router(rtm_scheduling_router)
-v2_app.include_router(dayaheadmarket_router)
-v2_app.include_router(audit_logger_router)
-v2_app.include_router(parameter_router)
-v2_app.include_router(idf_forecast_switch_router)
-v2_app.include_router(forecast_serve_router)
-v2_app.include_router(demand_serve_historical_router)
-v2_app.include_router(reports_forecast_router)
-v2_app.include_router(bid_market_router)
-v2_app.include_router(job_execution_router)
-v2_app.include_router(supply_manual_router)
-v2_app.include_router(demand_manual_router)
-v2_app.include_router(power_optimization_router)
-v2_app.include_router(power_exchange_router)
-v2_app.include_router(iex_api_detail_router)
-v2_app.include_router(api_key_management_router)
-v2_app.include_router(exchange_trade_router)
-v2_app.include_router(exchange_dsm_router)
-v2_app.include_router(exchange_config_router)
-v2_app.include_router(realtimemarket_router)
-v2_app.include_router(cron_orchestrator_router)
-v2_app.include_router(power_exchange_parameter_router)
+v2_app.include_router(new_rtm_bidding_router, dependencies=[guard("rtm_single_bid")])
+v2_app.include_router(new_rtm_bidding_public_router, dependencies=[guard("rtm_single_bid")])
+v2_app.include_router(new_dam_bidding_router, dependencies=[guard("dam_single_bid")])
+v2_app.include_router(new_dam_bidding_public_router, dependencies=[guard("dam_single_bid")])
+v2_app.include_router(new_gdam_bidding_router, dependencies=[guard("dam_single_bid")])
+v2_app.include_router(new_gdam_bidding_public_router, dependencies=[guard("dam_single_bid")])
+v2_app.include_router(new_hpdam_bidding_router, dependencies=[guard("dam_single_bid")])
+v2_app.include_router(new_hpdam_bidding_public_router, dependencies=[guard("dam_single_bid")])
+v2_app.include_router(renewable_routes, dependencies=[guard(("renewable_supply", "supply"))])
+v2_app.include_router(dam_scheduling_router, dependencies=[guard("dam_scheduling")])
+v2_app.include_router(block_bid_route, dependencies=[guard(("dam_block_bid", "rtm_block_bid"))])
+v2_app.include_router(rtm_scheduling_router, dependencies=[guard("rtm_scheduling")])
+v2_app.include_router(dayaheadmarket_router, dependencies=[guard(("dam", "dam_single_bid"))])
+v2_app.include_router(audit_logger_router, dependencies=[guard(("audit_log", "admin"))])
+v2_app.include_router(parameter_router, dependencies=[guard(("parameter", "masters"))])
+v2_app.include_router(idf_forecast_switch_router, dependencies=[guard("forecast")])
+v2_app.include_router(forecast_serve_router, dependencies=[guard("forecast")])
+v2_app.include_router(demand_serve_historical_router, dependencies=[guard("demand_forecast")])
+v2_app.include_router(reports_forecast_router, dependencies=[guard(("reports", "standard_reports"))])
+v2_app.include_router(bid_market_router, dependencies=[guard(("bid_market", "masters"))])
+v2_app.include_router(job_execution_router, dependencies=[guard("admin")])
+v2_app.include_router(supply_manual_router, dependencies=[guard("dc_sg_template")])
+v2_app.include_router(demand_manual_router, dependencies=[guard("demand_forecast")])
+v2_app.include_router(power_optimization_router)  # HMAC-authenticated, no JWT context
+v2_app.include_router(power_exchange_router, dependencies=[guard(("power_exchange", "masters"))])
+v2_app.include_router(iex_api_detail_router, dependencies=[guard(("iex_api_detail", "masters"))])
+v2_app.include_router(api_key_management_router, dependencies=[guard("admin")])
+v2_app.include_router(exchange_trade_router, dependencies=[guard(("dam_trade_status", "rtm_trade_status"))])
+v2_app.include_router(exchange_dsm_router, dependencies=[guard("dsm_overview")])
+v2_app.include_router(exchange_config_router, dependencies=[guard(("power_exchange", "masters"))])
+v2_app.include_router(realtimemarket_router, dependencies=[guard(("rtm", "rtm_single_bid"))])
+v2_app.include_router(cron_orchestrator_router, dependencies=[guard("admin")])
+v2_app.include_router(
+    power_exchange_parameter_router,
+    dependencies=[guard(("power_exchange", "parameter", "masters"))],
+)
+
+assert_every_route_is_guarded(v2_app)
 
 
 
