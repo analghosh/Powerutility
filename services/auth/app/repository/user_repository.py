@@ -5,6 +5,7 @@ User repository for authentication service
 from typing import Optional, List, Dict, Any
 from datetime import datetime, timedelta
 from bson import ObjectId
+import asyncio
 import bcrypt
 import logging
 from pymongo.collation import Collation
@@ -16,6 +17,39 @@ from ..core.config import settings
 
 logger = logging.getLogger(__name__)
 CASE_INSENSITIVE_COLLATION = Collation(locale="en", strength=2)
+
+
+# bcrypt is CPU-bound C code containing no await, so calling it straight from an
+# `async def` holds the event loop for its full duration -- about 250ms per call
+# at BCRYPT_ROUNDS=12. That used to make concurrent logins serialise AND freeze
+# every other route on this service: measured, 60 simultaneous logins took 15-20s
+# during which `GET /health` answered in 14,101ms instead of 1-3ms. Because every
+# other service validates every request by HTTP call to this one, they hit their
+# 10s client timeout and failed CLOSED with 401 -- a login rush 401'd the whole
+# platform.
+#
+# asyncio.to_thread moves the work to the default executor. It does NOT make
+# hashing cheaper (nor should it -- the cost factor is the security property);
+# it stops that cost being paid out of the event loop's budget. Logins still
+# queue against the executor's worker count, but the loop stays free to serve
+# validation, health and everything else throughout.
+
+
+async def _hash_password(password: str) -> bytes:
+    """Hash a password without blocking the event loop."""
+
+    def _hash() -> bytes:
+        salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
+        return bcrypt.hashpw(password.encode("utf-8"), salt)
+
+    return await asyncio.to_thread(_hash)
+
+
+async def _verify_password(password: str, password_hash: Any) -> bool:
+    """Verify a password without blocking the event loop."""
+    return await asyncio.to_thread(
+        bcrypt.checkpw, password.encode("utf-8"), password_hash
+    )
 
 
 class UserRepository(BaseRepository):
@@ -31,8 +65,7 @@ class UserRepository(BaseRepository):
         if email and await self.get_user_by_email(email):
             raise ValueError("Email already exists")
 
-        salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
-        hashed_password = bcrypt.hashpw(password.encode('utf-8'), salt)
+        hashed_password = await _hash_password(password)
 
         user_data = {
             "username": username,
@@ -116,7 +149,7 @@ class UserRepository(BaseRepository):
             return None
 
         try:
-            if bcrypt.checkpw(password.encode('utf-8'), user_doc["password_hash"]):
+            if await _verify_password(password, user_doc["password_hash"]):
                 await self._reset_login_attempts(ObjectId(user_doc["_id"]))
                 await self.update_last_login(str(user_doc["_id"]))
                 user_dto = UserDTO.from_db_document(user_doc)
@@ -165,8 +198,7 @@ class UserRepository(BaseRepository):
 
     async def update_password(self, user_id: str, new_password: str) -> bool:
         try:
-            salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
-            hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), salt)
+            hashed_password = await _hash_password(new_password)
 
             user_doc = await self.find_one({"_id": ObjectId(user_id)})
             if not user_doc:
@@ -306,8 +338,7 @@ class UserRepository(BaseRepository):
     async def admin_reset_password(self, user_id: str, new_password: str, admin_id: str) -> bool:
         try:
             logger.info(f"Admin reset password attempt for user_id: {user_id}")
-            salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
-            hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), salt)
+            hashed_password = await _hash_password(new_password)
 
             user_doc = await self.find_one({"_id": ObjectId(user_id)})
             if not user_doc:
