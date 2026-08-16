@@ -53,42 +53,75 @@ def create_database_indexes():
         raise
 
 def _create_user_indexes(db):
-    """Create indexes for users collection"""
+    """
+    Create indexes for users collection.
+
+    Each index is created independently (its own try/except) rather than
+    inside one big try/except for the whole function. In the live UAT data,
+    813 of 816 users have `email: null` and two share `admin@epms.com`, so
+    the unique index on `email` ALWAYS fails with OperationFailure. When
+    every statement shared one try/except, that single failure silently
+    aborted every index declared after it - `roles`, `login_attempts`,
+    `locked_until`, `mfa_enabled`, `sessions.session_id`, and
+    `password_expires_at` never existed on any deployment. Isolating each
+    call means one bad index (still `email`, still expected to fail here)
+    only costs that one index.
+    """
+    users_collection = db[settings.MONGODB_AUTH_COLLECTION]
+
+    # Unique indexes for authentication
+    _create_single_index(users_collection, "username", unique=True, background=True)
+    _create_single_index(users_collection, "email", unique=True, background=True)
+
+    # Compound index for active users queries
+    _create_single_index(
+        users_collection,
+        [("is_deleted", ASCENDING), ("is_active", ASCENDING)],
+        background=True,
+    )
+
+    # Index for login attempts and account lockout
+    _create_single_index(users_collection, "login_attempts", background=True)
+    _create_single_index(users_collection, "locked_until", background=True)
+
+    # Index for role-based queries
+    _create_single_index(users_collection, "roles", background=True)
+
+    # Compound index serving notification audience resolution:
+    #   users.find({"roles": {"$in": [...]}, "is_active": True,
+    #               "is_deleted": {"$ne": True}}, {"_id": 1})
+    # The single-field `roles` index above cannot also serve the
+    # `is_active` predicate, so that query stayed a COLLSCAN over the
+    # TOTAL user count (816) instead of narrowing by recipient count.
+    _create_single_index(
+        users_collection,
+        [("roles", ASCENDING), ("is_active", ASCENDING)],
+        background=True,
+    )
+
+    # Index for MFA users
+    _create_single_index(users_collection, "mfa_enabled", background=True)
+
+    # Index for session management
+    _create_single_index(users_collection, "sessions.session_id", background=True)
+
+    # Index for password expiry queries
+    _create_single_index(users_collection, "password_expires_at", background=True)
+
+    logger.debug("✅ User collection indexes created")
+
+
+def _create_single_index(collection, keys, **kwargs):
+    """
+    Attempt to create one index, logging (and swallowing) a failure for
+    just that index instead of letting it cancel every index that follows.
+    """
     try:
-        users_collection = db[settings.MONGODB_AUTH_COLLECTION]
-        
-        # Unique indexes for authentication
-        users_collection.create_index("username", unique=True, background=True)
-        users_collection.create_index("email", unique=True, background=True)
-        
-        # Compound index for active users queries
-        users_collection.create_index([
-            ("is_deleted", ASCENDING),
-            ("is_active", ASCENDING)
-        ], background=True)
-        
-        # Index for login attempts and account lockout
-        users_collection.create_index("login_attempts", background=True)
-        users_collection.create_index("locked_until", background=True)
-        
-        # Index for role-based queries
-        users_collection.create_index("roles", background=True)
-        
-        # Index for MFA users
-        users_collection.create_index("mfa_enabled", background=True)
-        
-        # Index for session management
-        users_collection.create_index("sessions.session_id", background=True)
-        
-        # Index for password expiry queries
-        users_collection.create_index("password_expires_at", background=True)
-        
-        logger.debug("✅ User collection indexes created")
-        
+        collection.create_index(keys, **kwargs)
     except OperationFailure as e:
-        logger.warning(f"⚠️ Some user indexes may already exist: {e}")
+        logger.warning(f"⚠️ Index {keys!r} may already exist or conflicts with data: {e}")
     except Exception as e:
-        logger.error(f"❌ Failed to create user indexes: {e}")
+        logger.error(f"❌ Failed to create index {keys!r}: {e}")
 
 def _create_role_indexes(db):
     """Create indexes for roles collection"""
