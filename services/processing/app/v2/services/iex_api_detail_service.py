@@ -3,10 +3,28 @@ from typing import Dict, Any, List
 from datetime import datetime
 from fastapi import HTTPException, status
 from ..repository.iex_api_detail_repository import IexApiDetailRepository
-from ..utils.encryption import encrypt_api_key, decrypt_api_key
+from ..utils.encryption import encrypt_api_key
 from ..repository.exchange_config_repository import ExchangeConfigRepository
 
 logger = logging.getLogger(__name__)
+
+# Placeholder handed out in place of a stored API key. The exchange key is a
+# production trading credential and is only ever needed server-side, so it never
+# leaves the service; the placeholder still lets the UI tell a configured
+# credential apart from an empty one.
+#
+# Dots, not asterisks: the client filters this field through /[^A-Za-z0-9._-]/g and
+# validates it against the same character set, so an asterisk mask is stripped to an
+# empty string and the edit form then refuses to save with "API Key is required".
+API_KEY_MASK = "........"
+_MASK_CHARS = {".", "*", "•"}
+
+
+def is_masked_api_key(value: Any) -> bool:
+    """True if the value is a mask placeholder rather than a real API key."""
+    text = str(value or "").strip()
+    return bool(text) and set(text) <= _MASK_CHARS
+
 
 class IexApiDetailService:
     def __init__(self):
@@ -14,18 +32,14 @@ class IexApiDetailService:
         self.exchange_config_repo = ExchangeConfigRepository()
 
     async def get_all(self) -> List[Dict[str, Any]]:
-        """Get all IEX API details with decrypted api_key"""
+        """Get all IEX API details. The api_key is masked, never returned in plaintext."""
         details = await self.repository.get_all_details()
-        
-        # Decrypt api_key for each detail
+
         for detail in details:
-            if detail.get("api_key"):
-                try:
-                    detail["api_key"] = decrypt_api_key(detail["api_key"])
-                except Exception as e:
-                    logger.warning(f"Failed to decrypt api_key for document {detail.get('_id')}: {e}")
-                    # Keep encrypted value if decryption fails
-                    
+            has_key = bool(detail.get("api_key"))
+            detail["api_key"] = API_KEY_MASK if has_key else ""
+            detail["has_api_key"] = has_key
+
         return details
 
     async def create(self, data: Dict[str, Any], user_info: Dict[str, Any] = None) -> Dict[str, Any]:
@@ -38,6 +52,14 @@ class IexApiDetailService:
                     detail="A record with the same asset_id, bid_area_id, user_id, participant_id, portfolio_id, server_type, and server_url already exists"
                 )
             
+            # Refuse the mask get_all() hands out — storing it would silently
+            # configure a credential that can never authenticate to the exchange.
+            if is_masked_api_key(data.get("api_key")):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="API key is a masked placeholder; enter the real key"
+                )
+
             # Encrypt api_key before saving
             if data.get("api_key"):
                 try:
@@ -118,6 +140,12 @@ class IexApiDetailService:
                 "status": data.get("status"),
                 "updated_at": now
             }
+
+            # An unchanged edit form posts back the mask from get_all(). Drop it so the
+            # stored key survives instead of being overwritten with the placeholder.
+            if is_masked_api_key(update_payload.get("api_key")):
+                logger.info(f"Ignoring masked api_key on update of {id}; keeping stored key")
+                update_payload["api_key"] = None
 
             # Encrypt api_key if it's being updated
             if update_payload.get("api_key"):
