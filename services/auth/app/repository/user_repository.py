@@ -14,6 +14,7 @@ from fastapi import HTTPException, status
 from .base_repository import BaseRepository
 from ..core.dto import UserDTO, AuthUserDTO
 from ..core.config import settings
+from libs.authz.route_guard import SUPER_ROLES
 
 logger = logging.getLogger(__name__)
 CASE_INSENSITIVE_COLLATION = Collation(locale="en", strength=2)
@@ -295,7 +296,11 @@ class UserRepository(BaseRepository):
         all_permissions = []
         accessible_menus = []
 
-        if "admin" in user.roles:
+        # `superadmin` was missing here. It appears in exactly one other place in the
+        # backend (password_policy.py), so the highest-privilege role resolved to nothing
+        # but its read-only menu grants -- invisible while nothing checked permissions,
+        # an instant lockout of the platform owners the moment something did.
+        if SUPER_ROLES.intersection(r.lower() for r in (user.roles or []) if isinstance(r, str)):
             all_permissions = ["*"]
         else:
             from .role_repository import RoleRepository
