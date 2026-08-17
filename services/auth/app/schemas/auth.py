@@ -42,6 +42,11 @@ class TokenResponse(BaseModel):
 
 class MinimalUserResponse(BaseModel):
     """Minimal user response schema for login with essential user info"""
+    # The plain login path already returned an id; this schema dropped it, so the route
+    # layer audited every MFA login as user_id="unknown" -- the one flow that proves who
+    # the user is was the one the audit trail could not name. Optional so an older caller
+    # that omits it still validates.
+    id: Optional[str] = Field(None, description="User ID")
     # Only include fields that exist in the database profile
     first_name: Optional[str] = Field(None, description="User's first name from profile")
     last_name: Optional[str] = Field(None, description="User's last name from profile")

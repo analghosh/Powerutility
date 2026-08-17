@@ -276,12 +276,11 @@ async def update_user(
         user_repo = UserRepository()
         
         current_user_id = current_user.user_id
-        # Check if user exists
-        user = user_repo.get_user_by_id(user_id)
-        if not await user_repo.get_user_by_id(user_id): # Await the call
-            raise HTTPException(status_code=404, detail="User not found")
-        user = await user_repo.get_user_by_id(user_id) # Re-fetch after check
-        if not user: # Should not happen if previous check passed, but for type safety
+        # Check if user exists. This was three calls: one un-awaited (a coroutine that was
+        # created, never run, and immediately overwritten -- a "coroutine was never awaited"
+        # warning per request), then two real round trips for the same document.
+        user = await user_repo.get_user_by_id(user_id)
+        if not user:
             raise HTTPException(status_code=404, detail="User not found")
         
         # Determine whether this is a self-update
@@ -331,8 +330,10 @@ async def update_user(
                     success=True
                 )
         
-        success = user_repo.update_user(user_id, update_data, modified_by=current_user_id)
-        if not await user_repo.update_user(user_id, update_data, modified_by=current_user_id): # Await the call
+        # The un-awaited call that used to sit above this one never executed -- an
+        # un-awaited coroutine does nothing -- so the update ran once, not twice. It was
+        # still a per-request RuntimeWarning and a trap for the next reader.
+        if not await user_repo.update_user(user_id, update_data, modified_by=current_user_id):
             raise HTTPException(status_code=500, detail="Failed to update user")
         
         # Get updated user

@@ -2,12 +2,15 @@
 MFA API routes
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+import os
+import sys
+from typing import Optional
+
+from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ....controllers.mfa_controller import mfa_controller
 from ....controllers.auth_controller import auth_controller
-from ....utils.activity_logger import log_mfa_activity
 from datetime import datetime
 
 # Import secure audit logging
@@ -16,14 +19,47 @@ from ....core.dto import AuthUserDTO
 from ....schemas.mfa import (
     EnableMFARequest, EnableMFAResponse, VerifyMFARequest, VerifyMFAResponse,
     DisableMFARequest, DisableMFAResponse, MFARecoveryRequest, MFARecoveryResponse,
-    MFAStatusResponse
+    MFAStatusResponse, EmergencyDisableRequest
 )
+
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', '..'))
+from libs.authz.route_guard import is_allowed
 
 # Create router
 router = APIRouter(prefix="/mfa", tags=["Multi-Factor Authentication"])
 
 # Security scheme
 security = HTTPBearer()
+
+# Permissions guarding the two admin endpoints. `is_allowed` composes "<resource>:<action>",
+# so these read as mfa:emergency_disable and mfa:reset_rate_limit -- both registered in
+# libs/core/authz/permissions_catalog.py.
+_MFA_RESOURCE = "mfa"
+_ACTION_EMERGENCY_DISABLE = "emergency_disable"
+_ACTION_RESET_RATE_LIMIT = "reset_rate_limit"
+
+
+def _require_mfa_admin(admin_user: AuthUserDTO, action: str) -> None:
+    """
+    Authorize an MFA admin action against the shared authorization primitives.
+
+    The hand-rolled check this replaces was
+    `if "admin" not in roles and "<perm>" not in permissions`, which could not pass anyone:
+    neither permission existed in the catalogue so the second clause never fired, and a
+    superadmin carries `permissions=["*"]`, which a literal `in` test does not satisfy.
+    `is_allowed` handles the `*` wildcard, `mfa:*`, and the admin/superadmin role bypass
+    that the rest of the platform already relies on.
+    """
+    principal = {
+        "roles": getattr(admin_user, "roles", []) or [],
+        "permissions": getattr(admin_user, "permissions", []) or [],
+    }
+    if is_allowed(principal, _MFA_RESOURCE, action):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail=f"Missing required permission: {_MFA_RESOURCE}:{action}",
+    )
 
 
 @router.post("/enable", response_model=EnableMFAResponse, summary="Enable MFA")
@@ -246,21 +282,31 @@ async def disable_mfa(
     return await mfa_controller.disable_mfa(user.id, request)
 
 
-@router.post("/recover", response_model=MFARecoveryResponse, summary="Recover MFA")
+@router.post("/recover", response_model=MFARecoveryResponse, summary="Regenerate Backup Codes")
 async def recover_mfa(
     request: MFARecoveryRequest,
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
-    Recover MFA using backup code
-    
-    Requires:
+    Spend one backup code to replace the whole set
+
+    ## This is not the locked-out-of-login path
+    It requires a full access token, which a user stuck at the MFA prompt does not have.
+    **To log in without an authenticator**, call `POST /auth/verify-login` with the
+    temporary token from `/auth/login` and a `backup_code` instead of a `totp_code`.
+
+    What this endpoint is for is topping the set back up afterwards: a backup-code login
+    consumes one code, and this is the only way to get a fresh set without disabling and
+    re-enrolling MFA.
+
+    ## Requires:
     - Valid access token in Authorization header
-    - Valid backup code
-    
-    Returns:
+    - One unused backup code
+
+    ## Returns:
     - Recovery result
-    - New backup codes if successful
+    - A complete new set of backup codes. **Every previous code, including unused ones, is
+      invalidated** — write the new set down before closing the response.
     """
     # Get current user
     token = credentials.credentials
@@ -299,81 +345,165 @@ async def get_mfa_status(credentials: HTTPAuthorizationCredentials = Depends(sec
     return await mfa_controller.get_mfa_status(user.id)
 
 
-@router.post("/admin/emergency-disable/{target_user_id}")
+@router.post("/admin/emergency-disable/{target_user_id}", summary="Emergency MFA Disable (admin)")
 async def emergency_disable_mfa(
     target_user_id: str,
-    reason: str,
+    request: Request,
+    reason: Optional[str] = None,
+    payload: Optional[EmergencyDisableRequest] = Body(default=None),
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Emergency MFA disable by admin (for account recovery)
-    
-    Requires:
-    - Valid admin access token
-    - Target user ID
-    - Reason for emergency disable
-    
-    Returns:
+
+    This is the recovery path for a user who has lost the device holding their
+    authenticator and exhausted their backup codes. It clears the secret, the enrolment
+    flags and the backup codes, and resets that user's MFA rate limiting.
+
+    ## Requires:
+    - An access token holding `mfa:emergency_disable` (the `admin` and `superadmin` roles
+      pass without it)
+    - Target user ID in the path
+    - A reason, either as a `?reason=` query parameter or as `{"reason": "..."}` in the body
+
+    ## Returns:
     - Emergency disable result
+
+    The action is written to the security audit log with both user IDs and the reason,
+    whether it succeeds or is refused.
     """
     # Get current admin user
     token = credentials.credentials
     admin_user = await auth_controller.get_current_user(token)
-    
+
     if not admin_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid access token"
         )
-    
-    # Check admin permissions (require admin role or specific permission)
-    if "admin" not in admin_user.roles and "mfa:emergency_disable" not in admin_user.permissions:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin permissions required for emergency MFA disable"
+
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    try:
+        _require_mfa_admin(admin_user, _ACTION_EMERGENCY_DISABLE)
+    except HTTPException:
+        get_audit_logger().log_security_event(
+            service="auth",
+            event_type="mfa_emergency_disable_denied",
+            message=f"Emergency MFA disable refused for {admin_user.username}",
+            user_id=admin_user.id,
+            username=admin_user.username,
+            target_user_id=target_user_id,
+            client_ip=client_ip,
+            user_agent=user_agent,
+            failure_reason="missing_permission",
+            success=False,
         )
-    
-    return await mfa_controller.emergency_disable_mfa(target_user_id, admin_user.id, reason)
+        raise
+
+    reason_text = (payload.reason if payload else None) or reason
+    if not reason_text or not reason_text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="A reason is required for an emergency MFA disable",
+        )
+
+    result = await mfa_controller.emergency_disable_mfa(
+        target_user_id, admin_user.id, reason_text.strip()
+    )
+
+    # Removing somebody's second factor is exactly the action an attacker with an admin
+    # session wants, so it is logged unconditionally rather than only on the error path.
+    get_audit_logger().log_security_event(
+        service="auth",
+        event_type="mfa_emergency_disable",
+        message=(
+            f"MFA emergency disabled for {result.get('target_user')} "
+            f"by admin {admin_user.username}"
+        ),
+        user_id=admin_user.id,
+        username=admin_user.username,
+        target_user_id=target_user_id,
+        target_username=result.get("target_user"),
+        reason=reason_text.strip(),
+        client_ip=client_ip,
+        user_agent=user_agent,
+        success=True,
+    )
+
+    return result
 
 
-@router.post("/admin/reset-rate-limit/{target_user_id}")
+@router.post("/admin/reset-rate-limit/{target_user_id}", summary="Reset MFA Rate Limit (admin)")
 async def reset_mfa_rate_limit(
     target_user_id: str,
+    request: Request,
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
     """
     Reset MFA rate limiting for a user (admin function)
-    
-    Requires:
-    - Valid admin access token
+
+    Clears the failed-attempt window, any active lockout and the escalating strike count,
+    so a user locked out by repeated bad codes can try again immediately. It does not
+    change the user's MFA enrolment.
+
+    ## Requires:
+    - An access token holding `mfa:reset_rate_limit` (the `admin` and `superadmin` roles
+      pass without it)
     - Target user ID
-    
-    Returns:
+
+    ## Returns:
     - Reset result
     """
     # Get current admin user
     token = credentials.credentials
     admin_user = await auth_controller.get_current_user(token)
-    
+
     if not admin_user:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid access token"
         )
-    
-    # Check admin permissions
-    if "admin" not in admin_user.roles and "mfa:reset_rate_limit" not in admin_user.permissions:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin permissions required for rate limit reset"
+
+    client_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+
+    try:
+        _require_mfa_admin(admin_user, _ACTION_RESET_RATE_LIMIT)
+    except HTTPException:
+        get_audit_logger().log_security_event(
+            service="auth",
+            event_type="mfa_rate_limit_reset_denied",
+            message=f"MFA rate limit reset refused for {admin_user.username}",
+            user_id=admin_user.id,
+            username=admin_user.username,
+            target_user_id=target_user_id,
+            client_ip=client_ip,
+            user_agent=user_agent,
+            failure_reason="missing_permission",
+            success=False,
         )
-    
+        raise
+
     from ....services.mfa_rate_limiter import mfa_rate_limiter
     mfa_rate_limiter.reset_user(target_user_id)
-    
+
+    get_audit_logger().log_security_event(
+        service="auth",
+        event_type="mfa_rate_limit_reset",
+        message=f"MFA rate limiting reset for {target_user_id} by admin {admin_user.username}",
+        user_id=admin_user.id,
+        username=admin_user.username,
+        target_user_id=target_user_id,
+        client_ip=client_ip,
+        user_agent=user_agent,
+        success=True,
+    )
+
     return {
         "reset": True,
         "message": f"MFA rate limiting reset for user {target_user_id}",
         "admin_user": admin_user.username,
         "timestamp": datetime.now().isoformat()
-    } 
+    }

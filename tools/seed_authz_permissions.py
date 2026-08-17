@@ -213,10 +213,21 @@ def build_plan(db):
     return grant_updates, role_updates, roles, menus
 
 
+# Permissions that belong to no menu, so the menu walk below cannot produce them. They are
+# granted to no role by this matrix: admin and superadmin already pass the MFA admin gate
+# on their role, and removing somebody's second factor is not a delegation to make by
+# default. Listing them keeps the catalogue -- what the Roles & Permissions screen offers
+# an administrator -- a superset of what the code actually checks.
+NON_MENU_PERMISSIONS = [
+    "mfa:emergency_disable",
+    "mfa:reset_rate_limit",
+]
+
+
 def catalog_permissions(db) -> list:
     """Every resource:action the matrix can produce, so the catalog stays a superset."""
     menus = list(db["menus"].find({}, {"name": 1}))
-    wanted = set()
+    wanted = set(NON_MENU_PERMISSIONS)
     for m in menus:
         resource = resource_name(m.get("name") or "", MENU_TO_RESOURCE)
         for action in (READ, WRITE, DELETE, APPROVE):

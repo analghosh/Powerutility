@@ -15,6 +15,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 from libs.audit_queue.timezone_utils import now_ist
+from libs.crypto import decrypt_secret
 from ..repository.user_repository import UserRepository
 # from ..repository.audit_repository import AuditRepository  # Remove direct audit repo
 from ..core.dto import UserDTO, AuthUserDTO
@@ -244,8 +245,20 @@ class AuthService:
                         logger.error(f"MFA secret not found for user {user.username}")
                         raise HTTPException(500, detail="MFA configuration error")
 
+                    # Secrets are stored encrypted; `decrypt_secret` returns a legacy
+                    # plaintext value unchanged, so accounts enrolled before that change
+                    # keep working with no migration window.
+                    try:
+                        mfa_secret = decrypt_secret(full_user_doc["mfa_secret"])
+                    except Exception:
+                        logger.error(
+                            "Could not decrypt the MFA secret for user %s -- ENCRYPTION_KEY "
+                            "may have changed since enrolment", user.username
+                        )
+                        raise HTTPException(500, detail="MFA configuration error")
+
                     verification_result = mfa_service.verify_totp_with_rate_limit(
-                        user_id, full_user_doc["mfa_secret"], totp_code or ""
+                        user_id, mfa_secret, totp_code or ""
                     )
 
                     if verification_result['rate_limited']:
@@ -294,19 +307,47 @@ class AuthService:
             access_expires_at = now + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES)
             refresh_expires_at = now + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
 
-            # Invalidate temporary token after successful login
-            redis_blacklist_service.invalidate_temporary_token(temporary_token, user_id)
-            
+            # Burn the temporary token so it cannot be presented twice. The return value was
+            # previously discarded: when Redis was unavailable the call logged a warning,
+            # returned False and left the token replayable for its whole life. It is now
+            # checked, reported as a security event, and -- because the blacklist keeps an
+            # in-process fallback for temporary tokens -- single use is still enforced
+            # within this worker while Redis is down.
+            if not redis_blacklist_service.invalidate_temporary_token(temporary_token, user_id):
+                logger.error(
+                    "Temporary token for %s could not be invalidated; single-use is "
+                    "enforced in-process only until the token store recovers", user.username
+                )
+                self.audit_logger.log_security_event(
+                    service="auth",
+                    event_type="temporary_token_invalidation_degraded",
+                    message=f"Temporary token could not be blacklisted for {user.username}",
+                    user_id=user.id,
+                    username=user.username,
+                    client_ip=request_info.get("ip_address"),
+                    user_agent=request_info.get("user_agent"),
+                    failure_reason="token_store_unavailable",
+                    success=False,
+                )
+                # Deliberately not fatal. Refusing the login here would turn a Redis outage
+                # into a total authentication outage for every MFA user, and the replay it
+                # would prevent still requires an unused TOTP code -- which is itself now
+                # single-use (see MFAService.verify_totp_with_rate_limit).
+
             # MFA login success logging handled at route layer to avoid duplication
-            
+
             # Get user profile information
             user_profile = getattr(user, 'profile', {}) or {}
-            
+
             return {
                 "user": {
                     "first_name": user_profile.get("first_name"),
                     "last_name": user_profile.get("last_name"),
-                    "last_login": getattr(user, 'last_login', None)
+                    "last_login": getattr(user, 'last_login', None),
+                    # Without this the route layer audited every MFA login as
+                    # user_id="unknown", so the one login flow that proves who the user is
+                    # was the one the audit trail could not name.
+                    "id": user.id
                 },
                 "tokens": {
                     "access_token": access_token,
@@ -319,10 +360,16 @@ class AuthService:
                 }
             }
             
+        except HTTPException:
+            # A deliberate 4xx/5xx from inside the flow -- an MFA configuration error, a
+            # missing role -- must reach the caller. Folding it into the generic handler
+            # below turned every one of them into "Invalid temporary token or TOTP code",
+            # which is how a crash in the rate limiter presented as a wrong password.
+            raise
         except Exception as e:
-            logger.error(f"Verify login error: {e}")
+            logger.error("Verify login error: %s", e, exc_info=True)
             return None
-    
+
     @staticmethod
     def _token_version_is_current(payload: Dict[str, Any], user) -> bool:
         """
