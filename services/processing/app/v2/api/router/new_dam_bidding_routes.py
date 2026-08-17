@@ -15,6 +15,7 @@ from ...dependencies import get_user_context
 from ...dependencies import get_user_context
 from services.processing.app.v2.controller.dam_transaction_controller import dam_transaction_controller
 from datetime import datetime
+from libs.authz.service_auth import internal_headers
 
 
 logger = logging.getLogger(__name__)
@@ -581,7 +582,10 @@ async def run_dam_live_sync(
         logger.info(f"[DAM Live Sync] Calling scheduler service at {endpoint}")
 
         async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(endpoint)
+            response = await client.post(
+                endpoint,
+                headers=internal_headers(settings.INTERNAL_SERVICE_TOKEN),
+            )
 
             if response.status_code != 200:
                 error_detail = response.text

@@ -21,6 +21,8 @@ from .shared.middleware.error_handler import ErrorHandlerMiddleware
 
 # Configure logging with correlation ID support
 from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, CacheMiddleware, SecurityHeadersMiddleware
+from libs.middleware.auth_middleware import AuthMiddleware
+from libs.authz.route_guard import ACTION_WRITE, guard
 
 # Configure logging based on settings
 configure_logging(
@@ -219,27 +221,34 @@ app.add_middleware(CorrelationMiddleware)
 # Security headers added to every response
 app.add_middleware(SecurityHeadersMiddleware)
 
-# Add Auth Middleware
-# AuthMiddleware removed to allow internal trigger without authentication
-# app.add_middleware(
-#     AuthMiddleware,
-#     auth_service_url=settings.AUTH_SERVICE_URL,
-#     require_auth=False,
-#     exclude_paths=[
-#         "/health",
-#         "/docs",
-#         "/redoc",
-#         "/openapi.json",
-#         "/favicon.ico",
-#         "/static",
-#         "/config",
-#         "/login",
-#         "/dashboard",
-#         "/",
-#         "/api/v1/scheduler/rtm-scheduling",
-#         "/api/v1/scheduler/rtm-scheduling/trigger"
-#     ]
-# )
+# Authentication. This was commented out with the note "AuthMiddleware removed to allow
+# internal trigger without authentication", which left every job-control endpoint on this
+# service open to anyone who could reach the port -- including a job-disable route and the
+# full 80-job inventory.
+#
+# The internal callers are real: five call sites in the processing service
+# (cron_orchestrator_service, rtm_scheduling_controller, the DAM and RTM bidding routes)
+# invoke this service with no credentials. They now present INTERNAL_SERVICE_TOKEN via the
+# X-Internal-Token header, which AuthMiddleware accepts in place of a login.
+#
+# The previous exclude list is deliberately not carried over. "/", "/config", "/login" and
+# "/dashboard" were exempt, and "/api/v1/scheduler/rtm-scheduling" exempted the RTM
+# trigger by prefix -- the exact endpoint the internal caller needed, left open to
+# everyone as a side effect. Only the paths that genuinely cannot carry a credential
+# remain.
+app.add_middleware(
+    AuthMiddleware,
+    auth_service_url=settings.AUTH_SERVICE_URL,
+    internal_token=settings.INTERNAL_SERVICE_TOKEN,
+    exclude_paths=[
+        "/health",
+        "/docs",
+        "/redoc",
+        "/openapi.json",
+        "/favicon.ico",
+        "/static",
+    ],
+)
 
 # Add cache middleware third (executes third to last)
 from libs.cache.config import get_ttl_config
@@ -254,13 +263,24 @@ app.add_middleware(
     ttl_config=get_ttl_config()
 )
 
-# Include routers
-app.include_router(scheduler.router, prefix="/api/v1/scheduler", tags=["scheduler"])
-app.include_router(queue_health.router, tags=["queue"])
-app.include_router(job_monitoring.router, tags=["job-monitoring"])
-app.include_router(rtm_scheduling_router.router, prefix="/api/v1/scheduler", tags=["rtm-scheduling"])
-app.include_router(bid_trade_live_sync_router.router, prefix="/api/v1/scheduler", tags=["bid-trade-live-sync"])
-app.include_router(demand_trigger_router.router, prefix="/api/v1/scheduler", tags=["demand-trigger"])
+# Include routers.
+#
+# Authentication alone would leave every job-control endpoint open to any of the ~790
+# accounts that can log in -- including disabling a scheduled job. Everything this service
+# exposes is platform operation, so it all requires `admin`. The internal service
+# credential resolves to a context holding "*", so trusted service-to-service calls pass
+# the same guard rather than bypassing it.
+# action="write" rather than deriving it from the method: nearly every role holds some
+# `admin:read` from the Administration menu, and a GET here returns the entire job
+# inventory. Reading job control is an administrative act too.
+_admin_only = [guard("admin", action=ACTION_WRITE)]
+
+app.include_router(scheduler.router, prefix="/api/v1/scheduler", tags=["scheduler"], dependencies=_admin_only)
+app.include_router(queue_health.router, tags=["queue"], dependencies=_admin_only)
+app.include_router(job_monitoring.router, tags=["job-monitoring"], dependencies=_admin_only)
+app.include_router(rtm_scheduling_router.router, prefix="/api/v1/scheduler", tags=["rtm-scheduling"], dependencies=_admin_only)
+app.include_router(bid_trade_live_sync_router.router, prefix="/api/v1/scheduler", tags=["bid-trade-live-sync"], dependencies=_admin_only)
+app.include_router(demand_trigger_router.router, prefix="/api/v1/scheduler", tags=["demand-trigger"], dependencies=_admin_only)
 
 # Mount static files
 from pathlib import Path

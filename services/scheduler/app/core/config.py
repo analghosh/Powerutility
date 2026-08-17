@@ -161,6 +161,9 @@ class Settings(BaseSettings):
     
     # Authentication Service
     AUTH_SERVICE_URL: str = "http://localhost:8001"
+    # Shared secret presented by other EPMS services on internal calls
+    # (X-Internal-Token). Empty means no internal caller is trusted.
+    INTERNAL_SERVICE_TOKEN: str = ""
     AUTH_SERVICE_TIMEOUT: int = 10
     
     # Ingestion Service
