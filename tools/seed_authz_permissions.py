@@ -108,8 +108,16 @@ MASTERS_MENUS = {
 }
 ADMIN_MENUS = {
     "Administration", "Users", "Roles & Permissions", "Audit Log", "Setup",
+}
+
+# Data-entry screens served by the ingestion service. Its own check used to be a
+# hardcoded dict granting "Data Ingestion" to admin and operator; these grants reproduce
+# that in data, so replacing the dict with a real permission check does not quietly
+# change who can upload. `user` and `viewer` keep read, as before.
+INGESTION_MENUS = {
     "Upload CSV", "DC SG Template", "SCADA Data", "SCADA - Data Input",
 }
+INGESTION_WRITE_ROLES = {"operator"}
 
 # Read-only roles keep exactly what they have.
 READ_ONLY_ROLES = {"viewer"}
@@ -120,6 +128,8 @@ def classify(menu_name: str) -> str:
         return "masters"
     if menu_name in ADMIN_MENUS:
         return "admin"
+    if menu_name in INGESTION_MENUS:
+        return "ingestion"
     if "Approval" in (menu_name or ""):
         return "approval"
     return "operational"
@@ -136,6 +146,9 @@ def permissions_for(role_name: str, menu_name: str) -> list:
     kind = classify(menu_name)
     if kind in {"masters", "admin"}:
         return [READ]
+    if kind == "ingestion":
+        # Matches the dict this replaces: admin and operator could ingest, nobody else.
+        return [READ, WRITE] if role_name.lower() in INGESTION_WRITE_ROLES else [READ]
     # operational and approval screens: makers may act, only admins may approve
     return [READ, WRITE]
 

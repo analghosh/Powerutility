@@ -21,7 +21,8 @@ configure_logging(
 )
 
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
+from .middleware.page_access import require_internal_or_admin
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
 from fastapi.security import HTTPBearer
@@ -253,7 +254,15 @@ async def health_check():
     )
 
 
-@app.get("/cron/status")
+# These three were the only routes on this service carrying no authentication at all --
+# every other route already depends on require_page_access. `/cron/trigger-all` starts
+# every registered ingestion job, and `/cron/status` returned the job inventory and next
+# run times to anyone who could reach the port.
+#
+# They are also the reason the duplicate definitions below this point existed:
+# trigger_cron_job and trigger_all_cron_jobs were each declared twice, and Python simply
+# kept the second copy. The duplicates are gone.
+@app.get("/cron/status", dependencies=[Depends(require_internal_or_admin)])
 async def cron_status():
     """Get cron scheduler status"""
     cron_manager = app.state.cron_manager
@@ -264,7 +273,7 @@ async def cron_status():
     }
 
 
-@app.post("/cron/trigger/{job_id}")
+@app.post("/cron/trigger/{job_id}", dependencies=[Depends(require_internal_or_admin)])
 async def trigger_cron_job(job_id: str):
     """Trigger a specific cron job immediately"""
     from fastapi import HTTPException
@@ -280,37 +289,7 @@ async def trigger_cron_job(job_id: str):
     }
 
 
-@app.post("/cron/trigger-all")
-async def trigger_all_cron_jobs():
-    """Trigger all registered cron jobs immediately"""
-    cron_manager = app.state.cron_manager
-    registered = cron_manager.get_registered_jobs()
-    results = {}
-    for job_id in registered:
-        results[job_id] = cron_manager.trigger_job_now(job_id)
-    return {
-        "service": "ingestion-service",
-        "triggered": results
-    }
-
-
-@app.post("/cron/trigger/{job_id}")
-async def trigger_cron_job(job_id: str):
-    """Trigger a specific cron job immediately"""
-    from fastapi import HTTPException
-    cron_manager = app.state.cron_manager
-    registered = cron_manager.get_registered_jobs()
-    if job_id not in registered:
-        raise HTTPException(status_code=404, detail=f"Job '{job_id}' not found")
-    success = cron_manager.trigger_job_now(job_id)
-    return {
-        "service": "ingestion-service",
-        "job_id": job_id,
-        "triggered": success
-    }
-
-
-@app.post("/cron/trigger-all")
+@app.post("/cron/trigger-all", dependencies=[Depends(require_internal_or_admin)])
 async def trigger_all_cron_jobs():
     """Trigger all registered cron jobs immediately"""
     cron_manager = app.state.cron_manager
