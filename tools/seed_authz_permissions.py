@@ -58,6 +58,40 @@ from pymongo import MongoClient
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 AUTH_DB_NAME = os.getenv("AUTH_DB_NAME", "auth_db")
 
+
+def _safe_url(url: str) -> str:
+    """mongodb://user:secret@host/ -> mongodb://user:***@host/"""
+    if "@" not in url:
+        return url
+    scheme, _, rest = url.partition("://")
+    creds, _, host = rest.rpartition("@")
+    user = creds.split(":")[0]
+    return f"{scheme}://{user}:***@{host}"
+
+
+def announce_target(db) -> None:
+    """
+    Say out loud which database is about to be changed.
+
+    The defaults are localhost/auth_db, and on the production box those defaults are
+    *correct* -- which is exactly what makes a mistake quiet. Both UAT and production run
+    Mongo on localhost, so the only thing distinguishing them is which machine the shell
+    is on.
+    """
+    print(f"target : {_safe_url(MONGODB_URL)}  db={AUTH_DB_NAME}")
+    print(f"         {db['roles'].count_documents({})} roles, "
+          f"{db['menu_roles'].count_documents({})} menu grants, "
+          f"{db['users'].count_documents({})} users")
+
+
+def confirm(action: str, assume_yes: bool) -> bool:
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        print(f"refusing to {action} without --yes when stdin is not a terminal")
+        return False
+    return input(f"{action} against {AUTH_DB_NAME} at {_safe_url(MONGODB_URL)}? [y/N] ").strip().lower() == "y"
+
 READ = "read"
 WRITE = "write"
 DELETE = "delete"
@@ -245,11 +279,33 @@ def main() -> int:
     group.add_argument("--apply", action="store_true", help="write the matrix")
     group.add_argument("--revert", metavar="BACKUP", help="restore a backup file")
     parser.add_argument("--backup-dir", default=".", help="where --apply writes its backup")
+    parser.add_argument("--yes", action="store_true",
+                        help="skip the confirmation prompt (required for non-interactive runs)")
     args = parser.parse_args()
 
     db = MongoClient(MONGODB_URL)[AUTH_DB_NAME]
+    announce_target(db)
+    print()
 
     if args.revert:
+        # A backup records _id values. Those differ between environments, so a UAT backup
+        # applied to production silently matches nothing -- or, worse, matches the wrong
+        # documents. Check before writing.
+        with open(args.revert) as fh:
+            payload = json.load(fh)
+        ids = [ObjectId(d["_id"]) for d in payload["roles"]]
+        present = db["roles"].count_documents({"_id": {"$in": ids}})
+        print(f"backup taken {payload.get('taken_at')}: {len(ids)} roles, "
+              f"{present} of them exist in this database")
+        if present == 0:
+            print("none of the backup's documents exist here -- this backup is from a "
+                  "different environment. Refusing.")
+            return 1
+        if present < len(ids):
+            print(f"WARNING: {len(ids) - present} of the backup's roles are missing here")
+
+        if not confirm("revert", args.yes):
+            return 1
         grants, roles = revert(db, args.revert)
         print(f"reverted {grants} menu_role and {roles} role documents from {args.revert}")
         return 0
@@ -270,10 +326,15 @@ def main() -> int:
         print("\ndry run, nothing written")
         return 0
 
+    if not confirm("apply the permission matrix", args.yes):
+        return 1
+
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    path = os.path.join(args.backup_dir, f"authz-backup-{stamp}.json")
+    path = os.path.abspath(os.path.join(args.backup_dir, f"authz-backup-{AUTH_DB_NAME}-{stamp}.json"))
     backup(db, path)
     print(f"\nbackup written to {path}")
+    print("KEEP THIS FILE -- it is the only way to put the permission data back, and it "
+          "only works against this database.")
 
     grants, roles_changed, catalog_size = apply_plan(db, grant_updates, role_updates, catalog)
     print(f"applied: {grants} menu_role grants, {roles_changed} roles, "

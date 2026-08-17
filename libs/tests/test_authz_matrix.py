@@ -113,6 +113,18 @@ def test_resource_names_match_the_auth_services_mapping():
     assert seeder.resource_name("Users", seeder.MENU_TO_RESOURCE) == "users"
 
 
+def test_the_announced_target_never_prints_the_mongo_password():
+    # The script prints which database it is about to change, and on the production box
+    # that URI carries credentials.
+    masked = seeder._safe_url("mongodb://epms:sup3rs3cret@10.0.0.5:27017/?authSource=admin")
+    assert "sup3rs3cret" not in masked
+    assert masked.startswith("mongodb://epms:***@10.0.0.5:27017")
+
+
+def test_a_url_without_credentials_is_left_alone():
+    assert seeder._safe_url("mongodb://localhost:27017") == "mongodb://localhost:27017"
+
+
 def test_unmapped_menu_names_fall_back_to_slugging():
     assert seeder.resource_name("OCF Limit Values", seeder.MENU_TO_RESOURCE) == "ocf_limit_values"
     assert seeder.resource_name("Price Groups", seeder.MENU_TO_RESOURCE) == "price_groups"
