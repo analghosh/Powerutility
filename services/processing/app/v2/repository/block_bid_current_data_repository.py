@@ -8,6 +8,15 @@ from ..repository.base_repository import GenericRepository
 from ...core.config import settings
 logger = logging.getLogger(__name__)
 
+# Exchange submission covers "Bid" rows only. `selected_for` is stored verbatim from
+# the client (block_bid_services.insert_block_bid) with no enum or validation, so match
+# case-insensitively and tolerate surrounding whitespace. Written as an exclusion rather
+# than selected_for == "Bid" so that older documents, which predate the field, keep
+# being submitted instead of silently dropping out.
+NOT_RESERVED_MATCH: Dict[str, Any] = {
+    "selected_for": {"$not": {"$regex": r"^\s*reserved\s*$", "$options": "i"}}
+}
+
 # A trading day is 96 blocks of 15 minutes; block n covers (n-1)*15 .. n*15 minutes
 BLOCK_INTERVAL_MINUTES = 15
 BLOCKS_PER_DAY = 96
@@ -563,6 +572,11 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Fetch the latest Approved block bid per session for a given date and market type.
         If the same session has been submitted/approved multiple times, only the most
         recently created document (highest _id) is returned for exchange submission.
+
+        Bids marked "Reserved" are held back deliberately and are never sent to the
+        exchange — only "Bid" rows are. The exclusion sits in the $match, before the
+        $group, so a Reserved row can neither be submitted nor win the $first slot of
+        a time block that also has a real Bid row.
         """
         try:
             pipeline = [
@@ -570,7 +584,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
                     "$match": {
                         "biding_date": biding_date,
                         "market_type": market_type,
-                        "status": "Approved"
+                        "status": "Approved",
+                        **NOT_RESERVED_MATCH,
                     }
                 },
                 {"$sort": {"revision_no": -1}},  # latest revision first
@@ -599,6 +614,10 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Update status only on the latest revision per trade_session.
         Old revisions are left unchanged to preserve history.
         Returns count of modified documents.
+
+        Reserved bids are excluded for the same reason as in get_approved_bids: they
+        are never submitted, so they must not be flipped Approved -> Submitted after
+        a submission either.
         """
         try:
             # Find the _id of the latest revision per session that matches from_status
@@ -608,6 +627,7 @@ class BlockBidCurrentDataRepository(GenericRepository):
                         "biding_date": biding_date,
                         "market_type": market_type,
                         "status": from_status,
+                        **NOT_RESERVED_MATCH,
                     }
                 },
                 {"$sort": {"revision_no": -1}},
