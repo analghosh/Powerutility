@@ -3,14 +3,18 @@ from __future__ import annotations
 from typing import List, Optional
 import re, time
 
+# Genuinely pre-authentication endpoints: you cannot hold a token before calling them.
+#
+# /mfa/enable, /mfa/verify and /mfa/disable used to be listed here and are not public at
+# all -- every one of them acts on the caller's own account and requires an access token.
+# Declaring them public told any service that mounts this guard to wave through the
+# endpoints that add, confirm and remove a second factor. They are inert on the auth
+# service today only because the MFA router is mounted without the guard.
 PUBLIC: List[tuple[str, str]] = [
     ("GET", "/health"),
     ("POST", "/auth/login"),
     ("POST", "/auth/refresh"),
     ("POST", "/auth/verify-login"),
-    ("POST", "/mfa/enable"),
-    ("POST", "/mfa/verify"),
-    ("POST", "/mfa/disable"),
 ]
 
 ADMIN_PREFIXES = ["/admin"]

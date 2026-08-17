@@ -113,9 +113,16 @@ DEFAULT_PERMISSIONS_CATALOG = [
     
     # Authentication & MFA
     "auth:login",
-    "auth:logout", 
+    "auth:logout",
     "mfa:setup",
     "mfa:disable",
+    # Admin-side MFA recovery. Checked by the /mfa/admin/* routes through
+    # libs.authz.route_guard.is_allowed, so "mfa:*" and the admin/superadmin roles satisfy
+    # them too. The gate that preceded them named permissions that existed nowhere, so the
+    # only branch that could ever fire was a literal "admin" role check -- which a
+    # superadmin, carrying permissions=["*"], failed.
+    "mfa:emergency_disable",
+    "mfa:reset_rate_limit",
     
     # System
     "system:health",

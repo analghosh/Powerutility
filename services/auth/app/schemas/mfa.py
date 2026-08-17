@@ -57,4 +57,15 @@ class MFAStatusResponse(BaseModel):
     """MFA status response schema"""
     enabled: bool = Field(..., description="Whether MFA is enabled")
     setup_complete: bool = Field(..., description="Whether MFA setup is complete")
-    backup_codes_remaining: int = Field(..., description="Number of backup codes remaining") 
+    backup_codes_remaining: int = Field(..., description="Number of backup codes remaining")
+
+
+class EmergencyDisableRequest(BaseModel):
+    """
+    Body for the admin emergency-disable endpoint.
+
+    The endpoint historically took `reason` as a query parameter. It still does, so no
+    existing caller breaks; this optional body is the form a UI would rather send, and
+    takes precedence when both are supplied.
+    """
+    reason: str = Field(..., description="Why MFA is being removed from this account") 
