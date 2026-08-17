@@ -36,7 +36,7 @@ class UserUpdateRequest(BaseModel):
 class UserResponse(BaseModel):
     id: str
     username: str
-    email: Optional[str] = None 
+    email: Optional[str] = None
     is_active: bool
     is_verified: bool
     roles: List[str]
@@ -44,6 +44,11 @@ class UserResponse(BaseModel):
     profile: Dict[str, Any]
     created_at: Optional[str] = None
     last_login: Optional[str] = None
+    # The real MFA state. The User Management screen used to show `is_verified` under an
+    # "MFA" heading -- an unrelated flag -- so it reported two-factor as on for accounts
+    # that had none. Login gates on both of these together.
+    mfa_enabled: bool = False
+    mfa_setup_complete: bool = False
 
 class RoleAssignmentRequest(BaseModel):
     roles: List[str]
@@ -103,7 +108,9 @@ async def list_users(
                 permissions=user.permissions,
                 profile=user.profile,
                 created_at=user.created_at.isoformat() if user.created_at else None,
-                last_login=user.last_login.isoformat() if user.last_login else None
+                last_login=user.last_login.isoformat() if user.last_login else None,
+                mfa_enabled=getattr(user, "mfa_enabled", False),
+                mfa_setup_complete=getattr(user, "mfa_setup_complete", False)
             )
             for user in users
         ]
@@ -196,7 +203,9 @@ async def create_user(
             permissions=user.permissions,
             profile=user.profile,
             created_at=user.created_at.isoformat() if user.created_at else None,
-            last_login=user.last_login.isoformat() if user.last_login else None
+            last_login=user.last_login.isoformat() if user.last_login else None,
+            mfa_enabled=getattr(user, "mfa_enabled", False),
+            mfa_setup_complete=getattr(user, "mfa_setup_complete", False)
         )
     except HTTPException:
         raise
@@ -245,7 +254,9 @@ async def get_user(
             permissions=user.permissions,
             profile=user.profile,
             created_at=user.created_at.isoformat() if user.created_at else None,
-            last_login=user.last_login.isoformat() if user.last_login else None
+            last_login=user.last_login.isoformat() if user.last_login else None,
+            mfa_enabled=getattr(user, "mfa_enabled", False),
+            mfa_setup_complete=getattr(user, "mfa_setup_complete", False)
         )
     except HTTPException:
         raise
@@ -337,7 +348,9 @@ async def update_user(
             permissions=updated_user.permissions,
             profile=updated_user.profile,
             created_at=updated_user.created_at.isoformat() if updated_user.created_at else None,
-            last_login=updated_user.last_login.isoformat() if updated_user.last_login else None
+            last_login=updated_user.last_login.isoformat() if updated_user.last_login else None,
+            mfa_enabled=getattr(updated_user, "mfa_enabled", False),
+            mfa_setup_complete=getattr(updated_user, "mfa_setup_complete", False)
         )
     except HTTPException:
         raise
