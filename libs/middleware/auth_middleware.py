@@ -3,6 +3,7 @@ Authentication middleware for JWT token validation using centralized auth servic
 """
 
 import logging
+import secrets
 from contextvars import ContextVar
 from typing import Callable, Optional, Dict, Any
 from fastapi import Request, Response, HTTPException
@@ -10,6 +11,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from ..auth_client import AuthClient, AuthValidationResponse, get_auth_client
 from ..auth.exceptions import AuthenticationError, MissingTokenError, InvalidAuthHeaderError
 from .utils import extract_bearer_token, log_request_info
+from libs.authz.service_auth import INTERNAL_TOKEN_HEADER
 from .correlation import get_correlation_id
 
 logger = logging.getLogger(__name__)
@@ -24,14 +26,22 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """
     
     def __init__(
-        self, 
-        app, 
+        self,
+        app,
         auth_service_url: str = None,
         auth_client: AuthClient = None,
         exclude_paths: Optional[list] = None,
-        require_auth: bool = True
+        require_auth: bool = True,
+        internal_token: Optional[str] = None,
     ):
         super().__init__(app)
+
+        # Shared secret for service-to-service calls. The scheduler shipped with this
+        # middleware commented out entirely -- "removed to allow internal trigger without
+        # authentication" -- because five call sites in the processing service call it
+        # with no credentials. Rather than leave the whole service open for them, they now
+        # present this header. Unset means the door stays shut: no header is ever accepted.
+        self.internal_token = internal_token or None
         
         # Initialize auth client
         if auth_client:
@@ -72,6 +82,16 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Log when auth is required (for debugging)
         logger.debug(f"🔒 Auth required for path: {request_path} | CorrelationID: {correlation_id}")
         
+        # Service-to-service call: a matching shared secret stands in for a login.
+        service_context = self._authenticate_service(request)
+        if service_context is not None:
+            _current_user.set(service_context)
+            request.state.current_user = service_context
+            try:
+                return await call_next(request)
+            finally:
+                _current_user.set(None)
+
         try:
             # Extract and validate JWT token
             user_context = await self._authenticate_request(request)
@@ -108,6 +128,40 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # Clean up context
             _current_user.set(None)
     
+    def _authenticate_service(self, request: Request) -> Optional[Dict[str, Any]]:
+        """
+        Recognise a trusted internal caller by shared secret.
+
+        Returns a service context, or None to fall through to normal JWT handling.
+        Compared with `secrets.compare_digest` so a wrong header cannot be narrowed down
+        by timing, and short-circuited when no secret is configured so an empty
+        environment variable can never match an empty header.
+        """
+        if not self.internal_token:
+            return None
+
+        presented = request.headers.get(INTERNAL_TOKEN_HEADER)
+        if not presented:
+            return None
+
+        if not secrets.compare_digest(presented, self.internal_token):
+            logger.warning(
+                "Rejected %s with a wrong internal token on %s",
+                INTERNAL_TOKEN_HEADER, request.url.path,
+            )
+            return None
+
+        return {
+            "user_id": "internal-service",
+            "username": "internal-service",
+            "email": None,
+            "roles": ["service"],
+            "permissions": ["*"],
+            "session_id": None,
+            "token": None,
+            "is_service_account": True,
+        }
+
     def _should_skip_auth(self, path: str) -> bool:
         """
         Check if authentication should be skipped for given path

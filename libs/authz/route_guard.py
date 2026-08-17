@@ -135,6 +135,7 @@ def require(
     resource: "str | Iterable[str]",
     *,
     skip_path_suffixes: Optional[Iterable[str]] = None,
+    action: Optional[str] = None,
 ) -> Callable:
     """
     Build a dependency enforcing `resource:<action>` where the action follows the method.
@@ -146,9 +147,13 @@ def require(
             service synthesises from menus (`_get_resource_name_from_menu`).
         skip_path_suffixes: paths this router serves that carry their own authentication
             and never see `request.state.current_user` -- the HMAC and SSE-ticket routes.
+        action: pin the action instead of deriving it from the method. For surfaces where
+            even reading is privileged -- the scheduler's job control, where a GET returns
+            the whole job inventory -- since nearly every role holds some `:read`.
     """
     resources = _as_resources(resource)
     skips = tuple(skip_path_suffixes or ())
+    fixed_action = action
 
     async def _guard(request: Request) -> None:
         mode = get_mode()
@@ -159,7 +164,7 @@ def require(
         if any(path.endswith(suffix) for suffix in skips):
             return
 
-        action = action_for(request.method, path)
+        action = fixed_action or action_for(request.method, path)
         user = getattr(request.state, "current_user", None)
 
         if not user:

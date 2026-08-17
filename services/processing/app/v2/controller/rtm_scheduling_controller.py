@@ -6,6 +6,7 @@ from zoneinfo import ZoneInfo
 from libs.audit_queue.simple_logger import AuditLogger
 
 from services.processing.app.v2.services.rtm_scheduling_services import RTMSchedulingServices
+from libs.authz.service_auth import internal_headers
 
 logger = logging.getLogger(__name__)
 
@@ -122,7 +123,11 @@ class RTMSchedulingController:
             logger.info(f"[RTMSchedulingController] Calling scheduler service at {endpoint} with payload: {payload}, Correlation ID: {correlation_id}")
 
             async with httpx.AsyncClient(timeout=300.0) as client:  # 5 minute timeout for long calculations
-                response = await client.post(endpoint, json=payload)
+                response = await client.post(
+                    endpoint,
+                    json=payload,
+                    headers=internal_headers(settings.INTERNAL_SERVICE_TOKEN),
+                )
                 
                 if response.status_code != 200:
                     error_detail = response.text

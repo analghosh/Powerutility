@@ -12,6 +12,7 @@ from urllib.parse import urlparse
 import httpx
 
 from ...core.config import settings
+from libs.authz.service_auth import internal_headers
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +79,7 @@ class CronOrchestratorService:
         try:
             resp = await client.get(
                 f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/scheduler/jobs/all",
+                headers=internal_headers(settings.INTERNAL_SERVICE_TOKEN),
                 timeout=SCHEDULER_TIMEOUT
             )
             resp.raise_for_status()
@@ -93,6 +95,7 @@ class CronOrchestratorService:
         try:
             resp = await client.post(
                 f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/scheduler/jobs/{job_id}/trigger",
+                headers=internal_headers(settings.INTERNAL_SERVICE_TOKEN),
                 timeout=SCHEDULER_TIMEOUT
             )
             resp.raise_for_status()
