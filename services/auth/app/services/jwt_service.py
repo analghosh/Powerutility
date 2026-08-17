@@ -2,7 +2,7 @@
 JWT Token Service for authentication
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 import uuid
@@ -10,6 +10,19 @@ import logging
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
+
+# `exp` is defined by RFC 7519 as seconds since the Unix epoch, and python-jose converts a
+# datetime with `timegm(value.utctimetuple())` -- which reads a *naive* datetime as though
+# its fields were already UTC. The previous code passed `datetime.now()`, local wall time,
+# so on the IST production box every expiry landed 5h30m late: a "30 minute" access token
+# measured 21,600 seconds, a "5 minute" temporary MFA token measured 5h35m. Anchoring to
+# UTC makes the advertised lifetimes the real ones.
+#
+# Operational consequence, which is the point: sessions now genuinely end when the API says
+# they do. Expect more refresh traffic and, for anyone used to a working day on one token,
+# a visible change.
+def _expires_at(**delta) -> datetime:
+    return datetime.now(timezone.utc) + timedelta(**delta)
 
 
 class JWTService:
@@ -31,7 +44,7 @@ class JWTService:
     def create_access_token(self, data: Dict[str, Any], session_id: Optional[str] = None) -> str:
         """Create access token with session ID"""
         to_encode = data.copy()
-        expire = datetime.now() + timedelta(minutes=self.access_token_expire_minutes)
+        expire = _expires_at(minutes=self.access_token_expire_minutes)
         
         # Generate session ID if not provided
         if session_id is None:
@@ -48,7 +61,7 @@ class JWTService:
     def create_refresh_token(self, data: Dict[str, Any], session_id: Optional[str] = None) -> str:
         """Create refresh token with session ID"""
         to_encode = data.copy()
-        expire = datetime.now() + timedelta(days=self.refresh_token_expire_days)
+        expire = _expires_at(days=self.refresh_token_expire_days)
         
         # Generate session ID if not provided
         if session_id is None:
@@ -65,7 +78,7 @@ class JWTService:
     def create_temporary_token(self, data: Dict[str, Any], expire_minutes: int = 5) -> str:
         """Create temporary token for MFA verification"""
         to_encode = data.copy()
-        expire = datetime.now() + timedelta(minutes=expire_minutes)
+        expire = _expires_at(minutes=expire_minutes)
         to_encode.update({"exp": expire, "type": "temporary"})
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
@@ -148,7 +161,7 @@ class JWTService:
         """Get token expiry time"""
         payload = self.verify_token(token)
         if payload and "exp" in payload:
-            return datetime.fromtimestamp(payload["exp"])
+            return datetime.fromtimestamp(payload["exp"], tz=timezone.utc)
         return None
     
     def get_session_id(self, token: str) -> Optional[str]:
