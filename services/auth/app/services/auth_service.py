@@ -323,6 +323,22 @@ class AuthService:
             logger.error(f"Verify login error: {e}")
             return None
     
+    @staticmethod
+    def _token_version_is_current(payload: Dict[str, Any], user) -> bool:
+        """
+        Is this token still on the account's current version?
+
+        Tokens issued before this field existed carry no `token_version`; they are treated
+        as version 0, which matches every account that has never had one bumped. So the
+        change is invisible until the first reset — nobody is logged out by deploying it.
+        """
+        current = getattr(user, "token_version", 0) or 0
+        presented = payload.get("token_version", 0) or 0
+        try:
+            return int(presented) >= int(current)
+        except (TypeError, ValueError):
+            return False
+
     async def refresh_token(self, refresh_token: str, request_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Refresh access token using refresh token
@@ -347,6 +363,15 @@ class AuthService:
                 return None
             user = await self.user_repo.get_user_by_id(user_id)
             if not user or not user.is_active:
+                return None
+
+            # The refresh token is the long-lived half -- seven days against the access
+            # token's thirty minutes -- so this check matters more here than anywhere
+            # else. Without it a password reset revoked the access token and left the
+            # holder able to mint fresh ones for a week, which is the whole of F9.
+            if not self._token_version_is_current(payload, user):
+                logger.info("Refusing to refresh a token issued before %s's rights changed",
+                            user.username)
                 return None
 
             # Resolve roles and menu-derived permissions the same way login does. The raw
@@ -467,7 +492,18 @@ class AuthService:
             user = await self.user_repo.get_user_by_id(user_id)
             if not user or not user.is_active:
                 return None
-            
+
+            # Reject a token minted before the account's credentials or rights changed.
+            # Every service validates every request through here, so a password reset,
+            # role change or deactivation takes effect on the very next request instead
+            # of waiting out a 30-minute access token or a 7-day refresh token.
+            if not self._token_version_is_current(payload, user):
+                logger.info(
+                    "Rejecting token for %s: version %s, account is at %s",
+                    user.username, payload.get("token_version", 0), getattr(user, "token_version", 0),
+                )
+                return None
+
             # Add roles and permissions from token payload
             user.roles = payload.get("roles", [])
             user.permissions = payload.get("permissions", [])

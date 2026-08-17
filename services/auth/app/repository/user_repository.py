@@ -187,12 +187,43 @@ class UserRepository(BaseRepository):
         "is_super_admin", "is_deleted", "requires_admin_unlock",
     ])
 
+
+    # Fields whose change must end every existing session for the account.
+    _SESSION_REVOKING_FIELDS = frozenset({"roles", "permissions", "is_active"})
+
+    async def bump_token_version(self, user_id: str, reason: str) -> bool:
+        """
+        Invalidate every token already issued for this account.
+
+        Tokens carry the version they were minted with and validation rejects anything
+        behind the account's current value, so this takes effect on the next request --
+        not when a 30-minute access token expires, and not when a 7-day refresh token
+        finally runs out.
+        """
+        try:
+            result = await self.collection.update_one(
+                {"_id": ObjectId(user_id)},
+                {"$inc": {"token_version": 1},
+                 "$set": {"token_version_bumped_at": datetime.now(),
+                          "token_version_reason": reason}},
+            )
+            if result.modified_count:
+                logger.info("Revoked existing sessions for %s (%s)", user_id, reason)
+            return bool(result.modified_count)
+        except Exception as e:
+            logger.error(f"Error bumping token version for {user_id}: {e}")
+            return False
+
     async def update_user(self, user_id: str, update_data: dict, modified_by: Optional[str] = None) -> bool:
         try:
             for field in self._PRIVILEGED_FIELDS:
                 update_data.pop(field, None)
             update_data["updated_at"] = datetime.now()
-            return await self.update(user_id, update_data)
+            updated = await self.update(user_id, update_data)
+            # A demotion or deactivation must not wait out the caller's current token.
+            if updated and self._SESSION_REVOKING_FIELDS.intersection(update_data):
+                await self.bump_token_version(user_id, "rights changed")
+            return updated
         except Exception as e:
             logger.error(f"Error updating user {user_id}: {e}")
             return False
@@ -213,7 +244,7 @@ class UserRepository(BaseRepository):
             if len(password_history) > settings.PASSWORD_HISTORY_COUNT:
                 password_history.pop(0)
 
-            return await self.update(user_id, {
+            changed = await self.update(user_id, {
                 "password_hash": hashed_password,
                 "password_changed_at": datetime.now(),
                 "password_expires_at": datetime.now() + timedelta(days=settings.PASSWORD_EXPIRY_DAYS),
@@ -221,13 +252,19 @@ class UserRepository(BaseRepository):
                 "login_attempts": 0,
                 "locked_until": None,
             })
+            if changed:
+                await self.bump_token_version(user_id, "password changed")
+            return changed
         except Exception as e:
             logger.error(f"Error updating password for user {user_id}: {e}")
             return False
 
     async def soft_delete_user(self, user_id: str) -> bool:
         try:
-            return await self.soft_delete(user_id)
+            deleted = await self.soft_delete(user_id)
+            if deleted:
+                await self.bump_token_version(user_id, "account deleted")
+            return deleted
         except Exception as e:
             logger.error(f"Error soft deleting user {user_id}: {e}")
             return False
@@ -371,6 +408,10 @@ class UserRepository(BaseRepository):
                 "password_reset_at": datetime.now(),
                 "updated_at": datetime.now(),
             })
+            if result:
+                # The point of an admin reset is usually that the account is compromised.
+                # Leaving the existing 7-day refresh token alive defeats it entirely.
+                await self.bump_token_version(user_id, "password reset by admin")
             logger.info(f"Admin reset password result for user_id {user_id}: {result}")
             return result
         except Exception as e:

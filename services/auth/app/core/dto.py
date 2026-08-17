@@ -26,6 +26,11 @@ class UserDTO:
     password_expires_at: Optional[datetime]
     mfa_enabled: bool
     mfa_setup_complete: bool
+    # Bumped whenever a session must stop being valid -- a password reset, a role change,
+    # a deactivation. Every token carries the value it was minted with, and validation
+    # rejects any token whose value is behind the account's. Without it an admin password
+    # reset revoked nothing: the 7-day refresh token kept working.
+    token_version: int = 0
     accessible_menus: list = None  # List of accessible menu IDs
     
     @classmethod
@@ -48,6 +53,7 @@ class UserDTO:
             password_expires_at=user_doc.get("password_expires_at"),
             mfa_enabled=user_doc.get("mfa_enabled", False),
             mfa_setup_complete=user_doc.get("mfa_setup_complete", False),
+            token_version=int(user_doc.get("token_version", 0) or 0),
             accessible_menus=[]  # Will be populated by user repository when fetching permissions
         )
     
@@ -69,6 +75,7 @@ class UserDTO:
             "password_expires_at": self.password_expires_at.isoformat() if self.password_expires_at else None,
             "mfa_enabled": self.mfa_enabled,
             "mfa_setup_complete": self.mfa_setup_complete,
+            "token_version": self.token_version,
             "accessible_menus": self.accessible_menus or []
         }
 
@@ -87,6 +94,7 @@ class AuthUserDTO:
     created_at: datetime
     mfa_enabled: bool
     mfa_setup_complete: bool
+    token_version: int = 0
     accessible_menus: list = None  # List of accessible menu IDs
     
     @classmethod
@@ -104,6 +112,7 @@ class AuthUserDTO:
             created_at=user_dto.created_at,
             mfa_enabled=user_dto.mfa_enabled,
             mfa_setup_complete=user_dto.mfa_setup_complete,
+            token_version=getattr(user_dto, "token_version", 0),
             accessible_menus=user_dto.accessible_menus or []
         )
     
@@ -120,5 +129,6 @@ class AuthUserDTO:
             "last_login": self.last_login.isoformat() if self.last_login else None,
             "mfa_enabled": self.mfa_enabled,
             "mfa_setup_complete": self.mfa_setup_complete,
+            "token_version": self.token_version,
             "accessible_menus": self.accessible_menus or []
         } 
