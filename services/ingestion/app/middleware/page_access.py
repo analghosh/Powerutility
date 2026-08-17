@@ -2,9 +2,14 @@
 Page Access Middleware for Ingestion Service
 """
 
+import secrets
 from fastapi import Request, HTTPException, Depends
-from typing import Dict, Any
+from typing import Any, Dict
+from libs.authz.service_auth import INTERNAL_TOKEN_HEADER
+from ..core.config import settings
 from ..services.auth_client import auth_client
+
+SUPER_ROLES = {"admin", "superadmin"}
 
 async def get_current_user(request: Request) -> Dict[str, Any]:
     """Get current user from request headers"""
@@ -29,6 +34,28 @@ async def get_current_user(request: Request) -> Dict[str, Any]:
     except Exception as exc:
         raise HTTPException(status_code=401, detail="Authentication failed") from exc
 
+async def require_internal_or_admin(request: Request) -> Dict[str, Any]:
+    """
+    Guard for the cron control routes.
+
+    `/cron/status`, `/cron/trigger/{job_id}` and `/cron/trigger-all` were the only routes
+    on this service with no authentication of any kind -- trigger-all starts every
+    registered ingestion job. They are called by other EPMS services, so a trusted
+    internal credential is accepted alongside an administrator login.
+    """
+    presented = request.headers.get(INTERNAL_TOKEN_HEADER)
+    expected = getattr(settings, "INTERNAL_SERVICE_TOKEN", "") or ""
+    if expected and presented and secrets.compare_digest(presented, expected):
+        return {"user_id": "internal-service", "username": "internal-service",
+                "roles": ["service"], "is_service_account": True}
+
+    user = await get_current_user(request)
+    roles = {r.lower() for r in (user.get("roles") or []) if isinstance(r, str)}
+    if not roles & SUPER_ROLES:
+        raise HTTPException(status_code=403, detail="Administrator role required")
+    return user
+
+
 def require_page_access(page_name: str):
     """
     Dependency to require access to a specific page
@@ -43,9 +70,14 @@ def require_page_access(page_name: str):
         try:
             user_roles = current_user.get("roles", [])
             token = current_user.get("token", "")
-            
-            # Check page access via auth service
-            has_access = await auth_client.check_page_access(user_roles, page_name, token)
+
+            # The caller's real permissions, resolved by the auth service at login. These
+            # were previously fetched and then thrown away: the check compared role names
+            # against a hardcoded list instead.
+            has_access = await auth_client.check_page_access(
+                user_roles, page_name, token,
+                user_permissions=current_user.get("permissions", []),
+            )
             
             if not has_access:
                 raise HTTPException(

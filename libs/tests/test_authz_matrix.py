@@ -17,7 +17,11 @@ _spec.loader.exec_module(seeder)
 
 MASTER_SCREENS = ["Power Exchange", "IEX API Detail", "Price Groups", "Plant Details",
                   "Parameter", "Bid Market", "Masters", "DAM Limit Values"]
-ADMIN_SCREENS = ["Users", "Roles & Permissions", "Audit Log", "Administration", "SCADA Data"]
+ADMIN_SCREENS = ["Users", "Roles & Permissions", "Audit Log", "Administration", "Setup"]
+# Data-entry screens served by the ingestion service. Split out of the admin group so the
+# permission matrix can reproduce what the hardcoded dictionary in the ingestion service
+# used to grant: admin and operator could ingest, nobody else.
+INGESTION_SCREENS = ["Upload CSV", "DC SG Template", "SCADA Data", "SCADA - Data Input"]
 OPERATIONAL_SCREENS = ["DAM Block Bid", "RTM Single Bid", "DAM Scheduling", "Dashboard",
                        "Demand Forecast", "Renewable Supply"]
 APPROVAL_SCREENS = ["DAM Block Bid Approval", "RTM Single Bid Approval",
@@ -44,9 +48,24 @@ def test_approval_screens_are_classified_as_approval(menu):
     assert seeder.classify(menu) == "approval"
 
 
+@pytest.mark.parametrize("menu", INGESTION_SCREENS)
+def test_ingestion_screens_are_their_own_class(menu):
+    assert seeder.classify(menu) == "ingestion"
+
+
 @pytest.mark.parametrize("menu", OPERATIONAL_SCREENS)
 def test_everything_else_is_operational(menu):
     assert seeder.classify(menu) == "operational"
+
+
+@pytest.mark.parametrize("menu", INGESTION_SCREENS)
+def test_operator_can_ingest_but_ordinary_users_cannot(menu):
+    # Reproduces the dictionary this replaced — {"Data Ingestion": ["admin", "operator"]}.
+    # Widening it would hand 739 accounts the ability to upload; narrowing it would stop
+    # the desk loading data.
+    assert seeder.permissions_for("operator", menu) == ["read", "write"]
+    assert seeder.permissions_for("user", menu) == ["read"]
+    assert seeder.permissions_for("viewer", menu) == ["read"]
 
 
 # --- what ordinary roles get ----------------------------------------------
