@@ -8,7 +8,10 @@ class MenuRoleInDB(BaseModel):
     id: str = Field(default_factory=str, alias="_id")
     menu_id: str
     role_id: str
-    permissions: List[str] = ["read"]  # Permissions for this menu: read, write, create, delete
+    # A grant row means "this role has this page". The list is kept at ["read"] for
+    # backward compatibility with older tooling; the verbs a role actually holds come
+    # from roles.is_read_only via libs/authz/page_model.
+    permissions: List[str] = ["read"]
     is_active: bool = True
     created_at: datetime = Field(default_factory=datetime.utcnow)
     updated_at: datetime = Field(default_factory=datetime.utcnow)
@@ -17,11 +20,17 @@ class MenuRoleCreate(BaseModel):
     """Model for creating a new menu-role relationship"""
     menu_id: str
     role_id: str
+    # A grant row means "this role has this page". The list is kept at ["read"] for
+    # backward compatibility with older tooling; the verbs a role actually holds come
+    # from roles.is_read_only via libs/authz/page_model.
     permissions: List[str] = ["read"]
 
 class MenuRoleUpdate(BaseModel):
     """Model for updating a menu-role relationship"""
-    permissions: Optional[List[str]] = None
+    # A grant row means "this role has this page". The list is kept at ["read"] for
+    # backward compatibility with older tooling; the verbs a role actually holds come
+    # from roles.is_read_only via libs/authz/page_model.
+    permissions: List[str] = ["read"]
 
 class MenuPermissionResponse(BaseModel):
     """Response model for menu permissions"""

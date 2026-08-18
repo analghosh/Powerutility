@@ -226,38 +226,43 @@ class MenuRoleRepository(BaseRepository):
     
     async def _sync_role_permissions(self, role_id: str) -> bool:
         """
-        Sync role permissions based on assigned menu permissions.
-        Uses consistent format compatible with centralized RBAC system.
+        Rebuild roles.permissions from the pages this role holds.
+
+        The verbs used to be copied out of each menu_roles row. They never varied: the
+        Role Management screen hides its Write/Delete checkboxes and hardcodes every
+        grant to ["read"], so all 385 grants in the live database said `read` and no
+        role could hold a write. Under PTC's page model a grant row means only "this
+        role has this page", and the verbs come from the role's is_read_only flag.
+
+        `approve` is never granted here -- see libs/authz/page_model.
         """
         try:
             from .role_repository import RoleRepository
             from .menu_repository import MenuRepository
-            
+            from libs.authz.page_model import permission_strings
+
             role_repo = RoleRepository()
             menu_repo = MenuRepository()
-            
-            # Get all menu assignments for this role
+
+            # A role deleted between the grant and this sync yields None. Default to the
+            # full verb set: failing the other way would silently strip an operational
+            # role down to read, which looks like a permissions bug rather than a race.
+            role = await role_repo.get_role_by_id(role_id)
+            is_read_only = bool(getattr(role, "is_read_only", False)) if role else False
+
             menu_roles = await self.get_menu_roles_by_role_id(role_id)
-            
-            # Build consolidated permission list using centralized RBAC format
-            all_permissions = []
+
+            resource_names = []
             for menu_role in menu_roles:
                 menu = await menu_repo.get_menu_by_id(menu_role.menu_id)
                 if menu:
-                    # Use consistent resource naming that matches route mapping
-                    resource_name = self._get_resource_name_from_menu(menu)
-                    
-                    # Create permission strings in standard format "resource:action"
-                    for permission in menu_role.permissions:
-                        permission_string = f"{resource_name}:{permission}"
-                        all_permissions.append(permission_string)
-            
-            # Remove duplicates while preserving order
-            unique_permissions = list(dict.fromkeys(all_permissions))
-            
-            # Update role permissions
-            return await role_repo.set_role_permissions(role_id, unique_permissions)
-            
+                    # Must match the guard's resource names in processing/app/main.py.
+                    resource_names.append(self._get_resource_name_from_menu(menu))
+
+            permissions = permission_strings(resource_names, is_read_only)
+
+            return await role_repo.set_role_permissions(role_id, permissions)
+
         except Exception as e:
             logger.error(f"Error syncing role permissions for role {role_id}: {e}")
             return False
