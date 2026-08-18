@@ -26,7 +26,9 @@ The rule
 Not a business decision -- PTC's page model: a role that holds a page gets read, write
 and delete on it; a role flagged `is_read_only` is capped at read. `approve` is granted
 by this tool to nobody; it stays reachable only through the guard's SUPER_ROLES bypass,
-which keeps maker and checker distinct.
+which keeps maker and checker distinct. The administrative resources (page_model's
+ADMIN_RESOURCES: users, roles, admin) are capped at read for every role -- holding the
+Users page must not confer the right to delete users.
 
 Usage
 -----
@@ -51,7 +53,13 @@ from datetime import datetime
 from bson import ObjectId
 from pymongo import MongoClient
 
-from libs.authz.page_model import permission_strings
+# Run from anywhere, including a production box. `libs` is only importable here because a
+# development venv carries an editable-install .pth file; on the server there is no such
+# .pth and the import below dies before argparse ever runs. Put the repo root on the path
+# ourselves so the tool is standalone, as its predecessor was.
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from libs.authz.page_model import permission_strings  # noqa: E402
 
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 AUTH_DB_NAME = os.getenv("AUTH_DB_NAME", "auth_db")
@@ -143,7 +151,12 @@ def build_plan(db):
       roles, menus  -- the raw documents, keyed by str(_id), for backup()
     """
     roles = {str(r["_id"]): r for r in db["roles"].find({})}
-    menus = {str(m["_id"]): m for m in db["menus"].find({})}
+    # Mirrors MenuRepository.get_menu_by_id, which filters is_deleted the same way. The
+    # runtime sync resolves menus through that repository, so reading every menu here
+    # would let a soft-deleted page with a surviving active grant contribute a resource
+    # under --apply but not under the incremental sync: a role's permissions would then
+    # depend on which of the two paths ran last.
+    menus = {str(m["_id"]): m for m in db["menus"].find({"is_deleted": {"$ne": True}})}
 
     grant_updates = []
     resources_by_role = defaultdict(list)
@@ -207,9 +220,14 @@ def backup(db, path):
             {"_id": str(d["_id"]), "permissions": d.get("permissions")}
             for d in db["menu_roles"].find({}, {"permissions": 1})
         ],
+        # is_read_only is captured because it decides the verbs: a backup that restored
+        # only `permissions` would put the strings back while leaving the flag that
+        # generated them at whatever it had become, so the next sync would undo the revert.
         "roles": [
-            {"_id": str(d["_id"]), "name": d.get("name"), "permissions": d.get("permissions")}
-            for d in db["roles"].find({}, {"permissions": 1, "name": 1})
+            {"_id": str(d["_id"]), "name": d.get("name"),
+             "permissions": d.get("permissions"),
+             "is_read_only": bool(d.get("is_read_only", False))}
+            for d in db["roles"].find({}, {"permissions": 1, "name": 1, "is_read_only": 1})
         ],
         "permissions_catalog": [
             {"_id": str(d["_id"]), "permissions": d.get("permissions")}
@@ -251,9 +269,12 @@ def revert(db, path):
             {"_id": ObjectId(doc["_id"])}, {"$set": {"permissions": doc["permissions"]}}
         )
     for doc in payload["roles"]:
-        db["roles"].update_one(
-            {"_id": ObjectId(doc["_id"])}, {"$set": {"permissions": doc["permissions"]}}
-        )
+        fields = {"permissions": doc["permissions"]}
+        # Older backups predate the flag; those roles keep whatever they currently have
+        # rather than being silently reset to not-read-only.
+        if "is_read_only" in doc:
+            fields["is_read_only"] = bool(doc["is_read_only"])
+        db["roles"].update_one({"_id": ObjectId(doc["_id"])}, {"$set": fields})
     for doc in payload["permissions_catalog"]:
         db["permissions_catalog"].update_one(
             {"_id": ObjectId(doc["_id"])}, {"$set": {"permissions": doc["permissions"]}}

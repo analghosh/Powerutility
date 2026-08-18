@@ -8,6 +8,7 @@ the two checks from the old suite that are still load-bearing: that the resource
 match what the guards ask for, and that the tool never prints the Mongo password.
 """
 import importlib.util
+import json
 import pathlib
 
 _TOOL = pathlib.Path(__file__).resolve().parents[2] / "tools" / "resync_role_permissions.py"
@@ -20,24 +21,52 @@ _spec.loader.exec_module(tool)
 ROLE_ID = "694e8ac4e5342637ee485d8e"
 
 
+def _matches(doc, query):
+    """
+    Evaluate the filters the tool actually issues: flat equality and {"$ne": ...}.
+
+    Anything else raises rather than quietly matching everything -- a fake that ignores a
+    filter turns "this query is applied" into a test that passes without applying it.
+    """
+    for key, want in (query or {}).items():
+        got = doc.get(key)
+        if isinstance(want, dict):
+            if set(want) != {"$ne"}:
+                raise NotImplementedError(f"FakeDB cannot evaluate {want!r}")
+            if got == want["$ne"]:
+                return False
+        elif got != want:
+            return False
+    return True
+
+
+class _Coll:
+    def __init__(self, docs, name, updates):
+        self._docs = docs
+        self._name = name
+        self._updates = updates
+
+    def find(self, query=None, *_args, **_kwargs):
+        return iter([d for d in self._docs if _matches(d, query)])
+
+    def find_one(self, query=None, *_args, **_kwargs):
+        return next((d for d in self._docs if _matches(d, query)), None)
+
+    def count_documents(self, query=None):
+        return sum(1 for d in self._docs if _matches(d, query))
+
+    def update_one(self, flt, update, **_kwargs):
+        self._updates.append((self._name, flt, update))
+
+
 class FakeDB:
-    def __init__(self, roles, menus, menu_roles):
-        self._c = {"roles": roles, "menus": menus, "menu_roles": menu_roles}
+    def __init__(self, roles, menus, menu_roles, permissions_catalog=None):
+        self._c = {"roles": roles, "menus": menus, "menu_roles": menu_roles,
+                   "permissions_catalog": permissions_catalog or []}
+        self.updates = []
 
     def __getitem__(self, name):
-        class Coll:
-            def __init__(self, docs):
-                self._docs = docs
-
-            def find(self, query=None, *_args, **_kwargs):
-                # Honours flat equality filters, so build_plan's {"is_active": True}
-                # is actually exercised rather than silently ignored.
-                docs = self._docs
-                for key, want in (query or {}).items():
-                    docs = [d for d in docs if d.get(key) == want]
-                return iter(docs)
-
-        return Coll(self._c[name])
+        return _Coll(self._c[name], name, self.updates)
 
 
 def _db(read_only=False, menu_names=("DAM Single Bid",), role=None):
@@ -98,8 +127,8 @@ def test_no_role_is_granted_approve():
 
 
 def test_menus_sharing_a_resource_name_collapse():
-    # Setup and Administration both resolve to `admin`, an administrative resource, so
-    # the collapsed result is read alone.
+    # Setup and Administration both resolve to `admin`, which is an administrative
+    # resource: capped at read for every role. See the ADMIN_RESOURCES tests below.
     _g, role_updates, _r, _m = tool.build_plan(
         _db(read_only=False, menu_names=("Setup", "Administration"))
     )
@@ -221,3 +250,118 @@ def test_the_announced_target_never_prints_the_mongo_password():
 
 def test_a_url_without_credentials_is_left_alone():
     assert tool._safe_url("mongodb://localhost:27017") == "mongodb://localhost:27017"
+
+
+# --- administrative resources ------------------------------------------------------
+
+
+def test_an_ordinary_role_holding_the_admin_pages_gets_no_write_or_delete():
+    """
+    The escalation this branch introduced, pinned at the bulk path.
+
+    `global_authz_guard` (mounted on the auth service's user/role/menu routers) resolves
+    DELETE /api/v1/users/{id} to exactly `users:delete` and satisfies it by string
+    membership -- and it has no AUTHZ_MODE switch, so the warn/soak/enforce rollout gives
+    no cover. Minting these from a page grant let a plain `user` account delete a user.
+    """
+    _g, role_updates, _r, _m = tool.build_plan(
+        _db(read_only=False, menu_names=("Users", "Roles", "Setup", "DAM Single Bid"))
+    )
+    perms = _perms(role_updates)
+    for forbidden in ("users:write", "users:delete", "roles:write", "roles:delete",
+                      "admin:write", "admin:delete"):
+        assert forbidden not in perms, f"{forbidden} must never come from a page grant"
+    # Read on those pages survives, and an operational page in the same role is untouched.
+    assert "users:read" in perms and "roles:read" in perms and "admin:read" in perms
+    assert "dam_single_bid:write" in perms and "dam_single_bid:delete" in perms
+
+
+def test_a_soft_deleted_menu_contributes_no_resource():
+    """
+    The runtime resolves menus through MenuRepository.get_menu_by_id, which filters
+    is_deleted. If the tool read every menu, a soft-deleted page with a surviving active
+    grant would produce a resource under --apply but not under the incremental sync, and
+    a role's permissions would depend on which path ran last.
+    """
+    db = FakeDB(
+        roles=[{"_id": ROLE_ID, "name": "trial", "permissions": []}],
+        menus=[{"_id": "menu0", "name": "Dashboard"},
+               {"_id": "menu1", "name": "DAM Single Bid", "is_deleted": True}],
+        menu_roles=[
+            {"_id": "grant0", "role_id": ROLE_ID, "menu_id": "menu0",
+             "permissions": ["read"], "is_active": True},
+            {"_id": "grant1", "role_id": ROLE_ID, "menu_id": "menu1",
+             "permissions": ["read"], "is_active": True},   # still active, menu deleted
+        ],
+    )
+    _g, role_updates, _r, _m = tool.build_plan(db)
+    perms = _perms(role_updates)
+    assert "dashboard:read" in perms
+    assert not any(p.startswith("dam_single_bid") for p in perms)
+
+
+def test_a_menu_without_the_flag_is_not_treated_as_deleted():
+    _g, role_updates, _r, _m = tool.build_plan(_db(menu_names=("Dashboard",)))
+    assert "dashboard:read" in _perms(role_updates)
+
+
+# --- backup / revert ------------------------------------------------------------------
+
+
+def test_the_backup_captures_the_read_only_flag(tmp_path):
+    """
+    is_read_only decides the verbs. A backup that restored only `permissions` would put
+    the strings back and leave the flag that generated them wherever it had got to, so
+    the next sync would quietly undo the revert.
+    """
+    db = FakeDB(
+        roles=[{"_id": ROLE_ID, "name": "viewer", "permissions": ["dashboard:read"],
+                "is_read_only": True}],
+        menus=[], menu_roles=[],
+    )
+    payload = tool.backup(db, tmp_path / "b.json")
+    assert payload["roles"][0]["is_read_only"] is True
+
+
+def test_revert_restores_the_read_only_flag(tmp_path):
+    path = tmp_path / "b.json"
+    path.write_text(json.dumps({
+        "taken_at": "now",
+        "menu_roles": [],
+        "roles": [{"_id": ROLE_ID, "name": "viewer", "permissions": ["dashboard:read"],
+                   "is_read_only": True}],
+        "permissions_catalog": [],
+    }))
+    db = FakeDB(roles=[], menus=[], menu_roles=[])
+    tool.revert(db, path)
+    _coll, _flt, update = db.updates[0]
+    assert update["$set"]["is_read_only"] is True
+    assert update["$set"]["permissions"] == ["dashboard:read"]
+
+
+def test_revert_of_an_older_backup_leaves_the_flag_alone(tmp_path):
+    # Backups taken before the flag was captured must not silently clear it.
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({
+        "taken_at": "then",
+        "menu_roles": [],
+        "roles": [{"_id": ROLE_ID, "name": "viewer", "permissions": ["dashboard:read"]}],
+        "permissions_catalog": [],
+    }))
+    db = FakeDB(roles=[], menus=[], menu_roles=[])
+    tool.revert(db, path)
+    _coll, _flt, update = db.updates[0]
+    assert "is_read_only" not in update["$set"]
+
+
+# --- running outside a development checkout -------------------------------------------
+
+
+def test_the_tool_puts_the_repo_root_on_sys_path():
+    """
+    On a production box there is no editable-install .pth, so `from libs.authz...` would
+    fail at import before argparse ever ran. The bootstrap has to survive refactoring.
+    """
+    import sys
+    repo_root = str(pathlib.Path(__file__).resolve().parents[2])
+    assert repo_root in sys.path
