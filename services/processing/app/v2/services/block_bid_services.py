@@ -24,6 +24,21 @@ logger = logging.getLogger(__name__)
 # Valid values: "Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"
 VALID_ORDER_STATUSES = {"Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"}
 
+def exchange_quantity(quantum, iex_split_percent, qty_decimal, buy_sell) -> int:
+    """Quantity in the form IEX expects: a magnitude, signed by direction.
+
+    Direction is carried by the sign — negative for Sell, positive for Buy — so the
+    stored figure has to be reduced to a magnitude before the sign is applied. Buy
+    block bids are stored negative in `block_bid_current_data` (the screen's own
+    convention), so passing the stored value straight through sent a negative
+    Quantity on a "B" order; the exchange rejected every one of them. This is the
+    order the single bid path already uses (`dam_transaction_service`: abs(), then
+    negate for Sell).
+    """
+    magnitude = abs(float(quantum)) * iex_split_percent / 100 * qty_decimal
+    return int(-magnitude if buy_sell == "S" else magnitude)
+
+
 # Day-ahead markets share one block-bid flow — no trade session, and IEX exposes an
 # identical block-bid API for each under its own path prefix (DAM 2.2 §9.15,
 # GDAM 2.1 §6 item 13). RTM has a different contract and its own flow.
@@ -390,8 +405,9 @@ class BlockBidServices:
 
             quantum  = int(bid.get("quantum", 0))
             buy_sell = "S" if bid.get("type", "Sell") == "Sell" else "B"
-            iex_quantity = (quantum * iex_value) / 100
-            quantity_exchange = iex_quantity * biddedQtyDecimal * (-1 if buy_sell == "S" else 1)
+            quantity_exchange = exchange_quantity(
+                quantum, iex_value, biddedQtyDecimal, buy_sell
+            )
 
             num_bids = int(bid.get("number_of_bids", 1))
             bid_details_for_this_bid: List[Dict[str, Any]] = []
@@ -960,8 +976,9 @@ class BlockBidServices:
                 )
                 continue
 
-            iex_quantity = (quantum * iex_value) / 100
-            quantity_exchange = iex_quantity * biddedQtyDecimal * (-1 if buy_sell == "S" else 1)
+            quantity_exchange = exchange_quantity(
+                quantum, iex_value, biddedQtyDecimal, buy_sell
+            )
 
             from_period_id = bid.get("from", "00:00")
             to_period_id   = bid.get("to", "00:00")
