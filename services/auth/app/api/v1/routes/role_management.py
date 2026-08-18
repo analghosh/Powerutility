@@ -13,11 +13,15 @@ from datetime import datetime
 class RoleCreateRequest(BaseModel):
     name: str
     description: str
+    # Caps the role at `read` on every page it holds. See libs/authz/page_model.
+    is_read_only: bool = False
     # Note: permissions are auto-generated from menu assignments
 
 class RoleUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+    # None means "not supplied" -- an update that only renames must leave the flag alone.
+    is_read_only: Optional[bool] = None
     # Note: permissions are auto-synced from menu assignments, not directly editable
 
 class RoleResponse(BaseModel):
@@ -25,6 +29,7 @@ class RoleResponse(BaseModel):
     name: str
     description: str
     permissions: List[str]
+    is_read_only: bool = False
     is_active: bool
     created_at: Optional[str] = None
     updated_at: Optional[str] = None
@@ -66,6 +71,7 @@ async def list_roles(
                 name=role.name,
                 description=role.description,
                 permissions=role.permissions,
+                is_read_only=role.is_read_only,
                 is_active=role.is_active,
                 created_at=role.created_at.isoformat() if role.created_at else None,
                 updated_at=role.updated_at.isoformat() if role.updated_at else None
@@ -109,16 +115,18 @@ async def create_role(
         role = await role_repo.create_role(
             name=role_data.name,
             description=role_data.description,
-            permissions=[]  # Empty initially, will be populated when menus are assigned
+            permissions=[],  # Empty initially, will be populated when menus are assigned
+            is_read_only=role_data.is_read_only
         )
-        
+
         # Role is already returned from create_role method
-        
+
         return RoleResponse(
             id=str(role.id),
             name=role.name,
             description=role.description,
             permissions=role.permissions,
+            is_read_only=role.is_read_only,
             is_active=role.is_active,
             created_at=role.created_at.isoformat() if role.created_at else None,
             updated_at=role.updated_at.isoformat() if role.updated_at else None
@@ -147,6 +155,7 @@ async def get_role(
             name=role.name,
             description=role.description,
             permissions=role.permissions,
+            is_read_only=role.is_read_only,
             is_active=role.is_active,
             created_at=role.created_at.isoformat() if role.created_at else None,
             updated_at=role.updated_at.isoformat() if role.updated_at else None
@@ -182,20 +191,34 @@ async def update_role(
             update_data['name'] = role_data.name
         if role_data.description is not None:
             update_data['description'] = role_data.description
+        # Changing the flag changes every permission string this role holds, so the
+        # sync has to run now. Without it the role keeps its old strings until somebody
+        # happens to add or remove one of its menus.
+        flag_changed = (
+            role_data.is_read_only is not None
+            and bool(role_data.is_read_only) != bool(getattr(role, "is_read_only", False))
+        )
+        if role_data.is_read_only is not None:
+            update_data['is_read_only'] = role_data.is_read_only
         # Note: permissions are not directly updatable - use menu assignment endpoints
-        
+
         success = await role_repo.update_role(role_id, update_data)
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update role")
-        
+
+        if flag_changed:
+            from ....repository.menu_role_repository import MenuRoleRepository
+            await MenuRoleRepository()._sync_role_permissions(role_id)
+
         # Get updated role
         updated_role = await role_repo.get_role_by_id(role_id)
-        
+
         return RoleResponse(
             id=str(updated_role.id),
             name=updated_role.name,
             description=updated_role.description,
             permissions=updated_role.permissions,
+            is_read_only=updated_role.is_read_only,
             is_active=updated_role.is_active,
             created_at=updated_role.created_at.isoformat() if updated_role.created_at else None,
             updated_at=updated_role.updated_at.isoformat() if updated_role.updated_at else None
