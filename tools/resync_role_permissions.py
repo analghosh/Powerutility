@@ -59,7 +59,7 @@ from pymongo import MongoClient
 # ourselves so the tool is standalone, as its predecessor was.
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from libs.authz.page_model import permission_strings  # noqa: E402
+from libs.authz.page_model import ADMIN_RESOURCES, permission_strings  # noqa: E402
 
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 AUTH_DB_NAME = os.getenv("AUTH_DB_NAME", "auth_db")
@@ -213,6 +213,56 @@ def catalog_permissions(db) -> list:
     return sorted(wanted)
 
 
+# Strings an operator must see in full when reading a --dry-run: the administrative
+# resources, plus the two screens that hold the exchange credentials and the exchange
+# switch. Everything else can be summarised; these never are.
+ALWAYS_SHOWN_RESOURCES = frozenset(ADMIN_RESOURCES | {"iex_api_detail", "power_exchange"})
+
+# How many ordinary (non-ALWAYS_SHOWN) strings to list per side before summarising.
+MAX_LISTED = 12
+
+
+def _resource_of(permission: str) -> str:
+    return permission.split(":", 1)[0]
+
+
+def _diff_lines(marker: str, permissions: list) -> list:
+    """
+    Render one side (added or removed) of a role's permission diff.
+
+    `operator 92 -> 159 permissions (53 write)` is not enough to approve a rollout: that
+    line is exactly what let `users:delete` reach four roles through seven reviews. So
+    the strings themselves are printed. Ordinary ones are capped at MAX_LISTED for
+    readability; anything in ALWAYS_SHOWN_RESOURCES is listed first and never truncated.
+    """
+    if not permissions:
+        return []
+    always = [p for p in permissions if _resource_of(p) in ALWAYS_SHOWN_RESOURCES]
+    ordinary = [p for p in permissions if _resource_of(p) not in ALWAYS_SHOWN_RESOURCES]
+    shown = always + ordinary[:MAX_LISTED]
+    lines = [f"      {marker} ({len(permissions)}): {', '.join(shown)}"]
+    hidden = len(ordinary) - len(ordinary[:MAX_LISTED])
+    if hidden:
+        lines.append(f"          ... and {hidden} more")
+    return lines
+
+
+def render_role_diff(name, old_permissions, new_permissions) -> list:
+    """The lines --dry-run and --apply print for one role: counts, then what changes."""
+    old = list(old_permissions or [])
+    new = list(new_permissions or [])
+    old_set, new_set = set(old), set(new)
+    added = [p for p in new if p not in old_set]
+    removed = [p for p in old if p not in new_set]
+    writes = sum(1 for p in new if p.endswith(f":{WRITE}"))
+    approves = sum(1 for p in new if p.endswith(f":{APPROVE}"))
+    lines = [f"  {(name or ''):24s} {len(old):3d} -> {len(new):3d} permissions "
+             f"({writes} write, {approves} approve)"]
+    lines += _diff_lines("+", added)
+    lines += _diff_lines("-", removed)
+    return lines
+
+
 def backup(db, path):
     payload = {
         "taken_at": datetime.now().isoformat(),
@@ -330,12 +380,11 @@ def main() -> int:
     catalog = catalog_permissions(db)
 
     print(f"menu_role grants to change: {len(grant_updates)}")
-    print("role permission sets to rewrite:")
-    for _id, name, perms, old in sorted(role_updates, key=lambda r: r[1] or ""):
-        writes = sum(1 for p in perms if p.endswith(":write"))
-        approves = sum(1 for p in perms if p.endswith(":approve"))
-        print(f"  {name:24s} {old:3d} -> {len(perms):3d} permissions "
-              f"({writes} write, {approves} approve)")
+    print("role permission sets to rewrite (+ granted, - withdrawn):")
+    for role_id, name, perms, _old in sorted(role_updates, key=lambda r: r[1] or ""):
+        current = (roles.get(str(role_id)) or {}).get("permissions") or []
+        for line in render_role_diff(name, current, perms):
+            print(line)
     print(f"catalog entries after merge: {len(catalog)}")
 
     if args.dry_run:
@@ -355,8 +404,11 @@ def main() -> int:
     grants, roles_changed, catalog_size = apply_plan(db, grant_updates, role_updates, catalog)
     print(f"applied: {grants} menu_role grants, {roles_changed} roles, "
           f"catalog now {catalog_size} entries")
-    print("\nUsers must obtain a new token for this to take effect -- permissions are "
-          "resolved at login and at every /validate call.")
+    # Not uniform across services, and the difference decides how fast a mistake bites.
+    print("\nProcessing service: users must obtain a new token for this to take effect "
+          "(permissions come from the JWT, minted at login and at /validate).")
+    print("Auth service admin routes: effective immediately, including for sessions "
+          "already signed in -- compute_effective_permissions reads db.roles live.")
     print(f"To undo: python {sys.argv[0]} --revert {path}")
     return 0
 

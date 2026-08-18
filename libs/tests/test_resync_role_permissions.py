@@ -305,6 +305,44 @@ def test_a_menu_without_the_flag_is_not_treated_as_deleted():
     assert "dashboard:read" in _perms(role_updates)
 
 
+# --- the --dry-run diff --------------------------------------------------------------
+
+
+def test_the_diff_lists_the_strings_being_added_and_removed():
+    lines = "\n".join(tool.render_role_diff(
+        "trial", ["dashboard:read", "supply:read"], ["dashboard:read", "dashboard:write"]
+    ))
+    assert "dashboard:write" in lines      # added
+    assert "supply:read" in lines          # removed
+    assert "+" in lines and "-" in lines
+
+
+def test_administrative_and_exchange_strings_are_never_truncated():
+    """
+    `operator 92 -> 159 permissions (53 write)` is why users:delete survived seven
+    reviews. Ordinary strings may be summarised; these must always be readable.
+    """
+    added = [f"filler{i}:write" for i in range(40)] + [
+        "users:delete", "admin:write", "roles:delete",
+        "iex_api_detail:write", "power_exchange:delete",
+    ]
+    lines = "\n".join(tool.render_role_diff("operator", [], added))
+    for must_show in ("users:delete", "admin:write", "roles:delete",
+                      "iex_api_detail:write", "power_exchange:delete"):
+        assert must_show in lines, f"{must_show} must never be truncated away"
+    assert "... and" in lines   # the filler is summarised
+
+
+def test_short_diffs_are_printed_in_full_without_a_more_line():
+    lines = "\n".join(tool.render_role_diff("trial", [], ["dashboard:read", "supply:read"]))
+    assert "... and" not in lines
+
+
+def test_an_unchanged_role_prints_only_its_counts():
+    lines = tool.render_role_diff("trial", ["dashboard:read"], ["dashboard:read"])
+    assert len(lines) == 1
+
+
 # --- backup / revert ------------------------------------------------------------------
 
 
