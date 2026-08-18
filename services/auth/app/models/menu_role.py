@@ -30,7 +30,8 @@ class MenuRoleUpdate(BaseModel):
     # A grant row means "this role has this page". The list is kept at ["read"] for
     # backward compatibility with older tooling; the verbs a role actually holds come
     # from roles.is_read_only via libs/authz/page_model.
-    permissions: List[str] = ["read"]
+    # Optional on an update: None means "not supplied", which is not the same as ["read"].
+    permissions: Optional[List[str]] = None
 
 class MenuPermissionResponse(BaseModel):
     """Response model for menu permissions"""
