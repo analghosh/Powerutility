@@ -34,11 +34,14 @@ DEFAULT_PAGES = [
 ]
 
 # Default roles - simplified structure
+# `is_read_only` caps the role at `read` on every page it holds (libs/authz/page_model).
+# Only `viewer` carries it: without the flag a fresh deployment -- or any force_reload --
+# would seed the role whose entire purpose is read-only as a full read/write/delete role.
 DEFAULT_ROLES = [
     {"name": "admin", "description": "System administrator"},
-    {"name": "operator", "description": "System operator"},  
+    {"name": "operator", "description": "System operator"},
     {"name": "user", "description": "Regular user"},
-    {"name": "viewer", "description": "Read-only user"}
+    {"name": "viewer", "description": "Read-only user", "is_read_only": True}
 ]
 
 # Comprehensive menu structure for EPMS
@@ -235,7 +238,8 @@ class DatabaseSeeder:
                 
                 created_role = await self.role_repository.create_role(
                     name=role_data["name"],
-                    description=role_data["description"]
+                    description=role_data["description"],
+                    is_read_only=role_data.get("is_read_only", False)
                 )
                 logger.info(f"Created role: {created_role.name}")
             
