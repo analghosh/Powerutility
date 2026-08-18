@@ -99,7 +99,7 @@ class TestCatalogueConsistency:
 
     @pytest.mark.parametrize("action", ACTIONS)
     def test_the_seeder_keeps_the_catalogue_a_superset(self, action):
-        from tools.seed_authz_permissions import NON_MENU_PERMISSIONS
+        from tools.resync_role_permissions import NON_MENU_PERMISSIONS
 
         assert f"mfa:{action}" in NON_MENU_PERMISSIONS
 
@@ -107,10 +107,12 @@ class TestCatalogueConsistency:
         """
         Removing somebody's second factor is not a default delegation. admin and superadmin
         reach these endpoints on their role, so nothing needs granting.
-        """
-        from tools.seed_authz_permissions import permissions_for
 
-        for role in ("user", "viewer", "operator", "checker"):
-            for menu in ("Users", "Dashboard", "DAM Block Bid"):
-                assert "emergency_disable" not in permissions_for(role, menu)
-                assert "reset_rate_limit" not in permissions_for(role, menu)
+        Under the page model (libs/authz/page_model.PAGE_VERBS) a page grant can only ever
+        produce read/write/delete on a menu's own resource -- there is no per-role matrix
+        left that could special-case an mfa action onto an ordinary role's permissions.
+        """
+        from libs.authz.page_model import PAGE_VERBS
+
+        assert "emergency_disable" not in PAGE_VERBS
+        assert "reset_rate_limit" not in PAGE_VERBS

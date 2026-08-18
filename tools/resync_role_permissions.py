@@ -1,43 +1,39 @@
 #!/usr/bin/env python
 """
-Seed the permission matrix the F6 route guards check against.
+Resync roles.permissions from the pages each role has been granted.
 
 Why this exists
 ---------------
-Before this script, `auth_db.menu_roles` held 385 grants and every one of them was
-`read`. Not a single write grant existed anywhere in the database. Turning the guards on
-against that data would have returned 403 for every write by every account that is not
-`admin` or `superadmin` -- which is to say, the platform.
+This tool used to seed a hand-authored matrix that classified every menu as masters /
+admin / ingestion / approval / operational and picked verbs per classification. Under
+PTC's page model (libs/authz/page_model.py) that classification is dead: holding a page
+is the whole decision. Read the grants, derive the permissions, done.
 
 What it writes
 --------------
 Two collections, because the runtime reads one and the UI rewrites it from the other:
 
 * `menu_roles.permissions` -- the source of truth the Roles & Permissions screen edits.
+  Under the page model a grant row means only "this role has this page"; verbs no longer
+  live here, so a normalised row is just ["read"]. Only touched with --normalise-grants.
 * `roles.permissions`      -- the flattened `resource:action` list the auth service puts
   in the token. It is a stale snapshot of menu_roles (the sync only fires on
   grant/revoke), so writing only menu_roles would change nothing at runtime, and writing
   only roles would be silently undone the next time an admin touches a menu grant.
 
-The matrix
-----------
-Interim, and explicitly not a business decision -- PTC has not yet answered which roles
-should hold write and approve on each screen. It is the least-privilege reading of what
-the existing UI already enforces client-side:
-
-* MASTERS and ADMIN screens  -> read for everyone who has the menu; write/delete for
-  nobody but admin/superadmin. This is what closes VAPT F2's second half, F3 and F4.
-* APPROVAL screens           -> read+write; `approve` for nobody but admin/superadmin,
-  so no ordinary account can push a bid to the exchange.
-* OPERATIONAL screens        -> read+write, matching what those roles can do today.
-* `viewer`                   -> read everywhere. It is named "Read-only user".
-* admin / superadmin         -> unaffected; they resolve to `*` in the auth service.
+The rule
+--------
+Not a business decision -- PTC's page model: a role that holds a page gets read, write
+and delete on it; a role flagged `is_read_only` is capped at read. `approve` is granted
+by this tool to nobody; it stays reachable only through the guard's SUPER_ROLES bypass,
+which keeps maker and checker distinct.
 
 Usage
 -----
-    python tools/seed_authz_permissions.py --dry-run     # print the diff, change nothing
-    python tools/seed_authz_permissions.py --apply       # write, after taking a backup
-    python tools/seed_authz_permissions.py --revert FILE # restore a backup exactly
+    python tools/resync_role_permissions.py --dry-run            # print the diff, change nothing
+    python tools/resync_role_permissions.py --apply              # write, after taking a backup
+    python tools/resync_role_permissions.py --apply --normalise-grants
+    python tools/resync_role_permissions.py --revert FILE        # restore a backup exactly
 
 Every --apply writes a timestamped backup of both collections first. --revert replays it
 document by document, so an unwanted rollout is undone without a deploy. For an immediate
@@ -54,6 +50,8 @@ from datetime import datetime
 
 from bson import ObjectId
 from pymongo import MongoClient
+
+from libs.authz.page_model import permission_strings
 
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 AUTH_DB_NAME = os.getenv("AUTH_DB_NAME", "auth_db")
@@ -100,58 +98,6 @@ APPROVE = "approve"
 # Roles that bypass the matrix entirely in the auth service.
 SUPER_ROLES = {"admin", "superadmin"}
 
-# Menu names whose screens administer master data or the platform itself. Write access
-# here is what an attacker wants: exchange credentials, plants, price groups, users.
-MASTERS_MENUS = {
-    "Masters", "Plant Details", "Price Groups", "IEX API Detail", "Power Exchange",
-    "Parameter", "Bid Market", "DAM Limit Values", "RTM Limit Values", "OCF Limit Values",
-}
-ADMIN_MENUS = {
-    "Administration", "Users", "Roles & Permissions", "Audit Log", "Setup",
-}
-
-# Data-entry screens served by the ingestion service. Its own check used to be a
-# hardcoded dict granting "Data Ingestion" to admin and operator; these grants reproduce
-# that in data, so replacing the dict with a real permission check does not quietly
-# change who can upload. `user` and `viewer` keep read, as before.
-INGESTION_MENUS = {
-    "Upload CSV", "DC SG Template", "SCADA Data", "SCADA - Data Input",
-}
-INGESTION_WRITE_ROLES = {"operator"}
-
-# Read-only roles keep exactly what they have.
-READ_ONLY_ROLES = {"viewer"}
-
-
-def classify(menu_name: str) -> str:
-    if menu_name in MASTERS_MENUS:
-        return "masters"
-    if menu_name in ADMIN_MENUS:
-        return "admin"
-    if menu_name in INGESTION_MENUS:
-        return "ingestion"
-    if "Approval" in (menu_name or ""):
-        return "approval"
-    return "operational"
-
-
-def permissions_for(role_name: str, menu_name: str) -> list:
-    """The interim matrix, in one place."""
-    if role_name.lower() in SUPER_ROLES:
-        # Harmless to grant, and it keeps the UI honest if the `*` shortcut is ever removed.
-        return [READ, WRITE, DELETE, APPROVE]
-    if role_name.lower() in READ_ONLY_ROLES:
-        return [READ]
-
-    kind = classify(menu_name)
-    if kind in {"masters", "admin"}:
-        return [READ]
-    if kind == "ingestion":
-        # Matches the dict this replaces: admin and operator could ingest, nobody else.
-        return [READ, WRITE] if role_name.lower() in INGESTION_WRITE_ROLES else [READ]
-    # operational and approval screens: makers may act, only admins may approve
-    return [READ, WRITE]
-
 
 def resource_name(menu_name: str, mapping: dict) -> str:
     if menu_name in mapping:
@@ -181,34 +127,56 @@ MENU_TO_RESOURCE = {
 
 
 def build_plan(db):
+    """
+    Rebuild every role's permissions from the pages it holds.
+
+    Under PTC's page model, holding a page grants read/write/delete on it; a role flagged
+    is_read_only is capped at read. There is no per-menu classification any more -- the
+    matrix this replaced decided masters / admin / ingestion / approval / operational per
+    screen, and none of that survives the rule "page access means full rights".
+
+    The four-tuple shape is unchanged, because main(), apply_plan() and backup() all
+    unpack it positionally:
+
+      grant_updates -- (menu_role _id, ["read"]) for rows still carrying stale verbs.
+                       A grant row now means "has this page" and nothing more; rows left
+                       over from the earlier matrix assert an authority nothing reads.
+                       Only written when --normalise-grants is passed.
+      role_updates  -- (ObjectId(role_id), role_name, permissions, old_count)
+      roles, menus  -- the raw documents, keyed by str(_id), for backup()
+    """
     roles = {str(r["_id"]): r for r in db["roles"].find({})}
     menus = {str(m["_id"]): m for m in db["menus"].find({})}
 
-    grant_updates = []          # (menu_role _id, new permissions)
-    role_permissions = defaultdict(list)
+    grant_updates = []
+    resources_by_role = defaultdict(list)
 
-    for mr in db["menu_roles"].find({}):
+    # is_active is REQUIRED here. The old code read every grant row, active or not, and
+    # got away with it because the matrix handed those rows `read`. Under the page model
+    # an inactive row would become a write: `user` alone carries 20 revoked grants across
+    # 740 live accounts. MenuRoleRepository.get_menu_roles_by_role_id already filters
+    # this way -- the tool has to agree with it or the two produce different permissions
+    # for the same role.
+    for mr in db["menu_roles"].find({"is_active": True}):
         role = roles.get(str(mr.get("role_id")))
         menu = menus.get(str(mr.get("menu_id")))
         if not role or not menu:
             continue
-        role_name = role.get("name") or ""
-        menu_name = menu.get("name") or ""
 
-        wanted = permissions_for(role_name, menu_name)
-        if sorted(wanted) != sorted(mr.get("permissions") or []):
-            grant_updates.append((mr["_id"], wanted))
+        resources_by_role[str(mr["role_id"])].append(
+            resource_name(menu.get("name") or "", MENU_TO_RESOURCE)
+        )
 
-        resource = resource_name(menu_name, MENU_TO_RESOURCE)
-        for action in wanted:
-            role_permissions[str(role["_id"])].append(f"{resource}:{action}")
+        if sorted(mr.get("permissions") or []) != [READ]:
+            grant_updates.append((mr["_id"], [READ]))
 
     role_updates = []
-    for role_id, perms in role_permissions.items():
-        unique = list(dict.fromkeys(perms))
-        current = roles[role_id].get("permissions") or []
-        if sorted(unique) != sorted(current):
-            role_updates.append((ObjectId(role_id), roles[role_id].get("name"), unique, len(current)))
+    for role_id, resource_names in resources_by_role.items():
+        role = roles[role_id]
+        perms = permission_strings(resource_names, bool(role.get("is_read_only", False)))
+        current = role.get("permissions") or []
+        if sorted(perms) != sorted(current):
+            role_updates.append((ObjectId(role_id), role.get("name"), perms, len(current)))
 
     return grant_updates, role_updates, roles, menus
 
@@ -303,6 +271,10 @@ def main() -> int:
     group.add_argument("--apply", action="store_true", help="write the matrix")
     group.add_argument("--revert", metavar="BACKUP", help="restore a backup file")
     parser.add_argument("--backup-dir", default=".", help="where --apply writes its backup")
+    parser.add_argument(
+        "--normalise-grants", action="store_true",
+        help="also rewrite menu_roles rows to ['read'] (they no longer carry verbs)",
+    )
     parser.add_argument("--yes", action="store_true",
                         help="skip the confirmation prompt (required for non-interactive runs)")
     args = parser.parse_args()
@@ -335,6 +307,8 @@ def main() -> int:
         return 0
 
     grant_updates, role_updates, roles, _menus = build_plan(db)
+    if not args.normalise_grants:
+        grant_updates = []
     catalog = catalog_permissions(db)
 
     print(f"menu_role grants to change: {len(grant_updates)}")
