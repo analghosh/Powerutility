@@ -27,8 +27,9 @@ Not a business decision -- PTC's page model: a role that holds a page gets read,
 and delete on it; a role flagged `is_read_only` is capped at read. `approve` is granted
 by this tool to nobody; it stays reachable only through the guard's SUPER_ROLES bypass,
 which keeps maker and checker distinct. The administrative resources (page_model's
-ADMIN_RESOURCES: users, roles, admin) are capped at read for every role -- holding the
-Users page must not confer the right to delete users.
+ADMIN_RESOURCES: users, roles, admin, menu, menus) are capped at read for every role --
+holding the Users page must not confer the right to delete users, and holding the Menu
+page must not confer the right to delete a menu.
 
 Usage
 -----
