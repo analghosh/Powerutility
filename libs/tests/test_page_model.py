@@ -81,7 +81,7 @@ def test_empty_resource_names_are_dropped():
 
 
 def test_the_administrative_resources_are_the_ones_the_auth_guard_protects():
-    assert ADMIN_RESOURCES == frozenset({"users", "roles", "admin"})
+    assert ADMIN_RESOURCES == frozenset({"users", "roles", "admin", "menu", "menus"})
 
 
 def test_an_ordinary_role_holding_the_users_page_gets_read_only():
@@ -94,6 +94,14 @@ def test_an_ordinary_role_holding_the_roles_page_gets_read_only():
 
 def test_an_ordinary_role_holding_the_admin_page_gets_read_only():
     assert permission_strings(["admin"], False) == ["admin:read"]
+
+
+def test_an_ordinary_role_holding_the_menu_page_gets_read_only():
+    # Latent, not live: no seeded menu slugs to "menu", and menu:create is super-only.
+    # But global_authz_guard derives "menu" for the auth service's menu router
+    # (services/auth/app/main.py + libs/core/authz/config.py), so DELETE
+    # /api/v1/menu/{id} needs exactly menu:delete -- capped here the same as users/roles.
+    assert permission_strings(["menu"], False) == ["menu:read"]
 
 
 @pytest.mark.parametrize("resource", sorted(ADMIN_RESOURCES))
