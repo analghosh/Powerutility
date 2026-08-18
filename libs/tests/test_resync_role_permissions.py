@@ -176,7 +176,12 @@ def test_guard_resources_in_main_are_all_grantable():
         for n in ("Plant Details", "Bid Market", "IEX API Detail", "Parameter",
                   "Power Exchange", "Price Groups", "Audit Log", "DC SG Template",
                   "OCF Limit Values", "DAM Trade Status", "RTM Trade Status",
-                  "Upload CSV", "SCADA Data", "SCADA - Data Input")
+                  "Upload CSV", "SCADA Data", "SCADA - Data Input",
+                  # The parent DAM and RTM menus. Their names are not keys in
+                  # MENU_TO_RESOURCE, so resource_name slugs them to "dam" and "rtm" --
+                  # which is exactly what guard(("dam", "dam_single_bid")) at main.py:528
+                  # and guard(("rtm", "rtm_single_bid")) at main.py:546 ask for.
+                  "DAM", "RTM")
     })
     missing = asked - grantable - {"weather"}
     assert not missing, f"guard resources no menu can grant: {sorted(missing)}"
