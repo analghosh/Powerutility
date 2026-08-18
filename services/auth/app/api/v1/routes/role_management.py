@@ -191,13 +191,6 @@ async def update_role(
             update_data['name'] = role_data.name
         if role_data.description is not None:
             update_data['description'] = role_data.description
-        # Changing the flag changes every permission string this role holds, so the
-        # sync has to run now. Without it the role keeps its old strings until somebody
-        # happens to add or remove one of its menus.
-        flag_changed = (
-            role_data.is_read_only is not None
-            and bool(role_data.is_read_only) != bool(getattr(role, "is_read_only", False))
-        )
         if role_data.is_read_only is not None:
             update_data['is_read_only'] = role_data.is_read_only
         # Note: permissions are not directly updatable - use menu assignment endpoints
@@ -206,9 +199,20 @@ async def update_role(
         if not success:
             raise HTTPException(status_code=500, detail="Failed to update role")
 
-        if flag_changed:
-            from ....repository.menu_role_repository import MenuRoleRepository
-            await MenuRoleRepository()._sync_role_permissions(role_id)
+        # Re-sync unconditionally rather than only when is_read_only changed. The sync is
+        # idempotent -- it recomputes from current state -- so an unconditional call costs
+        # one menu walk on a rare admin operation and buys two things: a failed sync can be
+        # healed by re-saving the role, and a role can never be left asserting a read-only
+        # flag its permission strings do not reflect. _sync_role_permissions swallows its
+        # own exceptions and reports False, so the result must be checked, not awaited and
+        # discarded.
+        from ....repository.menu_role_repository import MenuRoleRepository
+        if not await MenuRoleRepository()._sync_role_permissions(role_id):
+            raise HTTPException(
+                status_code=500,
+                detail="Role saved but its permissions could not be re-synced. "
+                       "Save the role again to retry.",
+            )
 
         # Get updated role
         updated_role = await role_repo.get_role_by_id(role_id)
