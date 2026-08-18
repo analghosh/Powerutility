@@ -19,29 +19,31 @@ class RoleRepository(BaseRepository):
     def __init__(self):
         super().__init__("roles", settings.AUTH_DB_NAME)
     
-    async def create_role(self, name: str, description: str = "", permissions: List[str] = None) -> RoleInDB:
+    async def create_role(self, name: str, description: str = "", permissions: List[str] = None,
+                          is_read_only: bool = False) -> RoleInDB:
         """Create a new role"""
         try:
             # Check if role already exists
             if await self.get_role_by_name(name):
                 raise ValueError("Role already exists")
-            
+
             if permissions is None:
                 permissions = []
-            
+
             # Create role document
             role_data = {
                 "name": name,
                 "description": description,
                 "permissions": permissions,
+                "is_read_only": is_read_only,
                 "is_active": True,
                 "created_at": datetime.now(),
                 "updated_at": datetime.now()
             }
-            
+
             role_id = await self.create(role_data)
             role_data["_id"] = str(role_id)
-            
+
             return RoleInDB(**role_data)
         except Exception as e:
             logger.error(f"Error creating role: {e}")
