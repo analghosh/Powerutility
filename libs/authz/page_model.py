@@ -43,7 +43,17 @@ READ_ONLY_VERBS: Tuple[str, ...] = ("read",)
 # ["*"] at login (user_repository.py, SUPER_ROLES), so they never depend on page-derived
 # strings. A non-super role that genuinely needs user administration must be granted it
 # explicitly rather than acquiring it from a menu assignment.
-ADMIN_RESOURCES = frozenset({"users", "roles", "admin"})
+#
+# "menu" and "menus" are here for the same reason, one level down: the auth service also
+# guards its menu router this way (services/auth/app/main.py), and
+# libs/core/authz/config.py derives the resource "menu" for it, so DELETE
+# /api/v1/menu/{menu_id} requires exactly menu:delete. This is latent, not live -- no
+# seeded menu slugs to "menu", and creating one requires menu:create, which only admin
+# and superadmin hold. Keep it capped anyway: the cost is one entry in this set, and it
+# is exactly the shape of gap that made ADMIN_RESOURCES necessary for users/roles/admin
+# in the first place. Do not delete this as "unnecessary" without re-checking that no
+# menu can ever be named "Menu" or "Menus".
+ADMIN_RESOURCES = frozenset({"users", "roles", "admin", "menu", "menus"})
 
 
 def verbs_for_role(is_read_only: bool) -> Tuple[str, ...]:
