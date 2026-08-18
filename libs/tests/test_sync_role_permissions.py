@@ -39,6 +39,8 @@ def repo(monkeypatch):
         "m2": _Menu("Dashboard"),
         "m3": _Menu("Setup"),           # resolves to `admin`
         "m4": _Menu("Administration"),  # also resolves to `admin`
+        "m5": _Menu("Users"),           # administrative: read only, for every role
+        "m6": _Menu("Roles"),           # administrative: read only, for every role
     }
     state = {"role": _Role("operator"), "grants": []}
 
@@ -101,11 +103,40 @@ async def test_no_role_receives_approve_from_holding_a_page(repo):
 
 @pytest.mark.asyncio
 async def test_two_menus_sharing_a_resource_name_collapse(repo):
+    # Setup and Administration both resolve to `admin`, an administrative resource, so
+    # the collapsed result is read alone -- see the ADMIN_RESOURCES tests below.
     repo._state["role"] = _Role("superadmin", is_read_only=False)
     repo._state["grants"] = [_MenuRole("m3", ["read"]), _MenuRole("m4", ["read"])]
 
     await repo._sync_role_permissions("r1")
-    assert repo._written == ["admin:read", "admin:write", "admin:delete"]
+    assert repo._written == ["admin:read"]
+
+
+@pytest.mark.asyncio
+async def test_the_administrative_pages_grant_read_alone_at_runtime(repo):
+    """
+    The runtime half of the escalation fix. `global_authz_guard` is mounted on the auth
+    service's own user/role/menu routers and resolves DELETE /api/v1/users/{id} to
+    exactly `users:delete`, satisfied by string membership -- and it has no AUTHZ_MODE
+    switch. A grant of the Users page must therefore never mint users:write or
+    users:delete, however the role is flagged.
+    """
+    repo._state["role"] = _Role("operator", is_read_only=False)
+    repo._state["grants"] = [_MenuRole("m5", ["read"]), _MenuRole("m6", ["read"]),
+                             _MenuRole("m3", ["read"]), _MenuRole("m1", ["read"])]
+
+    await repo._sync_role_permissions("r1")
+    for forbidden in ("users:write", "users:delete", "roles:write", "roles:delete",
+                      "admin:write", "admin:delete"):
+        assert forbidden not in repo._written
+    assert repo._written == [
+        "users:read",
+        "roles:read",
+        "admin:read",
+        "dam_single_bid:read",
+        "dam_single_bid:write",
+        "dam_single_bid:delete",
+    ]
 
 
 @pytest.mark.asyncio

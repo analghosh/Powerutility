@@ -6,13 +6,18 @@ flagged read-only, in which case it grants read alone.
 the exchange is a different authority from creating one; under the guard's rules only
 admin and superadmin reach those routes. Adding "approve" here would collapse maker and
 checker into one right for every role that holds a bid screen.
+
+The administrative resources (ADMIN_RESOURCES) are the model's one exception: holding the
+Users, Roles or Administration page grants `read` and nothing more, for every role.
 """
 import pytest
 
 from libs.authz.page_model import (
+    ADMIN_RESOURCES,
     PAGE_VERBS,
     READ_ONLY_VERBS,
     permission_strings,
+    verbs_for_resource,
     verbs_for_role,
 )
 
@@ -63,3 +68,61 @@ def test_order_is_stable_so_diffs_stay_readable():
 
 def test_empty_resource_names_are_dropped():
     assert permission_strings(["dashboard", "", None], True) == ["dashboard:read"]
+
+
+# --- administrative resources ------------------------------------------------------
+#
+# The page model mints permission strings that `global_authz_guard` satisfies by plain
+# membership: DELETE /api/v1/users/{id} resolves to exactly `users:delete`. Granting an
+# ordinary role the Users page therefore handed it user administration -- measured on the
+# migrated database, `user` (740 live accounts), `operator`, `checker` and `test123` all
+# received users:delete and admin:delete, and a plain `user` account deleted another user.
+# That guard has no AUTHZ_MODE switch, so the warn/soak/enforce rollout gives no cover.
+
+
+def test_the_administrative_resources_are_the_ones_the_auth_guard_protects():
+    assert ADMIN_RESOURCES == frozenset({"users", "roles", "admin"})
+
+
+def test_an_ordinary_role_holding_the_users_page_gets_read_only():
+    assert permission_strings(["users"], False) == ["users:read"]
+
+
+def test_an_ordinary_role_holding_the_roles_page_gets_read_only():
+    assert permission_strings(["roles"], False) == ["roles:read"]
+
+
+def test_an_ordinary_role_holding_the_admin_page_gets_read_only():
+    assert permission_strings(["admin"], False) == ["admin:read"]
+
+
+@pytest.mark.parametrize("resource", sorted(ADMIN_RESOURCES))
+def test_no_administrative_write_or_delete_is_ever_minted(resource):
+    for is_read_only in (False, True):
+        perms = permission_strings([resource], is_read_only)
+        assert f"{resource}:write" not in perms
+        assert f"{resource}:delete" not in perms
+
+
+def test_the_restriction_is_per_resource_not_per_call():
+    # A role holding both an administrative page and an operational one keeps full rights
+    # on the operational page. Capping the whole call would break every real role.
+    assert permission_strings(["users", "dam_single_bid"], False) == [
+        "users:read",
+        "dam_single_bid:read",
+        "dam_single_bid:write",
+        "dam_single_bid:delete",
+    ]
+
+
+def test_a_read_only_role_is_unaffected_by_the_administrative_cap():
+    assert permission_strings(["users", "dashboard"], True) == [
+        "users:read",
+        "dashboard:read",
+    ]
+
+
+def test_verbs_for_resource_caps_administrative_pages_only():
+    assert verbs_for_resource("users", False) == READ_ONLY_VERBS
+    assert verbs_for_resource("dashboard", False) == PAGE_VERBS
+    assert verbs_for_resource("dashboard", True) == READ_ONLY_VERBS
