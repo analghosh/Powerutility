@@ -98,10 +98,21 @@ def test_no_role_is_granted_approve():
 
 
 def test_menus_sharing_a_resource_name_collapse():
+    # Setup and Administration both resolve to `admin`, an administrative resource, so
+    # the collapsed result is read alone.
     _g, role_updates, _r, _m = tool.build_plan(
         _db(read_only=False, menu_names=("Setup", "Administration"))
     )
-    assert _perms(role_updates) == ["admin:read", "admin:write", "admin:delete"]
+    assert _perms(role_updates) == ["admin:read"]
+
+
+def test_menus_sharing_an_operational_resource_name_collapse():
+    _g, role_updates, _r, _m = tool.build_plan(
+        _db(read_only=False, menu_names=("DAM Single Bid", "DAM Single Bid"))
+    )
+    assert _perms(role_updates) == [
+        "dam_single_bid:read", "dam_single_bid:write", "dam_single_bid:delete",
+    ]
 
 
 def test_grant_rows_carrying_stale_verbs_are_queued_for_normalisation():
