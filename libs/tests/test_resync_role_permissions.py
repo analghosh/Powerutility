@@ -145,10 +145,27 @@ def test_revoked_grants_do_not_become_permissions():
     assert not any(p.startswith("dam_single_bid") for p in perms)
 
 
+def test_a_role_whose_grants_are_all_revoked_is_reset_not_skipped():
+    """
+    A role with no active grants must be visited and zeroed, not passed over. Iterating
+    only the roles that produced resources silently leaves stale over-privilege in place --
+    the same failure the is_active filter closes, one level up.
+    """
+    db = FakeDB(
+        roles=[{"_id": ROLE_ID, "name": "revoked",
+                "permissions": ["dam_block_bid:read", "dam_block_bid:write"]}],
+        menus=[{"_id": "menu0", "name": "DAM Block Bid"}],
+        menu_roles=[{"_id": "grant0", "role_id": ROLE_ID, "menu_id": "menu0",
+                     "permissions": ["read"], "is_active": False}],
+    )
+    _g, role_updates, _r, _m = tool.build_plan(db)
+    assert _perms(role_updates, "revoked") == []
+
+
 def test_the_dead_matrix_is_gone():
     # If any of these survive a rename, two sources of truth are deciding permissions.
     for name in ("classify", "permissions_for", "MASTERS_MENUS", "ADMIN_MENUS",
-                 "INGESTION_MENUS", "READ_ONLY_ROLES"):
+                 "INGESTION_MENUS", "INGESTION_WRITE_ROLES", "READ_ONLY_ROLES"):
         assert not hasattr(tool, name), f"{name} should have been deleted"
 
 

@@ -95,9 +95,6 @@ WRITE = "write"
 DELETE = "delete"
 APPROVE = "approve"
 
-# Roles that bypass the matrix entirely in the auth service.
-SUPER_ROLES = {"admin", "superadmin"}
-
 
 def resource_name(menu_name: str, mapping: dict) -> str:
     if menu_name in mapping:
@@ -171,8 +168,8 @@ def build_plan(db):
             grant_updates.append((mr["_id"], [READ]))
 
     role_updates = []
-    for role_id, resource_names in resources_by_role.items():
-        role = roles[role_id]
+    for role_id, role in roles.items():
+        resource_names = resources_by_role.get(role_id, [])
         perms = permission_strings(resource_names, bool(role.get("is_read_only", False)))
         current = role.get("permissions") or []
         if sorted(perms) != sorted(current):
