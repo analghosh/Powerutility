@@ -416,11 +416,20 @@ def test_revert_of_an_older_backup_leaves_the_flag_alone(tmp_path):
 # --- running outside a development checkout -------------------------------------------
 
 
-def test_the_tool_puts_the_repo_root_on_sys_path():
+def test_the_tool_puts_the_repo_root_on_sys_path_before_importing_libs():
     """
     On a production box there is no editable-install .pth, so `from libs.authz...` would
     fail at import before argparse ever ran. The bootstrap has to survive refactoring.
+
+    Asserting `repo_root in sys.path` after the module has already been imported is not
+    a real test of that: this dev venv carries `__editable__.epms_backend-0.1.0.pth`,
+    which puts the repo root on sys.path at interpreter start regardless of whether the
+    tool's own bootstrap line exists -- delete the bootstrap and that assertion would
+    still pass. Read the source instead and check the structural property that actually
+    matters: the sys.path.insert bootstrap appears before the `from libs.authz` import
+    that depends on it, so the import can succeed even without the .pth file.
     """
-    import sys
-    repo_root = str(pathlib.Path(__file__).resolve().parents[2])
-    assert repo_root in sys.path
+    src = _TOOL.read_text()
+    bootstrap_pos = src.index("sys.path.insert")
+    import_pos = src.index("from libs.authz")
+    assert bootstrap_pos < import_pos
