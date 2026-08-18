@@ -41,8 +41,12 @@ READ_ONLY_VERBS: Tuple[str, ...] = ("read",)
 #
 # Withholding these costs real administrators nothing: `admin` and `superadmin` resolve to
 # ["*"] at login (user_repository.py, SUPER_ROLES), so they never depend on page-derived
-# strings. A non-super role that genuinely needs user administration must be granted it
-# explicitly rather than acquiring it from a menu assignment.
+# strings. There is currently no supported way to give a non-super role user
+# administration instead: RoleCreateRequest/RoleUpdateRequest carry no `permissions`
+# field, and _sync_role_permissions overwrites roles.permissions wholesale on every
+# grant, revoke and PUT /api/v1/roles/{id}, so a hand-written grant would be wiped by the
+# next sync. Delegating this to a non-super role needs a permission source that survives
+# that sync -- that does not exist yet and is not designed here.
 #
 # "menu" and "menus" are here for the same reason, one level down: the auth service also
 # guards its menu router this way (services/auth/app/main.py), and

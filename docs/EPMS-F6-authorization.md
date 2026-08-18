@@ -92,9 +92,15 @@ and `test123` all held `users:delete` and `admin:delete`, and an account with th
 `user` role was able to soft-delete another user with a single call.
 
 Withholding these costs real administrators nothing: `admin` and `superadmin` resolve to
-`["*"]` at login, so they never depend on page-derived strings. A non-super role that
-genuinely needs user administration has to be granted it explicitly rather than acquiring
-it from a menu assignment.
+`["*"]` at login, so they never depend on page-derived strings. There is currently no
+supported way to give a non-super role user administration instead. `RoleCreateRequest`
+and `RoleUpdateRequest` (`services/auth/app/api/v1/routes/role_management.py`) carry no
+`permissions` field, and `_sync_role_permissions` → `set_role_permissions` replaces
+`roles.permissions` wholesale on every grant, every revoke and every
+`PUT /api/v1/roles/{id}` — so a hand-written grant on a role document would be wiped by
+the next sync, not preserved. Delegating user administration to a non-super role would
+need a permission source that survives that sync; building one is future work, not
+something this branch provides.
 
 The Role Management screen exposes `is_read_only` as a checkbox (`RoleCreateRequest` /
 `RoleUpdateRequest` in `services/auth/app/api/v1/routes/role_management.py`). Setting it
