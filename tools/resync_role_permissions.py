@@ -232,13 +232,25 @@ def _diff_lines(marker: str, permissions: list) -> list:
 
     `operator 92 -> 159 permissions (53 write)` is not enough to approve a rollout: that
     line is exactly what let `users:delete` reach four roles through seven reviews. So
-    the strings themselves are printed. Ordinary ones are capped at MAX_LISTED for
-    readability; anything in ALWAYS_SHOWN_RESOURCES is listed first and never truncated.
+    the strings themselves are printed -- but the risk is carried by the verb, not the
+    resource. An ordinary `dam_block_bid:write` past the twelfth entry could still hide
+    behind "... and N more" under a resource-only rule, and on a role picking up ~150
+    strings that is most of them, including exactly the write grants this tool exists to
+    create. So every :write, :delete and :approve string is always shown, on any
+    resource, with no exceptions. ALWAYS_SHOWN_RESOURCES still does the rest of the job:
+    it keeps :read on the administrative and exchange resources (users, roles, admin,
+    menu, menus, iex_api_detail, power_exchange) always-shown too, ordered first, because
+    a `:read` grant on the Users page is worth an approver seeing eagerly and not only
+    its writes. Only an ordinary :read string on an ordinary resource is ever summarised.
     """
     if not permissions:
         return []
-    always = [p for p in permissions if _resource_of(p) in ALWAYS_SHOWN_RESOURCES]
-    ordinary = [p for p in permissions if _resource_of(p) not in ALWAYS_SHOWN_RESOURCES]
+
+    def _always_shown(p: str) -> bool:
+        return _resource_of(p) in ALWAYS_SHOWN_RESOURCES or not p.endswith(f":{READ}")
+
+    always = [p for p in permissions if _always_shown(p)]
+    ordinary = [p for p in permissions if not _always_shown(p)]
     shown = always + ordinary[:MAX_LISTED]
     lines = [f"      {marker} ({len(permissions)}): {', '.join(shown)}"]
     hidden = len(ordinary) - len(ordinary[:MAX_LISTED])

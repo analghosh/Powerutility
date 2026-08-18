@@ -321,8 +321,11 @@ def test_administrative_and_exchange_strings_are_never_truncated():
     """
     `operator 92 -> 159 permissions (53 write)` is why users:delete survived seven
     reviews. Ordinary strings may be summarised; these must always be readable.
+
+    Filler is deliberately :read -- a :write filler would now be always-shown by the
+    verb rule below, and this test would stop exercising truncation at all.
     """
-    added = [f"filler{i}:write" for i in range(40)] + [
+    added = [f"filler{i}:read" for i in range(40)] + [
         "users:delete", "admin:write", "roles:delete",
         "iex_api_detail:write", "power_exchange:delete",
     ]
@@ -331,6 +334,24 @@ def test_administrative_and_exchange_strings_are_never_truncated():
                       "iex_api_detail:write", "power_exchange:delete"):
         assert must_show in lines, f"{must_show} must never be truncated away"
     assert "... and" in lines   # the filler is summarised
+
+
+def test_ordinary_write_and_delete_strings_are_never_truncated():
+    """
+    The risk in a --dry-run diff is carried by the verb, not the resource: an operator
+    picking up ~150 strings must see every :write and :delete it grants, including ones
+    on ordinary (non-administrative, non-exchange) resources -- those are exactly the
+    grants this tool exists to create. Only :read strings are ever eligible for the
+    "... and N more" tail.
+    """
+    reads = [f"filler{i}:read" for i in range(40)]
+    writes_and_deletes = ["dam_block_bid:write", "rtm_block_bid:write", "dam_single_bid:delete"]
+    added = reads + writes_and_deletes
+    lines = "\n".join(tool.render_role_diff("operator", [], added))
+    for must_show in writes_and_deletes:
+        assert must_show in lines, f"{must_show} must never be truncated away"
+    hidden = len(reads) - tool.MAX_LISTED
+    assert f"... and {hidden} more" in lines   # only the reads past MAX_LISTED are hidden
 
 
 def test_short_diffs_are_printed_in_full_without_a_more_line():
