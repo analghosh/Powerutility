@@ -8,6 +8,7 @@ from ....utils.activity_logger import log_auth_activity
 from ....core.dependencies import get_audit_logger
 # Removed AuthUserDTO import - using UserPrincipal from centralized system
 from datetime import datetime
+from libs.middleware.utils import get_client_ip_or_none
 
 # Role Master APIs
 class RoleCreateRequest(BaseModel):
@@ -50,7 +51,7 @@ async def list_roles(
         roles = await role_repo.get_all_active_roles()
         
         # Log role list access with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_user_action(
@@ -80,7 +81,7 @@ async def list_roles(
         ]
     except Exception as e:
         # Log failed role list access with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_error_event(

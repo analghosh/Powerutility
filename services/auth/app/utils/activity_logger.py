@@ -13,6 +13,7 @@ import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..'))
 from libs.audit_queue.timezone_utils import format_ist_timestamp
+from libs.middleware.utils import get_client_ip_or_none
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +22,7 @@ def _extract_request_info(request: Request) -> Dict[str, Any]:
     """Extract request information for logging"""
     try:
         # Get client IP address
-        ip_address = request.client.host if request.client else None
+        ip_address = get_client_ip_or_none(request)
         
         # Get user agent
         user_agent = request.headers.get("user-agent")
