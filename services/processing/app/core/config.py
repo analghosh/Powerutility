@@ -75,6 +75,12 @@ class Settings(BaseSettings):
     QUALITY_METRICS: List[str] = ["completeness", "accuracy", "consistency", "timeliness"]
     
     # JWT Configuration (for local token validation)
+
+    # Local token validation (libs/core/local_auth.py). These MUST be declared here:
+    # pydantic BaseSettings only loads fields it knows about, and it never writes what it
+    # reads into os.environ -- so an undeclared JWT_SECRET_KEY is invisible to both the
+    # settings object and os.getenv, and every token is rejected as "server misconfigured".
+    JWT_SECRET_KEY: str = ""
     JWT_ALGORITHM: str = "HS256"
     JWT_EXPIRATION_DELTA: int = 3600  # 1 hour
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30

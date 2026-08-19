@@ -20,6 +20,8 @@ from .v2.services.health_service import processing_health_service
 
 # Configure logging with correlation ID support
 from libs.middleware import configure_logging, LoggingMiddleware, CorrelationMiddleware, AuthMiddleware, SecurityHeadersMiddleware
+from libs.middleware.auth_middleware import _local_validation_enabled
+from libs.core.local_auth import local_token_validator
 
 # Import V2 authentication middleware
 from .v2.middleware.auth import V2AuthMiddleware
@@ -292,6 +294,9 @@ app.add_middleware(
     AuthMiddleware,
     auth_service_url=settings.AUTH_SERVICE_URL,
     exclude_paths=exclude_paths,
+    # Local validation reads JWT_SECRET_KEY / MONGODB_URI / REDIS_* from here: pydantic
+    # loads .env but never writes it back into os.environ.
+    settings=settings,
 )
 
 # Add HTTPS enforcement middleware for HMAC endpoints
@@ -495,27 +500,47 @@ async def auth_middleware(request: Request, call_next):
             token = auth_header.split(" ")[1]
             logger.info(f"✅ TOKEN EXTRACTED for: {path}")
 
-            # Use auth service for validation instead of local JWT validation
-            from libs.auth_client import AuthClient
-            auth_client = AuthClient(settings.AUTH_SERVICE_URL)
-            
-            async with auth_client:
-                validation_result = await auth_client.validate_token(token)
-                
-                if not validation_result.valid:
-                    logger.error(f"❌ AUTH SERVICE VALIDATION FAILED for: {path}")
+            # Validate in-process. The previous version built a NEW AuthClient -- and so a
+            # new httpx client and a new TCP connection -- on every single V2 request, then
+            # called the auth service over HTTP, and AuthMiddleware validated the same token
+            # again a moment later. Two remote validations per request, one of them
+            # unpooled, and both of them turning an auth-service timeout into a 401 for the
+            # caller. The local validator performs the same four checks (signature/expiry,
+            # logout blacklist, is_active, token_version) in ~2.6 ms without leaving the
+            # process. AUTH_LOCAL_VALIDATION=false restores the old path.
+            if _local_validation_enabled():
+                payload, reason = await local_token_validator.validate(token)
+                if payload is None:
+                    logger.warning("V2 token rejected for %s: %s", path, reason)
                     return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
-                
-                # Create user context from auth service response
+
                 request.state.current_user = {
-                    "user_id": validation_result.user_id,
-                    "username": validation_result.username,
-                    "email": validation_result.email,
-                    "roles": validation_result.roles,
-                    "permissions": validation_result.permissions,
-                    "token": token
+                    "user_id": payload.get("sub") or payload.get("id"),
+                    "username": payload.get("username"),
+                    "email": payload.get("email"),
+                    "roles": payload.get("roles") or [],
+                    "permissions": payload.get("permissions") or [],
+                    "token": token,
                 }
-                logger.info(f"✅ USER CONTEXT SET for: {path} - User: {validation_result.username}")
+            else:
+                from libs.auth_client import AuthClient
+                auth_client = AuthClient(settings.AUTH_SERVICE_URL)
+
+                async with auth_client:
+                    validation_result = await auth_client.validate_token(token)
+
+                    if not validation_result.valid:
+                        logger.error(f"❌ AUTH SERVICE VALIDATION FAILED for: {path}")
+                        return JSONResponse(status_code=401, content={"detail": "Invalid or expired token"})
+
+                    request.state.current_user = {
+                        "user_id": validation_result.user_id,
+                        "username": validation_result.username,
+                        "email": validation_result.email,
+                        "roles": validation_result.roles,
+                        "permissions": validation_result.permissions,
+                        "token": token
+                    }
             
         except Exception as e:
             logger.error(f"❌ AUTH PROCESSING FAILED for: {path} - Error: {e}")
