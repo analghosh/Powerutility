@@ -13,6 +13,18 @@ from libs.audit_queue.simple_logger import AuditLogger
 
 logger = logging.getLogger(__name__)
 
+
+class PriceGroupInUseError(Exception):
+    """Raised when a price group cannot be deleted because plants still reference it."""
+
+    def __init__(self, price_group: str, plant_count: int):
+        self.price_group = price_group
+        self.plant_count = plant_count
+        super().__init__(
+            f"Price group {price_group!r} is still assigned to {plant_count} "
+            f"plant(s) and cannot be deleted."
+        )
+
 IST = ZoneInfo("Asia/Kolkata")
 
 class PriceGroupPayloadMapper:
@@ -144,6 +156,36 @@ class PriceGroupService:
         return self.mapper.out_map(updated) if updated else None
 
     async def delete(self, _id: str, actor: Optional[Dict[str, Any]], req: Dict[str, Any]) -> bool:
+        """
+        Delete a price group, refusing while plants still reference it.
+
+        VAPT F3: the delete performed no referential check, so removing a group left every
+        `plant_master` row carrying its name pointing at nothing. The reference is by name
+        rather than id, so nothing in the database enforces this — it has to be checked
+        here.
+        """
+        existing = await self.repo.get(_id)
+        if not existing:
+            return False
+
+        group_name = existing.get("price_group")
+        in_use = await self.repo.count_referencing_plants(group_name)
+        if in_use:
+            a = self._actor(actor)
+            _safe_audit(self.audit_logger, {
+                "service": "processing",
+                "user_id": a["user_id"],
+                "action": "price_group_delete",
+                "message": f"Refused to delete price group {group_name}: {in_use} plants still reference it",
+                "username": a["username"],
+                "ip_address": req.get("ip_address"),
+                "user_agent": req.get("user_agent"),
+                "resource": "price_group",
+                "resource_id": _id,
+                "success": False,
+            })
+            raise PriceGroupInUseError(group_name, in_use)
+
         ok = await self.repo.delete(_id)
 
         a = self._actor(actor)
