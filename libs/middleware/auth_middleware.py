@@ -3,18 +3,30 @@ Authentication middleware for JWT token validation using centralized auth servic
 """
 
 import logging
+import os
 import secrets
 from contextvars import ContextVar
 from typing import Callable, Optional, Dict, Any
 from fastapi import Request, Response, HTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
 from ..auth_client import AuthClient, AuthValidationResponse, get_auth_client
+from ..core.local_auth import local_token_validator
 from ..auth.exceptions import AuthenticationError, MissingTokenError, InvalidAuthHeaderError
 from .utils import extract_bearer_token, log_request_info
 from libs.authz.service_auth import INTERNAL_TOKEN_HEADER
 from .correlation import get_correlation_id
 
 logger = logging.getLogger(__name__)
+
+
+def _local_validation_enabled() -> bool:
+    """
+    Validate tokens in-process (default) or by HTTP call to the auth service.
+
+    Read per call rather than cached at import so the flag can be flipped by a restart
+    alone, and so tests can toggle it without reloading the module.
+    """
+    return os.getenv("AUTH_LOCAL_VALIDATION", "true").strip().lower() in ("true", "1", "yes")
 
 # Context variable to store current user throughout request lifecycle
 _current_user: ContextVar[Optional[Dict[str, Any]]] = ContextVar("current_user", default=None)
@@ -29,6 +41,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         self,
         app,
         auth_service_url: str = None,
+        settings: Any = None,
         auth_client: AuthClient = None,
         exclude_paths: Optional[list] = None,
         require_auth: bool = True,
@@ -42,6 +55,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # with no credentials. Rather than leave the whole service open for them, they now
         # present this header. Unset means the door stays shut: no header is ever accepted.
         self.internal_token = internal_token or None
+        # Local validation needs JWT_SECRET_KEY / MONGODB_URI / REDIS_*, and pydantic
+        # BaseSettings never writes those into os.environ. See LocalTokenValidator.configure.
+        local_token_validator.configure(settings)
         
         # Initialize auth client
         if auth_client:
@@ -215,25 +231,39 @@ class AuthMiddleware(BaseHTTPMiddleware):
             # Extract Bearer token from Authorization header
             token = extract_bearer_token(request)
             
-            # Use centralized auth service for validation
-            if self.auth_client:
-                # Get correlation ID for passing to auth service
-                correlation_id = get_correlation_id()
-                logger.info(f"🔍 MIDDLEWARE DEBUG - Validating token with auth service")
-                validation_result = await self.auth_client.validate_token(token, correlation_id=correlation_id)
-                
-                logger.info(f"🔍 MIDDLEWARE DEBUG - Validation result: valid={validation_result.valid}")
-                logger.info(f"🔍 MIDDLEWARE DEBUG - User ID: {validation_result.user_id}")
-                logger.info(f"🔍 MIDDLEWARE DEBUG - Username: {validation_result.username}")
-                
-                if not validation_result.valid:
-                    logger.error(f"🔍 MIDDLEWARE DEBUG - Token validation FAILED - raising AuthenticationError")
+            # Validate locally unless explicitly told not to. The remote path is kept as
+            # a one-variable rollback (AUTH_LOCAL_VALIDATION=false) because this is the
+            # authentication path for every request in the service.
+            if _local_validation_enabled():
+                payload, reason = await local_token_validator.validate(token)
+                if payload is None:
+                    # Logged, never returned: telling the caller which check failed
+                    # distinguishes "expired" from "deactivated" from "no such account".
+                    logger.warning("Token rejected: %s", reason)
                     raise AuthenticationError("Invalid or expired token")
-                
-                logger.info(f"🔍 MIDDLEWARE DEBUG - Token validation PASSED - proceeding with request")
-                
-                # Convert validation result to user context
-                user_context = {
+
+                return {
+                    "user_id": payload.get("sub") or payload.get("id"),
+                    "username": payload.get("username"),
+                    "email": payload.get("email"),
+                    "roles": payload.get("roles") or [],
+                    "permissions": payload.get("permissions") or [],
+                    "session_id": payload.get("session_id"),
+                    "token": token,
+                }
+
+            # Legacy path: ask the auth service over HTTP. One network round trip, one
+            # Mongo read and two audit writes per request, and a timeout here becomes a
+            # 401 for the caller rather than a degraded response -- which is how a login
+            # storm on auth turned into a platform-wide 401 storm.
+            if self.auth_client:
+                correlation_id = get_correlation_id()
+                validation_result = await self.auth_client.validate_token(token, correlation_id=correlation_id)
+
+                if not validation_result.valid:
+                    raise AuthenticationError("Invalid or expired token")
+
+                return {
                     "user_id": validation_result.user_id,
                     "username": validation_result.username,
                     "email": validation_result.email,
@@ -242,9 +272,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     "session_id": validation_result.session_id,
                     "token": token
                 }
-                
-                return user_context
-            
+
             # Fallback: If no auth client configured, raise error
             else:
                 raise AuthenticationError("Authentication service not configured")

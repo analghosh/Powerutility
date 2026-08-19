@@ -59,6 +59,14 @@ class Settings(BaseSettings):
     MONGODB_CRON_JOBS_COLLECTION: str = "cron_jobs"
     
     # Redis Configuration
+    # Local token validation (libs/core/local_auth.py). Declared here because pydantic
+    # BaseSettings only loads fields it knows about, and never writes them into os.environ.
+    JWT_SECRET_KEY: str = ""
+    JWT_ALGORITHM: str = "HS256"
+    AUTH_DB_NAME: str = "auth_db"
+    # Same logical db the auth service's logout path writes blacklist:access:{token} to.
+    REDIS_BLACKLIST_DB: int = 1
+
     REDIS_HOST: str = "localhost"
     REDIS_PORT: int = 6379
     REDIS_DB: int = 3

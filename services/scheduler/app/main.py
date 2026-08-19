@@ -239,6 +239,7 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(
     AuthMiddleware,
     auth_service_url=settings.AUTH_SERVICE_URL,
+    settings=settings,
     internal_token=settings.INTERNAL_SERVICE_TOKEN,
     exclude_paths=[
         "/health",

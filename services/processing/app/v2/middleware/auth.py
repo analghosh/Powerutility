@@ -49,6 +49,7 @@ class V2AuthMiddleware(AuthMiddleware):
         auth_client = AuthClient(settings.AUTH_SERVICE_URL)
         
         super().__init__(
+            settings=settings,
             app=app,
             auth_client=auth_client,
             exclude_paths=v2_exclude_paths,
