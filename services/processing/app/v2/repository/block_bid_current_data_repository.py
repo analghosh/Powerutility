@@ -437,12 +437,13 @@ class BlockBidCurrentDataRepository(GenericRepository):
         biding_date: str,
     ) -> Dict[str, float]:
         """
-        Sum block-bid quantity for **Reserved** selections only, grouped by ``time_block``.
+        Sum block-bid quantity for **Reserved** selections only, per 15-minute block.
 
         Matches ``biding_date``, ``status`` exactly ``Approved``, and ``selected_for``
         exactly ``Reserved`` only (no ``market_type`` filter, so e.g. RTM/GRTM rows all
         count). Quantity per row matches ``get_approved_block_bid_quantities_by_time_block``
-        (``number_of_bids`` multiplies ``quantum`` when > 1).
+        (``number_of_bids`` multiplies ``quantum`` when > 1). Each row's clock range is
+        expanded into 15-minute block labels before summing.
         """
         try:
             match_filter: Dict[str, Any] = {
@@ -456,6 +457,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {
                     "$project": {
                         "time_block": 1,
+                        "from": 1,
+                        "to": 1,
                         "quantum": 1,
                         "number_of_bids": {"$ifNull": ["$number_of_bids", 1]},
                         "calculated_quantity": {
@@ -474,15 +477,12 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 },
                 {
                     "$group": {
-                        "_id": "$time_block",
+                        "_id": {
+                            "from": "$from",
+                            "to": "$to",
+                            "time_block": "$time_block",
+                        },
                         "total_quantum": {"$sum": "$calculated_quantity"},
-                    }
-                },
-                {
-                    "$project": {
-                        "_id": 0,
-                        "time_block": "$_id",
-                        "total_quantum": 1,
                     }
                 },
             ]
@@ -490,11 +490,26 @@ class BlockBidCurrentDataRepository(GenericRepository):
             results = await self.aggregate(pipeline)
 
             quantities_dict: Dict[str, float] = {}
+            unparsed_ranges = []
             for result in results:
-                time_block = result.get("time_block", "")
+                group_key = result.get("_id") or {}
                 total_quantum = float(result.get("total_quantum", 0))
-                if time_block:
-                    quantities_dict[time_block] = total_quantum
+                block_labels = self.expand_time_range_to_block_labels(
+                    group_key.get("from"),
+                    group_key.get("to"),
+                    group_key.get("time_block"),
+                )
+                if not block_labels:
+                    unparsed_ranges.append(group_key.get("time_block"))
+                    continue
+                for label in block_labels:
+                    quantities_dict[label] = quantities_dict.get(label, 0.0) + total_quantum
+
+            if unparsed_ranges:
+                logger.warning(
+                    f"Skipped {len(unparsed_ranges)} Reserved block bid row group(s) with an "
+                    f"unusable time range on {biding_date}: {unparsed_ranges}"
+                )
 
             logger.info(
                 f"Retrieved Reserved (Approved-only) block bid quantities for "
