@@ -16,6 +16,7 @@ from ....controllers.auth_controller import auth_controller
 
 # Import secure audit logging
 from ....core.dependencies import get_audit_logger
+from libs.middleware.utils import get_client_ip_or_none
 
 router = APIRouter(prefix="/token", tags=["Token Validation"])
 security = HTTPBearer()
@@ -117,7 +118,7 @@ async def validate_token(
     - **User Context**: Get current user information for business logic
     """
     token = credentials.credentials
-    client_ip = request.client.host if request.client else None
+    client_ip = get_client_ip_or_none(request)
     
     try:
         # Validate token directly - no caching for security
@@ -237,7 +238,7 @@ async def get_user_info(
     - **Audit Logging**: Include user context in operation logs
     """
     token = credentials.credentials
-    client_ip = request.client.host if request.client else None
+    client_ip = get_client_ip_or_none(request)
     
     try:
         # Validate the requesting token first

@@ -15,6 +15,7 @@ from datetime import datetime
 
 
 from libs.audit_queue.simple_logger import AuditLogger
+from libs.middleware.utils import get_client_ip_or_none
 
 # Pydantic models for user operations
 class UserCreateRequest(BaseModel):
@@ -79,7 +80,7 @@ async def list_users(
         users = await user_repo.get_users_with_pagination(skip=skip, limit=limit, role_filter=role, is_active_filter=is_active)
         
         # Log user list access with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_user_action(
@@ -116,7 +117,7 @@ async def list_users(
         ]
     except Exception as e:
         # Log failed user list access with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -174,7 +175,7 @@ async def create_user(
         )
         
         # Log successful user creation with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_user_action(
@@ -211,7 +212,7 @@ async def create_user(
         raise
     except Exception as e:
         # Log failed user creation with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -384,7 +385,7 @@ async def delete_user(
         audit_logger.log_user_action(
             service="auth",
             user_id=current_user.user_id,
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip_or_none(request),
             action="delete",
             message=f"Admin {current_user.user_id} deleted user {user.username}",
             target_user_id=user_id,
@@ -423,7 +424,7 @@ async def assign_roles_to_user(
         audit_logger.log_user_action( # audit_logger methods are sync (do not await)
             service="auth",
             user_id=current_user.user_id,
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip_or_none(request),
             action="assign_roles",
             message=f"Admin {current_user.user_id} updated roles for user {user.username}",
             target_user_id=user_id,

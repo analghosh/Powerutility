@@ -24,6 +24,7 @@ from ....schemas.mfa import (
 
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..', '..'))
 from libs.authz.route_guard import is_allowed
+from libs.middleware.utils import get_client_ip_or_none
 
 # Create router
 router = APIRouter(prefix="/mfa", tags=["Multi-Factor Authentication"])
@@ -107,7 +108,7 @@ async def enable_mfa(
     
     if not user:
         # Log failed MFA enable attempt with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_security_event(
@@ -128,7 +129,7 @@ async def enable_mfa(
         result = await mfa_controller.enable_mfa(user.id, enable_request)
         
         # Log successful MFA enable with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_security_event(
@@ -149,7 +150,7 @@ async def enable_mfa(
         
     except Exception as e:
         # Log failed MFA enable with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_error_event(
@@ -188,7 +189,7 @@ async def verify_mfa(
     
     if not user:
         # Log failed MFA verify attempt with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_security_event(
@@ -209,7 +210,7 @@ async def verify_mfa(
         result = await mfa_controller.verify_mfa(user.id, verify_request)
         
         # Log successful MFA verification with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_security_event(
@@ -229,7 +230,7 @@ async def verify_mfa(
         
     except Exception as e:
         # Log failed MFA verification with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         get_audit_logger().log_error_event(
@@ -382,7 +383,7 @@ async def emergency_disable_mfa(
             detail="Invalid access token"
         )
 
-    client_ip = request.client.host if request.client else None
+    client_ip = get_client_ip_or_none(request)
     user_agent = request.headers.get("user-agent")
 
     try:
@@ -466,7 +467,7 @@ async def reset_mfa_rate_limit(
             detail="Invalid access token"
         )
 
-    client_ip = request.client.host if request.client else None
+    client_ip = get_client_ip_or_none(request)
     user_agent = request.headers.get("user-agent")
 
     try:

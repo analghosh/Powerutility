@@ -18,6 +18,7 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..'))
 from libs.audit_queue.simple_logger import AuditLogger
 from ....core.dependencies import get_audit_logger
+from libs.middleware.utils import get_client_ip_or_none
 
 router = APIRouter(prefix="/auth", tags=["user-management"])
 security = HTTPBearer()
@@ -105,7 +106,7 @@ async def get_user_info(
             )
         
         # Log successful user info retrieval
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_system_operation(
@@ -139,7 +140,7 @@ async def get_user_info(
             service="auth",
             error_name="UserInfoRetrievalError",
             error_message=f"Failed to retrieve user info: {str(e)}",
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip_or_none(request),
             target_user_id=user_id,
             requesting_user_id=current_user.user_id,
             exception_type=type(e).__name__
@@ -185,7 +186,7 @@ async def validate_token_and_get_user(
     """
     try:
         # Log successful token validation
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_security_event(
@@ -214,7 +215,7 @@ async def validate_token_and_get_user(
             service="auth",
             error_name="TokenValidationError",
             error_message=f"Token validation failed: {str(e)}",
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip_or_none(request),
             exception_type=type(e).__name__
         )
         
@@ -261,7 +262,7 @@ async def get_available_roles(
         roles = await role_repo.get_all_active_roles()
         
         # Log successful roles retrieval
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_system_operation(
@@ -291,7 +292,7 @@ async def get_available_roles(
             service="auth",
             error_name="RolesRetrievalError",
             error_message=f"Failed to retrieve roles: {str(e)}",
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip_or_none(request),
             requesting_user_id=current_user.user_id,
             exception_type=type(e).__name__
         )
@@ -339,7 +340,7 @@ async def get_available_permissions(
         permissions = get_all_permissions()
         
         # Log successful permissions retrieval
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_system_operation(
@@ -368,7 +369,7 @@ async def get_available_permissions(
             service="auth",
             error_name="PermissionsRetrievalError",
             error_message=f"Failed to retrieve permissions: {str(e)}",
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip_or_none(request),
             requesting_user_id=current_user.user_id,
             exception_type=type(e).__name__
         )
@@ -435,7 +436,7 @@ async def validate_user_permissions(
         has_all_permissions = len(missing_permissions) == 0
         
         # Log permission validation
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_system_operation(
@@ -465,7 +466,7 @@ async def validate_user_permissions(
             service="auth",
             error_name="PermissionValidationError",
             error_message=f"Failed to validate permissions: {str(e)}",
-            client_ip=request.client.host if request.client else None,
+            client_ip=get_client_ip_or_none(request),
             target_user_id=user_id,
             requesting_user_id=current_user.user_id,
             exception_type=type(e).__name__
