@@ -107,6 +107,34 @@ class Settings(BaseSettings):
     SESSION_TIMEOUT_HOURS: int = 24
     MAX_SESSIONS_PER_USER: int = 5
     
+    # Login Throttling (VAPT: no login rate limiting or account lockout existed)
+    # Mode is the rollout kill switch, mirroring AUTHZ_MODE:
+    #   enforce - refuse throttled attempts (default)
+    #   warn    - log what would have been refused, allow it through
+    #   off     - do not evaluate at all
+    LOGIN_RATE_LIMIT_MODE: str = os.getenv("LOGIN_RATE_LIMIT_MODE", "enforce")
+
+    # Per-account limits, keyed on the SUBMITTED username whether or not it exists.
+    # Keying only on real accounts would turn the throttle into a username-existence
+    # oracle: spray, watch who slows down, harvest the valid list.
+    LOGIN_MAX_ATTEMPTS: int = int(os.getenv("LOGIN_MAX_ATTEMPTS", "6"))
+    LOGIN_WINDOW_MINUTES: int = int(os.getenv("LOGIN_WINDOW_MINUTES", "15"))
+    LOGIN_LOCKOUT_MINUTES: int = int(os.getenv("LOGIN_LOCKOUT_MINUTES", "5"))
+    LOGIN_MAX_LOCKOUT_MINUTES: int = int(os.getenv("LOGIN_MAX_LOCKOUT_MINUTES", "60"))
+    # "failures:seconds" pairs. The ramp in front of the lockout cliff: 3rd failure gates
+    # the next attempt for 2s, 4th for 5s, 5th for 15s, 6th locks.
+    LOGIN_DELAY_LADDER: str = os.getenv("LOGIN_DELAY_LADDER", "3:2,4:5,5:15")
+
+    # Per-IP limits. Deliberately far looser than the account limits: PTC users may share
+    # a corporate NAT egress address, in which case one IP is the whole company. This tier
+    # exists to catch spraying (one guess each against many accounts), which the account
+    # key cannot see, and it must never be the thing that locks a trading desk out.
+    LOGIN_IP_RATE_LIMIT_ENABLED: bool = os.getenv("LOGIN_IP_RATE_LIMIT_ENABLED", "true").lower() in ("true", "1", "yes")
+    LOGIN_IP_MAX_ATTEMPTS: int = int(os.getenv("LOGIN_IP_MAX_ATTEMPTS", "50"))
+    LOGIN_IP_WINDOW_MINUTES: int = int(os.getenv("LOGIN_IP_WINDOW_MINUTES", "15"))
+    LOGIN_IP_LOCKOUT_MINUTES: int = int(os.getenv("LOGIN_IP_LOCKOUT_MINUTES", "5"))
+    LOGIN_IP_MAX_LOCKOUT_MINUTES: int = int(os.getenv("LOGIN_IP_MAX_LOCKOUT_MINUTES", "15"))
+
     # Proxy Configuration
     # Comma-separated list of trusted reverse-proxy IPs (e.g. "127.0.0.1,10.0.0.1").
     # When set, X-Forwarded-For / X-Real-IP are only honoured for requests whose

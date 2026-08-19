@@ -17,6 +17,7 @@ from ....schemas.password_policy import (
 )
 from ....core.dto import AuthUserDTO
 from libs.core.authz import get_current_user, UserPrincipal
+from libs.middleware.utils import get_client_ip_or_none
 from ....services.password_policy import PasswordPolicyService
 from ....utils.activity_logger import (
     log_auth_activity
@@ -140,7 +141,7 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
         result = await auth_controller.login(login_data, request)
         
         # Log successful login attempt with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         if "temporary_token" in result:
@@ -182,8 +183,14 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
             return LoginResponse(**result)
             
     except HTTPException as e:
+        # A 429 was already audited as `login_rate_limited` by the controller, and it is
+        # not a failed credential attempt — re-logging it here would inflate the
+        # login_failed counts that any future alerting will be built on.
+        if e.status_code == status.HTTP_429_TOO_MANY_REQUESTS:
+            raise
+
         # Log failed login attempt with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_security_event(
@@ -278,7 +285,7 @@ async def verify_login(verify_data: VerifyLoginRequest, request: Request, audit_
         
         # Log successful MFA verification with secure audit logging
         user_info = result.get("user", {})
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         # Complete MFA login success - single comprehensive log
@@ -299,7 +306,7 @@ async def verify_login(verify_data: VerifyLoginRequest, request: Request, audit_
         
     except HTTPException as e:
         # Log failed MFA verification with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_security_event(
@@ -328,7 +335,7 @@ async def refresh_token(refresh_data: RefreshTokenRequest, request: Request, aud
         result = await auth_controller.refresh_token(refresh_data, request)
         
         # Log successful token refresh with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_user_action(
@@ -346,7 +353,7 @@ async def refresh_token(refresh_data: RefreshTokenRequest, request: Request, aud
         
     except HTTPException as e:
         # Log failed token refresh with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -385,7 +392,7 @@ async def logout(
         )
         
         # Log successful logout with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_security_event(
@@ -416,7 +423,7 @@ async def logout(
         
     except HTTPException as e:
         # Log failed logout attempt with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -466,7 +473,7 @@ async def get_current_user_info(
     """
     try:
         # Log user profile access with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_user_action(
@@ -617,7 +624,7 @@ async def change_password(
         )
         
         # Log successful password change with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_security_event(
@@ -637,7 +644,7 @@ async def change_password(
         
     except HTTPException as e:
         # Log failed password change with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -745,7 +752,7 @@ async def validate_password(
         result = password_service.validate_password_strength(validation_request.password)
         
         # Log password validation with secure audit logging (public endpoint)
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_system_operation(
@@ -770,7 +777,7 @@ async def validate_password(
         )
     except Exception as e:
         # Log failed password validation with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -850,7 +857,7 @@ async def get_password_policy(
     """
     try:
         # Log policy access with secure audit logging (public endpoint)
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_system_operation(
@@ -877,7 +884,7 @@ async def get_password_policy(
         )
     except Exception as e:
         # Log failed policy access with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -957,7 +964,7 @@ async def admin_unlock_user(
         )
         
         # Log successful unlock with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_security_event(
@@ -978,7 +985,7 @@ async def admin_unlock_user(
         
     except HTTPException as e:
         # Log failed unlock with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -995,7 +1002,7 @@ async def admin_unlock_user(
         raise e
     except Exception as e:
         # Log system error
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -1077,7 +1084,7 @@ async def admin_reset_password(
         )
         
         # Log successful password reset with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_security_event(
@@ -1098,7 +1105,7 @@ async def admin_reset_password(
         
     except HTTPException as e:
         # Log failed password reset with secure audit logging
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
@@ -1115,7 +1122,7 @@ async def admin_reset_password(
         raise e
     except Exception as e:
         # Log system error
-        client_ip = request.client.host if request.client else None
+        client_ip = get_client_ip_or_none(request)
         user_agent = request.headers.get("user-agent")
         
         audit_logger.log_error_event(
