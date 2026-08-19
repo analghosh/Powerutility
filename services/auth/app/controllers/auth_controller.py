@@ -6,6 +6,7 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import HTTPException, status, Request
 from services.auth.app.services.auth_service import auth_service
+from services.auth.app.services.login_rate_limiter import login_rate_limiter
 from services.auth.app.schemas.auth import LoginRequest, RefreshTokenRequest, ChangePasswordRequest, VerifyLoginRequest
 from services.auth.app.core.dto import AuthUserDTO
 from datetime import datetime
@@ -31,9 +32,17 @@ class AuthController:
         self.audit_logger : AuditLogger = get_audit_logger()
     
     def _extract_request_info(self, request: Request) -> Dict[str, Any]:
-        """Extract request information for audit logging"""
+        """
+        Extract request information for audit logging and throttling.
+
+        `get_client_ip` rather than `request.client.host`: behind nginx the socket peer is
+        the proxy, so the raw attribute recorded 127.0.0.1 as the client IP of every login
+        in production. It honours forwarded headers only when the peer is a trusted proxy,
+        so it cannot be spoofed by an untrusted client.
+        """
+        from libs.middleware.utils import get_client_ip_or_none
         return {
-            "ip_address": request.client.host if request.client else None,
+            "ip_address": get_client_ip_or_none(request),
             "user_agent": request.headers.get("user-agent"),
             "method": request.method,
             "path": request.url.path,
@@ -54,7 +63,32 @@ class AuthController:
         try:
             # Extract request info for audit
             request_info = self._extract_request_info(request)
-            
+            client_ip = request_info.get("ip_address")
+
+            # Throttle BEFORE the password is verified. Hashing is the expensive half, so
+            # letting a throttled attempt reach it would defeat the availability half of
+            # this control: unmetered /login is a CPU-exhaustion path against the one
+            # service every other service calls to validate every request.
+            throttle = login_rate_limiter.check(login_data.username, client_ip)
+            if not throttle["allowed"]:
+                self.audit_logger.log_security_event(
+                    service="auth",
+                    event_type="login_rate_limited",
+                    message="Login attempt refused by rate limiter",
+                    user_id=login_data.username,
+                    client_ip=client_ip,
+                    success=False,
+                    username=login_data.username,
+                    user_agent=request_info.get("user_agent"),
+                    failure_reason=throttle["detail"],
+                    login_method="password",
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail=throttle["message"],
+                    headers={"Retry-After": str(throttle["retry_after"])},
+                )
+
             # Attempt login
             result = await self.auth_service.login(
                 username=login_data.username,
@@ -77,11 +111,20 @@ class AuthController:
                     login_method="password"
                 )
                 
+                # Counted against the submitted username whether or not it exists.
+                # Throttling only real accounts would make the limiter a username-
+                # existence oracle.
+                login_rate_limiter.record_failure(login_data.username, client_ip)
+
                 raise HTTPException(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     detail="Invalid username or password"
                 )
             
+            # The password was correct on both branches below — an MFA challenge is
+            # issued only after it verifies — so the account's failure budget resets here.
+            login_rate_limiter.record_success(login_data.username, client_ip)
+
             # Check if this is a temporary token response (MFA enabled user)
             if "temporary_token" in result:
                 # MFA required logging handled at route layer to avoid duplication
