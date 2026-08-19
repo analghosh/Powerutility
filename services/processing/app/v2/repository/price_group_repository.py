@@ -140,6 +140,27 @@ class PriceGroupRepository(BaseRepository):
         return self._dump(res)
 
 
+    # Collection holding the live records that point at a price group by name. Deliberately
+    # only plant_master: seven other collections carry a `price_group` field
+    # (dam/gdam/hpdam/rtm bid captures, supply_serve, supply_serve_historical), but those
+    # are records of things that already happened. Blocking on them would make any price
+    # group that has ever been traded permanently undeletable, which is a worse outcome
+    # than the orphan this guards against — and it is not what VAPT F3 describes.
+    PLANT_COLLECTION = "plant_master"
+
+    async def count_referencing_plants(self, price_group: str) -> int:
+        """
+        How many plants still point at this price group.
+
+        The reference is by NAME, not by id (`plant_master.price_group` holds "A"/"B"/"C"),
+        so the caller must pass the group's `price_group` value, not its ObjectId.
+        """
+        if not price_group:
+            return 0
+        return await self.db[self.PLANT_COLLECTION].count_documents(
+            {"price_group": price_group}
+        )
+
     async def delete(self, _id: str) -> bool:
         return await super().delete(_id)
 

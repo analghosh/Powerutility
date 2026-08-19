@@ -8,7 +8,7 @@ from datetime import datetime
 import logging
 
 from ...repository.price_group_repository import PriceGroupRepository
-from ...services.price_group_service import PriceGroupService
+from ...services.price_group_service import PriceGroupService, PriceGroupInUseError
 from ...controller.price_group_controller import PriceGroupController
 from libs.models.price_group_entity import PriceGroupCreate, PriceGroupUpdate
 from libs.audit_queue.simple_logger import AuditLogger
@@ -347,7 +347,18 @@ async def delete_price_group(
             correlation_id=correlation_id,
             user_id=user_id
         )
-        ok = await controller.delete(price_group_id, user_context, req_meta)
+        try:
+            ok = await controller.delete(price_group_id, user_context, req_meta)
+        except PriceGroupInUseError as e:
+            # VAPT F3. 409 rather than 400: the request is well formed, it conflicts with
+            # the current state of the data. The message names the count so the operator
+            # knows what to reassign, and the service has already audited the refusal.
+            logger.info(
+                "Refused delete of price group %s: %s plant(s) still reference it",
+                price_group_id, e.plant_count,
+            )
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e))
+
         if not ok:
             raise HTTPException(status_code=404, detail="Price group not found")
 
