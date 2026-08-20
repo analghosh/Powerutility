@@ -186,7 +186,45 @@ class BlockBidCurrentDataRepository(GenericRepository):
         except (ValueError, IndexError, AttributeError) as e:
             logger.warning(f"Error converting time '{time_str}' to period_code: {str(e)}")
             return None
-    
+
+    @staticmethod
+    def period_range(from_time: Any, to_time: Any) -> List[int]:
+        """
+        Every period code a block bid covers: inclusive of `from`, exclusive of `to`.
+
+        A block bid is one order spanning a contiguous stretch of the 96-block day,
+        so a screen keyed by period has to list it under each block in that stretch.
+        `to` is the boundary the bid stops at, never a block it covers — 10:00-12:00
+        is blocks 41-48, not 41-49.
+
+        Midnight is written both ways in the data ("24:00" on RTM/GDAM rows, "00:00"
+        on DAM rows) and `time_to_period_code` rejects both: 24:00 computes 97 and
+        fails its 1-96 guard, 00:00 computes 1 and reads as a wrap. Any end at or
+        before the start therefore means end-of-day.
+
+        Args:
+            from_time: Start of the bid in "HH:MM"
+            to_time:   End of the bid in "HH:MM"
+
+        Returns:
+            Ascending period codes (1-96); empty if the start is unparseable.
+        """
+        start = BlockBidCurrentDataRepository.time_to_period_code(from_time)
+        if start is None:
+            return []
+
+        try:
+            hour, minute = map(int, str(to_time).split(":")[:2])
+            end = hour * 4 + (minute // BLOCK_INTERVAL_MINUTES) + 1
+        except (ValueError, IndexError, AttributeError) as e:
+            logger.warning(f"Error converting time '{to_time}' to period_code: {str(e)}")
+            return [start]
+
+        if end <= start or end > BLOCKS_PER_DAY + 1:
+            end = BLOCKS_PER_DAY + 1
+
+        return list(range(start, end))
+
     async def get_block_bid_data_by_date_and_market_type(
         self, 
         datebid: str, 
