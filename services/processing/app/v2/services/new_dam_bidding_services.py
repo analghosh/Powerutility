@@ -3928,9 +3928,6 @@ class DAMBiddingServices:
                 datebid, market_type="DAM"
             )
             
-            # Use repository method to convert time to period code
-            time_to_period_code = self.block_bid_current_data_repo.time_to_period_code
-            
             # Map block_bid_current_data to AllExcBlockBidDatas structure
             for block_bid_record in block_bid_current_data:
                 from_time = block_bid_record.get("from")
@@ -3939,11 +3936,17 @@ class DAMBiddingServices:
                 if not from_time or not to_time:
                     continue
                 
-                from_period_code = time_to_period_code(from_time)
-                to_period_code = time_to_period_code(to_time)
-                
-                if from_period_code is None or to_period_code is None:
+                # A block bid covers every period from `from` up to but not including
+                # `to`. period_range also normalises the two ways midnight is written
+                # in this collection — "24:00" on RTM/GDAM rows, "00:00" on DAM ones —
+                # both of which time_to_period_code rejects, dropping the bid entirely.
+                covered_periods = self.block_bid_current_data_repo.period_range(from_time, to_time)
+
+                if not covered_periods:
                     continue
+
+                from_period_code = covered_periods[0]
+                to_period_code = covered_periods[-1] + 1
                 
                 # Create block bid data structure matching AllExcBlockBidDatas format
                 ocf_val = block_bid_record.get("ocf_config") or block_bid_record.get("ocf", "")
@@ -3958,6 +3961,11 @@ class DAMBiddingServices:
                     "number_of_bids": int(block_bid_record.get("number_of_bids", 0)),
                     "buy_sell": block_bid_record.get("type", "").lower() if block_bid_record.get("type") else "",
                     "bid_status": block_bid_record.get("status", ""),
+                    # What the exchange made of the bid, kept apart from the local approval
+                    # status: a bid IEX rejects is still "Submitted" as far as EPMS is concerned.
+                    "exchange_status": block_bid_record.get("exchangeStatus", ""),
+                    "order_id": block_bid_record.get("orderId") or block_bid_record.get("exchangeOrderId") or "",
+                    "exchange_last_updated_time": block_bid_record.get("exchangeLastUpdatedTime", ""),
                     "Ex_split_string": block_bid_record.get("ex_split_string", ""),
                     "remark": block_bid_record.get("remark", ""),
                     "biding_date": block_bid_record.get("biding_date", datebid),
@@ -3974,13 +3982,11 @@ class DAMBiddingServices:
                     "_id": block_bid_record.get("_id")
                 }
                 
-                # Add to AllExcBlockBidDatas keyed by from_period_code (allow multiple entries)
-                all_exc_block_bid_datas.setdefault(from_period_code, []).append(block_bid_mapped)
-                
-                # If block bid spans multiple periods, also add to next period
-                if to_period_code != from_period_code + 1:
-                    next_period = from_period_code + 1
-                    all_exc_block_bid_datas.setdefault(next_period, []).append(block_bid_mapped)
+                # List the bid under every period it covers. Keying it to the first
+                # block plus one left an 8-block bid showing on 2 blocks. Several bids
+                # can cover the same period, so each one appends rather than replaces.
+                for period_code in covered_periods:
+                    all_exc_block_bid_datas.setdefault(period_code, []).append(block_bid_mapped)
             
             # Get exchange bid status for other user
             other_user_id = limit_array.get("other_user_id", "")
