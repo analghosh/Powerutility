@@ -24,6 +24,25 @@ logger = logging.getLogger(__name__)
 # Valid values: "Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"
 VALID_ORDER_STATUSES = {"Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"}
 
+
+def exchange_refusal_reason(response_data: Any) -> str:
+    """
+    The exchange's own words for why a block bid POST was not accepted.
+
+    The approval screen reports the submission itself — did the bid reach the
+    exchange — so a refusal has to arrive as a sentence a trader can act on, not
+    as a serialised response object. IEX puts the reason in `StatusMessage` and
+    the outcome in `Status`; either can be absent on a malformed reply.
+    """
+    if not isinstance(response_data, dict):
+        return "submission refused"
+    return (
+        response_data.get("StatusMessage")
+        or response_data.get("Status")
+        or "submission refused"
+    )
+
+
 def exchange_quantity(quantum, iex_split_percent, qty_decimal, buy_sell) -> int:
     """Quantity in the form IEX expects: a magnitude, signed by direction.
 
@@ -994,7 +1013,10 @@ class BlockBidServices:
 
         if submit_status != "Success" or not transaction_id:
             logger.error(f"{market} block bid submission failed — full exchange response: {response_data}")
-            raise HTTPException(status_code=502, detail={"exchange_response": response_data})
+            raise HTTPException(
+                status_code=502,
+                detail=f"{market} block bid was not submitted — {exchange_refusal_reason(response_data)}",
+            )
 
         logger.info(f"{market} block bid submitted: TransactionId={transaction_id}, waiting for bid details...")
 
@@ -1017,7 +1039,6 @@ class BlockBidServices:
         # 10. Map BlockBidDetails → store in iex_response
         dam_bid_details = bid_details_response.get("BlockBidDetails", []) if isinstance(bid_details_response, dict) else []
         response_docs: List[Dict[str, Any]] = []
-        final_status = "Submitted"
 
         async def _update_dam_bid_detail(val):
             order_status = val.get("OrderStatus", "Submitted")
@@ -1031,9 +1052,10 @@ class BlockBidServices:
                 "orderId":                 order_id_val,
                 "updatedAt":               datetime.now(),
             }
-            # Only mirror the rejection — don't touch status for any other exchange state.
-            if order_status == "Rejected":
-                set_fields["status"] = "exchange_rejected"
+            # `status` stays "Submitted": it records what EPMS did, and EPMS submitted
+            # the bid. Whatever the exchange makes of the order lives in
+            # `exchangeStatus` and surfaces in the Bid Status screen's Block Bid Status
+            # column, not in the approval screen's own status.
             await self.block_bid_repo.update_one(
                 {
                     "biding_date": biding_date,
@@ -1046,7 +1068,6 @@ class BlockBidServices:
             )
 
         if dam_bid_details:
-            final_status = dam_bid_details[-1].get("OrderStatus", "Submitted")
             await asyncio.gather(*[_update_dam_bid_detail(v) for v in dam_bid_details], return_exceptions=True)
 
         for val in dam_bid_details:
@@ -1074,12 +1095,21 @@ class BlockBidServices:
         if response_docs:
             await self.dam_iex_response_repo.bulk_insert_response_docs(response_docs)
 
-        logger.info(f"{market} block bid submission complete: TransactionId={transaction_id}, {len(response_docs)} bids, status={final_status}")
+        # The reply describes the POST alone. `bids_submitted` counts what was posted,
+        # not what get_bid_details echoed back: a failed follow-up read used to make a
+        # successful submission report zero bids. The order status the exchange assigns
+        # is written to `exchangeStatus` above and read by the Bid Status screen.
+        submitted_count = len(bid_details)
+        logger.info(
+            f"{market} block bid submission complete: TransactionId={transaction_id}, "
+            f"{submitted_count} bid(s) posted, {len(response_docs)} exchange records"
+        )
         return {
             "status": "success",
-            "message": f"{market} Bid {final_status} in exchange!",
+            "message": f"{submitted_count} {market} bid(s) submitted to exchange!",
             "transaction_id": transaction_id,
-            "bids_submitted": len(response_docs),
+            "bids_submitted": submitted_count,
+            "exchange_records": len(response_docs),
         }
 
     async def cancel_dam_block_bid_on_exchange(
