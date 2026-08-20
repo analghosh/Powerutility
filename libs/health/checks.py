@@ -4,10 +4,28 @@ Specific health check implementations for common services
 
 import asyncio
 import logging
-from typing import Optional
+from typing import Any, Dict, Optional
 from .health_checker import ComponentHealth, HealthStatus
 
 logger = logging.getLogger(__name__)
+
+
+# Health checks used to build a brand-new client on every call -- connect, probe, close --
+# for both Redis and MongoDB. On processing that put a single /health at 145 ms and made
+# the endpoint an unauthenticated load amplifier. The clients are pooled here instead.
+#
+# Keyed by the running event loop as well as the URL: both drivers bind their connection
+# pool to the loop that created it, and a client built on a dead loop silently fails every
+# operation. This codebase has been bitten by exactly that before.
+_CLIENTS: Dict[Any, Any] = {}
+
+
+def _loop_key(kind: str, url: str) -> Any:
+    try:
+        loop_id = id(asyncio.get_running_loop())
+    except RuntimeError:      # no running loop (sync call site)
+        loop_id = 0
+    return (kind, url, loop_id)
 
 
 async def check_redis_health(redis_url: Optional[str] = None) -> ComponentHealth:
@@ -26,9 +44,14 @@ async def check_redis_health(redis_url: Optional[str] = None) -> ComponentHealth
         # Use provided URL or default
         url = redis_url or "redis://localhost:6379"
         
-        # Create Redis client
-        client = redis.from_url(url, decode_responses=True)
-        
+        # Reuse the pooled client rather than connecting per call.
+        key = _loop_key("redis", url)
+        client = _CLIENTS.get(key)
+        if client is None:
+            client = redis.from_url(url, decode_responses=True,
+                                    socket_connect_timeout=5, socket_timeout=5)
+            _CLIENTS[key] = client
+
         # Test connection with ping
         await client.ping()
         
@@ -37,8 +60,8 @@ async def check_redis_health(redis_url: Optional[str] = None) -> ComponentHealth
         redis_version = info.get("redis_version", "unknown")
         connected_clients = info.get("connected_clients", 0)
         
-        await client.close()
-        
+        # Deliberately not closed: the client is pooled and reused by the next check.
+
         return ComponentHealth(
             name="redis",
             status=HealthStatus.HEALTHY,
@@ -80,15 +103,19 @@ async def check_mongodb_health(mongo_url: Optional[str] = None) -> ComponentHeal
         # Use provided URL or default
         url = mongo_url or "mongodb://localhost:27017"
         
-        # Create MongoDB client with connection pool limits
-        client = AsyncMongoClient(
-            url, 
-            serverSelectionTimeoutMS=5000,
-            maxPoolSize=2,  # Limit pool for health checks
-            minPoolSize=0,
-            maxIdleTimeMS=10000
-        )
-        
+        # Reuse the pooled client rather than connecting per call.
+        key = _loop_key("mongodb", url)
+        client = _CLIENTS.get(key)
+        if client is None:
+            client = AsyncMongoClient(
+                url,
+                serverSelectionTimeoutMS=5000,
+                maxPoolSize=2,  # Limit pool for health checks
+                minPoolSize=0,
+                maxIdleTimeMS=10000
+            )
+            _CLIENTS[key] = client
+
         # Test connection
         await client.admin.command('ping')
         
@@ -99,8 +126,8 @@ async def check_mongodb_health(mongo_url: Optional[str] = None) -> ComponentHeal
         # Get database stats
         db_names = await client.list_database_names()
         
-        await client.close()
-        
+        # Deliberately not closed: the client is pooled and reused by the next check.
+
         return ComponentHealth(
             name="mongodb",
             status=HealthStatus.HEALTHY,

@@ -4,6 +4,8 @@ Comprehensive health check service for EPMS applications
 
 import asyncio
 import logging
+import os
+import time
 from datetime import datetime
 from enum import Enum
 from typing import Dict, Any, Optional, List
@@ -31,9 +33,30 @@ class ComponentHealth(BaseModel):
 class HealthChecker:
     """Comprehensive health checker for application dependencies"""
     
-    def __init__(self):
+    # How long a completed result stays servable, in seconds. `/health` is unauthenticated
+    # and every request used to run the full dependency sweep, so an anonymous flood was a
+    # denial-of-service amplifier: measured on processing, 30 concurrent anonymous
+    # /health requests took real authenticated API calls from 8 ms to 1,700 ms median --
+    # 221x -- because the probes share the event loop with live traffic.
+    #
+    # Caching removes the amplification rather than making each probe cheaper: any number
+    # of requests inside the window collapse onto one real sweep. Five seconds is well
+    # inside what a load balancer or monitor needs, and set to 0 to disable.
+    DEFAULT_CACHE_TTL_SECONDS = 5.0
+
+    def __init__(self, cache_ttl_seconds: Optional[float] = None):
         self.checks = {}
         self.timeout = 5.0  # Default timeout for health checks
+        if cache_ttl_seconds is None:
+            try:
+                cache_ttl_seconds = float(os.getenv("HEALTH_CACHE_TTL_SECONDS",
+                                                    self.DEFAULT_CACHE_TTL_SECONDS))
+            except (TypeError, ValueError):
+                cache_ttl_seconds = self.DEFAULT_CACHE_TTL_SECONDS
+        self.cache_ttl_seconds = max(0.0, cache_ttl_seconds)
+        self._cached_result: Optional[Dict[str, Any]] = None
+        self._cached_at: float = 0.0
+        self._probe_lock: Optional[asyncio.Lock] = None
     
     def register_check(self, name: str, check_func, timeout: Optional[float] = None):
         """
@@ -101,7 +124,45 @@ class HealthChecker:
                 response_time_ms=response_time
             )
     
+    def _fresh_cache(self) -> Optional[Dict[str, Any]]:
+        """The cached result if it is still inside the TTL, else None."""
+        if self.cache_ttl_seconds <= 0 or self._cached_result is None:
+            return None
+        if (time.monotonic() - self._cached_at) >= self.cache_ttl_seconds:
+            return None
+        return self._cached_result
+
     async def check_all(self) -> Dict[str, Any]:
+        """
+        Run all registered health checks, reusing a recent result when one exists.
+
+        Single-flight is the point, not just the TTL. Without the lock, sixty requests
+        arriving on a cold cache would each start their own sweep -- exactly the behaviour
+        being fixed -- and only then populate the cache. With it, the first caller probes
+        and the other fifty-nine await that same probe.
+        """
+        cached = self._fresh_cache()
+        if cached is not None:
+            return cached
+
+        # Created lazily: the lock must belong to the running loop, and this object is
+        # constructed at import time, before there is one.
+        if self._probe_lock is None:
+            self._probe_lock = asyncio.Lock()
+
+        async with self._probe_lock:
+            # Re-check inside the lock: while we waited, the holder may have refreshed it.
+            cached = self._fresh_cache()
+            if cached is not None:
+                return cached
+
+            result = await self._check_all_uncached()
+            if self.cache_ttl_seconds > 0:
+                self._cached_result = result
+                self._cached_at = time.monotonic()
+            return result
+
+    async def _check_all_uncached(self) -> Dict[str, Any]:
         """
         Run all registered health checks
         
