@@ -93,19 +93,25 @@ class Settings(BaseSettings):
     USE_RABBITMQ_AUDIT: bool = False
 
     # MFA Configuration
-    # Method-scoped kill switch for authenticator-app (TOTP) two-factor auth. Named for the
-    # method rather than for MFA in general, because e-mail 2FA is expected to land later
-    # and the two need to be switchable independently -- either one alone, or both.
+    # Switch for the authenticator-app (TOTP) **enrolment** flow this branch adds. Named
+    # for the method rather than for MFA in general, because e-mail 2FA is expected later
+    # and the two need to be switchable independently.
     #
-    # When false: no new enrolment is accepted, and login does not issue a TOTP challenge.
-    # Existing `mfa_enabled` / `mfa_secret` data is left untouched, so flipping it back on
-    # restores every enrolled user exactly as they were.
+    #   false (default) -- /mfa/enable returns 503; nobody new can set up an authenticator
+    #   true            -- enrolment is offered
     #
-    # ⚠️ Defaults to TRUE on purpose. 13 active accounts -- including `admin` and
-    # `ptcindia` -- already have TOTP enabled and set up, so defaulting this to false would
-    # silently drop a second factor those users opted into. Set it to false explicitly in
-    # the environment to hold the feature closed.
-    AUTHENTICATOR_MFA_ENABLED: bool = os.getenv("AUTHENTICATOR_MFA_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+    # ⚠️ It deliberately does NOT gate the login challenge. Accounts that are already
+    # enrolled keep being challenged either way, because suppressing that would silently
+    # drop a second factor those users opted into — a security downgrade applied by a
+    # config default rather than by a decision. Retiring the method entirely is a
+    # migration (disable, then un-enrol), not a flag flip.
+    #
+    # The fixes to the existing TOTP path in this branch — replay protection, the
+    # four-logins-then-lockout bug, admin recovery, secret encryption — apply regardless
+    # of this switch. They are corrections to behaviour that is already live for enrolled
+    # users, and holding a lockout fix behind a flag would be worse than shipping it.
+    # Legacy plaintext secrets keep working: `decrypt_secret` passes them through.
+    AUTHENTICATOR_MFA_ENABLED: bool = os.getenv("AUTHENTICATOR_MFA_ENABLED", "false").strip().lower() in ("true", "1", "yes")
 
     # NOTE: MFA_ENABLED below is dead config -- it has never had a call site. Left in place
     # rather than removed, so nothing that reads it by name breaks; it gates nothing.

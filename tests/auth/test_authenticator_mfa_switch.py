@@ -1,97 +1,94 @@
 """
-`AUTHENTICATOR_MFA_ENABLED` — the method-level kill switch for authenticator-app 2FA.
+`AUTHENTICATOR_MFA_ENABLED` — the switch for the authenticator-app enrolment flow this
+branch adds.
 
 Named for the method, not for MFA in general: e-mail 2FA is expected later and the two
 have to be switchable independently.
 
-The property that matters is that the switch is honoured *consistently*. Both login steps
-consult it, because if they disagreed a user could be handed a temporary token at step one
-and then be unable to redeem it at step two — locked out of their own account by a config
-flag.
+The distinction these tests exist to protect: the switch gates **enrolment**, not the
+**login challenge**. Accounts already enrolled on `dev` keep being challenged whichever
+way it is set. Making `false` also suppress the challenge would silently drop a second
+factor those users opted into — a security downgrade applied by a config default rather
+than by a decision.
 """
 
-import pytest
-
-from services.auth.app.core.config import settings
+import re
 
 
-class _User:
-    def __init__(self, enabled=True, complete=True):
-        self.mfa_enabled = enabled
-        self.mfa_setup_complete = complete
-        self.username = "trader"
+SOURCE_CONFIG = "services/auth/app/core/config.py"
+SOURCE_AUTH = "services/auth/app/services/auth_service.py"
+SOURCE_ROUTES = "services/auth/app/api/v1/routes/mfa.py"
 
 
-def _challenge_required(user, switch_on):
-    """Mirrors auth_service's gate: switch AND user-enabled AND setup-complete."""
-    return bool(switch_on and user.mfa_enabled and user.mfa_setup_complete)
+class TestDefault:
+    def test_defaults_to_off(self):
+        """New capability ships inert; PTC turns it on when they have confirmed it."""
+        src = open(SOURCE_CONFIG).read()
+        m = re.search(r'AUTHENTICATOR_MFA_ENABLED[^\n]*os\.getenv\(\s*"AUTHENTICATOR_MFA_ENABLED"\s*,\s*"([^"]+)"', src)
+        assert m, "switch is no longer read from the environment with a literal default"
+        assert m.group(1).lower() == "false"
+
+    def test_truthy_spellings_are_accepted(self):
+        src = open(SOURCE_CONFIG).read()
+        line = [l for l in src.split("\n") if "AUTHENTICATOR_MFA_ENABLED: bool" in l][0]
+        for spelling in ('"true"', '"1"', '"yes"'):
+            assert spelling in line, f"{spelling} should be accepted as on"
 
 
-class TestSwitchSemantics:
-    def test_default_is_on(self):
-        """13 active accounts, including admin and ptcindia, already have TOTP set up.
-        Defaulting to off would silently drop a second factor they opted into."""
-        assert settings.AUTHENTICATOR_MFA_ENABLED is True
-
-    def test_switch_off_suppresses_the_challenge_for_an_enrolled_user(self):
-        assert _challenge_required(_User(), switch_on=False) is False
-
-    def test_switch_on_still_challenges_an_enrolled_user(self):
-        assert _challenge_required(_User(), switch_on=True) is True
-
-    def test_switch_on_does_not_challenge_a_user_who_never_enrolled(self):
-        """The switch offers the method; it does not impose it."""
-        assert _challenge_required(_User(enabled=False, complete=False), switch_on=True) is False
-
-    def test_partial_enrolment_is_not_challenged(self):
-        """Enabled but never completed setup means there is no secret to verify against."""
-        assert _challenge_required(_User(enabled=True, complete=False), switch_on=True) is False
-
-
-class TestBothLoginStepsAgree:
-    def test_the_two_gates_are_written_identically(self):
-        """A drift between the two would strand a user mid-login, holding a temporary
-        token that the second step refuses to accept."""
-        src = open("services/auth/app/services/auth_service.py").read()
-        assert src.count("settings.AUTHENTICATOR_MFA_ENABLED") == 2, (
-            "expected the switch at both the login and verify-login gates"
-        )
-
-
-class TestEnrolmentIsRefusedWhenClosed:
-    def test_enable_route_checks_the_switch_before_minting_a_secret(self):
-        """Refused early on purpose: a later check could leave a half-finished enrolment
-        and an orphaned secret on the account."""
-        src = open("services/auth/app/api/v1/routes/mfa.py").read()
+class TestItGatesEnrolmentOnly:
+    def test_enrolment_route_checks_the_switch(self):
+        src = open(SOURCE_ROUTES).read()
         enable_at = src.index('@router.post("/enable"')
         verify_at = src.index('@router.post("/verify"')
         body = src[enable_at:verify_at]
         assert "AUTHENTICATOR_MFA_ENABLED" in body
-        assert body.index("AUTHENTICATOR_MFA_ENABLED") < body.index("mfa_controller"), (
-            "the switch must be checked before any controller work"
+
+    def test_the_check_happens_before_any_secret_is_minted(self):
+        """A later check could leave a half-finished enrolment and an orphaned secret."""
+        src = open(SOURCE_ROUTES).read()
+        enable_at = src.index('@router.post("/enable"')
+        verify_at = src.index('@router.post("/verify"')
+        body = src[enable_at:verify_at]
+        assert body.index("AUTHENTICATOR_MFA_ENABLED") < body.index("mfa_controller")
+
+    def test_login_is_NOT_gated_by_the_switch(self):
+        """The load-bearing assertion. If this ever fails, turning the switch off has
+        started suppressing challenges for accounts that are already enrolled."""
+        src = open(SOURCE_AUTH).read()
+        assert "AUTHENTICATOR_MFA_ENABLED" not in src, (
+            "auth_service must not consult the enrolment switch — already-enrolled "
+            "accounts keep their second factor regardless of it"
         )
+
+    def test_both_login_gates_still_read_the_user_state(self):
+        src = open(SOURCE_AUTH).read()
+        assert src.count("user.mfa_enabled and user.mfa_setup_complete") == 2
+
+
+class TestExistingEnrolmentSurvives:
+    def test_the_switch_never_appears_on_a_line_that_writes_secrets(self):
+        """Flipping it must not delete or rewrite enrolment data."""
+        for path in (SOURCE_AUTH, SOURCE_ROUTES):
+            for line in open(path).read().split("\n"):
+                if "AUTHENTICATOR_MFA_ENABLED" in line:
+                    assert "mfa_secret" not in line
+                    assert "delete" not in line.lower()
+
+    def test_legacy_plaintext_secrets_still_decrypt(self):
+        """Accounts enrolled before this branch stored their secret in plaintext; the
+        encryption work must pass those through rather than fail every code."""
+        from libs.crypto import decrypt_secret
+        assert decrypt_secret("JBSWY3DPEHPK3PXP") == "JBSWY3DPEHPK3PXP"
 
 
 class TestClientCanHideTheOption:
     def test_status_exposes_method_availability(self):
-        """So the UI hides enrolment rather than offering a button that 503s."""
         from services.auth.app.schemas.mfa import MFAStatusResponse
         assert "method_available" in MFAStatusResponse.model_fields
 
     def test_method_available_is_independent_of_per_user_state(self):
+        """A user already enrolled sees enabled=True even while enrolment is closed."""
         from services.auth.app.schemas.mfa import MFAStatusResponse
         r = MFAStatusResponse(method_available=False, enabled=True,
                               setup_complete=True, backup_codes_remaining=3)
         assert r.method_available is False and r.enabled is True
-
-
-class TestExistingEnrolmentSurvives:
-    def test_switch_does_not_appear_in_any_write_path(self):
-        """Flipping the switch must not delete secrets — turning it back on has to restore
-        every enrolled user exactly as they were."""
-        for path in ("services/auth/app/services/auth_service.py",
-                     "services/auth/app/api/v1/routes/mfa.py"):
-            src = open(path).read()
-            for line in src.split("\n"):
-                if "AUTHENTICATOR_MFA_ENABLED" in line:
-                    assert "mfa_secret" not in line and "delete" not in line.lower()

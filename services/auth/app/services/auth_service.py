@@ -80,15 +80,8 @@ class AuthService:
             # Generate temporary token (expires in 5 minutes)
             temporary_token = self.jwt_service.create_temporary_token(temp_token_data, expire_minutes=5)
             
-            # Check if MFA is enabled for this user.
-            # `AUTHENTICATOR_MFA_ENABLED` is the method-level switch: with it off, no TOTP
-            # challenge is issued even to users who have one set up. Their enrolment data
-            # is untouched, so turning it back on restores them.
-            mfa_required = (
-                settings.AUTHENTICATOR_MFA_ENABLED
-                and user.mfa_enabled
-                and user.mfa_setup_complete
-            )
+            # Check if MFA is enabled for this user
+            mfa_required = user.mfa_enabled and user.mfa_setup_complete
             
             if mfa_required:
                 # MFA enabled: return temporary token for two-step flow
@@ -182,10 +175,8 @@ class AuthService:
             else:
                 user = user_with_perms  # Use the same object
             
-            # Check if MFA is required. Gated on the same method switch as the login
-            # step above -- if the two disagreed, a user could be issued a temporary token
-            # and then be unable to redeem it, or vice versa.
-            if settings.AUTHENTICATOR_MFA_ENABLED and user.mfa_enabled and user.mfa_setup_complete:
+            # Check if MFA is required
+            if user.mfa_enabled and user.mfa_setup_complete:
                 logger.info(f"MFA verification required for user {user.username}")
 
                 if not totp_code and not backup_code:
