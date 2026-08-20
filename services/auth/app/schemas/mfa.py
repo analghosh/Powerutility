@@ -55,6 +55,12 @@ class MFARecoveryResponse(BaseModel):
 
 class MFAStatusResponse(BaseModel):
     """MFA status response schema"""
+    # Whether the authenticator method is offered at all, independent of this user's own
+    # state. The client reads this to decide whether to show the enrolment option, rather
+    # than presenting a button that returns 503.
+    method_available: bool = Field(
+        True, description="Whether authenticator-app 2FA is currently offered"
+    )
     enabled: bool = Field(..., description="Whether MFA is enabled")
     setup_complete: bool = Field(..., description="Whether MFA setup is complete")
     backup_codes_remaining: int = Field(..., description="Number of backup codes remaining")

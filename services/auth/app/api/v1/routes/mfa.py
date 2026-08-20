@@ -7,6 +7,8 @@ import sys
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status, Request
+
+from ....core.config import settings
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from ....controllers.mfa_controller import mfa_controller
@@ -69,6 +71,14 @@ async def enable_mfa(
     enable_request: EnableMFARequest,
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ):
+    # Method-level switch. Refused here rather than deeper down so no secret is minted and
+    # no half-finished enrolment is left on the account when the method is closed.
+    if not settings.AUTHENTICATOR_MFA_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Authenticator-app two-factor authentication is not currently available.",
+        )
+
     """
     Enable Multi-Factor Authentication for the current user
     
@@ -343,7 +353,14 @@ async def get_mfa_status(credentials: HTTPAuthorizationCredentials = Depends(sec
             detail="Invalid access token"
         )
     
-    return await mfa_controller.get_mfa_status(user.id)
+    result = await mfa_controller.get_mfa_status(user.id)
+    # Whether the method is offered at all is service configuration, not per-user state,
+    # so it is stamped here rather than threaded through the controller.
+    if isinstance(result, dict):
+        result["method_available"] = settings.AUTHENTICATOR_MFA_ENABLED
+    else:
+        setattr(result, "method_available", settings.AUTHENTICATOR_MFA_ENABLED)
+    return result
 
 
 @router.post("/admin/emergency-disable/{target_user_id}", summary="Emergency MFA Disable (admin)")

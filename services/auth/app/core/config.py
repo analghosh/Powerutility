@@ -93,6 +93,22 @@ class Settings(BaseSettings):
     USE_RABBITMQ_AUDIT: bool = False
 
     # MFA Configuration
+    # Method-scoped kill switch for authenticator-app (TOTP) two-factor auth. Named for the
+    # method rather than for MFA in general, because e-mail 2FA is expected to land later
+    # and the two need to be switchable independently -- either one alone, or both.
+    #
+    # When false: no new enrolment is accepted, and login does not issue a TOTP challenge.
+    # Existing `mfa_enabled` / `mfa_secret` data is left untouched, so flipping it back on
+    # restores every enrolled user exactly as they were.
+    #
+    # ⚠️ Defaults to TRUE on purpose. 13 active accounts -- including `admin` and
+    # `ptcindia` -- already have TOTP enabled and set up, so defaulting this to false would
+    # silently drop a second factor those users opted into. Set it to false explicitly in
+    # the environment to hold the feature closed.
+    AUTHENTICATOR_MFA_ENABLED: bool = os.getenv("AUTHENTICATOR_MFA_ENABLED", "true").strip().lower() in ("true", "1", "yes")
+
+    # NOTE: MFA_ENABLED below is dead config -- it has never had a call site. Left in place
+    # rather than removed, so nothing that reads it by name breaks; it gates nothing.
     MFA_ENABLED: bool = True
     MFA_ISSUER: str = "EPMS"  # Can be overridden by APP_NAME env var
     MFA_ALGORITHM: str = "SHA1"
