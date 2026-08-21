@@ -26,7 +26,9 @@ logger = logging.getLogger(__name__)
 # ---------- helpers ----------
 REQUIRED_COLUMNS = ["schedule_date", "block", "id_type", "values"]
 ALLOWED_ACTIONS = {"UPSERT", "DELETE"}
-MATRIX_FIXED_COLUMNS = ["Date", "Market", "Block"]
+# "Exchange" is accepted and ignored: matrix files exported by newer builds carry it,
+# and anything not listed here is parsed as a numeric value column.
+MATRIX_FIXED_COLUMNS = ["Date", "Market", "Block", "Exchange"]
 
 # CSV Header -> Internal ID partial map (excluding dynamic ones)
 CSV_TO_DB_MAP = {
@@ -36,6 +38,7 @@ CSV_TO_DB_MAP = {
     "NOC Buy": "noc_buy",
     "NOC Sell": "noc_sell",
     "Min Sell Price": "minsellprice",
+    "Must Sell Percent (%)": "Must_Sell_Percent",
     "OCF Premium/Discount Price": "ocfPremiumDiscountPrice",
     "OCF Max OCF Qty": "ocfMaxOCFQty",
     # "Forecasted Price" is handled dynamically
