@@ -3861,7 +3861,7 @@ class GDAMBiddingServices:
             # Enhance AllExcBlockBidDatas with data from block_bid_current_data
             # Get block bid data from block_bid_current_data collection (filtered by market_type = "GDAM")
             block_bid_current_data = await self.block_bid_current_data_repo.get_block_bid_data_by_date_and_market_type(
-                datebid, market_type="GDAM"
+                datebid, market_type="GDAM", include_reserved=False
             )
             
             # Map block_bid_current_data to AllExcBlockBidDatas structure
