@@ -904,65 +904,52 @@ class BlockBidServices:
         biddedQtyDecimal = float(asset_details_list[0].get("OrderQtyDecimal", 10)) if asset_details_list else 10.0
         logger.info(f"{market} block bid: AssetId={asset_id}, QtyDecimal={biddedQtyDecimal}")
 
-        # IEX answers /deliverydates in two shapes — the single root object
-        # {DeliveryDateId, DeliveryDate} and the RTM-style {"DeliveryDates": [...]}
-        # list — and which one a day-ahead market sends is not fixed. Reading only
-        # the root key returned None whenever the exchange sent the list, and the
-        # submission died on "DeliveryDate not found" with the bid date perfectly
-        # valid. resolve_delivery_date takes either shape and, when there is a
-        # choice, picks the record that actually falls on the bid date rather than
-        # the first one in the list.
+        # The delivery date is the bid's own date, not whatever /deliverydates
+        # happens to be serving.
+        #
+        # Every DeliveryDate IEX has ever accepted on this path is exactly midnight
+        # UTC of the delivery day (1787011200 = 2026-08-18, 1787097600 = 2026-08-19,
+        # 1787270400 = 2026-08-21 ...), so it is computable and does not need to be
+        # asked for. Deriving it also makes it impossible to put a day's bids on a
+        # delivery day the trader did not choose: the date sent IS the bid date.
+        #
+        # /deliverydates is still called, but only as a cross-check, because it has
+        # been observed contradicting the exchange it describes. On 2026-08-21 it
+        # served 1787270400 (2026-08-21) — the same timestamp it had served the day
+        # before, when that was correctly D+1 — and IEX then refused a submission
+        # carrying that very value with "Invalid Delivery Date.". An endpoint whose
+        # answer the exchange itself rejects cannot be the source of truth; it was
+        # simply a day stale. Sending its value is what produced the refusals, and
+        # then blocking on it is what produced the 409s.
+        #
+        # This is the same derivation cancel_dam_block_bid_on_exchange has always
+        # used a few hundred lines below, on the same collection and the same date
+        # string.
         try:
             biding_date_obj = datetime.strptime(biding_date, "%Y-%m-%d").date()
         except (ValueError, TypeError):
-            biding_date_obj = datetime.now().date()
+            raise HTTPException(
+                status_code=400,
+                detail=f"{market} block bid: bid date {biding_date!r} is not a YYYY-MM-DD date.",
+            )
 
+        delivery_date_ts = int(
+            datetime.combine(biding_date_obj, datetime.min.time(), tzinfo=timezone.utc).timestamp()
+        )
+
+        # Cross-check only — never fatal, never overrides the derived value.
         resolved = resolve_delivery_date(delivery_dates_resp, biding_date_obj)
-        delivery_date_ts = resolved.timestamp
-        if not delivery_date_ts:
-            raise HTTPException(
-                status_code=404,
-                detail=(
-                    f"{market} exchange returned no delivery date for {biding_date} — "
-                    f"{describe_delivery_dates(delivery_dates_resp)}"
-                ),
-            )
-
         if not resolved.matched:
-            # The exchange's delivery date is not the date these bids are for, so the
-            # submission is refused rather than sent.
-            #
-            # This used to log and submit anyway, which is what produced six
-            # "Invalid Delivery Date." refusals from IEX on 2026-08-21: the exchange
-            # was still on delivery date 2026-08-21 (the identical timestamp
-            # 1787270400 it had served the day before, when it was correctly D+1),
-            # the bids on screen were for 2026-08-22, and EPMS posted the two
-            # together without comparing them. Every submission that has ever
-            # succeeded sent the bid's own date.
-            #
-            # The rejection is the good case. If the exchange ever accepts a
-            # mismatched date, the bids trade on the wrong delivery day — real money
-            # on a day nobody chose — and nothing downstream would notice.
-            resolved_day = datetime.fromtimestamp(delivery_date_ts, tz=timezone.utc).strftime("%Y-%m-%d")
-            offered = describe_delivery_dates(delivery_dates_resp)
-            logger.error(
-                f"{market} block bid NOT submitted: exchange delivery date {resolved_day} "
-                f"does not match bid date {biding_date} (offered: {offered})"
-            )
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    f"{market} bids are for {biding_date}, but the exchange is currently "
-                    f"bidding for {resolved_day}. Nothing was submitted. Either submit on "
-                    f"the day the exchange is open for, or wait for the exchange to roll "
-                    f"over to {biding_date}."
-                ),
+            logger.warning(
+                f"{market} block bid: /deliverydates does not offer the bid date "
+                f"{biding_date} (offered: {describe_delivery_dates(delivery_dates_resp)}); "
+                f"submitting against the bid date {delivery_date_ts} regardless. "
+                f"If the exchange refuses it, that delivery day is genuinely not open."
             )
 
         logger.info(
-            f"{market} block bid: DeliveryDate={delivery_date_ts} "
-            f"({resolved.record.get('DeliveryDateId', '?') if resolved.record else '?'}), "
-            f"bid date {biding_date}, matched={resolved.matched}"
+            f"{market} block bid: DeliveryDate={delivery_date_ts} derived from bid date "
+            f"{biding_date}, exchange offered {describe_delivery_dates(delivery_dates_resp)}"
         )
 
         # 4. Approved DAM bids
