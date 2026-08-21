@@ -251,7 +251,8 @@ class AuthController:
             # Attempt token refresh
             result = await self.auth_service.refresh_token(
                 refresh_token=refresh_data.refresh_token,
-                request_info=request_info
+                request_info=request_info,
+                superseded_access_token=getattr(refresh_data, "access_token", None),
             )
             
             if not result:

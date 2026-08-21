@@ -158,6 +158,12 @@ class LoginResponse(BaseModel):
 class RefreshTokenRequest(BaseModel):
     """Refresh token request schema"""
     refresh_token: str = Field(..., description="Refresh token")
+    # The access token this refresh replaces. Optional so a client that predates this
+    # field still refreshes normally -- during a rollout the previous bundle is still
+    # loaded in browsers, and rejecting those would log every one of them out.
+    access_token: Optional[str] = Field(
+        None, description="Access token being replaced; blacklisted once the new one is issued"
+    )
 
 
 class LogoutRequest(BaseModel):

@@ -121,13 +121,25 @@ class RedisBlacklistService:
             logger.error(f"Failed to blacklist refresh token: {e}")
             return False
     
-    def invalidate_access_token(self, access_token: str, user_id: str) -> bool:
+    def invalidate_access_token(self, access_token: str, user_id: str,
+                                ttl_seconds: Optional[int] = None) -> bool:
         """
         Add access token to Redis blacklist with TTL
         
         Args:
             access_token: The access token to blacklist
             user_id: User ID for audit purposes
+            ttl_seconds: How long to remember it. Defaults to the service-wide TTL, which
+                is sized for the refresh token (7 days) and is right for logout, where the
+                refresh token is blacklisted alongside.
+
+                Callers that blacklist a *superseded* access token must pass its remaining
+                lifetime instead. Those happen on every refresh -- roughly 48 per user per
+                day -- and the key IS the token, so keeping each for seven days would
+                accumulate hundreds of kilobyte-sized keys per active user in the same
+                Redis the rate limiter and notification pub/sub use. An access token has at
+                most thirty minutes left, so its own expiry is both sufficient and ~300x
+                cheaper.
             
         Returns:
             bool: True if successfully blacklisted, False otherwise
@@ -139,7 +151,7 @@ class RedisBlacklistService:
         try:
             # Set with expiry (same as token expiry)
             key = f"blacklist:access:{access_token}"
-            self.redis_client.setex(key, self.ttl_seconds, user_id)
+            self.redis_client.setex(key, ttl_seconds or self.ttl_seconds, user_id)
             
             logger.info(f"Access token blacklisted successfully for user {user_id}")
             return True

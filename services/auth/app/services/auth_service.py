@@ -3,6 +3,8 @@ Authentication service using repository pattern
 """
 
 import time
+
+import jwt
 import logging
 from fastapi import HTTPException
 from fastapi import Header
@@ -386,7 +388,8 @@ class AuthService:
         except (TypeError, ValueError):
             return False
 
-    async def refresh_token(self, refresh_token: str, request_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def refresh_token(self, refresh_token: str, request_info: Dict[str, Any],
+                            superseded_access_token: Optional[str] = None) -> Optional[Dict[str, Any]]:
         """
         Refresh access token using refresh token
         
@@ -442,6 +445,16 @@ class AuthService:
                 success=True
             )
             
+            # Retire the token this one replaces, so a refresh leaves exactly one usable
+            # access token instead of two. Deliberately AFTER the new token is minted: if
+            # minting had failed we would have blacklisted the caller's only working
+            # credential and logged them out on a server error.
+            #
+            # Optional on purpose. A client that does not send it still refreshes normally
+            # -- during a rollout the old bundle is still in browsers, and refusing those
+            # would log every one of them out.
+            self._retire_superseded_access_token(superseded_access_token, user_id)
+
             return {
                 "access_token": access_token,
                 "token_type": "bearer",
@@ -452,6 +465,38 @@ class AuthService:
             logger.error(f"Token refresh error: {e}")
             return None
     
+    @staticmethod
+    def _retire_superseded_access_token(token: Optional[str], user_id: str) -> None:
+        """
+        Blacklist the access token that a refresh has just replaced.
+
+        Blacklisted only for its own remaining lifetime, not the service-wide seven days.
+        This runs on every refresh -- about 48 times per user per day -- and the Redis key
+        *is* the token, so seven-day retention would accumulate hundreds of kilobyte-sized
+        keys per active user in the Redis the rate limiter and notifications also use.
+
+        Never raises. A token that is already expired, malformed, or absent needs no
+        blacklisting, and none of those is a reason to fail a refresh that has otherwise
+        succeeded -- the caller already holds their new token by this point.
+        """
+        if not token:
+            return
+        try:
+            payload = jwt.decode(
+                token,
+                settings.JWT_SECRET_KEY,
+                algorithms=[settings.JWT_ALGORITHM],
+                options={"verify_exp": False},   # expired is fine; it needs no blacklisting
+            )
+            remaining = int(payload.get("exp", 0) - time.time())
+            if remaining <= 0:
+                return                            # already dead on its own clock
+            redis_blacklist_service.invalidate_access_token(
+                token, user_id, ttl_seconds=remaining
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Could not retire the superseded access token: %s", exc)
+
     async def logout(self, access_token: str, refresh_token: Optional[str], request_info: Dict[str, Any]) -> bool:
         """
         Logout user by blacklisting tokens
