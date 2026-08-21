@@ -5,7 +5,7 @@ Client for external exchange APIs: Asset Details, Delivery Dates, Single Bid sub
 
 import httpx
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, NamedTuple
 from datetime import datetime, timezone
 from services.processing.app.v2.repository.integration_api_log_repository import integration_api_log_repository
 
@@ -1104,6 +1104,92 @@ class ExchangeAPIClient:
         """Clear cached API responses"""
         self._asset_details_cache = None
         self._delivery_date_cache = None
+
+
+class ResolvedDeliveryDate(NamedTuple):
+    """Outcome of resolving one exchange delivery-dates response against a bid date."""
+
+    timestamp: Optional[int]
+    record: Optional[Dict[str, Any]]
+    matched: bool
+    candidates: List[Dict[str, Any]]
+
+
+def delivery_date_candidates(delivery_dates_resp: Any) -> List[Dict[str, Any]]:
+    """
+    Flatten an exchange /deliverydates response into a list of records.
+
+    IEX answers this endpoint in two shapes and the shape is not documented per
+    market: RTM returns {"DeliveryDates": [{DeliveryDateId, DeliveryDate}, ...]}
+    while the day-ahead markets have been seen returning the single record
+    {"DeliveryDateId": "T+1", "DeliveryDate": 1770508800} at the root. Code that
+    reads only one of the two silently resolves nothing against the other.
+    """
+    if isinstance(delivery_dates_resp, list):
+        return [r for r in delivery_dates_resp if isinstance(r, dict)]
+
+    if not isinstance(delivery_dates_resp, dict):
+        return []
+
+    nested = delivery_dates_resp.get("DeliveryDates")
+    if isinstance(nested, list):
+        return [r for r in nested if isinstance(r, dict)]
+    if isinstance(nested, dict):
+        return [nested]
+
+    if delivery_dates_resp.get("DeliveryDate") is not None:
+        return [delivery_dates_resp]
+
+    return []
+
+
+def resolve_delivery_date(delivery_dates_resp: Any, target_date) -> ResolvedDeliveryDate:
+    """
+    Resolve the delivery-date timestamp to bid against, from either response shape.
+
+    Prefers the record whose DeliveryDate falls on target_date. When the exchange
+    offered exactly one date and it is not target_date, that single date is still
+    returned with matched=False: the caller decides whether to proceed and warn or
+    to refuse, and a one-date response is what the day-ahead markets normally send.
+    When several dates are offered and none is target_date, nothing is returned —
+    guessing between them would submit a day's bids against the wrong delivery day.
+    """
+    candidates = delivery_date_candidates(delivery_dates_resp)
+    if not candidates:
+        return ResolvedDeliveryDate(None, None, False, [])
+
+    match = select_delivery_date_record(candidates, target_date)
+    if match is not None:
+        return ResolvedDeliveryDate(int(match["DeliveryDate"]), match, True, candidates)
+
+    if len(candidates) == 1:
+        only = candidates[0]
+        try:
+            return ResolvedDeliveryDate(int(only["DeliveryDate"]), only, False, candidates)
+        except (KeyError, TypeError, ValueError):
+            return ResolvedDeliveryDate(None, None, False, candidates)
+
+    return ResolvedDeliveryDate(None, None, False, candidates)
+
+
+def describe_delivery_dates(delivery_dates_resp: Any) -> str:
+    """Human-readable summary of a delivery-dates response, for error messages."""
+    candidates = delivery_date_candidates(delivery_dates_resp)
+    if candidates:
+        parts = []
+        for record in candidates:
+            raw = record.get("DeliveryDate")
+            try:
+                shown = datetime.fromtimestamp(int(raw), tz=timezone.utc).strftime("%Y-%m-%d")
+            except (TypeError, ValueError, OSError):
+                shown = repr(raw)
+            parts.append(f"{record.get('DeliveryDateId', '?')}={shown}")
+        return ", ".join(parts)
+
+    if isinstance(delivery_dates_resp, dict):
+        keys = ", ".join(sorted(delivery_dates_resp.keys())) or "none"
+        return f"no delivery dates in response (keys: {keys})"
+    return f"unexpected response type {type(delivery_dates_resp).__name__}"
 
 
 def select_delivery_date_record(
