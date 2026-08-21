@@ -16,7 +16,12 @@ from ..repository.decision_dam_block_bid_iex_response_repository import Decision
 from ..repository.exchange_config_repository import ExchangeConfigRepository
 from ..repository.integration_api_log_repository import IntegrationApiLogRepository
 from ..repository.limit_values_repository import LimitValuesRepository
-from ..iex.masterApi import ExchangeAPIClient, select_delivery_date_record
+from ..iex.masterApi import (
+    ExchangeAPIClient,
+    describe_delivery_dates,
+    resolve_delivery_date,
+    select_delivery_date_record,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -869,11 +874,46 @@ class BlockBidServices:
         biddedQtyDecimal = float(asset_details_list[0].get("OrderQtyDecimal", 10)) if asset_details_list else 10.0
         logger.info(f"{market} block bid: AssetId={asset_id}, QtyDecimal={biddedQtyDecimal}")
 
-        # DAM exchange returns a single object {DeliveryDateId, DeliveryDate} (not wrapped in a list)
-        delivery_date_ts = delivery_dates_resp.get("DeliveryDate")
+        # IEX answers /deliverydates in two shapes — the single root object
+        # {DeliveryDateId, DeliveryDate} and the RTM-style {"DeliveryDates": [...]}
+        # list — and which one a day-ahead market sends is not fixed. Reading only
+        # the root key returned None whenever the exchange sent the list, and the
+        # submission died on "DeliveryDate not found" with the bid date perfectly
+        # valid. resolve_delivery_date takes either shape and, when there is a
+        # choice, picks the record that actually falls on the bid date rather than
+        # the first one in the list.
+        try:
+            biding_date_obj = datetime.strptime(biding_date, "%Y-%m-%d").date()
+        except (ValueError, TypeError):
+            biding_date_obj = datetime.now().date()
+
+        resolved = resolve_delivery_date(delivery_dates_resp, biding_date_obj)
+        delivery_date_ts = resolved.timestamp
         if not delivery_date_ts:
-            raise HTTPException(status_code=404, detail=f"DeliveryDate not found from {market} exchange")
-        logger.info(f"{market} block bid: DeliveryDate={delivery_date_ts}")
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"{market} exchange returned no delivery date for {biding_date} — "
+                    f"{describe_delivery_dates(delivery_dates_resp)}"
+                ),
+            )
+
+        if not resolved.matched:
+            # The exchange offered exactly one delivery date and it is not the bid's
+            # date. Submitting anyway is the long-standing behaviour, so it is kept,
+            # but it means the bids land on a different delivery day than the screen
+            # showed — worth an error line rather than a silent success.
+            offered = describe_delivery_dates(delivery_dates_resp)
+            logger.error(
+                f"{market} block bid: exchange delivery date does not match bid date "
+                f"{biding_date} — submitting against {offered}"
+            )
+
+        logger.info(
+            f"{market} block bid: DeliveryDate={delivery_date_ts} "
+            f"({resolved.record.get('DeliveryDateId', '?') if resolved.record else '?'}), "
+            f"bid date {biding_date}, matched={resolved.matched}"
+        )
 
         # 4. Approved DAM bids
         bids = await self.block_bid_repo.get_approved_bids(biding_date, market_type=market)
