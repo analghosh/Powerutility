@@ -165,3 +165,49 @@ def test_the_error_text_names_the_response_keys_when_there_are_no_dates():
 
 def test_the_error_text_survives_a_non_dict_response():
     assert "str" in describe_delivery_dates("<html>403 Forbidden</html>")
+
+
+# ------------------------------------------------ the 2026-08-21 refusal ---
+# On 2026-08-21 IEX served delivery date 1787270400 (2026-08-21) — the identical
+# timestamp it had served on 2026-08-20, when it was correctly D+1. Six DAM block
+# bid submissions dated 2026-08-22 were posted against it and IEX refused every
+# one with "Invalid Delivery Date.". Every submission that has ever succeeded on
+# this path sent the bid's own date:
+#
+#   2026-08-17 16:40  sent 2026-08-18 (D+1)  Success
+#   2026-08-19 09:10  sent 2026-08-20 (D+1)  Success
+#   2026-08-20 11:22  sent 2026-08-21 (D+1)  Success
+#   2026-08-21 10:59  sent 2026-08-21 (D+0)  Failed - Invalid Delivery Date.
+#
+# resolve_delivery_date must report that mismatch so the caller can refuse; the
+# caller must not post the pair.
+
+STUCK_DELIVERY_DATE = 1787270400  # 2026-08-21 00:00 UTC
+
+
+def test_the_stuck_delivery_date_is_reported_as_a_mismatch():
+    resp = {"DeliveryDateId": "T+1", "DeliveryDate": STUCK_DELIVERY_DATE}
+
+    resolved = resolve_delivery_date(resp, date(2026, 8, 22))
+
+    assert resolved.matched is False, "a D+0 date against D+1 bids must not read as a match"
+    assert resolved.timestamp == STUCK_DELIVERY_DATE
+
+
+def test_the_same_response_matched_the_day_before():
+    """The value was correct on 2026-08-20; only the calendar moved."""
+    resp = {"DeliveryDateId": "T+1", "DeliveryDate": STUCK_DELIVERY_DATE}
+
+    assert resolve_delivery_date(resp, date(2026, 8, 21)).matched is True
+
+
+def test_every_historical_success_still_matches():
+    """None of the submissions that worked would be refused by the strict check."""
+    for sent, bid_date in [
+        (1787011200, date(2026, 8, 18)),
+        (1787097600, date(2026, 8, 19)),
+        (1787184000, date(2026, 8, 20)),
+        (1787270400, date(2026, 8, 21)),
+    ]:
+        resolved = resolve_delivery_date({"DeliveryDateId": "T+1", "DeliveryDate": sent}, bid_date)
+        assert resolved.matched is True, f"{sent} vs {bid_date} should match"

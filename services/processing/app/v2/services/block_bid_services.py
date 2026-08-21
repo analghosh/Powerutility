@@ -929,14 +929,34 @@ class BlockBidServices:
             )
 
         if not resolved.matched:
-            # The exchange offered exactly one delivery date and it is not the bid's
-            # date. Submitting anyway is the long-standing behaviour, so it is kept,
-            # but it means the bids land on a different delivery day than the screen
-            # showed — worth an error line rather than a silent success.
+            # The exchange's delivery date is not the date these bids are for, so the
+            # submission is refused rather than sent.
+            #
+            # This used to log and submit anyway, which is what produced six
+            # "Invalid Delivery Date." refusals from IEX on 2026-08-21: the exchange
+            # was still on delivery date 2026-08-21 (the identical timestamp
+            # 1787270400 it had served the day before, when it was correctly D+1),
+            # the bids on screen were for 2026-08-22, and EPMS posted the two
+            # together without comparing them. Every submission that has ever
+            # succeeded sent the bid's own date.
+            #
+            # The rejection is the good case. If the exchange ever accepts a
+            # mismatched date, the bids trade on the wrong delivery day — real money
+            # on a day nobody chose — and nothing downstream would notice.
+            resolved_day = datetime.fromtimestamp(delivery_date_ts, tz=timezone.utc).strftime("%Y-%m-%d")
             offered = describe_delivery_dates(delivery_dates_resp)
             logger.error(
-                f"{market} block bid: exchange delivery date does not match bid date "
-                f"{biding_date} — submitting against {offered}"
+                f"{market} block bid NOT submitted: exchange delivery date {resolved_day} "
+                f"does not match bid date {biding_date} (offered: {offered})"
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{market} bids are for {biding_date}, but the exchange is currently "
+                    f"bidding for {resolved_day}. Nothing was submitted. Either submit on "
+                    f"the day the exchange is open for, or wait for the exchange to roll "
+                    f"over to {biding_date}."
+                ),
             )
 
         logger.info(
