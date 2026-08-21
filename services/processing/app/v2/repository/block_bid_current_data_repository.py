@@ -228,7 +228,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
     async def get_block_bid_data_by_date_and_market_type(
         self, 
         datebid: str, 
-        market_type: str = "RTM"
+        market_type: str = "RTM",
+        include_reserved: bool = True,
     ) -> List[Dict[str, Any]]:
         """
         Get block bid data for a specific date and market type.
@@ -236,6 +237,15 @@ class BlockBidCurrentDataRepository(GenericRepository):
         Args:
             datebid: Schedule date in YYYY-MM-DD format
             market_type: Market type (RTM, DAM, etc.). Defaults to "RTM"
+            include_reserved: keep rows whose selected_for is "Reserved". The Bid
+                Status screen passes False: a Reserved bid is held back and never
+                sent to the exchange, so listing it under "Block Bid Submitted"
+                claims something that did not happen. It also desynchronised that
+                column from "Block Bid Status" beside it, which is built from the
+                submitted bids only — on 2026-08-22 block 00:00-00:15 the two
+                columns showed 4 entries against 3, so every entry after the
+                Reserved one described the wrong bid.
+                Defaults True so the RTM caller keeps its current behaviour.
         
         Returns:
             List of block bid data dictionaries
@@ -245,6 +255,8 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 "biding_date": datebid,
                 "market_type": market_type
             }
+            if not include_reserved:
+                query.update(NOT_RESERVED_MATCH)
             
             results = await self.collection.find(query).sort("from", 1).to_list(length=10000)
             
@@ -620,19 +632,39 @@ class BlockBidCurrentDataRepository(GenericRepository):
             logger.error(f"Failed to find block bid records: {str(e)}")
             return []
 
-    async def get_approved_bids(self, biding_date: str, market_type: str = "RTM") -> List[Dict[str, Any]]:
+    async def get_approved_bids(
+        self,
+        biding_date: str,
+        market_type: str = "RTM",
+        latest_revision_only: bool = True,
+    ) -> List[Dict[str, Any]]:
         """
-        Fetch the latest Approved block bid per session for a given date and market type.
-        If the same session has been submitted/approved multiple times, only the most
-        recently created document (highest _id) is returned for exchange submission.
+        Fetch Approved block bids for a given date and market type.
 
         Bids marked "Reserved" are held back deliberately and are never sent to the
-        exchange — only "Bid" rows are. The exclusion sits in the $match, before the
+        exchange — only "Bid" rows are. The exclusion sits in the $match, before any
         $group, so a Reserved row can neither be submitted nor win the $first slot of
         a time block that also has a real Bid row.
+
+        Args:
+            latest_revision_only: collapse to one bid per (trade_session, time_block),
+                keeping the highest revision_no.
+
+                The day-ahead submit path passes False, because on block bids
+                `revision_no` does not mean "revision". `insert_block_bid` assigns it
+                as max+1 for the (session, time_block) pair, and there is no path that
+                edits a block bid — every insert is a separate bid the trader placed.
+                So collapsing by time block silently dropped every bid on a block but
+                the last one: the trader clicked Submit to Exchange, one bid went, and
+                the rest stayed Approved until the button was clicked again. In the UAT
+                copy 11 DAM time blocks carry more than one bid and one carries 11, so
+                that is 11 clicks — or, if nobody clicks again, 10 bids that never reach
+                the exchange at all.
+
+                Defaults True so the RTM caller keeps its current behaviour.
         """
         try:
-            pipeline = [
+            pipeline: List[Dict[str, Any]] = [
                 {
                     "$match": {
                         "biding_date": biding_date,
@@ -641,40 +673,55 @@ class BlockBidCurrentDataRepository(GenericRepository):
                         **NOT_RESERVED_MATCH,
                     }
                 },
-                {"$sort": {"revision_no": -1}},  # latest revision first
-                {
-                    "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
-                        "doc": {"$first": "$$ROOT"}
-                    }
-                },
-                {"$replaceRoot": {"newRoot": "$doc"}},
-                {"$sort": {"from": 1}},  # restore chronological order
             ]
+            if latest_revision_only:
+                pipeline += [
+                    {"$sort": {"revision_no": -1}},  # latest revision first
+                    {
+                        "$group": {
+                            "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
+                            "doc": {"$first": "$$ROOT"}
+                        }
+                    },
+                    {"$replaceRoot": {"newRoot": "$doc"}},
+                ]
+            pipeline.append({"$sort": {"from": 1, "revision_no": 1}})  # chronological, stable
             cursor = self.collection.aggregate(pipeline)
             results = await cursor.to_list(length=10000)
             for doc in results:
                 if "_id" in doc and isinstance(doc["_id"], ObjectId):
                     doc["_id"] = str(doc["_id"])
-            logger.info(f"Found {len(results)} latest approved bids for {biding_date} [{market_type}]")
+            logger.info(
+                f"Found {len(results)} approved bids for {biding_date} [{market_type}] "
+                f"(latest_revision_only={latest_revision_only})"
+            )
             return results
         except Exception as e:
             logger.error(f"Failed to get approved bids: {str(e)}")
             return []
 
-    async def bulk_update_status(self, biding_date: str, from_status: str, to_status: str, market_type: str = "RTM") -> int:
+    async def bulk_update_status(
+        self,
+        biding_date: str,
+        from_status: str,
+        to_status: str,
+        market_type: str = "RTM",
+        latest_revision_only: bool = True,
+    ) -> int:
         """
-        Update status only on the latest revision per trade_session.
-        Old revisions are left unchanged to preserve history.
-        Returns count of modified documents.
+        Move block bids from one status to another. Returns count of modified documents.
 
         Reserved bids are excluded for the same reason as in get_approved_bids: they
         are never submitted, so they must not be flipped Approved -> Submitted after
         a submission either.
+
+        `latest_revision_only` MUST be passed the same value the matching
+        get_approved_bids call used. If this collapses by time block while that one
+        did not, bids get submitted to the exchange and left sitting at Approved —
+        the next Submit would send them a second time.
         """
         try:
-            # Find the _id of the latest revision per session that matches from_status
-            pipeline = [
+            pipeline: List[Dict[str, Any]] = [
                 {
                     "$match": {
                         "biding_date": biding_date,
@@ -683,14 +730,19 @@ class BlockBidCurrentDataRepository(GenericRepository):
                         **NOT_RESERVED_MATCH,
                     }
                 },
-                {"$sort": {"revision_no": -1}},
-                {
-                    "$group": {
-                        "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
-                        "doc_id": {"$first": "$_id"}
-                    }
-                }
             ]
+            if latest_revision_only:
+                pipeline += [
+                    {"$sort": {"revision_no": -1}},
+                    {
+                        "$group": {
+                            "_id": {"trade_session": "$trade_session", "time_block": "$time_block"},
+                            "doc_id": {"$first": "$_id"}
+                        }
+                    },
+                ]
+            else:
+                pipeline.append({"$project": {"doc_id": "$_id"}})
             latest_docs = await self.collection.aggregate(pipeline).to_list(length=10000)
             ids_to_update = [doc["doc_id"] for doc in latest_docs]
 
@@ -701,7 +753,10 @@ class BlockBidCurrentDataRepository(GenericRepository):
                 {"_id": {"$in": ids_to_update}},
                 {"$set": {"status": to_status}}
             )
-            logger.info(f"bulk_update_status: {from_status} -> {to_status}, modified={result.modified_count} (latest revisions only)")
+            logger.info(
+                f"bulk_update_status: {from_status} -> {to_status}, "
+                f"modified={result.modified_count} (latest_revision_only={latest_revision_only})"
+            )
             return result.modified_count
         except Exception as e:
             logger.error(f"Failed to bulk update status: {str(e)}")

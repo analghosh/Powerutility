@@ -923,7 +923,13 @@ class BlockBidServices:
         )
 
         # 4. Approved DAM bids
-        bids = await self.block_bid_repo.get_approved_bids(biding_date, market_type=market)
+        # latest_revision_only=False: every approved bid on a time block goes in one
+        # submission. See get_approved_bids — on block bids revision_no is "the Nth
+        # bid on this block", not a revision, so collapsing left bids behind and the
+        # trader had to click Submit to Exchange again for each one.
+        bids = await self.block_bid_repo.get_approved_bids(
+            biding_date, market_type=market, latest_revision_only=False
+        )
         if not bids:
             raise HTTPException(status_code=404, detail=f"No approved {market} block bids found for {biding_date}")
 
@@ -1081,7 +1087,11 @@ class BlockBidServices:
             bid_details_response = {}
 
         # 9. Mark approved bids → Submitted
-        await self.block_bid_repo.bulk_update_status(biding_date, "Approved", "Submitted", market_type=market)
+        # Must mirror the get_approved_bids call above, or bids reach the exchange and
+        # stay Approved — the next Submit would send them again.
+        await self.block_bid_repo.bulk_update_status(
+            biding_date, "Approved", "Submitted", market_type=market, latest_revision_only=False
+        )
 
         # 10. Map BlockBidDetails → store in iex_response
         dam_bid_details = bid_details_response.get("BlockBidDetails", []) if isinstance(bid_details_response, dict) else []
