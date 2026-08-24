@@ -218,8 +218,21 @@ logging_config = {
 app.add_middleware(LoggingMiddleware, **logging_config)
 # Add correlation middleware second (executes second to last)
 app.add_middleware(CorrelationMiddleware)
-# Security headers added to every response
-app.add_middleware(SecurityHeadersMiddleware)
+# Security headers added to every response. This service is the only one that serves its
+# own HTML: the operator UI at "/", "/login" and "/dashboard", each a document built from
+# an inline <script> and an inline <style>. Under the default API policy
+# (`default-src 'none'`) the browser blocks both, so the pages render unstyled and inert.
+app.add_middleware(
+    SecurityHeadersMiddleware,
+    html_paths=(
+        "/",
+        "/login",
+        "/dashboard",
+        "/static/index.html",
+        "/static/login.html",
+        "/static/job_dashboard.html",
+    ),
+)
 
 # Authentication. This was commented out with the note "AuthMiddleware removed to allow
 # internal trigger without authentication", which left every job-control endpoint on this
@@ -248,6 +261,18 @@ app.add_middleware(
         "/openapi.json",
         "/favicon.ico",
         "/static",
+        # The operator UI's own shell. A browser navigation carries no Authorization
+        # header, so requiring one here locks out the page that exists to obtain the
+        # token in the first place -- and "/config" with it, which is where the login
+        # page reads the auth service URL. None of the three returns data: the dashboard
+        # fetches everything over XHR with a Bearer token, and those calls stay guarded.
+        #
+        # "/" is deliberately absent. _should_skip_auth strips trailing slashes and then
+        # calls startswith(), so "/" normalises to "" and exempts every path on this
+        # service. The index page is a link to the login page; it stays authenticated.
+        "/login",
+        "/dashboard",
+        "/config",
     ],
 )
 
