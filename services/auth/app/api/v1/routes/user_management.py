@@ -18,11 +18,22 @@ from libs.audit_queue.simple_logger import AuditLogger
 from libs.middleware.utils import get_client_ip_or_none
 
 # Pydantic models for user operations
+class UserProfile(BaseModel):
+    """
+    The profile the application actually has. Typed rather than a free-form object so a
+    caller cannot post extra keys and have them stored verbatim: pydantic drops anything
+    not declared here. Every one of the 818 accounts in the live database carries exactly
+    these two keys, and the client sends only these two.
+    """
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+
+
 class UserCreateRequest(BaseModel):
     username: str
     password: str
     email: Optional[str] = None
-    profile: Optional[Dict[str, Any]] = None
+    profile: Optional[UserProfile] = None
 
 class UserUpdateRequest(BaseModel):
     # username is deliberately not updatable: renaming the seeded super-admin frees
@@ -30,7 +41,7 @@ class UserUpdateRequest(BaseModel):
     email: Optional[str] = None
     roles: Optional[List[str]] = None
     permissions: Optional[List[str]] = None
-    profile: Optional[Dict[str, Any]] = None
+    profile: Optional[UserProfile] = None
     is_active: Optional[bool] = None
     is_verified: Optional[bool] = None
 
@@ -160,8 +171,8 @@ async def create_user(
         last_name = ""
 
         if user_data.profile:
-            first_name = user_data.profile.get("first_name", "")
-            last_name = user_data.profile.get("last_name", "")
+            first_name = user_data.profile.first_name or ""
+            last_name = user_data.profile.last_name or ""
         # Create user with simple defaults
         user = await user_repo.create_user(
             username=user_data.username,
@@ -292,7 +303,9 @@ async def update_user(
         if user_data.email is not None:
             update_data['email'] = user_data.email
         if user_data.profile is not None:
-            update_data['profile'] = user_data.profile
+            # dict(), not the model: this goes straight into Mongo. exclude_none keeps a
+            # partial update from blanking a name the caller did not send.
+            update_data['profile'] = user_data.profile.model_dump(exclude_none=True)
 
         # Privileged fields: only allow if caller is NOT updating their own account
         if not is_self_update:

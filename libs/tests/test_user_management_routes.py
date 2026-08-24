@@ -28,6 +28,7 @@ with patch.object(MongoClientFactory, "get_client", return_value=MagicMock()):
 delete_user = user_management.delete_user
 update_user = user_management.update_user
 UserUpdateRequest = user_management.UserUpdateRequest
+UserCreateRequest = user_management.UserCreateRequest
 
 
 def _stored_user(user_id="u1", username="trader1"):
@@ -161,3 +162,40 @@ async def test_update_never_writes_a_username(monkeypatch):
     for payload in repo.update_payloads:
         assert "username" not in payload
     assert repo.update_payloads[-1]["profile"] == {"first_name": "New"}
+
+
+class TestProfileIsTyped:
+    """
+    VAPT F15. `profile` was `Dict[str, Any]` and the update path wrote it into Mongo
+    verbatim, so any key a caller invented was stored on the user document. The typed
+    model drops what it does not declare; the two names the application uses survive.
+    """
+
+    def test_unknown_keys_are_dropped_from_an_update(self):
+        request = UserUpdateRequest(profile={
+            "first_name": "Asha",
+            "last_name": "Rao",
+            "is_super_admin": True,
+            "injected": {"anything": "at all"},
+        })
+        assert request.profile.model_dump(exclude_none=True) == {
+            "first_name": "Asha",
+            "last_name": "Rao",
+        }
+
+    def test_unknown_keys_are_dropped_from_a_create(self):
+        request = UserCreateRequest(
+            username="trader9",
+            password="Str0ng!Password",
+            profile={"first_name": "Asha", "roles": ["admin"]},
+        )
+        assert not hasattr(request.profile, "roles")
+        assert request.profile.first_name == "Asha"
+
+    def test_a_partial_update_does_not_blank_the_other_name(self):
+        """exclude_none, so sending only first_name leaves last_name alone in Mongo."""
+        request = UserUpdateRequest(profile={"first_name": "Asha"})
+        assert request.profile.model_dump(exclude_none=True) == {"first_name": "Asha"}
+
+    def test_the_profile_stays_optional(self):
+        assert UserUpdateRequest().profile is None
