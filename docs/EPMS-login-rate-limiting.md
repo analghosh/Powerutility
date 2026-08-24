@@ -1,7 +1,7 @@
 # Login rate limiting
 
 Closes the VAPT gap "no login rate limiting or account lockout anywhere". Built
-2026-08-19 on `feat/notifications`.
+2026-08-19; now on `fix/vapt-remediation`.
 
 ## What it does
 

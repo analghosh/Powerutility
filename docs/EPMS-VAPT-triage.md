@@ -9,6 +9,8 @@ Target: `epm.ptcindia.com`. Assessed **23 May 2026**, published **8 June 2026**.
 
 Verified against: backend `feat/notifications` @ `8b54924` with spot-checks on the vendor
 `UAT` branch, client @ `987c577`. No network requests were made to PTC infrastructure.
+The remediation has since moved to `fix/vapt-remediation` in both repos; see §3.1 for the
+current status and hashes.
 
 Published triage page (same content, prettier):
 <https://claude.ai/code/artifact/c700859a-e24d-4b60-bbdb-f73733e3f697>
@@ -71,7 +73,7 @@ severity is wrong. `NOT IN CODE` = infrastructure, not settleable from the repo.
 |---|---|---|---|
 | F1 | CONFIRMED | High → High | A check *does* exist; it reads a hardcoded allow-list. The report's implied fix changes nothing. |
 | F2 | CONFIRMED | High → **Critical** | GET returns *decrypted* exchange API keys. Two extra mutating routes the report missed. |
-| F3 | CONFIRMED | High → **FIXED** | Delete performed no referential check; orphaned plant records. Authorization closed by `e75d9be`; the referential half closed by `da3022e` — delete now returns **409** naming the count of plants still assigned. Verified live: group `B` (12 plants) refused, unreferenced group deleted 204. |
+| F3 | CONFIRMED | High → **FIXED** | Delete performed no referential check; orphaned plant records. Authorization closed by `06f465f`; the referential half closed by `bb85d84` — delete now returns **409** naming the count of plants still assigned. Verified live: group `B` (12 plants) refused, unreferenced group deleted 204. |
 | F4 | CONFIRMED | High → High | Scope understated — ungated bulk `/upload` and full `/download_csv` unlisted. |
 | F5 | CONFIRMED | High → **ACCEPTED (closed)** | Defect 1 (may you approve at all) closed by F6. Defect 2 (self-approval) **accepted by the client 2026-08-18** as a deliberate business trade. See §4.4. |
 | F6 | CONFIRMED | High → **Critical** | Quantified: 72 write routes, 3 dead authz libraries, 1 of 46 routers guarded. |
@@ -80,30 +82,67 @@ severity is wrong. `NOT IN CODE` = infrastructure, not settleable from the repo.
 | F9 | PARTIAL | Medium → Medium | No idle timeout confirmed. "Token valid after 30 min" contradicts configured expiry — ask for the capture. |
 | F10 | CONFIRMED | Medium → **Med–High** | Renaming the seeded admin re-seeds a fresh super-admin on restart. (Severity revised down from High — see §4.5.) |
 | F11 | PARTIAL | Medium → **ACCEPTED (closed)** | Not an exposed dashboard — the deployment root, holding the JWT signing key. **Accepted by the client 2026-08-19** on the basis that Jenkins requires a login. Recorded risk: that boundary has failed before (CVE-2024-23897 was an unauthenticated file read used in the wild to pull `secrets/` and `.env` off controllers), and a symmetric `JWT_SECRET_KEY` there means forged super-admin tokens without touching EPMS at all. Cheap mitigation offered and not taken: an nginx IP allowlist on `/jenkins/`. |
-| F12 | PARTIAL | Medium → **Low** | DMARC inherits from the org domain; the app sends no mail at all. |
+| F12 | CONFIRMED | Medium → **Low** | Corrected 2026-08-24: `ptcindia.com` publishes **no DMARC record at all**, so nothing is inherited. Still Low — the app sends no mail. PTC's DNS team owns it. |
 | F13 | NOT IN CODE | Low → Low | Banner real; "EOL" is not — Ubuntu backports into a frozen version string. |
 | F14 | PARTIAL | Low → **High** | Not a soft delete. No delete at all — the coroutine is never awaited. |
 | F15 | PARTIAL | Low → Low | The escalation warning is provably false here; the real risk on that endpoint is elsewhere. |
-| F16 | CONFIRMED | Low → **Medium** | Five origins, not two — and the recommended fix is impossible as written. |
-| F17 | PARTIAL | Low → **FIXED (API) / open (vhost)** | Headline false for the API. `911f22f` splits the policy: API responses now get `default-src 'none'` (no script-src at all), docs pages get a Swagger-shaped policy — **`unsafe-eval` removed from both**. Verified in a real browser: Swagger UI renders all 281 operations with no CSP violation from its own code. ⚠️ The static SPA vhost is nginx and still needs its own CSP — see §F17 note. |
+| F16 | CONFIRMED | Low → Low | **Subresource Integrity, not CORS** — an earlier revision of this table mislabelled it. Seven unpinned third-party tags in `client/index.html`. Untouched. |
+| F17 | PARTIAL | Low → **FIXED (API) / open (vhost)** | Headline false for the API. `86265e9` splits the policy: API responses now get `default-src 'none'` (no script-src at all), docs pages get a Swagger-shaped policy — **`unsafe-eval` removed from both**. Verified in a real browser: Swagger UI renders all 281 operations with no CSP violation from its own code. ⚠️ The static SPA vhost is nginx and still needs its own CSP — see §F17 note. |
 | F18 | PARTIAL | Low → **Info** | Not a vulnerability. Its only weight is as a map for F6. |
 | F19 | CONFIRMED | Low → **High** | Two independent breaks. The screen tells admins MFA is on for users who have none. |
 
 ---
 
+### 3.1 Status — 2026-08-24
+
+Verified against the code at the head of `fix/vapt-remediation`, not against this
+document's prose. **Nothing below is merged**: backend PR #294 and client PR #147 are the
+only place any of it exists, so none of it protects the running platform yet.
+
+Commit hashes elsewhere in this document were rewritten when the work was rebased onto
+`fix/vapt-remediation`; the hashes here are the current ones.
+
+| ID | Status | Where |
+|---|---|---|
+| F1 | ✅ fixed | `27c5f44` — the hardcoded page→roles dict is gone; real permissions are checked |
+| F2 | ✅ fixed | `247e6d5` (disclosure) + `06f465f` (the write routes). **Rotate the IEX credentials regardless** |
+| F3 | ✅ fixed | `06f465f` (authorization) + `bb85d84` (409 when plants still reference the group) |
+| F4 | ✅ fixed | `06f465f`, including the unlisted bulk upload and CSV export |
+| F5 | ⚖️ accepted | Client decision 2026-08-18. No code change, none planned — §4.4 |
+| F6 | ✅ fixed | `06f465f` + the page-permission model. 113 of 113 write routes guarded, `AUTHZ_MODE` defaults to enforce |
+| F7 | ✅ fixed | `296a924` (revocation on reset/role change/deactivation) + `d6b8324` (the refresh retires the token it replaces) |
+| F8 | ✅ fixed | `296a924` + `fd53d33`; revocation stays immediate under local validation |
+| F9 | ⚠️ partial | The 30-minute idle cap is a browser timer (client `e60ac55`, backend `d6b8324`). There is still no server-side session or last-activity, so a stolen refresh token lives its full seven days. Decide: accept and document, or build it |
+| F10 | ✅ fixed | `3d6998c` drops `username` from the update model. Residuals: the repository's `_PRIVILEGED_FIELDS` filter (vendor) still omits `username`, the seeder re-mints an admin whenever the name is free, and `ADMIN_INITIAL_PASSWORD` defaults to `""` with only a log warning |
+| F11 | ⚖️ accepted | Client decision 2026-08-19. Rotate everything Jenkins holds |
+| F12 | ⬜ open | Not a repo change. `ptcindia.com` publishes no DMARC record; PTC's DNS team must publish one |
+| F13 | ⬜ open | `server_tokens off` is written and waiting in `docs/nginx/application-proposed.conf`; needs a deploy |
+| F14 | ✅ fixed | `3d6998c` — the missing `await` |
+| F15 | ✅ fixed | `5ddac4a` — `profile` is a typed model, so unknown keys are dropped instead of stored |
+| F16 | ⬜ open | Subresource Integrity, **not** CORS. `client/index.html` still loads seven unpinned third-party tags. Fix by deleting them — but `ForecastChart.jsx:14` reads `window.Highcharts`, so that component moves to the npm import first |
+| F17 | ✅ API / ⬜ vhost | `86265e9` split the policy and dropped `unsafe-eval`; `00370b2` gave the scheduler's own HTML pages a document policy. The SPA vhost still needs its CSP — nginx |
+| F18 | ℹ️ informational | Not a vulnerability. Closed by reply |
+| F19 | ✅ fixed | `335527f` + client `00b6cb0`/`6323fe4`. **Ships switched off** (`d89d41b`, `1b7b13f`): set `AUTHENTICATOR_MFA_ENABLED=true` and `ENCRYPTION_KEY` in the deployment env or nobody can enrol |
+
+Two regressions this programme introduced were found and closed on 2026-08-24: the
+scheduler's operator UI was blanked by the new API CSP (`00370b2`) and its own login page
+returned 401 (`2e1c73e`). Both were verified in a browser before and after.
+
+
 ## 4. Fix order
 
 Ordered by verified severity and by what unblocks what. Effort covers the code change only.
 
-**Status, 2026-08-16** — three items shipped on backend `feat/notifications`. The vendor
+**Status, 2026-08-16** — three items shipped on backend `feat/notifications` (since rebased
+onto `fix/vapt-remediation`). The vendor
 has still fixed nothing; last vendor commit on any branch is 26 June 2026.
 
 | Commit | Closes | |
 |---|---|---|
-| `8c68b3e` | F2 — disclosure half only | `get_all()` returns `API_KEY_MASK` + `has_api_key`; `update()` drops the mask so an unchanged edit keeps the stored key; `create()` 400s on it. **The write routes are still unguarded — that half is F6; see §4.6 for what is actually reachable through them.** |
-| `21b16d4` | F14, F10 | `await` on `delete_user`; `username` gone from `UserUpdateRequest` (extra field, so old clients still get 200, not 422) |
-| `08d27ff` | — | `superadmin` gets the `*` wildcard; token refresh stops minting a permission-less session. Both vendor bugs, both harmless until something checked permissions |
-| `e75d9be` | **F6**, F2 (second half), F3, F4, and the unguarded `submit-to-exchange` | every processing route now requires a permission; 285 routes, 279 guarded, 108 of 108 writes. Provisional matrix, `AUTHZ_MODE=warn` kill switch. **See `EPMS-F6-authorization.md`** |
+| `247e6d5` | F2 — disclosure half only | `get_all()` returns `API_KEY_MASK` + `has_api_key`; `update()` drops the mask so an unchanged edit keeps the stored key; `create()` 400s on it. **The write routes are still unguarded — that half is F6; see §4.6 for what is actually reachable through them.** |
+| `3d6998c` | F14, F10 | `await` on `delete_user`; `username` gone from `UserUpdateRequest` (extra field, so old clients still get 200, not 422) |
+| `3a960de` | — | `superadmin` gets the `*` wildcard; token refresh stops minting a permission-less session. Both vendor bugs, both harmless until something checked permissions |
+| `06f465f` | **F6**, F2 (second half), F3, F4, and the unguarded `submit-to-exchange` | every processing route now requires a permission; 285 routes, 279 guarded, 108 of 108 writes. Provisional matrix, `AUTHZ_MODE=warn` kill switch. **See `EPMS-F6-authorization.md`** |
 
 Verified live against the local stack with curl, Mongo and Playwright, and covered by
 `libs/tests/test_exchange_credential_exposure.py` and
@@ -142,11 +181,12 @@ change a key an operator now types the new one.
 | F7 | Admin password reset revokes nothing; the 7-day refresh token survives | M |
 | F1 | Upload authorization resolves against a hardcoded dict granting `operator` | M |
 | F4 | Master plant CRUD unguarded — plus unlisted bulk upload and full CSV export | S |
-| F3 | ~~Price group CRUD unguarded; delete orphans referencing plants~~ — **fixed** (`e75d9be`, `da3022e`) | — |
+| F3 | ~~Price group CRUD unguarded; delete orphans referencing plants~~ — **fixed** (`06f465f`, `bb85d84`) | — |
 
 ### P2 — next quarter
 
-F9 (no server-side session, no idle cap) · F16 (CORS origin list) ·
+F9 (no server-side session; the 30-minute idle cap added 2026-08-21 is enforced in the browser, not on the server) ·
+F16 (Subresource Integrity — delete the CDN tags; `ForecastChart.jsx:14` reads `window.Highcharts`, so it moves to the npm import first) ·
 F17 — **API half fixed**; the static nginx vhost still needs a CSP. The production bundle was checked and does **not** need `unsafe-eval`: the only three `Function("return this")` hits in `client/dist` are
 try/catch-guarded `globalThis` polyfills, unreachable in a browser where `self` exists. Suggested vhost
 policy, to go in alongside the `X-Real-IP` change:
@@ -158,7 +198,7 @@ add_header Content-Security-Policy "default-src 'self'; script-src 'self'; "
 ```
 
 `style-src 'unsafe-inline'` stays because the charting libraries set inline styles at runtime.
-(F8 was closed by `f05e765` + `10380c0`.)
+(F8 was closed by `296a924` + `fd53d33`.)
 
 ### P3 — document or close
 
@@ -169,13 +209,13 @@ F18 (not a vulnerability)
 
 These are all **S**, independent, and **none depends on the permissions programme**:
 
-- ✅ the missing `await` on delete (one word) — `21b16d4`
-- ✅ drop `username` from `UserUpdateRequest` (one field) — `21b16d4`
-- ✅ mask `api_key` in `IexApiDetailService.get_all()` — `8c68b3e`
-- ⏸️ the self-approval guard (one line, ×6 handlers) — blocked on PTC's written answer
-  in §9, since self-approval may be a deliberate business decision
-- ⬜ restore scheduler authentication middleware
-- ⬜ add authentication to ingestion `/cron/*`
+- ✅ the missing `await` on delete (one word) — `3d6998c`
+- ✅ drop `username` from `UserUpdateRequest` (one field) — `3d6998c`
+- ✅ mask `api_key` in `IexApiDetailService.get_all()` — `247e6d5`
+- ⚖️ the self-approval guard (one line, ×6 handlers) — **decided 2026-08-18: accepted, not
+  built.** See §4.4
+- ✅ restore scheduler authentication middleware — `9699fec`
+- ✅ add authentication to ingestion `/cron/*` — `27c5f44`
 
 Hours, not weeks. Cheapest risk reduction available, and it de-risks the programme by
 shrinking what stays broken if the catalog work slips.
@@ -652,7 +692,9 @@ field first, then reconcile the names.**
    `False`; if PROD sets it `True`, the entire `/api/v1` surface of processing is excluded
    from `AuthMiddleware` and the inline middleware only guards `/api/v2/`.)
 4. What is the production host timezone? (`timedatectl`) — decides the MFA temp-token issue.
-5. Does `ptcindia.com` publish a DMARC record with an `sp=` tag? — decides F12.
+5. ~~Does `ptcindia.com` publish a DMARC record with an `sp=` tag?~~ — **answered 2026-08-24:
+   no `v=DMARC1` record exists on the domain at all.** Nothing to inherit; PTC's DNS team
+   must publish one (`p=none` with `rua=`, then tighten).
 
 ### For PTC (business decisions, in writing)
 
