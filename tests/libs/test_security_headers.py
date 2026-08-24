@@ -18,20 +18,27 @@ from starlette.testclient import TestClient
 from libs.middleware.security_headers import SecurityHeadersMiddleware
 
 
-def _client():
+def _client(**kwargs):
     app = Starlette(routes=[
+        Route("/", lambda r: HTMLResponse("<html></html>")),
         Route("/api/v2/anything", lambda r: JSONResponse({"ok": True})),
         Route("/docs", lambda r: HTMLResponse("<html></html>")),
         Route("/api/v2/docs", lambda r: HTMLResponse("<html></html>")),
         Route("/redoc", lambda r: HTMLResponse("<html></html>")),
         Route("/openapi.json", lambda r: JSONResponse({})),
+        Route("/login", lambda r: HTMLResponse("<html></html>")),
+        Route("/dashboard", lambda r: HTMLResponse("<html></html>")),
+        Route("/scheduler/login", lambda r: HTMLResponse("<html></html>")),
     ])
-    app.add_middleware(SecurityHeadersMiddleware)
+    app.add_middleware(SecurityHeadersMiddleware, **kwargs)
     return TestClient(app)
 
 
-def csp(path):
-    return _client().get(path).headers["Content-Security-Policy"]
+def csp(path, **kwargs):
+    return _client(**kwargs).get(path).headers["Content-Security-Policy"]
+
+
+UI_PATHS = ("/", "/login", "/dashboard")
 
 
 class TestNoUnsafeEvalAnywhere:
@@ -81,3 +88,41 @@ class TestOtherHeadersUnchanged:
         assert h["X-Frame-Options"] == "DENY"
         assert "max-age=31536000" in h["Strict-Transport-Security"]
         assert h["Referrer-Policy"] == "strict-origin-when-cross-origin"
+
+
+class TestAppPagePolicy:
+    """
+    A service that serves its own HTML needs a document policy for those pages. The
+    scheduler's operator UI is three such pages, each an inline <script> plus an inline
+    <style>; under the API policy Chromium blocks both and the page renders unstyled and
+    inert ("Executing inline script violates ... 'default-src 'none''").
+    """
+
+    def test_declared_pages_may_run_their_inline_script_and_style(self):
+        policy = csp("/login", html_paths=UI_PATHS)
+        assert "script-src 'self' 'unsafe-inline'" in policy
+        assert "style-src 'self' 'unsafe-inline'" in policy
+
+    def test_declared_pages_load_nothing_from_a_cdn(self):
+        assert "cdn.jsdelivr.net" not in csp("/login", html_paths=UI_PATHS)
+
+    def test_declared_pages_still_cannot_be_framed(self):
+        assert "frame-ancestors 'none'" in csp("/login", html_paths=UI_PATHS)
+
+    def test_pages_are_recognised_under_a_mounted_base_path(self):
+        """nginx serves the scheduler under /scheduler, so /login arrives prefixed."""
+        assert csp("/scheduler/login", html_paths=UI_PATHS) == csp("/login", html_paths=UI_PATHS)
+
+    def test_api_responses_are_untouched_when_pages_are_declared(self):
+        assert "default-src 'none'" in csp("/api/v2/anything", html_paths=UI_PATHS)
+
+    def test_root_is_matched_exactly_and_never_as_a_suffix(self):
+        """
+        "/" strips to "", and every path ends with "" -- so a suffix match on it would
+        give the document policy to every API response on the service.
+        """
+        assert "default-src 'none'" in csp("/api/v2/anything", html_paths=("/",))
+        assert "script-src 'self' 'unsafe-inline'" in csp("/", html_paths=("/",))
+
+    def test_no_pages_declared_leaves_every_response_on_the_api_policy(self):
+        assert "default-src 'none'" in csp("/login")
