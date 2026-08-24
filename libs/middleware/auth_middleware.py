@@ -92,7 +92,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         # Skip authentication for excluded paths
         request_path = request.url.path
         if self._should_skip_auth(request_path):
-            logger.info(f"✅ Skipping auth for path: {request_path} | CorrelationID: {correlation_id}")
+            logger.debug(f"✅ Skipping auth for path: {request_path} | CorrelationID: {correlation_id}")
             return await call_next(request)
         
         # Log when auth is required (for debugging)
@@ -189,7 +189,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             True if auth should be skipped, False otherwise
         """
         # Debug logging to help troubleshoot
-        logger.info(f"🔍 Checking auth skip for path: '{path}'")
+        logger.debug(f"🔍 Checking auth skip for path: '{path}'")
         logger.debug(f"   Exclude paths: {self.exclude_paths}")
         
         # Normalize path (remove trailing slashes for comparison)
@@ -201,17 +201,17 @@ class AuthMiddleware(BaseHTTPMiddleware):
             
             # Check if path starts with exclude path
             if normalized_path.startswith(normalized_exclude):
-                logger.info(f"✅ Skipping auth for path '{path}' (matches exclude '{exclude_path}')")
+                logger.debug(f"✅ Skipping auth for path '{path}' (matches exclude '{exclude_path}')")
                 return True
             
             # Also check if exclude path is contained in the path (for mounted apps)
             if normalized_exclude in normalized_path:
                 # Additional check: ensure it's at a path boundary (not just substring)
                 if normalized_path == normalized_exclude or normalized_path.startswith(normalized_exclude + '/'):
-                    logger.info(f"✅ Skipping auth for path '{path}' (contains exclude '{exclude_path}')")
+                    logger.debug(f"✅ Skipping auth for path '{path}' (contains exclude '{exclude_path}')")
                     return True
         
-        logger.info(f"❌ Auth required for path: '{path}' (no exclude match)")
+        logger.debug(f"❌ Auth required for path: '{path}' (no exclude match)")
         return False
     
     async def _authenticate_request(self, request: Request) -> Dict[str, Any]:
