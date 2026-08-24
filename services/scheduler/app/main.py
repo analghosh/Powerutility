@@ -4,6 +4,7 @@ Handles cron jobs and scheduling
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -35,12 +36,17 @@ configure_logging(
 logger = logging.getLogger("scheduler_service")
 
 
+SERVICE_VERSION = "1.0.0"
+
+
 class HealthResponse(BaseModel):
     """Health check response model"""
     status: str
     service: str
     version: str
     timestamp: str
+    scheduler_running: bool
+    database: str
 
 
 def run_timeblock_seeder():
@@ -187,7 +193,7 @@ async def lifespan(app: FastAPI):
 # Create FastAPI app
 app = FastAPI(
     title=settings.SERVICE_NAME,
-    version="1.0.0",
+    version=SERVICE_VERSION,
     lifespan=lifespan,
     docs_url="/docs" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
     redoc_url="/redoc" if (settings.DEBUG or settings.ENABLE_SWAGGER) else None,
@@ -366,12 +372,14 @@ async def health_check():
     return {
         "status": "healthy",
         "service": settings.SERVICE_NAME,
+        "version": SERVICE_VERSION,
+        "timestamp": datetime.now().isoformat(),
         "scheduler_running": cron_manager.is_running(),
-        "database": settings.AUDIT_DB_NAME
+        "database": settings.AUDIT_DB_NAME,
     }
 
 
-@app.get("/scheduler/diagnostics")
+@app.get("/scheduler/diagnostics", dependencies=_admin_only)
 async def scheduler_diagnostics():
     """Get detailed scheduler diagnostics to identify missed jobs"""
     from datetime import datetime, timedelta
@@ -518,14 +526,14 @@ async def scheduler_diagnostics():
         }
 
 
-@app.get("/cache/health")
+@app.get("/cache/health", dependencies=_admin_only)
 async def cache_health_check():
     """Cache service health check endpoint"""
     from libs.middleware import check_cache_health
     return await check_cache_health()
 
 
-@app.get("/cache/stats")
+@app.get("/cache/stats", dependencies=_admin_only)
 async def cache_stats():
     """Get cache service statistics"""
     from libs.middleware import get_cache_metrics
