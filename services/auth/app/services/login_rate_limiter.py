@@ -166,7 +166,11 @@ class LoginRateLimiter:
 
         if ip in get_trusted_proxies() or ip in ("127.0.0.1", "::1", "localhost"):
             if not self._bad_ip_warned:
-                logger.error(
+                # WARNING, not ERROR: this is the interlock behaving correctly, and it is
+                # the normal state locally and anywhere nginx is not yet forwarding the
+                # client address. At ERROR it reads as a fault in every log scan until
+                # that nginx change ships, which trains people to ignore the level.
+                logger.warning(
                     "Per-IP login throttling is inactive: the client address resolves to "
                     "%s, which is a trusted proxy or loopback. The reverse proxy is "
                     "probably not setting X-Real-IP / X-Forwarded-For, or TRUSTED_PROXIES "
