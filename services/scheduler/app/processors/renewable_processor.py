@@ -629,11 +629,15 @@ class RenewableProcessor(BaseProcessor):
             archival_candidates = await self.renewable_repository.find_many({
                 "scheduled_at": {"$lt": datetime.combine(archive_cutoff, datetime.min.time())}
             }, limit=10000)
-            
+
+            # Bound before the branch: the result dict below reads this unconditionally,
+            # and the "nothing to archive" path never entered the block that used to set
+            # it -- so the job raised UnboundLocalError on its own healthy path.
+            archived_count_actual = 0
+
             if not archival_candidates:
                 logger.info("No renewable records found for archival")
             else:
-                archived_count_actual = 0
                 if archival_candidates:
                     logger.info(f"Found {len(archival_candidates)} renewable records to potentially archive")
                     
