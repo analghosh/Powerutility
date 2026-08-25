@@ -56,7 +56,12 @@ class Settings(BaseSettings):
     JWT_ALGORITHM: str = "HS256"
     JWT_ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     ACCESS_TOKEN_EXPIRE_MINUTES: str = "30"  # Alias for JWT_ACCESS_TOKEN_EXPIRE_MINUTES
-    JWT_REFRESH_TOKEN_EXPIRE_DAYS: float = 7
+    # How long a session survives without re-entering a password: the browser trades this
+    # token for a fresh access token whenever the 30-minute one expires. It is therefore
+    # also the outer bound on a token copied from a browser, since nothing revokes it if
+    # the tab is closed before the idle timeout fires. Seven days was the VAPT's F9
+    # exposure window. Fractional values are allowed -- 0.5 is twelve hours.
+    JWT_REFRESH_TOKEN_EXPIRE_DAYS: float = float(os.getenv("JWT_REFRESH_TOKEN_EXPIRE_DAYS", "1"))
     
     # Security Configuration - must be set via env var; no insecure fallback
     SECRET_KEY: str = os.getenv("SECRET_KEY", "")

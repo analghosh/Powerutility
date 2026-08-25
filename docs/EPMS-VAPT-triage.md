@@ -79,7 +79,7 @@ severity is wrong. `NOT IN CODE` = infrastructure, not settleable from the repo.
 | F6 | CONFIRMED | High → **Critical** | Quantified: 72 write routes, 3 dead authz libraries, 1 of 46 routers guarded. |
 | F7 | CONFIRMED | Medium → **High** | The refresh token survives too, so the window is 7 days, not 30 minutes. |
 | F8 | CONFIRMED | Medium → Medium | Worse mechanism than described; but `is_active=false` does take effect immediately. |
-| F9 | PARTIAL | Medium → Medium | No idle timeout confirmed. "Token valid after 30 min" contradicts configured expiry — ask for the capture. |
+| F9 | ⚠️ partial — bounded | Idle sign-out after 30 minutes, which now **revokes both tokens server-side** (client `e60ac55` + `5f3f607`, backend `d6b8324`), and the refresh-token ceiling is cut from **7 days to 24 hours** (`JWT_REFRESH_TOKEN_EXPIRE_DAYS`). Residual, stated plainly: there is no server-side inactivity tracking, so if the browser never runs the timer — tab closed, crash, laptop slept — nothing is revoked and a token copied beforehand stays usable until that 24-hour ceiling. A session-idle key gated on a new token claim is designed and held in reserve if PTC's auditor requires server-side enforcement |
 | F10 | CONFIRMED | Medium → **Med–High** | Renaming the seeded admin re-seeds a fresh super-admin on restart. (Severity revised down from High — see §4.5.) |
 | F11 | PARTIAL | Medium → **ACCEPTED (closed)** | Not an exposed dashboard — the deployment root, holding the JWT signing key. **Accepted by the client 2026-08-19** on the basis that Jenkins requires a login. Recorded risk: that boundary has failed before (CVE-2024-23897 was an unauthenticated file read used in the wild to pull `secrets/` and `.env` off controllers), and a symmetric `JWT_SECRET_KEY` there means forged super-admin tokens without touching EPMS at all. Cheap mitigation offered and not taken: an nginx IP allowlist on `/jenkins/`. |
 | F12 | CONFIRMED | Medium → **Low** | Corrected 2026-08-24: `ptcindia.com` publishes **no DMARC record at all**, so nothing is inherited. Still Low — the app sends no mail. PTC's DNS team owns it. |
@@ -112,7 +112,7 @@ Commit hashes elsewhere in this document were rewritten when the work was rebase
 | F6 | ✅ fixed | `06f465f` + the page-permission model. 113 of 113 write routes guarded, `AUTHZ_MODE` defaults to enforce |
 | F7 | ✅ fixed | `296a924` (revocation on reset/role change/deactivation) + `d6b8324` (the refresh retires the token it replaces) |
 | F8 | ✅ fixed | `296a924` + `fd53d33`; revocation stays immediate under local validation |
-| F9 | ⚠️ partial | The 30-minute idle cap is a browser timer (client `e60ac55`, backend `d6b8324`). There is still no server-side session or last-activity, so a stolen refresh token lives its full seven days. Decide: accept and document, or build it |
+| F9 | ⚠️ partial — bounded | Idle sign-out after 30 minutes with **both tokens revoked server-side**, plus a refresh ceiling cut from 7 days to 24 hours. No server-side inactivity tracking — see §3.1 |
 | F10 | ✅ fixed | `3d6998c` drops `username` from the update model. Residuals: the repository's `_PRIVILEGED_FIELDS` filter (vendor) still omits `username`, the seeder re-mints an admin whenever the name is free, and `ADMIN_INITIAL_PASSWORD` defaults to `""` with only a log warning |
 | F11 | ⚖️ accepted | Client decision 2026-08-19. Rotate everything Jenkins holds |
 | F12 | ⬜ open | Not a repo change. `ptcindia.com` publishes no DMARC record; PTC's DNS team must publish one |
