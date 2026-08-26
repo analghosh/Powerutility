@@ -29,6 +29,39 @@ logger = logging.getLogger(__name__)
 # Valid values: "Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"
 VALID_ORDER_STATUSES = {"Submitted", "Executed", "Rejected", "Cancelled", "Excluded", "Provisional"}
 
+def _preflight_failure(exc: BaseException, market: str, what: str, endpoint: str) -> HTTPException:
+    """
+    Turn a failed pre-flight exchange call into an error a trader can act on.
+
+    The old message named neither the endpoint nor the kind of failure, so a
+    firewall silently dropping the connection (ConnectTimeout) and IEX taking
+    too long to answer (ReadTimeout) produced identical text and the same dead
+    end. The endpoint is given as host and path only — the full URL carries
+    LoginUserId and ParticipantId and belongs in the log, not in a browser
+    dialog.
+    """
+    if isinstance(exc, httpx.TimeoutException):
+        return HTTPException(
+            status_code=504,
+            detail=(
+                f"{market} block bid: IEX {what} did not respond "
+                f"({type(exc).__name__}) — {endpoint}. No bid was sent."
+            ),
+        )
+    if isinstance(exc, httpx.HTTPStatusError):
+        return HTTPException(
+            status_code=exc.response.status_code,
+            detail=f"{market} block bid: IEX {what} refused the request — {exc.response.text}",
+        )
+    return HTTPException(
+        status_code=502,
+        detail=(
+            f"{market} block bid: could not reach IEX {what} "
+            f"({type(exc).__name__}: {exc}) — {endpoint}. No bid was sent."
+        ),
+    )
+
+
 def exchange_quantity(quantum, iex_split_percent, qty_decimal, buy_sell) -> int:
     """Quantity in the form IEX expects: a magnitude, signed by direction.
 
@@ -837,18 +870,34 @@ class BlockBidServices:
             bid_type="block-bid",
         )
 
-        # 2 & 3. Fetch AssetId and DeliveryDate in parallel
-        try:
-            asset_response, delivery_dates_resp = await asyncio.gather(
-                api_client.get_asset_details(bid_type="block-bid"),
-                api_client.get_delivery_dates(bid_type="block-bid"),
+        # 2 & 3. Fetch AssetId and DeliveryDate in parallel.
+        #
+        # The two calls are not equally important and must not fail together.
+        # /master/assets is required — AssetId and OrderQtyDecimal shape the bid.
+        # /deliverydates is a cross-check only (see the delivery date derivation
+        # below): its answer is never used, so an unanswered cross-check must not
+        # cost a trader their submission. return_exceptions keeps them separate.
+        asset_response, delivery_dates_resp = await asyncio.gather(
+            api_client.get_asset_details(bid_type="block-bid"),
+            api_client.get_delivery_dates(bid_type="block-bid"),
+            return_exceptions=True,
+        )
+
+        if isinstance(delivery_dates_resp, BaseException):
+            logger.warning(
+                f"{market} block bid: /deliverydates did not answer "
+                f"({type(delivery_dates_resp).__name__}: {delivery_dates_resp}) — no cross-check "
+                f"available, submitting against the delivery date derived from the bid date"
             )
-        except httpx.TimeoutException:
-            raise HTTPException(status_code=504, detail=f"Exchange API timed out fetching {market} asset/delivery info.")
-        except httpx.HTTPStatusError as e:
-            raise HTTPException(status_code=e.response.status_code, detail=f"Exchange API error: {e.response.text}")
-        except Exception as e:
-            raise HTTPException(status_code=502, detail=f"Failed to reach {market} exchange API: {type(e).__name__}: {e}")
+            delivery_dates_resp = {}
+
+        if isinstance(asset_response, BaseException):
+            raise _preflight_failure(
+                asset_response,
+                market,
+                "asset details",
+                f"{base_url}/{market.lower()}/api/v2/master/assets",
+            )
 
         asset_details_list = asset_response.get("AssetDetails", [])
         asset_id = asset_details_list[0].get("AssetId", "") if asset_details_list else ""
