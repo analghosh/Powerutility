@@ -5,6 +5,7 @@ Client for external exchange APIs: Asset Details, Delivery Dates, Single Bid sub
 
 import httpx
 import logging
+import time
 from typing import Dict, Any, Optional, List, NamedTuple
 from datetime import datetime, timezone
 from services.processing.app.v2.repository.integration_api_log_repository import integration_api_log_repository
@@ -72,6 +73,44 @@ class ExchangeAPIClient:
             )
         except Exception as e:
             logger.error(f"Failed to log API call to DB: {e}")
+
+    async def _get_or_log_failure(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: Dict[str, str],
+        market_type: str,
+        bid_type: str,
+        method: str,
+    ) -> httpx.Response:
+        """
+        GET, and record the call in iex_integration_apilog even when it fails.
+
+        Every other call logs to the DB only after a response comes back, so a
+        call that timed out left no trace anywhere: nothing on the Bid
+        Submission Detail screen, nothing to reconcile against, and no way to
+        tell a submission that was never attempted from one the exchange never
+        answered. Failures are logged with the exception and the elapsed time,
+        then re-raised unchanged so callers behave exactly as before.
+        """
+        started = time.monotonic()
+        try:
+            return await client.get(url, headers=headers)
+        except Exception as exc:
+            elapsed = round(time.monotonic() - started, 2)
+            logger.error(
+                f"{method} failed after {elapsed}s ({type(exc).__name__}: {exc}) — {url}"
+            )
+            await self._log_to_db(
+                url,
+                {"method": "GET"},
+                headers,
+                {"error": type(exc).__name__, "message": str(exc), "elapsed_seconds": elapsed},
+                market_type,
+                bid_type,
+                method,
+            )
+            raise
 
     # ... (rest of methods) ...
 
@@ -170,9 +209,11 @@ class ExchangeAPIClient:
         headers = self._get_headers()
         
         logger.info(f"Fetching asset details from: {url}")
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, headers=headers)
+            response = await self._get_or_log_failure(
+                client, url, headers, self.market_type, bid_type or self.bid_type, "getAssetDetail"
+            )
             
             # Capture response body
             try:
@@ -205,9 +246,11 @@ class ExchangeAPIClient:
         headers = self._get_headers()
         
         logger.info(f"Fetching delivery dates from: {url}")
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, headers=headers)
+            response = await self._get_or_log_failure(
+                client, url, headers, self.market_type, bid_type or self.bid_type, "getDeliveryDate"
+            )
             
              # Capture response body
             try:
