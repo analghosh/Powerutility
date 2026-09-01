@@ -35,6 +35,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
 from ...core.config import settings
+from .parameter_service import REPORT_FEE_RATE_BASIS, parameter_service
 from ..repository.daily_markets_repository import (
     BLOCKS_PER_DAY,
     LIMIT_VALUE_BUFFER_ID,
@@ -277,7 +278,11 @@ class DailyMarketsService:
             )
         return rows
 
-    def _build_summary(self, trade_details: List[Dict[str, Any]]) -> Dict[str, Any]:
+    def _build_summary(
+        self,
+        trade_details: List[Dict[str, Any]],
+        rates: Dict[str, Any],
+    ) -> Dict[str, Any]:
         """
         mplive's RTM Trade Summary, formula for formula.
 
@@ -285,10 +290,10 @@ class DailyMarketsService:
         accumulates `round($amount)`; summing first and rounding last drifts
         from the published figure by a few rupees a day.
         """
-        fee_rate = float(settings.REPORTS_MARKETS_FEE_RATE_PER_MWH)
-        gst_multiplier = float(settings.REPORTS_MARKETS_GST_MULTIPLIER)
-        sldc_flat = float(settings.REPORTS_MARKETS_SLDC_FLAT_CHARGE)
-        fcr_rate = float(settings.REPORTS_MARKETS_FCR_RATE_PER_MU)
+        fee_rate = float(rates["fee_rate_per_mwh"])
+        gst_multiplier = float(rates["gst_multiplier"])
+        sldc_flat = float(rates["sldc_flat_charge"])
+        fcr_rate = float(rates["fcr_rate_per_mu"])
 
         total_amount = 0.0
         total_positive_amount = 0.0
@@ -421,6 +426,36 @@ class DailyMarketsService:
             "has_price_data": priced_blocks > 0,
         }
 
+    # ---------- charge rates ----------
+
+    async def _resolve_charge_rates(self) -> Dict[str, Any]:
+        """
+        Read the charge rates from `parameters`, falling back to the settings
+        constants if that store cannot be reached at all.
+
+        The parameter service already falls back per-key on a malformed value;
+        this outer guard covers the whole store being unavailable, which would
+        otherwise take every money row on the report to zero.
+        """
+        try:
+            return await parameter_service.get_report_charge_rates()
+        except Exception as e:
+            logger.error(
+                "Could not read report charge rates from parameters (%s); "
+                "falling back to settings constants",
+                e,
+            )
+            gst_multiplier = float(settings.REPORTS_MARKETS_GST_MULTIPLIER)
+            return {
+                "fee_rate_per_mwh": float(settings.REPORTS_MARKETS_FEE_RATE_PER_MWH),
+                "gst_percent": (gst_multiplier - 1) * 100,
+                "gst_multiplier": gst_multiplier,
+                "sldc_flat_charge": float(settings.REPORTS_MARKETS_SLDC_FLAT_CHARGE),
+                "fcr_rate_per_mu": float(settings.REPORTS_MARKETS_FCR_RATE_PER_MU),
+                "sources": {"all": "settings_fallback"},
+                "fee_rate_basis": REPORT_FEE_RATE_BASIS,
+            }
+
     # ---------- entry point ----------
 
     async def get_daily_markets(
@@ -434,6 +469,8 @@ class DailyMarketsService:
         resolved_market = self.normalize_market(market)
         resolved_exchange = (exchange or DEFAULT_EXCHANGE).strip().upper()
         fmt = self.normalize_format(response_format)
+
+        rates = await self._resolve_charge_rates()
 
         (
             trade_rows,
@@ -461,7 +498,7 @@ class DailyMarketsService:
             resolved_date, trades, prices, time_blocks, sessions
         )
         other_details = self._build_other_details(resolved_date, limits, time_blocks)
-        summary = self._build_summary(trade_details)
+        summary = self._build_summary(trade_details, rates)
 
         csv_export: Dict[str, Any] = {
             "headers": CSV_HEADERS,
@@ -481,11 +518,13 @@ class DailyMarketsService:
                 "format": fmt,
             },
             "charge_rates": {
-                "fee_rate_per_mwh": float(settings.REPORTS_MARKETS_FEE_RATE_PER_MWH),
-                "gst_multiplier": float(settings.REPORTS_MARKETS_GST_MULTIPLIER),
-                "sldc_flat_charge": float(settings.REPORTS_MARKETS_SLDC_FLAT_CHARGE),
-                "fcr_rate_per_mu": float(settings.REPORTS_MARKETS_FCR_RATE_PER_MU),
-                "source": "mplive dailyReport constants — pending PTC confirmation",
+                "fee_rate_per_mwh": rates["fee_rate_per_mwh"],
+                "gst_percent": rates["gst_percent"],
+                "gst_multiplier": rates["gst_multiplier"],
+                "sldc_flat_charge": rates["sldc_flat_charge"],
+                "fcr_rate_per_mu": rates["fcr_rate_per_mu"],
+                "sources": rates["sources"],
+                "fee_rate_basis": rates["fee_rate_basis"],
             },
             "data_coverage": self._build_coverage(trades, prices, limits),
             "summary": summary,

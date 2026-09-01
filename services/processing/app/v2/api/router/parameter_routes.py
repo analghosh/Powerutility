@@ -10,6 +10,10 @@ from datetime import datetime
 import logging
 
 from ...controller.parameter_controller import parameter_controller
+from ...services.parameter_service import (
+    REPORT_CHARGE_RATE_KEYS,
+    parameter_service,
+)
 from ...dependencies import get_user_context
 from ...services.idf_forecast_switch_service import ManualSwitchNotAllowedError
 from libs.audit_queue.simple_logger import AuditLogger
@@ -347,6 +351,138 @@ async def get_all_parameters(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to fetch parameters"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Daily/Weekly markets report charge rates
+# ---------------------------------------------------------------------------
+class ReportChargeRateField(BaseModel):
+    """One rate, with enough context for the Masters screen to render it."""
+
+    para_key: str
+    value: float
+    description: str
+    editable: bool
+    source: str = Field(..., description="parameters | default")
+
+
+class ReportChargeRatesResponse(BaseModel):
+    rates: List[ReportChargeRateField]
+    fee_rate_basis: str
+
+
+class ReportChargeRatesSaveRequest(BaseModel):
+    reports_fee_rate_per_mwh: Optional[float] = None
+    reports_sldc_flat_charge: Optional[float] = None
+    reports_fcr_rate_per_mu: Optional[float] = None
+    # reports_gst_percent is intentionally absent: it is not editable until PTC
+    # confirms whether the per-MWh charge already includes GST. Sending it is
+    # rejected by the service rather than silently ignored.
+    reports_gst_percent: Optional[float] = None
+
+
+@router.get(
+    "/report-charge-rates",
+    response_model=ReportChargeRatesResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get daily/weekly report charge rates",
+    description=(
+        "The four rates the markets report money rows are derived from. "
+        "EPMS holds no fee or charge dataset, so these are configuration, not "
+        "measured data."
+    ),
+)
+async def get_report_charge_rates(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    try:
+        resolved = await parameter_service.get_report_charge_rates()
+        value_of = {
+            "reports_fee_rate_per_mwh": resolved["fee_rate_per_mwh"],
+            "reports_gst_percent": resolved["gst_percent"],
+            "reports_sldc_flat_charge": resolved["sldc_flat_charge"],
+            "reports_fcr_rate_per_mu": resolved["fcr_rate_per_mu"],
+        }
+        return ReportChargeRatesResponse(
+            rates=[
+                ReportChargeRateField(
+                    para_key=key,
+                    value=value_of[key],
+                    description=spec["description"],
+                    editable=spec["editable"],
+                    source=resolved["sources"].get(key, "default"),
+                )
+                for key, spec in REPORT_CHARGE_RATE_KEYS.items()
+            ],
+            fee_rate_basis=resolved["fee_rate_basis"],
+        )
+    except Exception as e:
+        logger.exception("Failed to read report charge rates")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to read report charge rates.",
+        )
+
+
+@router.put(
+    "/report-charge-rates",
+    response_model=Dict[str, Any],
+    status_code=status.HTTP_200_OK,
+    summary="Update daily/weekly report charge rates",
+    description=(
+        "Updates the editable charge rates. Values are validated and range "
+        "checked here rather than through the generic parameter CRUD, because "
+        "these multiply every figure on the markets report."
+    ),
+)
+async def save_report_charge_rates(
+    request: Request,
+    payload: ReportChargeRatesSaveRequest = Body(...),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+
+    try:
+        result = await parameter_service.save_report_charge_rates(updates)
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            username=username,
+            action="report_charge_rates_updated",
+            message="User updated the markets report charge rates",
+            correlation_id=correlation_id,
+            success=True,
+            data_type="report_charge_rates",
+            updated=result["updated"],
+            previous=result["previous"],
+        )
+        return {"success": True, **result}
+    except ValueError as e:
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            username=username,
+            action="report_charge_rates_updated",
+            message="Charge rate update rejected",
+            correlation_id=correlation_id,
+            success=False,
+            data_type="report_charge_rates",
+            failure_reason=str(e),
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(e)
+        )
+    except Exception:
+        logger.exception("Failed to save report charge rates")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save report charge rates.",
         )
 
 

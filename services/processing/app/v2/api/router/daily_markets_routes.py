@@ -63,13 +63,21 @@ class DailyMarketsQuery(BaseModel):
 
 
 class DailyMarketsChargeRates(BaseModel):
-    """The rates the money rows are derived from — not measured data."""
+    """
+    The rates the money rows are derived from — not measured data.
+
+    `sources` reports, per rate, whether the value came from the `parameters`
+    collection or fell back to a default, so a bad edit is visible rather than
+    silently reshaping every figure.
+    """
 
     fee_rate_per_mwh: float
+    gst_percent: float
     gst_multiplier: float
     sldc_flat_charge: float
     fcr_rate_per_mu: float
-    source: str
+    sources: Dict[str, str]
+    fee_rate_basis: str
 
 
 class DailyMarketsCoverage(BaseModel):

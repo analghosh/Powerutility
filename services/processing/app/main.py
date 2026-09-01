@@ -110,6 +110,7 @@ async def lifespan(app: FastAPI):
     try:
         from .v2.services.parameter_service import parameter_service
         created = await parameter_service.ensure_bid_price_defaults()
+        await parameter_service.ensure_report_charge_rate_defaults()
         if created:
             logger.info(f"Auto-created bid price parameters: {created}")
     except Exception as e:

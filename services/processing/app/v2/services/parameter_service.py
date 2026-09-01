@@ -66,6 +66,57 @@ DEFAULT_MAX_BUY_BID_PRICE_FLAGS = {
 }
 
 
+# Daily/Weekly markets report charge rates.
+#
+# These are rates, not measured data: EPMS holds no fee or charge dataset, and
+# mplive carried them as literals in ReportsController@dailyReport. They live in
+# `parameters` so PTC can correct them without a deploy, seeded here from the
+# same values the report has always used so nothing moves on first run.
+#
+# GST is deliberately NOT editable yet. It is applied to the "Fees (incl. GST)"
+# row only - Buy Cost and Sell Proceeds carry the bare fee - and whether that is
+# right depends on a question PTC has not answered: is the per-MWh charge a
+# transaction fee or a transmission charge, and does it already include GST?
+# Until that is settled, changing the percentage would move two rows and leave
+# two others behind, so the field is served read-only.
+REPORT_CHARGE_RATE_KEYS = {
+    "reports_fee_rate_per_mwh": {
+        "default": "20",
+        "description": "Per-MWh charge applied to cleared volume (assumed GST-exclusive)",
+        "editable": True,
+        "minimum": 0.0,
+    },
+    "reports_gst_percent": {
+        "default": "18",
+        "description": "GST on the per-MWh charge, percent. Applied to the Fees row only",
+        "editable": False,
+        "minimum": 0.0,
+        "maximum": 100.0,
+    },
+    "reports_sldc_flat_charge": {
+        "default": "3000",
+        "description": "Flat SLDC scheduling and operating charge per day when any bid exists",
+        "editable": True,
+        "minimum": 0.0,
+    },
+    "reports_fcr_rate_per_mu": {
+        "default": "200000",
+        "description": "Fixed cost recovery rate per MU of cleared sell volume",
+        "editable": True,
+        "minimum": 0.0,
+    },
+}
+
+REPORT_FEE_RATE_BASIS = (
+    "GST-exclusive. Applied to the Fees row only - Buy Cost and Sell Proceeds "
+    "carry the bare per-MWh charge."
+)
+
+# Shown when a write to a locked rate is refused. Kept separate from the basis
+# text so shortening one does not leave the other without a reason.
+REPORT_RATE_LOCKED_REASON = "It applies to the Fees row only."
+
+
 class ParameterService:
     """Service for parameter operations"""
 
@@ -221,6 +272,10 @@ class ParameterService:
         Returns:
             Updated parameter or None
         """
+        # A locked report charge rate has to stay locked whichever route reaches
+        # it. Guarding only the dedicated endpoint left this generic path able to
+        # change the same row, which made the lock decorative.
+        await self._reject_locked_report_rate_update(parameter_id, update_data)
         try:
             existing = await parameter_repository.get_parameter_by_id(parameter_id)
             if not existing:
@@ -285,6 +340,149 @@ class ParameterService:
     # ------------------------------------------------------------------
     # Bid price defaults (parameter master)
     # ------------------------------------------------------------------
+
+    async def _reject_locked_report_rate_update(
+        self,
+        parameter_id: str,
+        update_data: Dict[str, Any],
+    ) -> None:
+        """Raise if a write would change a report charge rate marked non-editable."""
+        if "para_value" not in update_data:
+            return
+        try:
+            existing = await parameter_repository.get_parameter_by_id(parameter_id)
+        except Exception:
+            return
+        if not existing:
+            return
+        spec = REPORT_CHARGE_RATE_KEYS.get(existing.get("para_key"))
+        if spec and not spec["editable"]:
+            raise ValueError(
+                f"'{existing['para_key']}' is not editable. {REPORT_RATE_LOCKED_REASON}"
+            )
+
+    async def ensure_report_charge_rate_defaults(self) -> Dict[str, Any]:
+        """
+        Ensure the four daily/weekly report charge rates exist in `parameters`.
+        Creates missing keys with their defaults; never overwrites a value PTC
+        has already set.
+        """
+        created: Dict[str, Any] = {}
+        for para_key, spec in REPORT_CHARGE_RATE_KEYS.items():
+            existing = await parameter_repository.get_parameter_by_key(para_key)
+            if existing:
+                continue
+            await parameter_repository.create_parameter(
+                {
+                    "para_key": para_key,
+                    "para_value": spec["default"],
+                    "description": spec["description"],
+                }
+            )
+            created[para_key] = spec["default"]
+            logger.info(
+                "Auto-created report charge rate '%s' with default %s",
+                para_key,
+                spec["default"],
+            )
+        return created
+
+    async def get_report_charge_rates(self) -> Dict[str, Any]:
+        """
+        Return the four report charge rates, plus which source each came from.
+
+        `parameters` stores values as strings with no schema, so a hand-edited
+        row can hold anything. Any value that will not parse, or is out of
+        range, falls back to the seeded default rather than propagating a zero
+        into every money row on the report. `source` reports which applied so a
+        bad edit surfaces instead of silently changing every figure.
+        """
+        await self.ensure_report_charge_rate_defaults()
+
+        values: Dict[str, float] = {}
+        sources: Dict[str, str] = {}
+        for para_key, spec in REPORT_CHARGE_RATE_KEYS.items():
+            default = float(spec["default"])
+            record = await parameter_repository.get_parameter_by_key(para_key)
+            raw = record.get("para_value") if record else None
+            resolved, source = default, "default"
+            if raw is not None:
+                try:
+                    candidate = float(str(raw).strip())
+                except (TypeError, ValueError):
+                    logger.warning(
+                        "Report charge rate '%s' is not numeric (%r); using default %s",
+                        para_key, raw, default,
+                    )
+                else:
+                    low = spec.get("minimum")
+                    high = spec.get("maximum")
+                    if (low is not None and candidate < low) or (
+                        high is not None and candidate > high
+                    ):
+                        logger.warning(
+                            "Report charge rate '%s' out of range (%s); using default %s",
+                            para_key, candidate, default,
+                        )
+                    else:
+                        resolved, source = candidate, "parameters"
+            values[para_key] = resolved
+            sources[para_key] = source
+
+        gst_percent = values["reports_gst_percent"]
+        return {
+            "fee_rate_per_mwh": values["reports_fee_rate_per_mwh"],
+            # Stored as a percent so that 0 means "no GST" rather than "no fee";
+            # a stored multiplier would let 0 silently delete the charge.
+            "gst_percent": gst_percent,
+            "gst_multiplier": 1 + gst_percent / 100,
+            "sldc_flat_charge": values["reports_sldc_flat_charge"],
+            "fcr_rate_per_mu": values["reports_fcr_rate_per_mu"],
+            "sources": sources,
+            "fee_rate_basis": REPORT_FEE_RATE_BASIS,
+        }
+
+    async def save_report_charge_rates(
+        self, updates: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Update editable report charge rates. Rejects unknown keys, non-numeric
+        values, out-of-range values, and any attempt to change a rate marked
+        non-editable.
+        """
+        if not updates:
+            raise ValueError("No charge rates supplied")
+
+        parsed: Dict[str, float] = {}
+        for para_key, raw in updates.items():
+            spec = REPORT_CHARGE_RATE_KEYS.get(para_key)
+            if spec is None:
+                raise ValueError(f"Unknown charge rate '{para_key}'")
+            if not spec["editable"]:
+                raise ValueError(
+                    f"'{para_key}' is not editable. {REPORT_RATE_LOCKED_REASON}"
+                )
+            try:
+                value = float(str(raw).strip())
+            except (TypeError, ValueError):
+                raise ValueError(f"'{para_key}' must be a number, got {raw!r}")
+            low, high = spec.get("minimum"), spec.get("maximum")
+            if low is not None and value < low:
+                raise ValueError(f"'{para_key}' must be at least {low}")
+            if high is not None and value > high:
+                raise ValueError(f"'{para_key}' must be at most {high}")
+            parsed[para_key] = value
+
+        await self.ensure_report_charge_rate_defaults()
+        previous: Dict[str, Any] = {}
+        for para_key, value in parsed.items():
+            record = await parameter_repository.get_parameter_by_key(para_key)
+            previous[para_key] = record.get("para_value") if record else None
+            await parameter_repository.update_parameter_by_key(
+                para_key, {"para_value": str(value)}
+            )
+
+        return {"updated": parsed, "previous": previous}
 
     async def ensure_bid_price_defaults(self) -> Dict[str, Any]:
         """
