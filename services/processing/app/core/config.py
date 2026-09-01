@@ -193,6 +193,19 @@ class Settings(BaseSettings):
     MONGODB_RENEWABLE_SERVE: str = "renewable_serve"
     MONGODB_RENEWABLE_SERVE_HISTORICAL: str = "renewable_serve_historical"
 
+    # Bid trade serve historical (active collection is MONGODB_SERVE_PX_BID_COLLECTION)
+    MONGODB_BID_TRADE_SERVE_HISTORICAL_COLLECTION: str = "bid_trade_serve_historical"
+
+    # Daily/Weekly markets report charge rates.
+    # Ported verbatim from mplive's hardcoded values in
+    # app/Http/Controllers/front/v1/Reports/ReportsController.php@dailyReport.
+    # They are rates, not measured data - EPMS holds no fee/charge dataset.
+    # PENDING PTC CONFIRMATION before the report is treated as authoritative.
+    REPORTS_MARKETS_FEE_RATE_PER_MWH: float = 20.0
+    REPORTS_MARKETS_GST_MULTIPLIER: float = 1.18
+    REPORTS_MARKETS_SLDC_FLAT_CHARGE: float = 3000.0
+    REPORTS_MARKETS_FCR_RATE_PER_MU: float = 200000.0
+
     # DAM Scheduling Collections
     MONGODB_DAM_SCHEDULING_COLLECTION: str = "serve_dam_scheduling"
     MONGODB_DAM_SCHEDULING_STAGING_COLLECTION: str = "dam_scheduling_staging"
