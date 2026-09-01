@@ -164,6 +164,7 @@ from .v2.api.router.forecast_serve_routes import router as forecast_serve_router
 from .v2.api.router.demand_serve_historical_routes import router as demand_serve_historical_router
 from .v2.api.router.reports_forecast_routes import router as reports_forecast_router
 from .v2.api.router.daily_markets_routes import router as daily_markets_router
+from .v2.api.router.weekly_markets_routes import router as weekly_markets_router
 from .v2.api.router.bid_market_routes import router as bid_market_router
 from .v2.api.router.job_execution_routes import router as job_execution_router
 from .v2.api.router.supply_manual_routes import router as supply_manual_router
@@ -346,12 +347,14 @@ v2_app.include_router(idf_forecast_switch_router)
 v2_app.include_router(forecast_serve_router)
 v2_app.include_router(demand_serve_historical_router)
 v2_app.include_router(reports_forecast_router)
-# Registered the same way as every other v2 router: authenticated by the auth
-# middleware, with no per-route permission check, because this branch has no
-# libs/authz. When the authorization work lands, this router needs
-# dependencies=[guard(("reports", "standard_reports"))] like reports_forecast,
-# or assert_every_route_is_guarded() will refuse to start the service.
+# Both markets report routers are registered the same way as every other v2
+# router: authenticated by the auth middleware, with no per-route permission
+# check, because this branch has no libs/authz. When the authorization work
+# lands, BOTH of these need dependencies=[guard(("reports", "standard_reports"))]
+# like reports_forecast, or assert_every_route_is_guarded() refuses to start
+# the service. Guarding only one is the easy mistake here.
 v2_app.include_router(daily_markets_router)
+v2_app.include_router(weekly_markets_router)
 v2_app.include_router(bid_market_router)
 v2_app.include_router(job_execution_router)
 v2_app.include_router(supply_manual_router)

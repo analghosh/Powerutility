@@ -282,6 +282,7 @@ class DailyMarketsService:
         self,
         trade_details: List[Dict[str, Any]],
         rates: Dict[str, Any],
+        block_count: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         mplive's RTM Trade Summary, formula for formula.
@@ -381,7 +382,10 @@ class DailyMarketsService:
         # as-is so the EPMS number matches the report PTC reads today.
         funds_pay_in_out = (buy_outgo + sell_revenue) - (fees_incl_gst + sldc_charges)
 
-        average_acp = acp_sum / BLOCKS_PER_DAY
+        # Over a multi-day period the denominator is the blocks in the whole
+        # period, not one day's 96, or the average reads 7x high on a week.
+        blocks = block_count or BLOCKS_PER_DAY
+        average_acp = acp_sum / blocks if blocks else 0.0
 
         return {
             "funds_pay_in_out": _php_round(funds_pay_in_out, 2),
