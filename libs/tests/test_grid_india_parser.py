@@ -153,5 +153,129 @@ class TestGridIndiaParser(unittest.TestCase):
         self.assertFalse(self.parser.validate_content(json.dumps({"random": "json"})))
         self.assertFalse(self.parser.validate_content("not json"))
 
+class TestGridIndiaFuelTypes(unittest.TestCase):
+    """Grid India reports each seller under exactly one fuel block, and the fuel
+    decides the field names. Reading only the Thermal spelling silently produced
+    96 zero-volume blocks instead of a parse failure, so these cases assert on
+    the values rather than on the record merely existing."""
+
+    def setUp(self):
+        self.parser = GridIndiaParser()
+
+    @staticmethod
+    def _isgs(acronym, gen_type, block_key, amount):
+        return {
+            "EnergyScheduleTypeName": "ISGS",
+            "SellerAcronym": acronym,
+            "FullScheduleData": {
+                "ISGSFullScheduleJsonData": {
+                    "ISGSGeneratorTypeName": gen_type,
+                    block_key: {
+                        "TotalDrwBoundarySchdAmount": [amount] * 96,
+                        "TotalRegBoundarySchdAmount": [amount + 1] * 96,
+                    },
+                }
+            },
+        }
+
+    @staticmethod
+    def _payload(full_schd=(), entitlements=()):
+        return json.dumps({
+            "ResponseBody": {
+                "Date": "02-09-2026",
+                "FullSchdRevisionNo": 104,
+                "GroupWiseDataList": [{
+                    "FullschdList": list(full_schd),
+                    "EntitlementList": list(entitlements),
+                }],
+            }
+        })
+
+    def _volumes(self, rows, plant_id, dc_sg):
+        return [r["volume"] for r in rows
+                if r["plant_id"] == plant_id and r["dc_sg"] == dc_sg]
+
+    def test_hydro_schedule_is_read_not_zeroed(self):
+        """Bhutan hydro (Punatsangchhu_II) arrives as ISGS/HYDRO. Before the fix
+        the plant was still emitted, but with every block at 0.0."""
+        rows = self.parser.parse(self._payload(full_schd=[
+            self._isgs("Punatsangchhu_II", "HYDRO",
+                       "ISGSHydroFullScheduleJsonData", 13.87),
+        ]))
+        volumes = self._volumes(rows, "Punatsangchhu_II", "SG")
+        self.assertEqual(len(volumes), 96)
+        self.assertEqual(set(volumes), {13.87})
+
+    def test_thermal_and_nuclear_schedules_still_read(self):
+        rows = self.parser.parse(self._payload(full_schd=[
+            self._isgs("THERM", "THERMAL", "ISGSThermalFullScheduleJsonData", 50.0),
+            self._isgs("NUC", "NUCLEAR", "ISGSNuclearFullScheduleJsonData", 70.0),
+        ]))
+        self.assertEqual(set(self._volumes(rows, "THERM", "SG")), {50.0})
+        self.assertEqual(set(self._volumes(rows, "NUC", "SG")), {70.0})
+
+    def test_unknown_generator_type_is_not_silently_zeroed(self):
+        """A fuel we do not model yet must not masquerade as a real zero
+        schedule. It carries no usable block, so it contributes nothing."""
+        rows = self.parser.parse(self._payload(full_schd=[
+            self._isgs("MYSTERY", "GEOTHERMAL",
+                       "ISGSGeothermalFullScheduleJsonData", 42.0),
+        ]))
+        self.assertEqual(set(self._volumes(rows, "MYSTERY", "SG")), {0.0})
+
+    def test_nuclear_entitlement_yields_dc_volume(self):
+        """Nuclear drops the Onbar/Offbar prefix. Reading only OnbarFinalEntAmount
+        left every nuclear DC row on this deployment at zero."""
+        rows = self.parser.parse(self._payload(entitlements=[{
+            "SellerAcronym": "KKNP",
+            "EntitlementData": {"NuclearEntJsonData": {
+                "FinalEntAmount": [33.79] * 96,
+                "EntireSharedEntAmount": [33.79] * 96,
+            }},
+        }]))
+        volumes = self._volumes(rows, "KKNP", "DC")
+        self.assertEqual(len(volumes), 96)
+        self.assertEqual(set(volumes), {33.79})
+
+    def test_hydro_entitlement_yields_dc_volume(self):
+        rows = self.parser.parse(self._payload(entitlements=[{
+            "SellerAcronym": "Punatsangchhu_II",
+            "EntitlementData": {"HydroEntJsonData": {
+                "FinalEntAmount": [14.46] * 96,
+                "EntireSharedEntAmount": [14.46] * 96,
+            }},
+        }]))
+        self.assertEqual(set(self._volumes(rows, "Punatsangchhu_II", "DC")), {14.46})
+
+    def test_thermal_entitlement_keeps_onbar_offbar_split(self):
+        """Thermal must keep using the Onbar spelling, and its off-bar half must
+        survive the added fallbacks."""
+        rows = self.parser.parse(self._payload(entitlements=[{
+            "SellerAcronym": "TALST2",
+            "EntitlementData": {"ThermalEntJsonData": {
+                "OnbarFinalEntAmount": [61.42] * 96,
+                "EntireSharedOnbarEntAmount": [63.99] * 96,
+                "EntireSharedOffbarEntAmount": [1.5] * 96,
+            }},
+        }]))
+        dc = [r for r in rows if r["plant_id"] == "TALST2" and r["dc_sg"] == "DC"]
+        self.assertEqual(len(dc), 96)
+        self.assertEqual(dc[0]["volume"], 61.42)
+        self.assertEqual(dc[0]["entire_shared_onbar_ent_amount"], 63.99)
+        self.assertEqual(dc[0]["entire_shared_offbar_ent_amount"], 1.5)
+
+    def test_a_fuel_with_no_split_reports_no_offbar(self):
+        rows = self.parser.parse(self._payload(entitlements=[{
+            "SellerAcronym": "KKNP",
+            "EntitlementData": {"NuclearEntJsonData": {
+                "FinalEntAmount": [33.79] * 96,
+                "EntireSharedEntAmount": [33.79] * 96,
+            }},
+        }]))
+        dc = [r for r in rows if r["plant_id"] == "KKNP" and r["dc_sg"] == "DC"][0]
+        self.assertEqual(dc["entire_shared_onbar_ent_amount"], 33.79)
+        self.assertEqual(dc.get("entire_shared_offbar_ent_amount", 0.0), 0.0)
+
+
 if __name__ == '__main__':
     unittest.main()
