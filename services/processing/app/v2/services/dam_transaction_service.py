@@ -59,57 +59,151 @@ class DAMTransactionService:
         
         return self._api_client
 
-    async def _get_all_ocf_values(self, delivery_date: int) -> Dict[int, Dict[str, Any]]:
+    async def _get_all_ocf_values(self, bidding_date: str) -> Dict[int, Dict[str, Any]]:
         """
-        Fetch OCF values for ALL 96 blocks in a single DB query (replaces 96 sequential queries).
+        Build the per-block OCF map for a bid date from the approval records.
+
+        OCF is chosen by the trader per block on the bid sheet and travels with the
+        bid through submit-for-approval, landing on each dam_single_bid_data_for_approval
+        document as `ocf_config` in the form:
+
+            {allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}]
+
+        e.g. "60_O_20_7.92" → 60% allocation, OCF opted, premium 20, max OCF qty 7.92.
+        "S" in the second position means standalone, i.e. no OCF for that block.
+        The 4th segment exists for DAM only; GDAM and HP-DAM have no MaxOCFQty.
+
+        The latest revision wins, matching the revision the bid itself is built from.
 
         Args:
-            delivery_date: Unix timestamp of delivery date
+            bidding_date: Bid date in "YYYY-MM-DD" form (the delivery date being bid for)
 
         Returns:
             Dict mapping block number (1-96) → {PremiumDiscountPrice, MaxOCFQty, OCFOpted}
         """
-        dt = datetime.fromtimestamp(delivery_date, tz=timezone.utc)
-        scheduled_at_str = dt.strftime("%Y-%m-%d")
+        logger.info(f"Fetching per-block OCF config for bid date {bidding_date}")
 
-        logger.info(f"Fetching all OCF values for date {scheduled_at_str} in bulk")
+        # Highest revision per block, in one round trip.
+        pipeline = [
+            {"$match": {"bid_date": bidding_date}},
+            {"$sort": {"block_no": 1, "revision_no": -1}},
+            {"$group": {"_id": "$block_no", "doc": {"$first": "$$ROOT"}}},
+            {"$replaceRoot": {"newRoot": "$doc"}},
+        ]
+        docs = await self.dam_single_bid_repo.aggregate(pipeline)
 
-        # Single query: fetch all OCF rows for this date (both id types, all blocks)
-        all_ocf_rows = await self.limit_values_repo.get_all_data_with_filters(
-            "limit_values",
-            filters={
-                "id": {"$in": ["ocfPremiumDiscountPrice", "ocfMaxOCFQty"]},
-                "category": "Limits",
-                "market": "DAM",
-                "scheduled_at": {"$regex": f"^{scheduled_at_str}"}
-            }
+        ocf_map: Dict[int, Dict[str, Any]] = {
+            block: {"PremiumDiscountPrice": 0, "MaxOCFQty": 0, "OCFOpted": "N"}
+            for block in range(1, 97)
+        }
+
+        opted_blocks = 0
+        for doc in docs:
+            block = doc.get("block_no")
+            if not isinstance(block, int) or not 1 <= block <= 96:
+                continue
+            parsed = self._parse_ocf_config(doc)
+            ocf_map[block] = parsed
+            if parsed["OCFOpted"] == "Y":
+                opted_blocks += 1
+
+        logger.info(
+            f"OCF config resolved for {bidding_date}: {len(docs)} approval docs → "
+            f"{opted_blocks}/96 blocks with OCF opted"
         )
-
-        # Build per-block maps
-        premium_map: Dict[int, float] = {}
-        max_qty_map: Dict[int, float] = {}
-
-        for row in all_ocf_rows:
-            block = row.get("block")
-            val = row.get("values", 0) or 0
-            if row.get("id") == "ocfPremiumDiscountPrice":
-                premium_map[block] = val
-            elif row.get("id") == "ocfMaxOCFQty":
-                max_qty_map[block] = val
-
-        # Build full map for blocks 1-96
-        ocf_map: Dict[int, Dict[str, Any]] = {}
-        for block in range(1, 97):
-            premium = premium_map.get(block, 0)
-            max_qty = max_qty_map.get(block, 0)
-            ocf_map[block] = {
-                "PremiumDiscountPrice": premium,
-                "MaxOCFQty": max_qty,
-                "OCFOpted": "Y" if (premium != 0 or max_qty != 0) else "N"
-            }
-
-        logger.info(f"OCF bulk fetch complete: {len(all_ocf_rows)} rows → 96 blocks mapped")
         return ocf_map
+
+    @staticmethod
+    def _parse_ocf_config(doc: Dict[str, Any], include_max_qty: bool = True) -> Dict[str, Any]:
+        """
+        Turn one approval document's ocf_config into exchange OCF fields.
+
+        Falls back to the pre-parsed ocf_premium_discount / max_ocf_qty fields that
+        submit-for-approval stores for buy bids when the raw string is absent.
+        Anything unparseable is treated as standalone rather than guessed at — an
+        wrong premium on a live bid is worse than no OCF.
+        """
+        standalone = {"PremiumDiscountPrice": 0, "MaxOCFQty": 0, "OCFOpted": "N"}
+
+        raw = doc.get("ocf_config") or doc.get("ocf") or ""
+        parts = [p.strip() for p in str(raw).split("_")] if raw else []
+
+        # Second segment carries the mode: O = OCF, S = Standalone.
+        if len(parts) < 3 or parts[1].upper() != "O":
+            return standalone
+
+        def _num(value: Any) -> int:
+            # IEX documents these as "Number" but the API binds them to
+            # System.Int32: a float — even a whole one like 20.0 — comes back as
+            # 400 "could not be converted to System.Int32". Truncate like
+            # submit-for-approval does when it stores ocf_premium_discount.
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return 0
+
+        def _raw(value: Any) -> float:
+            try:
+                return float(value)
+            except (TypeError, ValueError):
+                return 0.0
+
+        premium = _num(doc.get("ocf_premium_discount")) if doc.get("ocf_premium_discount") is not None else _num(parts[2])
+
+        # MaxOCFQty keeps full precision here — it is scaled by OrderQtyDecimal
+        # before being sent, so truncating now would lose the fractional MW
+        # (7.92 MW must reach the exchange as 79, not 70). The raw ocf_config
+        # segment is preferred over the stored max_ocf_qty, which submit-for-
+        # approval already rounded to a whole number.
+        max_qty = 0.0
+        if include_max_qty:
+            if len(parts) >= 4:
+                max_qty = _raw(parts[3])
+            elif doc.get("max_ocf_qty") is not None:
+                max_qty = _raw(doc.get("max_ocf_qty"))
+
+        return {
+            "PremiumDiscountPrice": premium,
+            "MaxOCFQty": max_qty,
+            "OCFOpted": "Y",
+        }
+
+    @staticmethod
+    def _compress_pq_curve(pq_array: List[Dict[str, Any]], max_points: int = 100) -> List[Dict[str, Any]]:
+        """
+        Drop the PQ points that sit *inside* a run of identical quantity.
+
+        Bid creation builds one price point per distinct price across the whole
+        day (~150) and stamps that same ladder onto every block, but IEX caps
+        PQData at 100 entries per block (DAM 2.2 §12.25, GDAM 2.1 §12.9). Almost
+        all of those points are redundant — a block whose quantity never changes
+        is a two-point curve written out 150 times.
+
+        Only the interior of a flat run is removed; the first and last point of
+        every run are kept. The curve is therefore identical whether the exchange
+        reads PQData as a step function or interpolates between the points.
+        """
+        if len(pq_array) <= 2:
+            return pq_array
+
+        compressed = [pq_array[0]]
+        for i in range(1, len(pq_array) - 1):
+            prev_qty = pq_array[i - 1]["Quantity"]
+            curr_qty = pq_array[i]["Quantity"]
+            next_qty = pq_array[i + 1]["Quantity"]
+            # Keep the point unless it is flanked by the same quantity on both
+            # sides, i.e. unless it lies strictly inside a flat segment.
+            if not (curr_qty == prev_qty and curr_qty == next_qty):
+                compressed.append(pq_array[i])
+        compressed.append(pq_array[-1])
+
+        if len(compressed) > max_points:
+            logger.error(
+                f"PQData still has {len(compressed)} points after compression, over the "
+                f"{max_points} the exchange accepts — the bid curve genuinely has that many "
+                "steps and will be rejected. Not truncating: dropping points would change the bid."
+            )
+        return compressed
 
     def _validate_round_quantity(self, quantity: float, order_qty_decimal: int) -> int:
         """
@@ -233,17 +327,33 @@ class DAMTransactionService:
                     "MaxOCFQty": 0,
                     "OCFOpted": "N"
                 })
-                
+
+                ocf_opted = ocf["OCFOpted"]
+                # MaxOCFQty is a quantity, so it travels in the same units as every
+                # PQData Quantity — scaled by OrderQtyDecimal. Sending the raw MW
+                # figure got "Invalid Max OCF Quantity" back from the exchange.
+                max_ocf_qty = int(ocf["MaxOCFQty"] * biddedQtyDecimal) if ocf_opted == "Y" else 0
+
+                # DAM 2.2 §12.25 defines MaxOCFQty as zero only when OCF is NOT
+                # opted, so "Y" with nothing to carry forward is not a legal
+                # combination — send the block as standalone instead.
+                if ocf_opted == "Y" and max_ocf_qty <= 0:
+                    logger.warning(
+                        f"Block {block} has OCF opted but no max OCF quantity; "
+                        "submitting it as standalone."
+                    )
+                    ocf_opted = "N"
+
                 bid_detail = {
                     "FromPeriodId": from_period,
                     "ToPeriodId": to_period,
                     "BuySell": buy_sell,
-                    "OCFOpted": ocf["OCFOpted"],
-                    "PremiumDiscountPrice": ocf["PremiumDiscountPrice"],
-                    "MaxOCFQty": ocf["MaxOCFQty"],
-                    "PQData": pq_array
+                    "OCFOpted": ocf_opted,
+                    "PremiumDiscountPrice": ocf["PremiumDiscountPrice"] if ocf_opted == "Y" else 0,
+                    "MaxOCFQty": max_ocf_qty,
+                    "PQData": self._compress_pq_curve(pq_array)
                 }
-                
+
                 bid_details.append(bid_detail)
         
         return bid_details
@@ -263,7 +373,8 @@ class DAMTransactionService:
         Args:
             current_user: Current authenticated user
             bid_data: Dictionary containing bid data for BidCreationpost (prices, volumes, etc)
-            ocf_toggle: If True, fetch OCF values from limit_values
+            ocf_toggle: Accepted for payload compatibility, no longer gates OCF.
+                        OCF is taken from the per-block limit_values data every time.
             bid_area_id: Bid area ID (if provided, overrides config)
             correlation_id: Request correlation ID
             
@@ -338,63 +449,50 @@ class DAMTransactionService:
         
         logger.info(f"Asset: {asset_id}, DeliveryDate: {delivery_date}, bidding_date: {bidding_date}")
         
-        # 4. Check for existing bids and cancel if found
+        # 4. Withdraw every existing bid, then submit the new revision.
+        # iDAM treats one submission as ONE bid no matter how many of the 96 blocks
+        # it carries, so revision N must completely replace revision N-1. This runs
+        # unconditionally: the previous "look up existing bids, cancel only if the
+        # lookup found some" guard let stale blocks survive whenever the lookup
+        # missed them (bid placed under a different bid area, paging, or a swallowed
+        # error), leaving revision N-1 merged with revision N on the exchange.
         effective_bid_area_id = bid_area_id or config.get("BidAreaId", "S2")
-        logger.info(f"Checking for existing DAM bids with BidAreaId: {effective_bid_area_id}")
-        
+        logger.info(f"Withdrawing all existing DAM bids before submission (BidAreaId: {effective_bid_area_id})")
+
         try:
-            existing_bids = await api_client.get_single_bid_dam(
+            cancel_result = await api_client.cancel_all_dam_bid(
                 delivery_date=delivery_date,
-                product_id="ALL",
+                asset_id=asset_id,
                 bid_area_id=effective_bid_area_id
             )
-            
-            total_record = existing_bids.get("TotalRecord", 0)
-            single_bid_details = existing_bids.get("SingleBidDetails", [])
-            
-            if total_record > 0 or len(single_bid_details) > 0:
-                logger.info(f"Found {total_record} existing bids, canceling before new submission")
-                
-                cancel_result = await api_client.cancel_all_dam_bid(
-                    delivery_date=delivery_date,
-                    asset_id=asset_id,
-                    bid_area_id=effective_bid_area_id
-                )
-                
-                if cancel_result.get("Status") != "Success":
-                    logger.warning(f"Bid cancellation returned non-success status: {cancel_result}")
-                    # Continue with submission anyway - user may want this behavior
-                
-                logger.info(f"Successfully cancelled existing bids: {cancel_result.get('TransactionId', 'N/A')}")
-                # Update DB status to cancelled for old records
-                try:
-                    await self.dam_single_bid_repo.update_many(
-                        {
-                            "bid_date": bidding_date,
-                            "bid_status": {"$in": ["submitted"]}
-                        },
-                        {"$set": {"bid_status": "withdrawal_bid", "exchangeStatus": "Cancelled"}}
-                    )
-                except Exception as db_err:
-                    logger.warning(f"Failed to update DB status to cancelled during pre-submission clear: {db_err}")
+
+            if cancel_result.get("Status") != "Success":
+                logger.warning(f"Pre-submission cancel-all returned non-success status: {cancel_result}")
             else:
-                logger.info("No existing bids found, proceeding with submission")
-                
+                logger.info(f"Withdrew all existing bids: {cancel_result.get('TransactionId', 'N/A')}")
+
+            # Update DB status to cancelled for old records
+            try:
+                await self.dam_single_bid_repo.update_many(
+                    {
+                        "bid_date": bidding_date,
+                        "bid_status": {"$in": ["submitted"]}
+                    },
+                    {"$set": {"bid_status": "withdrawal_bid", "exchangeStatus": "Cancelled"}}
+                )
+            except Exception as db_err:
+                logger.warning(f"Failed to update DB status to cancelled during pre-submission clear: {db_err}")
+
         except httpx.HTTPStatusError as e:
-            logger.warning(f"Error checking/canceling existing bids: {e.response.text}. Proceeding with submission.")
+            logger.warning(f"Pre-submission cancel-all failed [{e.response.status_code}]: {e.response.text}. Proceeding with submission.")
         except Exception as e:
-            logger.warning(f"Error checking/canceling existing bids: {str(e)}. Proceeding with submission.")
-        
-        # 5. Prepare OCF values map
-        if ocf_toggle:
-            # Single bulk DB query replaces 96 sequential queries (was ~2-3s, now <100ms)
-            logger.info("OCF toggle is ON, fetching all OCF values in bulk")
-            ocf_values_map = await self._get_all_ocf_values(delivery_date)
-        else:
-            # Default OCF values when toggle is off — build directly, no DB needed
-            default_ocf = {"PremiumDiscountPrice": 0, "MaxOCFQty": 0, "OCFOpted": "N"}
-            ocf_values_map = {block: default_ocf for block in range(1, 97)}
-        
+            logger.warning(f"Pre-submission cancel-all failed: {str(e)}. Proceeding with submission.")
+
+        # 5. Prepare OCF values map.
+        # OCF is driven by the per-block ocf_config the trader set on the bid sheet
+        # and that travelled through submit-for-approval — never by a global flag.
+        ocf_values_map = await self._get_all_ocf_values(bidding_date)
+
         # 6. Transform bid data with Quantity validation
         bid_details = self._transform_bid_block_to_api_format(
             bid_block_array, 
@@ -435,11 +533,30 @@ class DAMTransactionService:
             logger.error(f"Submission error: {err_msg}")
             raise HTTPException(status_code=500, detail=f"Submission failed: {err_msg}")
         
+        # The exchange answers 200 OK even when it rejects the bid — the verdict is
+        # in the body. Without this check a rejected submission looked successful
+        # and the bids were marked "submitted" while nothing reached the market.
+        submit_status = submit_response.get("Status") if isinstance(submit_response, dict) else None
+        if submit_status != "Success":
+            status_message = submit_response.get("StatusMessage", "") if isinstance(submit_response, dict) else str(submit_response)
+            logger.error(
+                f"DAM bid rejected by exchange [Status={submit_status}] — full response: {submit_response}"
+            )
+            raise HTTPException(
+                status_code=502,
+                detail={
+                    "message": "Exchange rejected the bid submission.",
+                    "exchange_status": submit_status,
+                    "exchange_message": status_message,
+                    "transaction_id": submit_response.get("TransactionId") if isinstance(submit_response, dict) else None,
+                },
+            )
+
         transaction_id = submit_response.get("TransactionId")
         if not transaction_id:
              logger.warning("No TransactionId in submit response, cannot fetch details.")
              return submit_response
-             
+
         # Format dates for aggregation
         # bidding_date already extracted above
         
@@ -558,9 +675,11 @@ class DAMTransactionService:
                 "bidded": bidded_qty,
                 "orderId": detail.get("OrderId"),
             }
-            # Mirror rejected status locally so listing endpoints reflect the rejection.
-            if exchange_order_status == "Rejected":
-                update_data["bid_status"] = "exchange_rejected"
+            # bid_status is deliberately left untouched. The workflow status stays
+            # whatever the approval flow set; a rejection by the exchange is not a
+            # workflow state. The raw exchange verdict is still recorded above in
+            # exchangeStatus, so nothing is lost — only the "Rejected by Exchange"
+            # bid status the business asked us to drop.
 
             db_update = self.dam_single_bid_repo.update_one(
                 {

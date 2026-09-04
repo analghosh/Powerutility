@@ -120,14 +120,33 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             ))
         return entities
 
+    async def _get_active_plant_ids(self) -> Optional[set]:
+        """
+        Distinct plant_ids that currently exist in plant_master.
+
+        A plant that has been deleted from plant_master still leaves behind
+        historical dc_sg records; those must not be rolled over into future
+        days. Returns None if the lookup fails, so callers can fall back to
+        the previous (unfiltered) behaviour instead of dropping every plant.
+        """
+        try:
+            plants = await self.plant_repository.collection.find(
+                {}, {"plant_id": 1}
+            ).to_list(length=10000)
+            return {str(p.get("plant_id")) for p in plants if p.get("plant_id")}
+        except Exception as e:
+            logger.error(f"Error fetching active plant_ids from plant_master: {e}")
+            return None
+
     @staticmethod
     def _plant_dc_is_zero(records: list, plant_id: str) -> bool:
         """
         True when the plant has DC records in `records` and every one is zero volume.
         """
+        plant_id_str = str(plant_id)
         dc_volumes = []
         for rec in records:
-            if rec.get("plant_id") != plant_id:
+            if str(rec.get("plant_id")) != plant_id_str:
                 continue
             if str(rec.get("dc_sg", "")).upper() != "DC":
                 continue
@@ -162,7 +181,7 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
 
             # ── 2. Distinct plant sets per date ───────────────────────────────────
             def plant_set(records):
-                return {r.get("plant_id") for r in records if r.get("plant_id")}
+                return {str(r.get("plant_id")) for r in records if r.get("plant_id")}
 
             plants_yesterday = plant_set(yesterday_records)
             plants_today     = plant_set(today_records)
@@ -183,6 +202,14 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
             _, best_records, best_plants = date_plant_counts[best_date]
             logger.info(f"Best source date: {best_date} with {len(best_plants)} plants")
 
+            # ── 3.5 Active plants (still present in plant_master) ─────────────────
+            # A deleted plant keeps its historical dc_sg records, so it would
+            # otherwise be treated as "missing" and rolled over. Exclude any
+            # plant that no longer exists in plant_master from the rollover.
+            active_plants = await self._get_active_plant_ids()
+            if active_plants is not None:
+                logger.info(f"Active plants in plant_master: {len(active_plants)}")
+
             # ── 4. Fill missing plants into today and tomorrow ────────────────────
             source_label = "dc_sg_rollover"
 
@@ -191,6 +218,16 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                 (tomorrow, plants_tomorrow, "tomorrow"),
             ]:
                 missing_plants = best_plants - target_plants
+
+                # A plant deleted from plant_master must not be rolled over,
+                # even though its historical dc_sg records still exist.
+                if active_plants is not None:
+                    deleted_plants = missing_plants - active_plants
+                    if deleted_plants:
+                        logger.info(
+                            f"Skipping deleted plant(s) for {label}: {deleted_plants}"
+                        )
+                        missing_plants &= active_plants
 
                 if target_date == today:
                     # A plant present only in tomorrow's data (e.g. a new generator
@@ -216,7 +253,10 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                     f"{len(missing_plants)} plant(s) missing from {label}, "
                     f"copying from {best_date}: {missing_plants}"
                 )
-                missing_records = [r for r in best_records if r.get("plant_id") in missing_plants]
+                missing_records = [
+                    r for r in best_records
+                    if r.get("plant_id") and str(r.get("plant_id")) in missing_plants
+                ]
                 entities_to_fill = self._records_to_dc_sg_entities(missing_records, target_date, source_label)
 
                 if entities_to_fill:
@@ -231,6 +271,20 @@ class SupplyTomorrowSyncProcessor(BaseProcessor):
                 return True
 
             logger.info(f"Found {len(tomorrow_records)} records in dc_sg for tomorrow.")
+
+            # Never sync a plant that has been deleted from plant_master, even if
+            # its dc_sg records were rolled over on an earlier run.
+            if active_plants is not None:
+                before = len(tomorrow_records)
+                tomorrow_records = [
+                    r for r in tomorrow_records
+                    if r.get("plant_id") and str(r.get("plant_id")) in active_plants
+                ]
+                dropped = before - len(tomorrow_records)
+                if dropped:
+                    logger.info(
+                        f"Excluded {dropped} record(s) for deleted plant(s) from supply_serve sync."
+                    )
 
             # 2. Convert to SupplyServeEntities
             entities_to_upsert = []

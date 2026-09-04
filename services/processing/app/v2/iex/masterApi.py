@@ -5,8 +5,9 @@ Client for external exchange APIs: Asset Details, Delivery Dates, Single Bid sub
 
 import httpx
 import logging
-from typing import Dict, Any, Optional, List
-from datetime import datetime
+import time
+from typing import Dict, Any, Optional, List, NamedTuple
+from datetime import datetime, timezone
 from services.processing.app.v2.repository.integration_api_log_repository import integration_api_log_repository
 
 logger = logging.getLogger(__name__)
@@ -37,8 +38,9 @@ class ExchangeAPIClient:
         self.bid_type = bid_type
         # Standard timeout for read-only calls (asset details, delivery dates, etc.)
         self.timeout = httpx.Timeout(connect=10.0, read=30.0, write=30.0, pool=10.0)
-        # Longer read timeout for bid submission — IEX exchange API can take >30s to process
-        self.submit_timeout = httpx.Timeout(connect=10.0, read=90.0, write=30.0, pool=10.0)
+        # Longer read timeout for bid submission — IEX exchange API (esp. GDAM)
+        # can take minutes to process; wait up to 5 minutes before timing out
+        self.submit_timeout = httpx.Timeout(connect=10.0, read=300.0, write=30.0, pool=10.0)
         self.bearer_token = bearer_token
         
         # Cache for API responses
@@ -71,6 +73,44 @@ class ExchangeAPIClient:
             )
         except Exception as e:
             logger.error(f"Failed to log API call to DB: {e}")
+
+    async def _get_or_log_failure(
+        self,
+        client: httpx.AsyncClient,
+        url: str,
+        headers: Dict[str, str],
+        market_type: str,
+        bid_type: str,
+        method: str,
+    ) -> httpx.Response:
+        """
+        GET, and record the call in iex_integration_apilog even when it fails.
+
+        Every other call logs to the DB only after a response comes back, so a
+        call that timed out left no trace anywhere: nothing on the Bid
+        Submission Detail screen, nothing to reconcile against, and no way to
+        tell a submission that was never attempted from one the exchange never
+        answered. Failures are logged with the exception and the elapsed time,
+        then re-raised unchanged so callers behave exactly as before.
+        """
+        started = time.monotonic()
+        try:
+            return await client.get(url, headers=headers)
+        except Exception as exc:
+            elapsed = round(time.monotonic() - started, 2)
+            logger.error(
+                f"{method} failed after {elapsed}s ({type(exc).__name__}: {exc}) — {url}"
+            )
+            await self._log_to_db(
+                url,
+                {"method": "GET"},
+                headers,
+                {"error": type(exc).__name__, "message": str(exc), "elapsed_seconds": elapsed},
+                market_type,
+                bid_type,
+                method,
+            )
+            raise
 
     # ... (rest of methods) ...
 
@@ -169,9 +209,11 @@ class ExchangeAPIClient:
         headers = self._get_headers()
         
         logger.info(f"Fetching asset details from: {url}")
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, headers=headers)
+            response = await self._get_or_log_failure(
+                client, url, headers, self.market_type, bid_type or self.bid_type, "getAssetDetail"
+            )
             
             # Capture response body
             try:
@@ -204,9 +246,11 @@ class ExchangeAPIClient:
         headers = self._get_headers()
         
         logger.info(f"Fetching delivery dates from: {url}")
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            response = await client.get(url, headers=headers)
+            response = await self._get_or_log_failure(
+                client, url, headers, self.market_type, bid_type or self.bid_type, "getDeliveryDate"
+            )
             
              # Capture response body
             try:
@@ -275,10 +319,10 @@ class ExchangeAPIClient:
         # I'll rely on market_type. If RTM needs different path suffix, we can adjust here.
         # Assuming consistency for now:
         url = f"{self.base_url}/{self.market_type}/api/v2/singlebid/ocf"
-        if self.market_type == 'rtm':
-             # RTM might not have /ocf suffix or might be different
-             # User mentioned "again call post api" for RTM. 
-             # Assuming common V2 structure: /rtm/api/v2/singlebid
+        if self.market_type in ('rtm', 'hpdam'):
+             # RTM and HPDAM use the plain (non-OCF) single-bid endpoint.
+             # HP-DAM API 2.0: OCF & Max OCF quantity are not sent, so the request
+             # goes to /hpdam/api/v2/singlebid (not /singlebid/ocf).
              url = f"{self.base_url}/{self.market_type}/api/v2/singlebid"
 
         headers = self._get_headers()
@@ -301,8 +345,18 @@ class ExchangeAPIClient:
             await self._log_to_db(url, bid_request, headers, data, self.market_type, "single-bid", "submitSingleBid", bid_request.get("DeliveryDate"))
 
             response.raise_for_status()
-            
-            logger.info("Single bid submitted successfully")
+
+            # A 200 only means the exchange accepted the HTTP call; it reports
+            # acceptance or rejection of the bid itself in the body, so log what
+            # it actually said rather than claiming success.
+            body_status = data.get("Status") if isinstance(data, dict) else None
+            if body_status == "Success":
+                logger.info("Single bid accepted by exchange")
+            else:
+                logger.warning(
+                    f"Single bid returned HTTP 200 but exchange Status={body_status}: "
+                    f"{data.get('StatusMessage') if isinstance(data, dict) else data}"
+                )
             return data if isinstance(data, dict) else {}
 
     async def submit_block_bid(self, bid_request: Dict[str, Any]) -> Dict[str, Any]:
@@ -381,25 +435,26 @@ class ExchangeAPIClient:
         page_number = 0
         page_size = 0
         
+        # Market-aware: dam/gdam/hpdam each expose their own singlebid endpoint.
         url = (
-            f"{self.base_url}/dam/api/v2/singlebid/"
+            f"{self.base_url}/{self.market_type}/api/v2/singlebid/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{product_id},"
             f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
-        
-        logger.info(f"Fetching DAM single bids from: {url}")
-        
+
+        logger.info(f"Fetching {self.market_type.upper()} single bids from: {url}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "single-bid", "getSingleBidDam")
+
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "single-bid", "getSingleBidDam")
             
             response.raise_for_status()
             
@@ -425,9 +480,10 @@ class ExchangeAPIClient:
         Returns:
             { Status: str, StatusMessage: str, TransactionId: str }
         """
-        url = f"{self.base_url}/dam/api/v2/singlebid/cancelall"
+        # Market-aware: cancelling GDAM/HPDAM bids must not hit the DAM endpoint.
+        url = f"{self.base_url}/{self.market_type}/api/v2/singlebid/cancelall"
         headers = self._get_headers()
-        
+
         request_body = {
             "DeliveryDate": delivery_date,
             "AssetId": asset_id,
@@ -436,23 +492,40 @@ class ExchangeAPIClient:
             "ParticipantId": self.participant_id,
             "PortfolioId": self.portfolio_id
         }
-        
-        logger.info(f"Canceling all DAM bids: {url}")
+
+        # GDAM's cancel-all takes a Type that DAM and HP-DAM do not (GDAM 2.1 §9.9).
+        # Omitting it makes the exchange reject the cancellation; because a failed
+        # pre-submission cancel is deliberately non-fatal, the next submit then
+        # trips over the bid that was never withdrawn ("bid already exists").
+        # GDAM is a renewable purchase, matching the Type sent on submission.
+        if self.market_type == "gdam":
+            request_body["Type"] = "Renewable Purchase"
+
+        logger.info(f"Canceling all {self.market_type.upper()} bids: {url}")
         logger.debug(f"Cancel request body: {request_body}")
-        
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.put(url, json=request_body, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, request_body, headers, data, "dam", "single-bid", "cancelAllDamBid", delivery_date)
+
+            await self._log_to_db(url, request_body, headers, data, self.market_type, "single-bid", "cancelAllDamBid", delivery_date)
             
             response.raise_for_status()
-            
-            logger.info(f"DAM cancel response: Status={data.get('Status') if isinstance(data, dict) else 'N/A'}")
+
+            cancel_status = data.get("Status") if isinstance(data, dict) else None
+            if cancel_status == "Success":
+                logger.info(f"{self.market_type.upper()} cancel-all succeeded: {data.get('TransactionId', 'N/A')}")
+            else:
+                # A rejected cancel-all is what leaves a stale bid on the exchange,
+                # so surface the exchange's own reason rather than just the status.
+                logger.error(
+                    f"{self.market_type.upper()} cancel-all REJECTED [Status={cancel_status}]: "
+                    f"{data.get('StatusMessage') if isinstance(data, dict) else data}"
+                )
             return data if isinstance(data, dict) else {"Status": "Failed", "StatusMessage": str(data)}
 
     async def get_single_bid_rtm(
@@ -542,7 +615,8 @@ class ExchangeAPIClient:
         effective_user_id = user_id if user_id else self.login_user_id
         request_body = {
             "OrderId": int(order_id),  # Must be Number per API spec
-            "UserId": str(effective_user_id),
+            
+            "UserId": self.login_user_id,
             "ParticipantId": self.participant_id,
             "PortfolioId": self.portfolio_id,
             "LastUpdatedTime": int(last_updated_time)  # Must be Number per API spec
@@ -670,25 +744,26 @@ class ExchangeAPIClient:
             - BidType: 'S' for Single Bid, 'B' for Block Bid
             - OCFSourceBidCategory: For carried forward DAM bid from GDAM (Renewable/Solar)
         """
+        # Market-aware: dam/gdam/hpdam each expose their own trades endpoint.
         url = (
-            f"{self.base_url}/dam/api/v2/trades/"
+            f"{self.base_url}/{self.market_type}/api/v2/trades/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{from_period},{to_period},"
             f"{buy_sell},{bid_area_id},{trade_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
-        
-        logger.info(f"Fetching DAM trade book from: {url}")
-        
+
+        logger.info(f"Fetching {self.market_type.upper()} trade book from: {url}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "trade-book", "getDamTradeBook")
+
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "trade-book", "getDamTradeBook")
             
             response.raise_for_status()
             
@@ -723,23 +798,24 @@ class ExchangeAPIClient:
               - BuyQty: Number - Buy Quantity
               - SellQty: Number - Sell Quantity
         """
+        # Market-aware: dam/gdam/hpdam each expose their own pqresults endpoint.
         url = (
-            f"{self.base_url}/dam/api/v2/pqresults/"
+            f"{self.base_url}/{self.market_type}/api/v2/pqresults/"
             f"{self.login_user_id},{self.participant_id},{delivery_date}"
         )
         headers = self._get_headers()
-        
-        logger.info(f"Fetching DAM price quantity from: {url}")
-        
+
+        logger.info(f"Fetching {self.market_type.upper()} price quantity from: {url}")
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
-            
+
             try:
                 data = response.json()
             except:
                 data = response.text
-                
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "price-quantity", "getDamPriceQuantity")
+
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "price-quantity", "getDamPriceQuantity")
             
             response.raise_for_status()
             
@@ -889,7 +965,8 @@ class ExchangeAPIClient:
         """
         Submit DAM block bid to exchange API (OCF variant).
 
-        API: POST {baseUrl}/dam/api/v2/blockbid/ocf  (IEX DAM API v2.2, Section 9.15)
+        API: POST {baseUrl}/{marketType}/api/v2/blockbid/ocf
+             (IEX DAM API v2.2 §9.15; IEX GDAM API 2.1 §6 item 13 — same shape)
 
         Args:
             bid_request: PascalCase body per v2.2 spec:
@@ -900,13 +977,17 @@ class ExchangeAPIClient:
         Returns:
             {TransactionId, Status, StatusMessage}
         """
-        url = f"{self.base_url}/dam/api/v2/blockbid/ocf"
+        # DAM and GDAM take the time-block-wise OCF variant; HP-DAM has no OCF at
+        # all and exposes only the plain endpoint (HPDAM 2.0 §6 item 12, §9.15).
+        url = f"{self.base_url}/{self.market_type}/api/v2/blockbid/ocf"
+        if self.market_type == "hpdam":
+            url = f"{self.base_url}/{self.market_type}/api/v2/blockbid"
         headers = self._get_headers()
 
         import json as _json
-        logger.info(f"Submitting DAM block bid to: {url}")
+        logger.info(f"Submitting {self.market_type.upper()} block bid to: {url}")
         logger.info(
-            f"DAM Block bid curl equivalent: "
+            f"{self.market_type.upper()} Block bid curl equivalent: "
             f"curl -X POST '{url}' "
             f"-H 'Authorization: Bearer {self.bearer_token}' "
             f"-H 'Content-Type: application/json' "
@@ -925,15 +1006,15 @@ class ExchangeAPIClient:
 
             await self._log_to_db(
                 url, bid_request, headers, data,
-                "dam", "block-bid", "submitDamBlockBid",
+                self.market_type, "block-bid", "submitDamBlockBid",
                 bid_request.get("DeliveryDate")
             )
 
             if not response.is_success:
-                logger.error(f"DAM block bid submission failed [{response.status_code}]: {data}")
+                logger.error(f"{self.market_type.upper()} block bid submission failed [{response.status_code}]: {data}")
                 return {"Status": "Failed", "StatusMessage": data}
 
-            logger.info(f"DAM block bid submitted successfully: {data}")
+            logger.info(f"{self.market_type.upper()} block bid submitted successfully: {data}")
             return data if isinstance(data, dict) else {"Status": "Failed", "StatusMessage": data}
 
     async def cancel_dam_block_bid(
@@ -945,7 +1026,8 @@ class ExchangeAPIClient:
         """
         Cancel a submitted DAM block bid on the exchange.
 
-        API: PUT {baseUrl}/dam/api/v2/blockbid/cancel  (IEX DAM API v2.2)
+        API: PUT {baseUrl}/{marketType}/api/v2/blockbid/cancel
+             (IEX DAM API v2.2; IEX GDAM API 2.1 §6 item 15 — same shape)
 
         Request Body:
             OrderId, UserId, ParticipantId, PortfolioId, LastUpdatedTime
@@ -953,7 +1035,7 @@ class ExchangeAPIClient:
         Response:
             {TransactionId, Status ("Success"/"Failed"), StatusMessage}
         """
-        url = f"{self.base_url}/dam/api/v2/blockbid/cancel"
+        url = f"{self.base_url}/{self.market_type}/api/v2/blockbid/cancel"
         headers = self._get_headers()
 
         request_body = {
@@ -964,7 +1046,7 @@ class ExchangeAPIClient:
             "LastUpdatedTime": last_updated_time,
         }
 
-        logger.info(f"Cancelling DAM block bid order_id={order_id} at: {url}")
+        logger.info(f"Cancelling {self.market_type.upper()} block bid order_id={order_id} at: {url}")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.put(url, json=request_body, headers=headers)
@@ -978,7 +1060,7 @@ class ExchangeAPIClient:
 
             await self._log_to_db(
                 url, request_body, headers, data,
-                "dam", "block-bid", "cancelDamBlockBid",
+                self.market_type, "block-bid", "cancelDamBlockBid",
                 delivery_date
             )
 
@@ -989,15 +1071,15 @@ class ExchangeAPIClient:
         """
         Fetch DAM block bid reference count from exchange API.
 
-        API: GET {baseUrl}/dam/api/v2/blockbid/bidrefcount/{LoginUserId},{ParticipantId}
+        API: GET {baseUrl}/{marketType}/api/v2/blockbid/bidrefcount/{LoginUserId},{ParticipantId}
 
         Returns:
-            Bid reference count response (field: DAMBlockBidRefCount)
+            Bid reference count response (field: BlockBidRefCount — see DAM 2.2 §11.8)
         """
-        url = f"{self.base_url}/dam/api/v2/blockbid/bidrefcount/{self.login_user_id},{self.participant_id}"
+        url = f"{self.base_url}/{self.market_type}/api/v2/blockbid/bidrefcount/{self.login_user_id},{self.participant_id}"
         headers = self._get_headers()
 
-        logger.info(f"Fetching DAM block bid ref count from: {url}")
+        logger.info(f"Fetching {self.market_type.upper()} block bid ref count from: {url}")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
@@ -1007,11 +1089,11 @@ class ExchangeAPIClient:
             except Exception:
                 data = response.text
 
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "block-bid", "getDamBidReferenceId")
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "block-bid", "getDamBidReferenceId")
 
             response.raise_for_status()
 
-            logger.info(f"DAM block bid ref count fetched: {data}")
+            logger.info(f"{self.market_type.upper()} block bid ref count fetched: {data}")
             return data if isinstance(data, dict) else {}
 
     async def get_dam_block_bids(
@@ -1030,20 +1112,20 @@ class ExchangeAPIClient:
         """
         Fetch existing DAM block bids for a delivery date.
 
-        API: GET {baseUrl}/dam/api/v2/blockbid/{LoginUserId},{ParticipantId},{DeliveryDate},{UserId},{PortfolioId},{FromPeriodId},{ToPeriodId},{BuySell},{BidAreaId},{Status},{ExceptionId},{OrderId},{PageNumber},{PageSize}
+        API: GET {baseUrl}/{marketType}/api/v2/blockbid/{LoginUserId},{ParticipantId},{DeliveryDate},{UserId},{PortfolioId},{FromPeriodId},{ToPeriodId},{BuySell},{BidAreaId},{Status},{ExceptionId},{OrderId},{PageNumber},{PageSize}
 
         Returns:
             {DAMBlockBidDetails: [], TotalRecord: int}
         """
         url = (
-            f"{self.base_url}/dam/api/v2/blockbid/"
+            f"{self.base_url}/{self.market_type}/api/v2/blockbid/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{from_period},{to_period},"
             f"{buy_sell},{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
 
-        logger.info(f"Fetching existing DAM block bids from: {url}")
+        logger.info(f"Fetching existing {self.market_type.upper()} block bids from: {url}")
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
             response = await client.get(url, headers=headers)
@@ -1065,6 +1147,117 @@ class ExchangeAPIClient:
         """Clear cached API responses"""
         self._asset_details_cache = None
         self._delivery_date_cache = None
+
+
+class ResolvedDeliveryDate(NamedTuple):
+    """Outcome of resolving one exchange delivery-dates response against a bid date."""
+
+    timestamp: Optional[int]
+    record: Optional[Dict[str, Any]]
+    matched: bool
+    candidates: List[Dict[str, Any]]
+
+
+def delivery_date_candidates(delivery_dates_resp: Any) -> List[Dict[str, Any]]:
+    """
+    Flatten an exchange /deliverydates response into a list of records.
+
+    IEX answers this endpoint in two shapes and the shape is not documented per
+    market: RTM returns {"DeliveryDates": [{DeliveryDateId, DeliveryDate}, ...]}
+    while the day-ahead markets have been seen returning the single record
+    {"DeliveryDateId": "T+1", "DeliveryDate": 1770508800} at the root. Code that
+    reads only one of the two silently resolves nothing against the other.
+    """
+    if isinstance(delivery_dates_resp, list):
+        return [r for r in delivery_dates_resp if isinstance(r, dict)]
+
+    if not isinstance(delivery_dates_resp, dict):
+        return []
+
+    nested = delivery_dates_resp.get("DeliveryDates")
+    if isinstance(nested, list):
+        return [r for r in nested if isinstance(r, dict)]
+    if isinstance(nested, dict):
+        return [nested]
+
+    if delivery_dates_resp.get("DeliveryDate") is not None:
+        return [delivery_dates_resp]
+
+    return []
+
+
+def resolve_delivery_date(delivery_dates_resp: Any, target_date) -> ResolvedDeliveryDate:
+    """
+    Resolve the delivery-date timestamp to bid against, from either response shape.
+
+    Prefers the record whose DeliveryDate falls on target_date. When the exchange
+    offered exactly one date and it is not target_date, that single date is still
+    returned with matched=False: the caller decides whether to proceed and warn or
+    to refuse, and a one-date response is what the day-ahead markets normally send.
+    When several dates are offered and none is target_date, nothing is returned —
+    guessing between them would submit a day's bids against the wrong delivery day.
+    """
+    candidates = delivery_date_candidates(delivery_dates_resp)
+    if not candidates:
+        return ResolvedDeliveryDate(None, None, False, [])
+
+    match = select_delivery_date_record(candidates, target_date)
+    if match is not None:
+        return ResolvedDeliveryDate(int(match["DeliveryDate"]), match, True, candidates)
+
+    if len(candidates) == 1:
+        only = candidates[0]
+        try:
+            return ResolvedDeliveryDate(int(only["DeliveryDate"]), only, False, candidates)
+        except (KeyError, TypeError, ValueError):
+            return ResolvedDeliveryDate(None, None, False, candidates)
+
+    return ResolvedDeliveryDate(None, None, False, candidates)
+
+
+def describe_delivery_dates(delivery_dates_resp: Any) -> str:
+    """Human-readable summary of a delivery-dates response, for error messages."""
+    candidates = delivery_date_candidates(delivery_dates_resp)
+    if candidates:
+        parts = []
+        for record in candidates:
+            raw = record.get("DeliveryDate")
+            try:
+                shown = datetime.fromtimestamp(int(raw), tz=timezone.utc).strftime("%Y-%m-%d")
+            except (TypeError, ValueError, OSError):
+                shown = repr(raw)
+            parts.append(f"{record.get('DeliveryDateId', '?')}={shown}")
+        return ", ".join(parts)
+
+    if isinstance(delivery_dates_resp, dict):
+        keys = ", ".join(sorted(delivery_dates_resp.keys())) or "none"
+        return f"no delivery dates in response (keys: {keys})"
+    return f"unexpected response type {type(delivery_dates_resp).__name__}"
+
+
+def select_delivery_date_record(
+    delivery_date_list: List[Dict[str, Any]], target_date
+) -> Optional[Dict[str, Any]]:
+    """
+    Pick the exchange delivery date record whose DeliveryDate timestamp
+    (midnight UTC of the delivery day) falls on target_date.
+
+    IEX does not roll its "T"/"T+1" labels at midnight — the RTM list rolls
+    around 00:30 — so selecting by label sends bids placed between 00:00 and
+    00:30 to the previous day's delivery date. Matching on the actual
+    timestamp is correct regardless of when the labels roll.
+    """
+    for record in delivery_date_list:
+        raw_ts = record.get("DeliveryDate")
+        if raw_ts is None:
+            continue
+        try:
+            record_date = datetime.fromtimestamp(int(raw_ts), tz=timezone.utc).date()
+        except (ValueError, TypeError, OSError):
+            continue
+        if record_date == target_date:
+            return record
+    return None
 
 
 def block_to_time_period(block: int) -> tuple:

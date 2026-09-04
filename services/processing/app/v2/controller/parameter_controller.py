@@ -171,6 +171,72 @@ class ParameterController:
             logger.error(f"Error in parameter controller delete: {e}")
             raise
 
+    # ------------------------------------------------------------------
+    # Bid configuration (parameter master)
+    # ------------------------------------------------------------------
+
+    async def get_bid_configuration(self) -> Dict[str, Any]:
+        """Return active bid configuration."""
+        try:
+            return await parameter_service.get_bid_configuration()
+        except Exception as e:
+            logger.error(f"Error in bid configuration controller get: {e}")
+            raise
+
+    async def save_bid_configuration(
+        self,
+        config: Dict[str, Any],
+        user_ctx: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """Save bid configuration directly."""
+        try:
+            return await parameter_service.save_bid_configuration(config, user_ctx)
+        except Exception as e:
+            logger.error(f"Error in bid configuration controller save: {e}")
+            raise
+
+    async def get_active_markets(self) -> List[str]:
+        try:
+            return await parameter_service.get_active_markets()
+        except Exception as e:
+            logger.error(f"Error in active markets controller get: {e}")
+            raise
+
+    async def set_active_markets(self, markets: Any) -> Dict[str, Any]:
+        try:
+            return await parameter_service.set_active_markets(markets)
+        except Exception as e:
+            logger.error(f"Error in active markets controller set: {e}")
+            raise
+
+    async def get_active_market(self) -> str:
+        try:
+            return await parameter_service.get_active_market()
+        except Exception as e:
+            logger.error(f"Error in active market controller get: {e}")
+            raise
+
+    async def set_active_market(self, market: str) -> Dict[str, Any]:
+        try:
+            return await parameter_service.set_active_market(market)
+        except Exception as e:
+            logger.error(f"Error in active market controller set: {e}")
+            raise
+
+    async def get_active_exchange(self) -> str:
+        try:
+            return await parameter_service.get_active_exchange()
+        except Exception as e:
+            logger.error(f"Error in active exchange controller get: {e}")
+            raise
+
+    async def set_active_exchange(self, exchange: str) -> Dict[str, Any]:
+        try:
+            return await parameter_service.set_active_exchange(exchange)
+        except Exception as e:
+            logger.error(f"Error in active exchange controller set: {e}")
+            raise
+
 
 # Create singleton instance
 parameter_controller = ParameterController()

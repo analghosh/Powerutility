@@ -199,9 +199,10 @@ class LimitWorkflowRepository:
                         "let": {
                             "key_block": "$block",
                             "key_id": "$id",
-                            "key_market": "$market", 
+                            "key_market": "$market",
                             "key_category": "$category",
                             "key_area": "$area",
+                            "key_exchange": "$exchange",
                             "key_date": "$scheduled_at"
                         },
                         "pipeline": [
@@ -214,6 +215,7 @@ class LimitWorkflowRepository:
                                             {"$eq": ["$market", "$$key_market"]},
                                             {"$eq": ["$category", "$$key_category"]},
                                             {"$eq": ["$area", "$$key_area"]},
+                                            {"$eq": [{"$ifNull": ["$exchange", "IEX"]}, "$$key_exchange"]},
                                             {"$eq": ["$scheduled_at", "$$key_date"]}
                                         ]
                                     }
@@ -223,7 +225,7 @@ class LimitWorkflowRepository:
                         "as": "main_record"
                     }
                 },
-                
+
                 # Stage 3: Unwind main record (preserve null for approvals without main data)
                 {
                     "$unwind": {
@@ -231,7 +233,7 @@ class LimitWorkflowRepository:
                         "preserveNullAndEmptyArrays": True
                     }
                 },
-                
+
                 # Stage 4: Project the final structure
                 {
                     "$project": {
@@ -242,6 +244,7 @@ class LimitWorkflowRepository:
                         "market": 1,
                         "category": 1,
                         "area": 1,
+                        "exchange": 1,
                         "status": 1,
                         "request_type": 1,
                         "title": 1,
@@ -257,6 +260,7 @@ class LimitWorkflowRepository:
                             "market": "$market",
                             "category": "$category",
                             "area": "$area",
+                            "exchange": "$exchange",
                             "values": "$value"
                         }
                     }
@@ -328,6 +332,8 @@ class LimitWorkflowRepository:
                 match_stage["category"] = filters["category"]
             if "area" in filters:
                 match_stage["area"] = filters["area"]
+            if "exchange" in filters:
+                match_stage["exchange"] = filters["exchange"]
             if "status" in filters:
                 # Override status filter if explicitly provided
                 match_stage["status"] = filters["status"]
@@ -363,9 +369,10 @@ class LimitWorkflowRepository:
                         "let": {
                             "key_block": "$block",
                             "key_id": "$id",
-                            "key_market": "$market", 
+                            "key_market": "$market",
                             "key_category": "$category",
                             "key_area": "$area",
+                            "key_exchange": "$exchange",
                             "key_date": "$scheduled_at"
                         },
                         "pipeline": [
@@ -378,6 +385,7 @@ class LimitWorkflowRepository:
                                             {"$eq": ["$market", "$$key_market"]},
                                             {"$eq": ["$category", "$$key_category"]},
                                             {"$eq": ["$area", "$$key_area"]},
+                                            {"$eq": [{"$ifNull": ["$exchange", "IEX"]}, "$$key_exchange"]},
                                             {"$eq": ["$scheduled_at", "$$key_date"]}
                                         ]
                                     }
@@ -387,7 +395,7 @@ class LimitWorkflowRepository:
                         "as": "main_record"
                     }
                 },
-                
+
                 # Stage 3: Unwind main record (preserve null for approvals without main data)
                 {
                     "$unwind": {
@@ -395,7 +403,7 @@ class LimitWorkflowRepository:
                         "preserveNullAndEmptyArrays": True
                     }
                 },
-                
+
                 # Stage 4: Project the final structure
                 {
                     "$project": {
@@ -406,6 +414,7 @@ class LimitWorkflowRepository:
                         "market": 1,
                         "category": 1,
                         "area": 1,
+                        "exchange": 1,
                         "status": 1,
                         "request_type": 1,
                         "title": 1,
@@ -421,6 +430,7 @@ class LimitWorkflowRepository:
                             "market": "$market",
                             "category": "$category",
                             "area": "$area",
+                            "exchange": "$exchange",
                             "values": "$value"
                         }
                     }

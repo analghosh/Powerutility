@@ -50,6 +50,11 @@ Example Provider Configuration:
             "is_required": false
         },
         {
+            "field_name": "exchange",
+            "field_type": "string",
+            "is_required": false
+        },
+        {
             "field_name": "unit",
             "field_type": "string",
             "is_required": false
@@ -95,6 +100,10 @@ Example Provider Configuration:
             "serve_field": "area"
         },
         {
+            "provider_field": "exchange",
+            "serve_field": "exchange"
+        },
+        {
             "provider_field": "unit",
             "serve_field": "unit"
         },
@@ -114,7 +123,7 @@ Limit Values Configuration Options:
 - ingestion_type: UPLOAD
 - fields: Limit values field definitions with validation rules
 - mapping: Field mappings from provider fields to limit values fields
-- All limit values fields are supported: scheduled_at, block, id_type, values, market, category, area, unit, action, comment
+- All limit values fields are supported: scheduled_at, block, id_type, values, market, category, area, exchange, unit, action, comment
 
 Validation Rules:
 - Limit values providers MUST have data_type = "LIMIT_VALUES"
@@ -468,6 +477,7 @@ class LimitValuesProcessor:
                         "market": item.get("market", "DAM"),
                         "category": item.get("category", "Limits"),
                         "area": item.get("area", "Puducherry"), # defaulting based on sample
+                        "exchange": item.get("exchange", "IEX"),
                         "scheduled_at": item.get("scheduled_at")
                     }
                     
@@ -496,6 +506,7 @@ class LimitValuesProcessor:
                             "market": item.get("market"),
                             "category": item.get("category"),
                             "area": item.get("area"),
+                            "exchange": item.get("exchange", "IEX"),
                             "values": item.get("values"), # Store as values
                             "value": item.get("values"),  # Also store as value for compatibility
                             "scheduled_at": item.get("scheduled_at"),
