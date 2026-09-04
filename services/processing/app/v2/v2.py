@@ -34,6 +34,7 @@ from .api.router.parameter_routes import router as parameter_router
 from .api.router.job_execution_routes import router as job_execution_router
 from .api.router.supply_manual_routes import router as supply_manual_router
 from .api.router.exchange_config_routes import router as exchange_config_router
+from .api.router.power_exchange_routes import router as power_exchange_router
 
 logger = logging.getLogger(__name__)
 
@@ -171,6 +172,7 @@ v2_app.include_router(parameter_router)
 v2_app.include_router(job_execution_router)
 v2_app.include_router(supply_manual_router)
 v2_app.include_router(exchange_config_router)
+v2_app.include_router(power_exchange_router)
 
 # Add a health check endpoint for V2
 @v2_app.get("/health", tags=["Health"])

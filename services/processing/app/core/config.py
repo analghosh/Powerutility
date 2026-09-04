@@ -169,6 +169,18 @@ class Settings(BaseSettings):
     MONGODB_DAM_BID_CAPTURE_COLLECTION: str = "dam_bid_capture"
     MONGODB_DAM_BID_CAPTURE_MANUAL_COLLECTION: str = "dam_bid_capture_manual"
 
+    # GDAM Bidding Collections
+    MONGODB_GDAM_BOOK_COLLECTION: str = "gdam_book_collection"
+    MONGODB_GDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "gdam_single_bid_data_for_approval"
+    MONGODB_GDAM_BID_CAPTURE_COLLECTION: str = "gdam_bid_capture"
+    MONGODB_GDAM_BID_CAPTURE_MANUAL_COLLECTION: str = "gdam_bid_capture_manual"
+
+    # HPDAM Bidding Collections
+    MONGODB_HPDAM_BOOK_COLLECTION: str = "hpdam_book_collection"
+    MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "hpdam_single_bid_data_for_approval"
+    MONGODB_HPDAM_BID_CAPTURE_COLLECTION: str = "hpdam_bid_capture"
+    MONGODB_HPDAM_BID_CAPTURE_MANUAL_COLLECTION: str = "hpdam_bid_capture_manual"
+
     # RTM Bidding Collections
     MONGODB_RTM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "rtm_single_bid_data_for_approval"
     MONGODB_RTM_BLOCK_BID_COLLECTION: str = "block_bid_current_data"

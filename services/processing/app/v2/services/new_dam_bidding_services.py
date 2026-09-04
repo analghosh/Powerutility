@@ -13,6 +13,8 @@ from bson import ObjectId
 from libs.core.jwt_validator import TokenPayload
 from services.processing.app.core.config import settings
 
+from ..services.parameter_service import parameter_service
+from ..helpers.approval_messages import partial_message, success_message
 from ..repository.supply_serve_repository import SupplyServeRepository
 # from ..repository.serve_supply_table_repository import serveSupplyTableRepository
 from ..repository.new_dam_single_bid_data_for_approval_repository import DAMSingleBidDataForApprovalRepository
@@ -41,13 +43,18 @@ from services.processing.app.v2.repository.base_repository import GenericReposit
 
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
+from ..repository.power_exchange_repository import power_exchange_repository
 from libs.messaging.job_publisher import JobPublisher
 
 logger = logging.getLogger(__name__)
 
-def bidPriceNOC():
-    """Equivalent of PHP's bidPriceNOC() constant."""
-    return 10000
+async def bidPriceNOC():
+    """Fetch dam_bid_price from parameters; fallback to 10000."""
+    try:
+        return await parameter_service.get_bid_price("DAM")
+    except Exception as e:
+        logger.warning(f"Failed to fetch dam_bid_price from parameters: {e}")
+        return 10000
 
 
 def to_float(v):
@@ -55,6 +62,60 @@ def to_float(v):
         return float(v)
     except (ValueError, TypeError):
         return 0.0
+
+
+def extract_ocf_config(request_data: dict, block_no: str) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Read ocf-config from request.
+    Pattern: {allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}].
+    O = OCF (third part is premium/discount), S = Standalone.
+    Optional 4th part (max_ocf_qty) is used for DAM buy bids.
+    Accepts per-block keys or a shared ocf-config value.
+    Returns (normalized_value_or_empty, error_message_or_None).
+    """
+    raw = (
+        request_data.get(f"ocf-config_blk_{block_no}")
+        or request_data.get(f"ocf_config_blk_{block_no}")
+        or request_data.get(f"ocf_config_{block_no}")
+        or request_data.get("ocf-config")
+        or request_data.get("ocf_config")
+        or request_data.get("ocf")
+    )
+    if raw is None or str(raw).strip() == "":
+        return "", None
+
+    value = str(raw).strip()
+    parts = value.split("_")
+    if len(parts) not in (3, 4):
+        return None, (
+            f"Invalid ocf-config '{value}' for block {block_no}. "
+            "Expected format: {{allocation%}}_{{O|S}}_{{premium_or_discount}} "
+            "or {{allocation%}}_{{O|S}}_{{premium_or_discount}}_{{max_ocf_qty}} "
+            "e.g. 60_O_14, 20_S_0, or 60_O_14_100"
+        )
+
+    alloc, mode, prem = parts[0], parts[1], parts[2]
+    max_ocf_qty = parts[3] if len(parts) == 4 else None
+    mode_u = mode.upper()
+    if mode_u not in ("O", "S"):
+        return None, (
+            f"Invalid ocf-config mode '{mode}' for block {block_no}. "
+            "Second part must be O (OCF) or S (Standalone)"
+        )
+    try:
+        float(alloc)
+        float(prem)
+        if max_ocf_qty is not None:
+            float(max_ocf_qty)
+    except ValueError:
+        return None, (
+            f"Invalid ocf-config '{value}' for block {block_no}. "
+            "Allocation percent, premium/discount, and max_ocf_qty must be numeric"
+        )
+    if max_ocf_qty is not None:
+        return f"{alloc}_{mode_u}_{prem}_{max_ocf_qty}", None
+    return f"{alloc}_{mode_u}_{prem}", None
+
 
 class DAMBiddingServices:
     def __init__(self):
@@ -64,6 +125,246 @@ class DAMBiddingServices:
         self.integration_api_log_repo = IntegrationApiLogRepository()
         self.dam_book_collection = settings.MONGODB_DAM_BOOK_COLLECTION
         self.time_block_collection = settings.MONGODB_TIME_BLOCK_COLLECTION
+
+    async def _get_active_exchange(self, active_market: Optional[str] = None) -> str:
+        """
+        Get active exchange for single-bid-table.
+        Priority:
+        1. active_exchange parameter
+        2. exchange_config for the active market (legacy fallback)
+        3. Default IEX
+        """
+        try:
+            param_exchange = await parameter_service.get_active_exchange()
+            if param_exchange:
+                return param_exchange
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange from parameter: {e}")
+
+        try:
+            market = active_market or await self._get_active_market()
+            config = await self.exchange_config_repo.get_bidType_market_active_config("single", market)
+            if config and config.get("exchange"):
+                return config.get("exchange")
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange for {market}: {e}")
+        return "IEX"
+
+    async def _get_power_exchange_active_market(self) -> Optional[str]:
+        """
+        Read the active day-ahead market from the power_exchange config record
+        (key "active_exchange", value DAM/GDAM/HPDAM). Returns None when the
+        record is absent or holds an unknown value.
+        """
+        try:
+            record = await power_exchange_repository.find_one_async(
+                power_exchange_repository.collection_name,
+                {"key": "active_exchange"},
+            )
+            if record:
+                value = str(record.get("value") or record.get("market") or "").upper()
+                if value in ("DAM", "GDAM", "HPDAM"):
+                    return value
+                logger.warning(
+                    f"power_exchange active_exchange has unknown value '{value}'; ignoring"
+                )
+        except Exception as e:
+            logger.warning(f"Failed to read active market from power_exchange: {e}")
+        return None
+
+    async def _get_active_markets(self) -> List[str]:
+        """
+        Get list of active markets for single-bid-table.
+        Priority:
+        1. power_exchange config record (key "active_exchange")
+        2. active markets parameter (legacy fallback)
+        3. Default DAM
+        """
+        power_exchange_market = await self._get_power_exchange_active_market()
+        if power_exchange_market:
+            return [power_exchange_market]
+
+        try:
+            markets = await parameter_service.get_active_markets()
+            if markets:
+                return markets
+        except Exception as e:
+            logger.warning(f"Failed to get active markets from parameter: {e}")
+        return ["DAM"]
+
+    async def _get_active_market(self) -> str:
+        """Get first active market for single-bid-table from parameter."""
+        markets = await self._get_active_markets()
+        return markets[0] if markets else "DAM"
+
+    async def _aggregate_limit_values_with_fallback(
+        self,
+        pipeline: List[Dict[str, Any]],
+        active_exchange: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Run a limit_values aggregate first with the active exchange filter.
+        If no results are found, fall back to documents without an exchange field
+        (legacy/default IEX data).
+        """
+        import copy
+        pipeline_with_exchange = copy.deepcopy(pipeline)
+        if pipeline_with_exchange and "$match" in pipeline_with_exchange[0]:
+            pipeline_with_exchange[0]["$match"]["exchange"] = active_exchange
+
+        result = await self.limit_values_repo.aggregate(pipeline_with_exchange)
+        if result:
+            return result
+
+        logger.info(
+            f"No limit_values found for active exchange '{active_exchange}'; "
+            "falling back to legacy/default (no exchange) documents."
+        )
+        return await self.limit_values_repo.aggregate(pipeline)
+
+    def _apply_active_limit_prefix(
+        self,
+        data: Dict[str, Any],
+        active_exchange: str,
+        active_market: str
+    ) -> Dict[str, Any]:
+        """
+        Rename limit-values fields in single-bid-table rows so response keys
+        carry the exchange they were sourced from, following the pattern
+        {exchange_lowercase}_{original_fieldname} (e.g. iex_dam_nminusone_quantum).
+        """
+        if not data or not isinstance(data, dict):
+            return data
+
+        prefix = f"{active_exchange.lower()}_"
+        limit_field_map = {
+            "dam_forecasted_price": f"{prefix}dam_forecasted_price",
+            "ceiling_price": f"{prefix}ceiling_price",
+            "dam_buffer_value": f"{prefix}dam_buffer_value",
+            "dam_nminusone_quantum": f"{prefix}dam_nminusone_quantum",
+            "dam_noc_buy_value": f"{prefix}dam_noc_buy_value",
+            "dam_noc_sell_value": f"{prefix}dam_noc_sell_value",
+        }
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for plkey, block_rows in table_data.items():
+            if not isinstance(block_rows, dict):
+                continue
+            for blk, row in block_rows.items():
+                if not isinstance(row, dict):
+                    continue
+                for old_key, new_key in limit_field_map.items():
+                    if old_key in row:
+                        row[new_key] = row.pop(old_key)
+
+        return data
+
+    async def _fetch_limit_values_by_block(
+        self,
+        active_market: str,
+        active_exchange: str,
+        target_date_dt: datetime,
+        from_block: int,
+        to_block: int
+    ) -> Dict[str, Dict[int, Any]]:
+        """
+        Fetch limit_values for a specific market and return a dict keyed by field name,
+        where each value is a mapping of block number -> document value.
+        """
+        import copy
+
+        def make_base_pipeline(id_value: str, extra_match: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+            match = {
+                "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
+                "id": id_value,
+                "market": active_market,
+                "block": {"$gte": from_block, "$lte": to_block},
+            }
+            if extra_match:
+                match.update(extra_match)
+            return [
+                {"$match": match},
+                {"$sort": {"scheduled_at": -1, "block": 1}},
+                {
+                    "$group": {
+                        "_id": "$block",
+                        "latest_doc": {"$first": "$$ROOT"}
+                    }
+                },
+                {"$replaceRoot": {"newRoot": "$latest_doc"}},
+                {"$sort": {"block": 1}},
+                {"$project": {"_id": 0}},
+            ]
+
+        pipelines = {
+            "forecasted_price": make_base_pipeline(f"{active_market}_forecasted_price"),
+            # Buffer is stored under two id conventions across flows
+            "buffer_value": make_base_pipeline({"$in": ["Buffer", "Buffer_Price"]}),
+            "ceiling_price": make_base_pipeline("Ceiling_Price", {"category": "Limits"}),
+            "nminusone_quantum": make_base_pipeline("n_1", {"category": "Limits"}),
+            "noc_buy_value": make_base_pipeline("noc_buy", {"category": "Limits"}),
+            "noc_sell_value": make_base_pipeline("noc_sell", {"category": "Limits"}),
+        }
+
+        result: Dict[str, Dict[int, Any]] = {}
+        for field, pipeline in pipelines.items():
+            docs = await self._aggregate_limit_values_with_fallback(
+                copy.deepcopy(pipeline),
+                active_exchange,
+            )
+            result[field] = {int(doc.get("block", 0)): doc.get("values", 0) for doc in docs}
+        return result
+
+    async def _add_additional_market_limit_values(
+        self,
+        data: Dict[str, Any],
+        active_markets: List[str],
+        active_exchange: str,
+        target_date_dt: datetime,
+        from_block: int,
+        to_block: int
+    ) -> Dict[str, Any]:
+        """
+        For every active market beyond the first, fetch its limit_values and add
+        {activeExchange}_{market}_{field} keys to each row in table_data.
+        """
+        if not data or not isinstance(data, dict) or not active_markets[1:]:
+            return data
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for additional_market in active_markets[1:]:
+            limit_values = await self._fetch_limit_values_by_block(
+                additional_market,
+                active_exchange,
+                target_date_dt,
+                from_block,
+                to_block,
+            )
+            prefix = f"{active_exchange.lower()}_{additional_market.lower()}_"
+            for plkey, block_rows in table_data.items():
+                if not isinstance(block_rows, dict):
+                    continue
+                for blk, row in block_rows.items():
+                    if not isinstance(row, dict):
+                        continue
+                    try:
+                        block_no = int(blk)
+                    except (TypeError, ValueError):
+                        continue
+                    row[f"{prefix}forecasted_price"] = round(limit_values["forecasted_price"].get(block_no, 0) or 0)
+                    row[f"{prefix}ceiling_price"] = limit_values["ceiling_price"].get(block_no, 0) or 0
+                    row[f"{prefix}buffer_value"] = limit_values["buffer_value"].get(block_no, 0) or 0
+                    row[f"{prefix}nminusone_quantum"] = limit_values["nminusone_quantum"].get(block_no, 0) or 0
+                    row[f"{prefix}noc_buy_value"] = limit_values["noc_buy_value"].get(block_no, 0) or 0
+                    row[f"{prefix}noc_sell_value"] = limit_values["noc_sell_value"].get(block_no, 0) or 0
+
+        return data
 
     async def get_bid_submission_details(self, date_str: str) -> List[Dict[str, Any]]:
         """Get DAM bid submission details for a specific date."""
@@ -406,6 +707,20 @@ class DAMBiddingServices:
         self.supply_repo = SupplyServeRepository()
         self.exchange_config_repo = ExchangeConfigRepository()
         self.single_bid_data_for_approval_repo = DAMSingleBidDataForApprovalRepository(collection_name="dam_single_bid_data_for_approval")
+        self.gdam_single_bid_data_for_approval_repo = DAMSingleBidDataForApprovalRepository(
+            collection_name=getattr(
+                settings,
+                "MONGODB_GDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION",
+                "gdam_single_bid_data_for_approval",
+            )
+        )
+        self.hpdam_single_bid_data_for_approval_repo = DAMSingleBidDataForApprovalRepository(
+            collection_name=getattr(
+                settings,
+                "MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION",
+                "hpdam_single_bid_data_for_approval",
+            )
+        )
         self.dam_product_hardcoded_data_repo = DAMProductHardCodedDataRepository()
         self.plants_list_repo = MasterPlantsRepository()
         self.limit_values_repo = LimitValuesRepository()
@@ -490,22 +805,248 @@ class DAMBiddingServices:
         except Exception:
             logger.warning("DAM MongoDB index ensure failed", exc_info=True)
 
+    @staticmethod
+    def _parse_exchange_split_ratios(ex_split_str: Any) -> Dict[str, float]:
+        """
+        Parse exchange split string (e.g. 'IEX-100_PXIL-0' or 'IEX-60_PXIL-40_HPX-0')
+        into a mapping of lowercase exchange -> fractional ratio (0.0 to 1.0).
+        Defaults to {'iex': 1.0, 'pxil': 0.0, 'hpx': 0.0} if absent or unparseable.
+        """
+        splits = {"iex": 0.0, "pxil": 0.0, "hpx": 0.0}
+        if not ex_split_str or not isinstance(ex_split_str, str):
+            splits["iex"] = 1.0
+            return splits
+
+        parts = ex_split_str.split("_")
+        total_pct = 0.0
+        parsed_any = False
+        for part in parts:
+            if "-" in part:
+                ex_name, pct_str = part.split("-", 1)
+                ex_key = ex_name.strip().lower()
+                try:
+                    pct = float(pct_str.strip())
+                    if ex_key in splits:
+                        splits[ex_key] = pct / 100.0
+                        total_pct += pct
+                        parsed_any = True
+                except (ValueError, TypeError):
+                    pass
+        if not parsed_any or total_pct == 0.0:
+            splits["iex"] = 1.0
+        return splits
+
+    async def _fetch_single_bid_graph_data(
+        self, formatted_date: str
+    ) -> Dict[str, Any]:
+        """
+        Fetch single bid data from DAM, GDAM, and HPDAM approval collections.
+        Returns:
+            total_submitted: Dict[int, float] (time_block -> total volume)
+            total_approved: Dict[int, float] (time_block -> total volume)
+            per_exchange_market: Dict[str, Dict[int, float]] (key like 'iex_dam_single_bid' -> time_block -> volume)
+        """
+        total_submitted: Dict[int, float] = {}
+        total_approved: Dict[int, float] = {}
+        per_exchange_market: Dict[str, Dict[int, float]] = {
+            f"{ex}_{market}_single_bid": {}
+            for ex in ("iex", "pxil", "hpx")
+            for market in ("dam", "gdam", "hpdam")
+        }
+
+        repos = [
+            ("dam", self.single_bid_data_for_approval_repo),
+            ("gdam", self.gdam_single_bid_data_for_approval_repo),
+            ("hpdam", self.hpdam_single_bid_data_for_approval_repo),
+        ]
+
+        async def _process_market_repo(market: str, repo: Any):
+            try:
+                approval_docs = await repo.get_approval_data_by_date(formatted_date)
+                for time_block_str, doc in approval_docs.items():
+                    block_no = doc.get("block_no")
+                    if block_no is None:
+                        try:
+                            start_time_str = str(time_block_str).split("-")[0].strip()
+                            hour, minute = map(int, start_time_str.split(":"))
+                            block_no = hour * 4 + (minute // 15) + 1
+                        except (ValueError, IndexError, AttributeError):
+                            continue
+                    try:
+                        block_no = int(block_no)
+                    except (ValueError, TypeError):
+                        continue
+
+                    # Calculate total volume for this single bid block
+                    plants = doc.get("Plants")
+                    total_vol = 0.0
+                    if isinstance(plants, dict):
+                        for plant_key, plant_data in plants.items():
+                            if plant_key == "withdrawal_bid" or (isinstance(plant_data, dict) and plant_data.get("bid_plant_name") == "withdrawal_bid"):
+                                continue
+                            if isinstance(plant_data, dict):
+                                vol = plant_data.get("bid_volume") or plant_data.get("bid_default_volume") or 0.0
+                                try:
+                                    total_vol += float(vol)
+                                except (TypeError, ValueError):
+                                    pass
+                    elif isinstance(plants, list):
+                        for plant_data in plants:
+                            if isinstance(plant_data, dict):
+                                if plant_data.get("bid_plant_name") == "withdrawal_bid":
+                                    continue
+                                vol = plant_data.get("bid_volume") or plant_data.get("bid_default_volume") or 0.0
+                                try:
+                                    total_vol += float(vol)
+                                except (TypeError, ValueError):
+                                    pass
+
+                    bid_status = str(doc.get("bid_status") or "").strip().lower()
+                    ex_split_str = doc.get("Ex_split_string")
+                    split_ratios = self._parse_exchange_split_ratios(ex_split_str)
+
+                    if bid_status in ("approved", "submitted"):
+                        total_approved[block_no] = total_approved.get(block_no, 0.0) + total_vol
+
+                    if bid_status == "submitted":
+                        total_submitted[block_no] = total_submitted.get(block_no, 0.0) + total_vol
+                        for ex in ("iex", "pxil", "hpx"):
+                            ratio = split_ratios.get(ex, 0.0)
+                            key = f"{ex}_{market}_single_bid"
+                            per_exchange_market[key][block_no] = per_exchange_market[key].get(block_no, 0.0) + (total_vol * ratio)
+            except Exception as e:
+                logger.warning(f"Failed to fetch single bid graph data for market {market} on date {formatted_date}: {e}")
+
+        await asyncio.gather(*[_process_market_repo(m, r) for m, r in repos])
+
+        return {
+            "total_submitted": total_submitted,
+            "total_approved": total_approved,
+            "per_exchange_market": per_exchange_market,
+        }
+
+    async def _fetch_block_bid_graph_data(
+        self, formatted_date: str
+    ) -> Dict[str, Any]:
+        """
+        Fetch block bid and reserved block bid data from serve_dam_scheduling collection.
+        Returns:
+            total_submitted: Dict[int, float] (time_block -> total volume)
+            total_approved: Dict[int, float] (time_block -> total volume)
+            total_reserved: Dict[int, float] (time_block -> total volume)
+            block_bid_per_ex_market: Dict[str, Dict[int, float]] (key like 'iex_dam_block_bid' -> time_block -> volume)
+            reserved_per_ex_market: Dict[str, Dict[int, float]] (key like 'iex_dam_reserved_block_bid' -> time_block -> volume)
+        """
+        total_submitted: Dict[int, float] = {}
+        total_approved: Dict[int, float] = {}
+        total_reserved: Dict[int, float] = {}
+
+        block_bid_per_ex_market: Dict[str, Dict[int, float]] = {
+            f"{ex}_{market}_block_bid": {}
+            for ex in ("iex", "pxil", "hpx")
+            for market in ("dam", "gdam", "hpdam")
+        }
+        reserved_per_ex_market: Dict[str, Dict[int, float]] = {
+            f"{ex}_{market}_reserved_block_bid": {}
+            for ex in ("iex", "pxil", "hpx")
+            for market in ("dam", "gdam", "hpdam")
+        }
+
+        try:
+            block_docs = await self.block_bid_current_data_repo.collection.find({
+                "biding_date": formatted_date,
+                "market_type": {"$in": ["DAM", "GDAM", "HPDAM", "dam", "gdam", "hpdam"]}
+            }).to_list(length=10000)
+
+            for doc in block_docs:
+                market = str(doc.get("market_type") or "").strip().lower()
+                if market not in ("dam", "gdam", "hpdam"):
+                    continue
+
+                if market == "dam" and doc.get("trade_session") not in (0, None, "0", ""):
+                    continue
+
+                raw_exchange = str(doc.get("exchange") or "iex").strip().lower()
+                exchange = raw_exchange if raw_exchange in ("iex", "pxil", "hpx") else "iex"
+
+                status = str(doc.get("status") or "").strip().lower()
+                is_reserved = str(doc.get("selected_for") or "").strip().lower() == "reserved"
+
+                try:
+                    quantum = float(doc.get("quantum") or 0.0)
+                    number_of_bids = int(doc.get("number_of_bids") or 1)
+                    if number_of_bids > 1:
+                        calculated_qty = float(doc.get("calculated_quantity") or (quantum * number_of_bids))
+                    else:
+                        calculated_qty = quantum
+                except (ValueError, TypeError):
+                    calculated_qty = float(doc.get("quantum") or 0.0)
+
+                from_time = doc.get("from")
+                to_time = doc.get("to")
+                time_block_span = doc.get("time_block")
+                if (from_time in (None, "") or to_time in (None, "")) and time_block_span:
+                    parts = str(time_block_span).split("-")
+                    if len(parts) == 2:
+                        from_time = from_time or parts[0].strip()
+                        to_time = to_time or parts[1].strip()
+
+                covered_blocks = BlockBidCurrentDataRepository.period_range(from_time, to_time)
+                for b in covered_blocks:
+                    if is_reserved:
+                        if status in ("approved", "submitted"):
+                            total_reserved[b] = total_reserved.get(b, 0.0) + calculated_qty
+                            res_key = f"{exchange}_{market}_reserved_block_bid"
+                            if res_key in reserved_per_ex_market:
+                                reserved_per_ex_market[res_key][b] = reserved_per_ex_market[res_key].get(b, 0.0) + calculated_qty
+                    else:
+                        if status in ("approved", "submitted"):
+                            total_approved[b] = total_approved.get(b, 0.0) + calculated_qty
+                        if status == "submitted":
+                            total_submitted[b] = total_submitted.get(b, 0.0) + calculated_qty
+                            bb_key = f"{exchange}_{market}_block_bid"
+                            if bb_key in block_bid_per_ex_market:
+                                block_bid_per_ex_market[bb_key][b] = block_bid_per_ex_market[bb_key].get(b, 0.0) + calculated_qty
+        except Exception as e:
+            logger.warning(f"Failed to fetch block bid graph data on date {formatted_date}: {e}")
+
+        return {
+            "total_submitted": total_submitted,
+            "total_approved": total_approved,
+            "total_reserved": total_reserved,
+            "block_bid_per_ex_market": block_bid_per_ex_market,
+            "reserved_per_ex_market": reserved_per_ex_market,
+        }
+
+    async def _fetch_cleared_bid_graph_data(
+        self, formatted_date: str
+    ) -> Dict[int, float]:
+        """
+        Fetch traded / cleared bid volume from bid_trade_serve collection across DAM, GDAM, and HPDAM.
+        """
+        cleared_map: Dict[int, float] = {}
+        try:
+            for market_type in ("DAM", "GDAM", "HPDAM"):
+                trades = await self.bid_trade_serve_repo.get_trade_quantity_by_date_and_type(formatted_date, market_type)
+                for b, qty in trades.items():
+                    cleared_map[b] = cleared_map.get(b, 0.0) + float(qty)
+        except Exception as e:
+            logger.warning(f"Failed to fetch cleared bid graph data on date {formatted_date}: {e}")
+        return cleared_map
+
     async def dam_single_bid_graph(self, schedule_date, from_block, to_block):
         """
-        Fetch DSM (Deviation Settlement Mechanism) data for a given schedule date.
+        Fetch Single Bid graph data for a given schedule date and block range,
+        including supply, forecast, surplus/deficit, aggregated totals, and per-exchange
+        per-market breakdown for single bids, block bids, and reserved block bids.
 
-        Currently, the schedule_date is hardcoded to '8/4/2025'. This should ideally be
-        passed as a parameter or derived dynamically.
         Args:
             schedule_date (str): The schedule date in 'YYYY-MM-DD' format.
             from_block (int): Starting time block.
             to_block (int): Ending time block.
         Returns:
-            Optional[Dict[str, Any]]: A dictionary containing the DSM data,
-                                    or None if no data is found.
+            Optional[Dict[str, Any]]: A dictionary containing the graph data list.
         """
-        
-
         try:
             if schedule_date:
                 try:
@@ -516,82 +1057,143 @@ class DAMBiddingServices:
                         target_date = datetime.strptime(schedule_date, "%Y-%m%d")
                     except ValueError:
                         raise ValueError(f"Invalid date format: {schedule_date}. Expected YYYY-MM-DD.")
-            
             else:
-                # Get current date in YYYY-MM-DD format
                 target_date = datetime.now().date()
 
-                # Temporary: Hardcoded schedule date for fetching DSM records
-                # schedule_date= '2025-08-04'
-            
-          
+            if isinstance(target_date, (datetime, date)):
+                formatted_date = target_date.strftime("%Y-%m-%d")
+            else:
+                formatted_date = str(target_date)
+
             pipeline = [
-                    {
-                        # From supply_serve collection
-                        "$match": {
-                            "scheduled_at": target_date,                        # Change from schedule_date to scheduled_at 
-                            "dc_sg": "SG",
-                            "time_block": {"$gte": from_block, "$lte": to_block}
-                        }
-                    },
-                    {
-                        "$group": {
-                            "_id": "$time_block",
-                            "supply_total": {"$sum": "$volume"}
-                        }
-                    },
-                    {
-                        "$lookup": {
-                            # From demand_serve collection
-                            "from": "demand_serve",                          # Change from serve_demand_table to demand_serve for demand_serve collection
-                            "let": {"t_block": "$_id"},
-                            "pipeline": [
-                                {
-                                    "$match": {
-                                        "$expr": {
-                                            "$and": [
-                                                {"$eq": ["$time_block", "$$t_block"]},
-                                                {"$eq": ["$scheduled_at", target_date]},
-                                                {"$eq": ["$type", "DAF"]}
-                                            ]
-                                        }
-                                    }
-                                },
-                                {
-                                    "$group": {
-                                        "_id": None,
-                                        "forecast": {"$sum": "$forecast"}
+                {
+                    # From supply_serve collection
+                    "$match": {
+                        "scheduled_at": target_date,
+                        "dc_sg": "SG",
+                        "time_block": {"$gte": from_block, "$lte": to_block}
+                    }
+                },
+                {
+                    "$group": {
+                        "_id": "$time_block",
+                        "supply_total": {"$sum": "$volume"}
+                    }
+                },
+                {
+                    "$lookup": {
+                        # From demand_serve collection
+                        "from": "demand_serve",
+                        "let": {"t_block": "$_id"},
+                        "pipeline": [
+                            {
+                                "$match": {
+                                    "$expr": {
+                                        "$and": [
+                                            {"$eq": ["$time_block", "$$t_block"]},
+                                            {"$eq": ["$scheduled_at", target_date]},
+                                            {"$eq": ["$type", "DAF"]}
+                                        ]
                                     }
                                 }
-                            ],
-                            "as": "demand"
-                        }
-                    },
-                    {
-                        "$unwind": {
-                            "path": "$demand",
-                            "preserveNullAndEmptyArrays": True
-                        }
-                    },
-                    {
-                        "$project": {
-                            "time_block": "$_id",
-                            "supply_total": 1,
-                            "forecast": "$demand.forecast",
-                            "block_bid_submitted_volume": {"$literal": "0"},
-                            "block_bid_approved_volume": {"$literal": "0"},
-                            "single_bid_submitted_volume": {"$literal": "0"},
-                            "single_bid_approved_volume": {"$literal": "0"},
-                            "bid_cleared_volume": {"$literal": "0"},
-                            "reserved": {"$literal": "0"},
-                            "surplus_deficit": {
-                                "$subtract": ["$supply_total", "$demand.forecast"]
+                            },
+                            {
+                                "$group": {
+                                    "_id": None,
+                                    "forecast": {"$sum": "$forecast"}
+                                }
                             }
+                        ],
+                        "as": "demand"
+                    }
+                },
+                {
+                    "$unwind": {
+                        "path": "$demand",
+                        "preserveNullAndEmptyArrays": True
+                    }
+                },
+                {
+                    "$project": {
+                        "time_block": "$_id",
+                        "supply_total": 1,
+                        "forecast": "$demand.forecast",
+                        "surplus_deficit": {
+                            "$subtract": ["$supply_total", "$demand.forecast"]
                         }
-                    },
-                    {"$sort": {"time_block": 1}}
-                ]
-            result = await self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline)
+                    }
+                },
+                {"$sort": {"time_block": 1}}
+            ]
+
+            # Fetch supply/demand aggregation and bid metrics concurrently
+            result, single_data, block_data, cleared_map = await asyncio.gather(
+                self.supply_repo.aggregate_async(self.supply_repo.collection_name, pipeline),
+                self._fetch_single_bid_graph_data(formatted_date),
+                self._fetch_block_bid_graph_data(formatted_date),
+                self._fetch_cleared_bid_graph_data(formatted_date),
+            )
+
+            single_submitted = single_data["total_submitted"]
+            single_approved = single_data["total_approved"]
+            single_per_ex_market = single_data["per_exchange_market"]
+
+            block_submitted = block_data["total_submitted"]
+            block_approved = block_data["total_approved"]
+            block_reserved = block_data["total_reserved"]
+            block_per_ex_market = block_data["block_bid_per_ex_market"]
+            reserved_per_ex_market = block_data["reserved_per_ex_market"]
+
+            for row in result:
+                tb = int(row.get("time_block", 0))
+
+                # Aggregated Totals
+                row["total_block_bid_submitted_volume"] = round(block_submitted.get(tb, 0.0), 2)
+                row["block_bid_approved_volume"] = round(block_approved.get(tb, 0.0), 2)
+                row["single_bid_submitted_volume"] = round(single_submitted.get(tb, 0.0), 2)
+                row["single_bid_approved_volume"] = round(single_approved.get(tb, 0.0), 2)
+                row["bid_cleared_volume"] = round(cleared_map.get(tb, 0.0), 2)
+                row["reserved"] = round(block_reserved.get(tb, 0.0), 2)
+
+                # Single Bids per exchange & market
+                row["iex_dam_single_bid"] = round(single_per_ex_market["iex_dam_single_bid"].get(tb, 0.0), 2)
+                row["pxil_dam_single_bid"] = round(single_per_ex_market["pxil_dam_single_bid"].get(tb, 0.0), 2)
+                row["hpx_dam_single_bid"] = round(single_per_ex_market["hpx_dam_single_bid"].get(tb, 0.0), 2)
+
+                row["iex_gdam_single_bid"] = round(single_per_ex_market["iex_gdam_single_bid"].get(tb, 0.0), 2)
+                row["pxil_gdam_single_bid"] = round(single_per_ex_market["pxil_gdam_single_bid"].get(tb, 0.0), 2)
+                row["hpx_gdam_single_bid"] = round(single_per_ex_market["hpx_gdam_single_bid"].get(tb, 0.0), 2)
+
+                row["iex_hpdam_single_bid"] = round(single_per_ex_market["iex_hpdam_single_bid"].get(tb, 0.0), 2)
+                row["pxil_hpdam_single_bid"] = round(single_per_ex_market["pxil_hpdam_single_bid"].get(tb, 0.0), 2)
+                row["hpx_hpdam_single_bid"] = round(single_per_ex_market["hpx_hpdam_single_bid"].get(tb, 0.0), 2)
+
+                # Block Bids per exchange & market
+                row["iex_dam_block_bid"] = round(block_per_ex_market["iex_dam_block_bid"].get(tb, 0.0), 2)
+                row["pxil_dam_block_bid"] = round(block_per_ex_market["pxil_dam_block_bid"].get(tb, 0.0), 2)
+                row["hpx_dam_block_bid"] = round(block_per_ex_market["hpx_dam_block_bid"].get(tb, 0.0), 2)
+
+                row["iex_gdam_block_bid"] = round(block_per_ex_market["iex_gdam_block_bid"].get(tb, 0.0), 2)
+                row["pxil_gdam_block_bid"] = round(block_per_ex_market["pxil_gdam_block_bid"].get(tb, 0.0), 2)
+                row["hpx_gdam_block_bid"] = round(block_per_ex_market["hpx_gdam_block_bid"].get(tb, 0.0), 2)
+
+                row["iex_hpdam_block_bid"] = round(block_per_ex_market["iex_hpdam_block_bid"].get(tb, 0.0), 2)
+                row["pxil_hpdam_block_bid"] = round(block_per_ex_market["pxil_hpdam_block_bid"].get(tb, 0.0), 2)
+                row["hpx_hpdam_block_bid"] = round(block_per_ex_market["hpx_hpdam_block_bid"].get(tb, 0.0), 2)
+
+                # Reserved Block Bids per exchange & market
+                row["iex_dam_reserved_block_bid"] = round(reserved_per_ex_market["iex_dam_reserved_block_bid"].get(tb, 0.0), 2)
+                row["pxil_dam_reserved_block_bid"] = round(reserved_per_ex_market["pxil_dam_reserved_block_bid"].get(tb, 0.0), 2)
+                row["hpx_dam_reserved_block_bid"] = round(reserved_per_ex_market["hpx_dam_reserved_block_bid"].get(tb, 0.0), 2)
+
+                row["iex_gdam_reserved_block_bid"] = round(reserved_per_ex_market["iex_gdam_reserved_block_bid"].get(tb, 0.0), 2)
+                row["pxil_gdam_reserved_block_bid"] = round(reserved_per_ex_market["pxil_gdam_reserved_block_bid"].get(tb, 0.0), 2)
+                row["hpx_gdam_reserved_block_bid"] = round(reserved_per_ex_market["hpx_gdam_reserved_block_bid"].get(tb, 0.0), 2)
+
+                row["iex_hpdam_reserved_block_bid"] = round(reserved_per_ex_market["iex_hpdam_reserved_block_bid"].get(tb, 0.0), 2)
+                row["pxil_hpdam_reserved_block_bid"] = round(reserved_per_ex_market["pxil_hpdam_reserved_block_bid"].get(tb, 0.0), 2)
+                row["hpx_hpdam_reserved_block_bid"] = round(reserved_per_ex_market["hpx_hpdam_reserved_block_bid"].get(tb, 0.0), 2)
+
             return {"data": result}
         except Exception as e:
             logger.exception(f"[DAMBiddingServices] Failed to fetch demand data: {str(e)}")
@@ -633,6 +1235,10 @@ class DAMBiddingServices:
             # Get end of day for comparison
             target_date_end = datetime.combine(target_date_dt.date(), datetime.max.time())
 
+            # Active market(s)/exchange for limit_values filtering
+            active_markets = await self._get_active_markets()
+            active_exchange = await self._get_active_exchange(active_markets[0])
+            active_market = active_markets[0]
 
             # Fetch plant data
             pipeline = [
@@ -797,13 +1403,13 @@ class DAMBiddingServices:
             # )
             
             # OLD CODE - Get forecastedPrice from limit_values (commented for future reuse if needed)
-            forecastedPrice = await self.limit_values_repo.aggregate(
+            forecastedPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": target_date_end},  # Get data up to target date (end of day)
-                                "id": "DAM_forecasted_price",
-                                "market": "DAM",
+                                "id": f"{active_market}_forecasted_price",
+                                "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -818,19 +1424,21 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},  # Sort by block for consistent ordering
                         {"$project": {"_id": 0}},
                 ],
+                active_exchange,
             )
             limit_schedule_date = target_date
             print("=============================================================== forecastedPrice =============================================================== ")
             print(forecastedPrice)
             print("=============================================================== forecastedPrice =============================================================== ")
             
-            bufferPrice = await self.limit_values_repo.aggregate(
+            bufferPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
-                                "id": "Buffer",
-                                "market": "DAM",
+                                # Buffer is stored under two id conventions across flows
+                                "id": {"$in": ["Buffer", "Buffer_Price"]},
+                                "market": active_market,
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
                         },
@@ -845,15 +1453,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+                active_exchange,
+
+            
             )
             
-            ceilingPrice = await self.limit_values_repo.aggregate(
+            ceilingPrice = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "Ceiling_Price",
-                                "market": "DAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -869,16 +1482,21 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+                active_exchange,
+
+            
             )
             
 
-            n_1Limits = await self.limit_values_repo.aggregate(
+            n_1Limits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "n_1",
-                                "market": "DAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -894,15 +1512,22 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+            
+
+                active_exchange,
+
+            
+
             )
 
-            noc_buyLimits = await self.limit_values_repo.aggregate(
+            noc_buyLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_buy",
-                                "market": "DAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -918,15 +1543,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            noc_sellLimits = await self.limit_values_repo.aggregate(
+            noc_sellLimits = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "noc_sell",
-                                "market": "DAM",
+                                "market": active_market,
                                 "category": "Limits",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -942,15 +1572,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            typeofExchangeIEX = await self.limit_values_repo.aggregate(
+            typeofExchangeIEX = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "iex",
-                                "market": "DAM",
+                                "market": active_market,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -966,15 +1601,20 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
-            typeofExchangePXIL = await self.limit_values_repo.aggregate(
+            typeofExchangePXIL = await self._aggregate_limit_values_with_fallback(
                 [
                         {
                             "$match": {
                                 "scheduled_at": {"$lte": datetime.combine(target_date_dt.date() + timedelta(days=1), datetime.max.time())},
                                 "id": "pxil",
-                                "market": "DAM",
+                                "market": active_market,
                                 "category": "Ex_Split",
                                 "block": {"$gte": from_block, "$lte": to_block},
                             }
@@ -990,6 +1630,11 @@ class DAMBiddingServices:
                         {"$sort": {"block": 1}},
                         {"$project": {"_id": 0}},
                 ],
+
+
+                active_exchange,
+
+
             )
 
             
@@ -1327,7 +1972,16 @@ class DAMBiddingServices:
                         
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
-                                
+
+            self._apply_active_limit_prefix(data, active_exchange, active_market)
+            await self._add_additional_market_limit_values(
+                data,
+                active_markets,
+                active_exchange,
+                target_date_dt,
+                from_block,
+                to_block,
+            )
             return data
 
         except Exception as e:
@@ -1669,6 +2323,8 @@ class DAMBiddingServices:
             dbarray = {}
             capture_tasks: List[Dict[str, Any]] = []
             revision_by_date: Dict[str, Optional[int]] = {}
+            # One shared next revision per schedule date for the whole submit batch
+            next_revision_by_date: Dict[str, int] = {}
             
             requested_by_user = "unknown"
             if current_user:
@@ -1705,11 +2361,13 @@ class DAMBiddingServices:
                 date_obj = datetime.strptime(dates[0], "%d-%m-%Y")  # parse string to datetime
                 formatted_date = date_obj.strftime("%Y-%m-%d")      # normalize to "YYYY-MM-DD"
 
-                # Get latest revision for this specific date + start_time
-                # Use the block's scheduled date (formatted_date) instead of today's date
-                getRevision = await self.single_bid_data_for_approval_repo.getPlantDataForApprovalbytime(
-                    formatted_date, bltimefull[0]
-                )
+                # Shared next revision for all blocks on this date in this submit
+                if formatted_date not in next_revision_by_date:
+                    max_rev = await self.single_bid_data_for_approval_repo.get_max_revision_for_date(
+                        formatted_date
+                    )
+                    next_revision_by_date[formatted_date] = (int(max_rev) + 1) if max_rev else 1
+                bid_revision = next_revision_by_date[formatted_date]
                 
                 # Delete existing record if exists
                 check_exist_row = await self.dam_currect_selected_forecast_log_repo.getData(int(blno[1]),  dates[0])  # type: ignore
@@ -1737,7 +2395,6 @@ class DAMBiddingServices:
 
                 if not session_block:
                     return {"status": "error", "code": 400, "message": f"No session mapping for {bltimefull[0]}"}
-                bid_revision = (int(getRevision) + 1) if getRevision else 1
                 if formatted_date not in revision_by_date:
                     revision_by_date[formatted_date] = await self.supply_repo.get_first_sg_source_revision_for_date(
                         formatted_date
@@ -1779,6 +2436,10 @@ class DAMBiddingServices:
 
 
                 # Build dbarray for this block
+                ocf_config, ocf_error = extract_ocf_config(request_data, blno[1])
+                if ocf_error:
+                    return {"status": "error", "code": 400, "message": ocf_error}
+
                 current_time = datetime.now().strftime("%H:%M")
                 timestamp = int(time.time())
                 dbarray[keys] = {
@@ -1791,7 +2452,7 @@ class DAMBiddingServices:
                     "start_time": bltimefull[0],
                     "end_time": bltimefull[1],
                     "block_no": int(blno[1]),
-                    "revision_no": int(getRevision) + 1 if getRevision else 1,
+                    "revision_no": bid_revision,
                     "bid_type": "single",
                     "session_block": int(session_block),
                     "member_id": iex_participant_id,
@@ -1805,9 +2466,18 @@ class DAMBiddingServices:
                     "created_by": "",
                     "created_time": "",
                     "Ex_split_string": request_data[f"Exsplitstringblk_{blno[1]}"],
+                    "ocf": ocf_config,
+                    "ocf_config": ocf_config,
                     "remark": "",
                     "buy_sell_bid": request_data[f"buy_sell_bid_type_{blno[1]}"]
                 }
+                buy_sell_type = request_data[f"buy_sell_bid_type_{blno[1]}"]
+                if buy_sell_type == "buy" and ocf_config:
+                    ocf_parts = ocf_config.split("_")
+                    if len(ocf_parts) >= 3:
+                        dbarray[keys]["ocf_premium_discount"] = int(float(ocf_parts[2]))
+                    if len(ocf_parts) >= 4:
+                        dbarray[keys]["max_ocf_qty"] = int(float(ocf_parts[3]))
                 if rldc_revision_no is not None:
                     dbarray[keys]["rldc_revision_no"] = rldc_revision_no
                 
@@ -1838,7 +2508,6 @@ class DAMBiddingServices:
                     }
 
                 plcounter = 0
-                buy_sell_type = request_data[f"buy_sell_bid_type_{blno[1]}"]
                 
                 if buy_sell_type != "buy":  
                     dbarray[keys]["Plants"] = {}   # Initialize Plants dictionary
@@ -1884,7 +2553,7 @@ class DAMBiddingServices:
                         plant_key = plvalue
                         if plvalue == "0":
                             plant_key = f"A-{plvalue}"
-                        elif plvalue == bidPriceNOC():  # assuming bidPriceNOC() returns a string
+                        elif plvalue == await bidPriceNOC():  # assuming bidPriceNOC() returns comparable plant/price sentinel
                             plant_key = f"Z-{plvalue}"
 
                         # Initialize dictionary if not exists
@@ -2025,7 +2694,7 @@ class DAMBiddingServices:
                 buyary = {}
                 for idx, bid_price in enumerate(request[f"bid_price_{blno_index}", []]):
                     bid_volume = request[f"bid_volume_{blno_index}", []][idx]
-                    if bid_price not in [bidPriceNOC(), "0", ""] and bid_volume != "0":
+                    if bid_price not in [await bidPriceNOC(), "0", ""] and bid_volume != "0":
                         buyary[bid_price] = bid_volume
                         finalbuyarraysorted[bid_price] = bid_volume
                 # sort descending by price
@@ -2038,12 +2707,12 @@ class DAMBiddingServices:
         for blkey, blvalue in buybiddataarray.items():
             for price_str, vol in blvalue.items():
                 price = float(price_str)
-                if price_str not in ["0", bidPriceNOC()]:
+                if price_str not in ["0", await bidPriceNOC()]:
                     buypricekeys.append(price)
                     incresingprbuy2.append(price + 1)
 
         finalpricearraybuy = sorted(set(buypricekeys + incresingprbuy2))
-        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [bidPriceNOC()])))
+        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [await bidPriceNOC()])))
 
         # Step 3: Build bidblockarray
         bidblockarray = {}
@@ -2109,7 +2778,7 @@ class DAMBiddingServices:
 
                         if not matched:
                             # At the max price point (NOC), fill with the maximum bid volume
-                            fill_vol = max_volume if pricevalue == bidPriceNOC() else ""
+                            fill_vol = max_volume if pricevalue == await bidPriceNOC() else ""
                             pRarrayf = {
                                 "bid_plant_name": f"Buy_{counterkey}",
                                 "bid_price": pricevalue,
@@ -2319,6 +2988,8 @@ class DAMBiddingServices:
                 ]
             }
 
+            # Highest revision per block, then keep only the global max revision
+            # so leftover blocks from older full-day submissions are excluded.
             pipeline = [
                 {
                     "$match": match_criteria
@@ -2335,6 +3006,26 @@ class DAMBiddingServices:
                 {
                     "$replaceRoot": {"newRoot": "$doc"}
                 },
+                {
+                    "$group": {
+                        "_id": None,
+                        "max_rev": {"$max": "$revision_no"},
+                        "docs": {"$push": "$$ROOT"}
+                    }
+                },
+                {
+                    "$project": {
+                        "docs": {
+                            "$filter": {
+                                "input": "$docs",
+                                "as": "d",
+                                "cond": {"$eq": ["$$d.revision_no", "$max_rev"]}
+                            }
+                        }
+                    }
+                },
+                {"$unwind": "$docs"},
+                {"$replaceRoot": {"newRoot": "$docs"}},
                 {
                     "$sort": {
                         "block_no": 1
@@ -2496,6 +3187,9 @@ class DAMBiddingServices:
                             block['approved_time'] = data[j]['approved_time']
                             block['buy_sell_bid'] = data[j]['buy_sell_bid']
                             block['_id'] = data[j].get('_id')
+                            block['Ex_split_string'] = data[j].get('Ex_split_string', '')
+                            block['ocf'] = data[j].get('ocf_config') or data[j].get('ocf', '')
+                            block['ocf_config'] = block['ocf']
                             # Increment block index
                             bl += 1
                         else :
@@ -2578,6 +3272,8 @@ class DAMBiddingServices:
                             block['_id'] = data[j].get('_id')  # safe get
                             block['Remarks'] = data[j].get('remark', '')
                             block['Ex_split_string'] = data[j].get('Ex_split_string', '')
+                            block['ocf'] = data[j].get('ocf_config') or data[j].get('ocf', '')
+                            block['ocf_config'] = block['ocf']
 
                             # Selected demand type (from external dict)
                             block['selected_demand_type'] = ""
@@ -2659,11 +3355,11 @@ class DAMBiddingServices:
 
                         # Same logic for plvalue23
                         if int(float(plvalue22)) != 0:
-                            # Prevent exceeding bidPriceNOC() (10000) maximum
+                            # Prevent exceeding bidPriceNOC() maximum
                             price_val = float(plvalue22)
-                            ########################################## commented out to prevent exceeding bidPriceNOC() (10000) maximum ##########################################
-                            if price_val >= bidPriceNOC():
-                                plvalue23 = bidPriceNOC()  # Cap at 10000
+                            ########################################## commented out to prevent exceeding bidPriceNOC() maximum ##########################################
+                            if price_val >= await bidPriceNOC():
+                                plvalue23 = await bidPriceNOC()  # Cap at bidPriceNOC()
                             else:
                                 plvalue23 = price_val + 1
                         else:
@@ -2680,8 +3376,7 @@ class DAMBiddingServices:
 
                     for plkey22, plvalue22 in enumerate(price_list):
 
-                        # Skip empty OR bidPriceNOC()
-                        if plvalue22 == "" or plvalue22 == bidPriceNOC():
+                        if plvalue22 in ["", None]:
                             continue
 
                         # Validate numeric
@@ -2698,6 +3393,7 @@ class DAMBiddingServices:
                         else:
                             volume_val = ""   # PHP would give NULL → ""
 
+                        # Keep NOC (10000) so buy fill can use its volume at the cap.
                         price_key = plvalue22
 
                         buyary[price_key] = volume_val
@@ -2772,7 +3468,7 @@ class DAMBiddingServices:
         # sort($finalpricearray);
         # -----------------------------------------------------------------------
 
-        finalpricearray.append(bidPriceNOC())
+        finalpricearray.append(await bidPriceNOC())
 
         # PHP sort() → numeric ascending sort
         # If mixed types, convert safely
@@ -2854,22 +3550,30 @@ class DAMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Find the volume at the max price point, excluding bidPriceNOC (10000).
-                    # "10000" (str) != 10000 (int) in Python, so it is not filtered at
-                    # collection time — we explicitly exclude it here.
+                    # Fill prices < NOC from highest price below NOC (old logic).
+                    # At NOC: use payload volume only when NOC is present (incl. 0);
+                    # otherwise leave NOC at 0.
+                    noc = float(await bidPriceNOC())
+                    noc_keys = [k for k in blk_buydata.keys() if float(k) == noc]
+                    noc_in_payload = bool(noc_keys)
                     max_price_volume = 0.0
-                    max_price_float = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < bidPriceNOC()]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) < noc]
                         if valid_keys:
                             max_price_key = max(valid_keys, key=lambda x: float(x))
-                            max_price_float = float(max_price_key)
                             max_price_volume = to_float(blk_buydata[max_price_key])
 
-                    # Fill volume for all price points up to and including the max price.
-                    # Price points above the max price remain 0.
                     for prikey, pricevalue in enumerate(finalpricearray):
-                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= max_price_float else 0.0
+                        pv = float(pricevalue)
+                        if pv == noc:
+                            fill_vol = (
+                                round(to_float(blk_buydata[noc_keys[0]]), 1)
+                                if noc_in_payload else 0.0
+                            )
+                        elif pv < noc:
+                            fill_vol = round(max_price_volume, 1)
+                        else:
+                            fill_vol = 0.0
                         pRarrayf = {
                             "RTMPrice": pricevalue,
                             "Volume": fill_vol,
@@ -2885,6 +3589,11 @@ class DAMBiddingServices:
                 pDetailarray.setdefault("reference_number", {})[timeblock_key] = request_dict["reference_number"][timeblock_key]
                 pDetailarray.setdefault("bid_status", {})[timeblock_key] = request_dict["bid_status"][timeblock_key]
                 pDetailarray.setdefault("approve_by", {})[timeblock_key] = request_dict["approve_by"][timeblock_key]
+                ocf_config_val, _ = extract_ocf_config(request_dict, blno[1])
+                pDetailarray.setdefault("ocf_config", {})[timeblock_key] = ocf_config_val or ""
+                pDetailarray.setdefault("Ex_split_string", {})[timeblock_key] = request_dict.get(
+                    f"Ex_split_string_{blno[1]}", ""
+                )
 
         bidblockarrayExWise = {}
 
@@ -3020,11 +3729,11 @@ class DAMBiddingServices:
             if error_count > 0:
                 message = f"Update failed for {error_count} bid(s)"
             elif updated_count == total:
-                message = "All bids updated successfully"
+                message = success_message(updated)
             elif updated_count == 0:
                 message = "No bids updated — all were already processed"
             else:
-                message = f"Partial update: {updated_count} updated, {skipped_count} skipped"
+                message = partial_message(updated, skipped_count)
 
             return {
                 "result": updated_count > 0 and error_count == 0,
@@ -3485,6 +4194,14 @@ class DAMBiddingServices:
                 
                 if "Ex_split_string" not in all_exc_single_bid_datas[period_key] and approval_record.get("Ex_split_string"):
                     all_exc_single_bid_datas[period_key]["Ex_split_string"] = approval_record["Ex_split_string"]
+
+                if "ocf" not in all_exc_single_bid_datas[period_key] and approval_record.get("ocf"):
+                    all_exc_single_bid_datas[period_key]["ocf"] = approval_record["ocf"]
+
+                if "ocf_config" not in all_exc_single_bid_datas[period_key]:
+                    ocf_cfg = approval_record.get("ocf_config") or approval_record.get("ocf")
+                    if ocf_cfg:
+                        all_exc_single_bid_datas[period_key]["ocf_config"] = ocf_cfg
                 
                 if "remark" not in all_exc_single_bid_datas[period_key] and approval_record.get("remark"):
                     all_exc_single_bid_datas[period_key]["remark"] = approval_record["remark"]
@@ -3509,11 +4226,8 @@ class DAMBiddingServices:
             # Enhance AllExcBlockBidDatas with data from block_bid_current_data
             # Get block bid data from block_bid_current_data collection (filtered by market_type = "DAM")
             block_bid_current_data = await self.block_bid_current_data_repo.get_block_bid_data_by_date_and_market_type(
-                datebid, market_type="DAM"
+                datebid, market_type="DAM", include_reserved=False
             )
-            
-            # Use repository method to convert time to period code
-            time_to_period_code = self.block_bid_current_data_repo.time_to_period_code
             
             # Map block_bid_current_data to AllExcBlockBidDatas structure
             for block_bid_record in block_bid_current_data:
@@ -3523,13 +4237,20 @@ class DAMBiddingServices:
                 if not from_time or not to_time:
                     continue
                 
-                from_period_code = time_to_period_code(from_time)
-                to_period_code = time_to_period_code(to_time)
-                
-                if from_period_code is None or to_period_code is None:
+                # A block bid covers every period from `from` up to but not including
+                # `to`. period_range also normalises the two ways midnight is written
+                # in this collection — "24:00" on RTM/GDAM rows, "00:00" on DAM ones —
+                # both of which time_to_period_code rejects, dropping the bid entirely.
+                covered_periods = self.block_bid_current_data_repo.period_range(from_time, to_time)
+
+                if not covered_periods:
                     continue
+
+                from_period_code = covered_periods[0]
+                to_period_code = covered_periods[-1] + 1
                 
                 # Create block bid data structure matching AllExcBlockBidDatas format
+                ocf_val = block_bid_record.get("ocf_config") or block_bid_record.get("ocf", "")
                 block_bid_mapped = {
                     "from_period_code": from_period_code,
                     "to_period_code": to_period_code,
@@ -3541,6 +4262,11 @@ class DAMBiddingServices:
                     "number_of_bids": int(block_bid_record.get("number_of_bids", 0)),
                     "buy_sell": block_bid_record.get("type", "").lower() if block_bid_record.get("type") else "",
                     "bid_status": block_bid_record.get("status", ""),
+                    # What the exchange made of the bid, kept apart from the local approval
+                    # status: a bid IEX rejects is still "Submitted" as far as EPMS is concerned.
+                    "exchange_status": block_bid_record.get("exchangeStatus", ""),
+                    "order_id": block_bid_record.get("orderId") or block_bid_record.get("exchangeOrderId") or "",
+                    "exchange_last_updated_time": block_bid_record.get("exchangeLastUpdatedTime", ""),
                     "Ex_split_string": block_bid_record.get("ex_split_string", ""),
                     "remark": block_bid_record.get("remark", ""),
                     "biding_date": block_bid_record.get("biding_date", datebid),
@@ -3552,16 +4278,16 @@ class DAMBiddingServices:
                     "reason": block_bid_record.get("reason", ""),
                     "trade_session": int(block_bid_record.get("trade_session", 0)),
                     "market_type": block_bid_record.get("market_type", "DAM"),
+                    "ocf": ocf_val,
+                    "ocf_config": ocf_val,
                     "_id": block_bid_record.get("_id")
                 }
                 
-                # Add to AllExcBlockBidDatas keyed by from_period_code (allow multiple entries)
-                all_exc_block_bid_datas.setdefault(from_period_code, []).append(block_bid_mapped)
-                
-                # If block bid spans multiple periods, also add to next period
-                if to_period_code != from_period_code + 1:
-                    next_period = from_period_code + 1
-                    all_exc_block_bid_datas.setdefault(next_period, []).append(block_bid_mapped)
+                # List the bid under every period it covers. Keying it to the first
+                # block plus one left an 8-block bid showing on 2 blocks. Several bids
+                # can cover the same period, so each one appends rather than replaces.
+                for period_code in covered_periods:
+                    all_exc_block_bid_datas.setdefault(period_code, []).append(block_bid_mapped)
             
             # Get exchange bid status for other user
             other_user_id = limit_array.get("other_user_id", "")

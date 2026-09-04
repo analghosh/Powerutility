@@ -173,6 +173,11 @@ class GridIndiaParser(BaseParser):
                             data_source = isgs_data.get("ISGSThermalFullScheduleJsonData", {})
                         elif isgs_gen_type == "NUCLEAR":
                             data_source = isgs_data.get("ISGSNuclearFullScheduleJsonData", {})
+                        elif isgs_gen_type == "HYDRO":
+                            # Bhutan hydro imports (Punatsangchhu_II) arrive here. Without
+                            # this branch data_source stays empty and the plant is written
+                            # as 96 blocks of zero rather than skipped — a silent loss.
+                            data_source = isgs_data.get("ISGSHydroFullScheduleJsonData", {})
                     elif schd_type == "URS":
                         urs_data = full_schd_data.get("URSFullScheduleJsonData", {})
                         data_source = urs_data.get("URSThermalFullScheduleJsonData", {})
@@ -219,7 +224,7 @@ class GridIndiaParser(BaseParser):
                         entry["volume"][idx] += v
                         entry["sg_bl"][idx] += b
 
-                # 4. Process EntitlementList (DC) — OnbarFinalEntAmount is the DC before-loss value
+                # 4. Process EntitlementList (DC) — the final entitlement is the DC before-loss value
                 entitlement_list = group.get("EntitlementList", [])
                 for ent_item in entitlement_list:
                     plant_id = ent_item.get("SellerAcronym")
@@ -227,14 +232,28 @@ class GridIndiaParser(BaseParser):
                         continue
 
                     ent_data = ent_item.get("EntitlementData", {})
-                    # Try Thermal first, then Nuclear
-                    data_source = ent_data.get("ThermalEntJsonData") or ent_data.get("NuclearEntJsonData") or {}
+                    # Grid India splits the entitlement by fuel and populates exactly one
+                    # of these blocks per seller.
+                    data_source = (
+                        ent_data.get("ThermalEntJsonData")
+                        or ent_data.get("NuclearEntJsonData")
+                        or ent_data.get("HydroEntJsonData")
+                        or ent_data.get("GasEntJsonData")
+                        or {}
+                    )
 
                     if not data_source:
                         continue
 
-                    vol_list = data_source.get("OnbarFinalEntAmount") or []
-                    onbar_list = data_source.get("EntireSharedOnbarEntAmount") or []
+                    # Thermal and Gas report the entitlement split into on-bar and off-bar
+                    # halves; Nuclear and Hydro have no such split and drop the prefix from
+                    # the field names. Reading only the Onbar* spelling is why every nuclear
+                    # DC row on this deployment has been zero — the keys never matched.
+                    # A fuel with no split is entirely on-bar, so its off-bar stays 0.
+                    vol_list = data_source.get("OnbarFinalEntAmount") or \
+                               data_source.get("FinalEntAmount") or []
+                    onbar_list = data_source.get("EntireSharedOnbarEntAmount") or \
+                                 data_source.get("EntireSharedEntAmount") or []
                     offbar_list = data_source.get("EntireSharedOffbarEntAmount") or []
 
                     entry = aggregated_dc[plant_id]

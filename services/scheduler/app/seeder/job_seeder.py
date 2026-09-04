@@ -446,6 +446,26 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 6
             },
             {
+                "job_type": "gdam_bid_status_sync",
+                "name": "GDAM Bid Status Sync",
+                "type": "data_sync",
+                "schedule": "0,30 14-15 * * *",  # At 14:00, 14:30, 15:00, 15:30 IST (covers required times)
+                "enabled": False,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Syncs GDAM bid status by fetching bid details for today's submitted bids",
+                "priority": 6
+            },
+            {
+                "job_type": "hpdam_bid_status_sync",
+                "name": "HPDAM Bid Status Sync",
+                "type": "data_sync",
+                "schedule": "0,30 14-15 * * *",  # At 14:00, 14:30, 15:00, 15:30 IST (covers required times)
+                "enabled": False,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Syncs HPDAM bid status by fetching bid details for today's submitted bids",
+                "priority": 6
+            },
+            {
                 "job_type": "rtm_bid_status_sync",
                 "name": "RTM Bid Status Sync",
                 "type": "data_sync",
@@ -463,6 +483,26 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "enabled": True,
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Syncs DAM Single Bid Book from Exchange API to BookCollection",
+                "priority": 5
+            },
+            {
+                "job_type": "gdam_single_bid_book_sync",
+                "name": "GDAM Single Bid Book Sync",
+                "type": "data_sync",
+                "schedule": "0,30 14-16 * * *",  # 2:30 PM to 4:30 PM (Runs 14:00, 14:30, 15:00, 15:30, 16:00, 16:30)
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Syncs GDAM Single Bid Book from Exchange API to BookCollection",
+                "priority": 5
+            },
+            {
+                "job_type": "hpdam_single_bid_book_sync",
+                "name": "HPDAM Single Bid Book Sync",
+                "type": "data_sync",
+                "schedule": "0,30 14-16 * * *",  # 2:30 PM to 4:30 PM (Runs 14:00, 14:30, 15:00, 15:30, 16:00, 16:30)
+                "enabled": True,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Syncs HPDAM Single Bid Book from Exchange API to BookCollection",
                 "priority": 5
             },
             {

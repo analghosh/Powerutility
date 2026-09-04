@@ -162,7 +162,14 @@ async def get_approval_request_list(
     response_description="Processed bid block data",
 )
 async def bid_creation_post(
-    post_data: dict = Body(..., description="Bid data for multiple blocks"),
+    post_data: dict = Body(
+        ...,
+        description=(
+            "Bid data for multiple blocks. Include Ex_split_string_{blockNo} and "
+            "optional ocf_config_{blockNo} (or ocf_config) as "
+            "{allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}]."
+        ),
+    ),
 ):
     """
     Submit bid data for sell/buy types for given time blocks.
@@ -177,7 +184,15 @@ async def bid_creation_post(
     response_description="Returns success status after processing bid data",
 )
 async def submit_for_approval_post_data(
-    post_data: dict = Body(..., description="Submit bid approval data. Optional: manual_capture_bid=true to write DAM manual capture snapshot."),
+    post_data: dict = Body(
+        ...,
+        description=(
+            "Submit bid approval data. Optional: manual_capture_bid=true for manual capture. "
+            "Optional ocf-config (or per-block ocf-config_blk_{n}): "
+            "{allocation%}_{O|S}_{premium_or_discount}[_{max_ocf_qty}] e.g. 60_O_14, 20_S_0, "
+            "or 60_O_14_100 (buy: stores ocf_premium_discount and max_ocf_qty). Stored as `ocf`."
+        ),
+    ),
     current_user: TokenPayload = Depends(get_current_user),
     audit_logger: AuditLogger = Depends(get_audit_logger),
     user_context: Dict[str, Any] = Depends(get_user_context),

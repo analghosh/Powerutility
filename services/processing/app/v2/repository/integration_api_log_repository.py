@@ -266,10 +266,20 @@ class IntegrationApiLogRepository(GenericRepository):
             logger.error(f"Error fetching bid submission details: {e}")
             return []
 
-    async def get_block_bid_submission_details(self, date_str: str) -> list:
+    async def get_block_bid_submission_details(
+        self, date_str: str, market_type: Optional[str] = None
+    ) -> list:
         """
-        Get RTM block bid submission/cancellation details for a specific date.
+        Get block bid submission/cancellation details for a specific date.
         Reads from iex_integration_apilog filtered by bid_type="block-bid".
+
+        Supports RTM (submitBlockBid / cancelBlockBid) and DAM/GDAM/HPDAM
+        (submitDamBlockBid / cancelDamBlockBid).
+
+        Args:
+            date_str: Delivery date in YYYY-MM-DD format
+            market_type: Optional filter — "rtm", "dam", "gdam", or "hpdam".
+                         When omitted, returns all block-bid markets.
 
         Returns one entry per exchange call (one per submit or cancel operation),
         sorted newest first. Submit and cancel calls are returned as separate rows.
@@ -280,15 +290,21 @@ class IntegrationApiLogRepository(GenericRepository):
             start_ts   = int(start_date.timestamp())
             end_ts     = int(end_date.timestamp())
 
+            submit_methods = {"submitBlockBid", "submitDamBlockBid"}
+            cancel_methods = {"cancelBlockBid", "cancelDamBlockBid"}
+
+            match_filter: Dict[str, Any] = {
+                "delivery_date": {"$gte": start_ts, "$lte": end_ts},
+                "bid_type": "block-bid",
+                "method": {"$in": list(submit_methods | cancel_methods)},
+            }
+            if market_type:
+                match_filter["market_type"] = market_type.lower()
+            else:
+                match_filter["market_type"] = {"$in": ["rtm", "dam", "gdam", "hpdam"]}
+
             pipeline = [
-                {
-                    "$match": {
-                        "delivery_date": {"$gte": start_ts, "$lte": end_ts},
-                        "market_type": "rtm",
-                        "bid_type": "block-bid",
-                        "method": {"$in": ["submitBlockBid", "cancelBlockBid"]}
-                    }
-                },
+                {"$match": match_filter},
                 {"$sort": {"timestamp": -1}},
             ]
 
@@ -305,7 +321,7 @@ class IntegrationApiLogRepository(GenericRepository):
                         delivery_date_str = str(dd)
 
                 method = log.get("method", "submitBlockBid")
-                if method == "cancelBlockBid":
+                if method in cancel_methods:
                     response.append({
                         "correlationId":              log.get("correlation_id"),
                         "cancelBlockBidRequestBody":  log.get("requestBody"),
@@ -313,7 +329,8 @@ class IntegrationApiLogRepository(GenericRepository):
                         "DeliveryDate":               delivery_date_str,
                         "timestamp":                  log.get("timestamp"),
                         "bidType":                    "block-bid",
-                        "method":                     "cancelBlockBid",
+                        "marketType":                 log.get("market_type"),
+                        "method":                     method,
                     })
                 else:
                     response.append({
@@ -323,7 +340,8 @@ class IntegrationApiLogRepository(GenericRepository):
                         "DeliveryDate":               delivery_date_str,
                         "timestamp":                  log.get("timestamp"),
                         "bidType":                    "block-bid",
-                        "method":                     "submitBlockBid",
+                        "marketType":                 log.get("market_type"),
+                        "method":                     method,
                     })
 
             return response

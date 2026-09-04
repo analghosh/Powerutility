@@ -19,15 +19,13 @@ from ..repository.limit_workflow_repository import limit_workflow_repository
 from ...core.config import settings
 
 from libs.audit_queue.simple_logger import AuditLogger
-from libs.utils.csv_date_parse import parse_csv_scheduled_at, parse_schedule_date_filter
+from libs.utils.csv_date_parse import parse_csv_scheduled_at, parse_schedule_date_filter, parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
 # ---------- helpers ----------
 REQUIRED_COLUMNS = ["schedule_date", "block", "id_type", "values"]
 ALLOWED_ACTIONS = {"UPSERT", "DELETE"}
-# "Exchange" is accepted and ignored: matrix files exported by newer builds carry it,
-# and anything not listed here is parsed as a numeric value column.
 MATRIX_FIXED_COLUMNS = ["Date", "Market", "Block", "Exchange"]
 
 # CSV Header -> Internal ID partial map (excluding dynamic ones)
@@ -79,6 +77,7 @@ def _normalize_item(row: Dict[str, Any]) -> Dict[str, Any]:
             "market": row.get("market", "RTM"),
             "category": row.get("category", "Limits"),
             "area": row.get("area", ""),
+            "exchange": row.get("exchange", "IEX"),
             "value": value,  # <-- RENAMED from 'values'
             "comment": row.get("comment"),
         }
@@ -109,6 +108,7 @@ def _business_key(item: Dict[str, Any]) -> Dict[str, Any]:
         "market": item["market"],
         "category": item["category"],
         "area": item["area"],
+        "exchange": item.get("exchange", "IEX"),
     }
 
 def _is_rtm_forecast_past_block(item: Dict[str, Any]) -> bool:
@@ -128,11 +128,7 @@ def _is_rtm_forecast_past_block(item: Dict[str, Any]) -> bool:
         scheduled_at = item.get("scheduled_at")
         if scheduled_at is None:
             return False
-        if isinstance(scheduled_at, datetime):
-            item_date = scheduled_at.date()
-        else:
-            # Repository serialization returns ISO strings; parse before comparing.
-            item_date = parse_schedule_date_filter(scheduled_at).date()
+        item_date = scheduled_at.date() if isinstance(scheduled_at, datetime) else scheduled_at
 
         if item_id == "RTM_forecasted_price":
             current_block = (now_local.hour * 60 + now_local.minute) // 15 + 1
@@ -161,6 +157,7 @@ def _values_doc(item: Dict[str, Any]) -> Dict[str, Any]:
         "market": item["market"],
         "category": item["category"],
         "area": item["area"],
+        "exchange": item.get("exchange", "IEX"),
         "values": item["values"],
         "is_active": True,
     }
@@ -203,6 +200,8 @@ class LimitService:
                 return value
 
             serialized = [_serialize(r) for r in rows]
+            for record in serialized:
+                record.setdefault("exchange", "IEX")
             return {"records": serialized, "count": len(serialized)}
         except Exception as e:
             logger.exception(f"[LimitService] latest failed: {str(e)}")
@@ -214,26 +213,32 @@ class LimitService:
         If date_filter is None, returns data for the latest available date.
         """
         try:
-            return await self.values_repo.get_latest_inserted_at_data_pipeline_paginated(
+            result = await self.values_repo.get_latest_inserted_at_data_pipeline_paginated(
                 self.values_collection,
                 from_block=from_block,
                 to_block=to_block,
                 filters=filters,
                 date_filter=date_filter
             )
+            for record in result.get("data", []):
+                record.setdefault("exchange", "IEX")
+            return result
         except Exception as e:
             logger.exception(f"[LimitService] latest_paginated failed: {str(e)}")
             raise
 
-    async def latest_all(self, filters: Dict[str, Any], date_filter: str = None) -> Dict[str, Any]:
+    async def latest_all(self, filters: Dict[str, Any], date_filter: str = None, exchange: str = None) -> Dict[str, Any]:
         """
         Get all limit values without pagination.
         If date_filter is None, returns ALL data irrespective of date.
         If date_filter is provided, uses latest inserted_at per key for the given date.
+        Exchange is optional; when omitted, all exchanges are returned (one row per exchange).
         """
         try:
             if date_filter is None:
                 # Return all data without date filtering
+                if exchange:
+                    filters = {**(filters or {}), "exchange": exchange}
                 data = await self.values_repo.get_all_data_with_filters(
                     self.values_collection,
                     filters=filters
@@ -243,8 +248,11 @@ class LimitService:
                 data = await self.values_repo.get_latest_inserted_at_data_pipeline_with_filters(
                     self.values_collection,
                     filters=filters,
-                    date_filter=date_filter
+                    date_filter=date_filter,
+                    exchange=exchange
                 )
+            for record in data:
+                record.setdefault("exchange", "IEX")
             return {"data": data, "total": len(data)}
         except Exception as e:
             logger.exception(f"[LimitService] latest_all failed: {str(e)}")
@@ -275,9 +283,9 @@ class LimitService:
             filters["scheduled_at"] = {"$gte": start_dt, "$lte": end_dt}
             
             docs = await self.values_repo.get_all_data_with_filters(self.values_collection, filters=filters)
-            
+
             if not docs:
-                return "Date,Market,Block"
+                return "Date,Market,Block,Exchange"
 
             data = []
             
@@ -303,35 +311,36 @@ class LimitService:
                     "Date": datestr,
                     "Market": market_val,
                     "Block": doc.get("block"),
+                    "Exchange": doc.get("exchange", "IEX"),
                     "ID_Header": csv_header,
                     "Value": doc.get("values", doc.get("value"))
                 }
                 data.append(row)
-                
+
             if not data:
-                 return "Date,Market,Block"
-                 
+                 return "Date,Market,Block,Exchange"
+
             df = pd.DataFrame(data)
-            
+
             # Drop duplicates
-            df = df.drop_duplicates(subset=["Date", "Market", "Block", "ID_Header"], keep='last')
-            
+            df = df.drop_duplicates(subset=["Date", "Market", "Block", "Exchange", "ID_Header"], keep='last')
+
             # Pivot
-            pivot_df = df.pivot(index=["Date", "Market", "Block"], columns="ID_Header", values="Value")
-            
+            pivot_df = df.pivot(index=["Date", "Market", "Block", "Exchange"], columns="ID_Header", values="Value")
+
             # Reset index
             pivot_df = pivot_df.reset_index()
-            
+
             # Ensure specific column order if possible, or at least fixed columns first
             cols = list(pivot_df.columns)
             # Remove index cols from list to re-order
-            for c in ["Date", "Market", "Block"]:
+            for c in ["Date", "Market", "Block", "Exchange"]:
                 if c in cols: cols.remove(c)
-            
+
             # Sort remaining columns based on user preference if needed, or alpha?
             # User list: Buffer Price, N-1, Ceiling Price, NOC Buy, Forecasted Price, Min Sell Price, NOC Sell
             # Let's try to order them nicely if they exist
-            preferred_order = ["Ceiling Price", "Buffer Price", "N-1", "NOC Buy", "NOC Sell", "Forecasted Price", "Min Sell Price"]
+            preferred_order = ["Ceiling Price", "Buffer Price", "N-1", "NOC Buy", "NOC Sell", "Forecasted Price", "Min Sell Price", "Must Sell Percent (%)"]
             ordered_cols = []
             for p in preferred_order:
                 if p in cols:
@@ -339,7 +348,7 @@ class LimitService:
                     cols.remove(p)
             ordered_cols.extend(cols) # Add any remaining
             preferred_order =['OCF Max Qty', 'OCF Premium/Discount Price']
-            final_cols = ["Date", "Market", "Block"] + ordered_cols
+            final_cols = ["Date", "Market", "Block", "Exchange"] + ordered_cols
             pivot_df = pivot_df[final_cols]
             
             return pivot_df.to_csv(index=False)
@@ -384,10 +393,11 @@ class LimitService:
                             date_val = row.get("Date")
                             market = row.get("Market", "RTM")
                             block_raw = row.get("Block")
-                            
+                            exchange = (row.get("Exchange") or "IEX").strip() or "IEX"
+
                             if not date_val or not block_raw:
-                                continue 
-                                
+                                continue
+
                             block = int(block_raw)
                             
                             for header in id_columns:
@@ -410,10 +420,11 @@ class LimitService:
                                     "market": market,
                                     "category": "Limits", # ALWAYS Limits
                                     "area": "Puducherry", # ALWAYS Puducherry
+                                    "exchange": exchange,
                                     "values": float(val_str),
                                     "scheduled_at": date_val,
                                     "schedule_date": date_val,
-                                    "action": "UPSERT" 
+                                    "action": "UPSERT"
                                 }
                                 
                                 try:
@@ -485,7 +496,7 @@ class LimitService:
             correlation_id = user_ctx.get("correlation_id", "unknown")
             batch_id = str(ObjectId()) # One ID for this entire upload
             
-            UNIQUE_KEY_FIELDS = ["block", "id", "market", "category", "area", "scheduled_at"]
+            UNIQUE_KEY_FIELDS = ["block", "id", "market", "category", "area", "exchange", "scheduled_at"]
 
             audit_logs_to_write = []
             successful_upserts = 0
@@ -721,11 +732,18 @@ class LimitService:
                 return []
 
             # Call the new repository method
-            return await self.flow_repo.get_combined_approvals(
-                approval_collection=self.approval_collection, 
+            approvals = await self.flow_repo.get_combined_approvals(
+                approval_collection=self.approval_collection,
                 main_collection=self.values_collection,
                 status_filter=status_filter
             )
+            for approval in approvals:
+                approval.setdefault("exchange", "IEX")
+                if approval.get("old_value"):
+                    approval["old_value"].setdefault("exchange", "IEX")
+                if approval.get("new_value"):
+                    approval["new_value"].setdefault("exchange", "IEX")
+            return approvals
         except Exception as e:
             logger.exception(f"[LimitService] list_for_approver failed: {str(e)}")
             raise
@@ -765,8 +783,8 @@ class LimitService:
             logger.info(f"[DEBUG] Status filter for user {user_ctx.get('username')}: {status_filter}")
 
             # Call the new paginated repository method with date filter
-            return await self.flow_repo.get_combined_approvals_paginated(
-                approval_collection=self.approval_collection, 
+            result = await self.flow_repo.get_combined_approvals_paginated(
+                approval_collection=self.approval_collection,
                 main_collection=self.values_collection,
                 status_filter=status_filter,
                 page=page,
@@ -774,6 +792,13 @@ class LimitService:
                 filters=filters,
                 date_filter=date_filter
             )
+            for approval in result.get("data", []):
+                approval.setdefault("exchange", "IEX")
+                if approval.get("old_value"):
+                    approval["old_value"].setdefault("exchange", "IEX")
+                if approval.get("new_value"):
+                    approval["new_value"].setdefault("exchange", "IEX")
+            return result
         except Exception as e:
             logger.exception(f"[LimitService] list_for_approver_paginated failed: {str(e)}")
             raise
@@ -807,12 +832,9 @@ class LimitService:
                 scheduled_at_raw = approval.get("scheduled_at")
                 if scheduled_at_raw is None:
                     raise ValueError("Approval document is missing scheduled_at")
-                # Repository serialization returns ISO strings; convert back to datetime.
-                scheduled_at = (
-                    parse_schedule_date_filter(scheduled_at_raw)
-                    if isinstance(scheduled_at_raw, str)
-                    else scheduled_at_raw
-                )
+                # scheduled_at comes from the DB, where find_one serializes BSON
+                # datetimes to ISO strings — parse ungated by CSV upload flags
+                scheduled_at = parse_ingestion_date(scheduled_at_raw)
 
                 key = {
                     "block": approval["block"],
@@ -821,6 +843,7 @@ class LimitService:
                     "category": approval["category"],
                     "area": approval["area"],
                     "scheduled_at": scheduled_at,
+                    "exchange": approval.get("exchange", "IEX")
                 }
             except KeyError as e:
                 logger.error(f"Approval doc {approval_id} is malformed. Missing key: {str(e)}")
@@ -847,6 +870,7 @@ class LimitService:
                 "market": approval.get("market", "RTM"),
                 "category": approval.get("category", "Limits"),
                 "area": approval.get("area", ""),
+                "exchange": approval.get("exchange", "IEX"),
                 "values": approval.get("value", approval.get("values")),
                 "updated_at": now,
                 "updated_by": actor_id,
@@ -909,7 +933,7 @@ class LimitService:
                 
                 result = await self.values_repo.repository.update_one(
                     self.values_collection,
-                    key,  # Unique business key matching limit_values_unique_idx
+                    key,  # Unique key without date
                     update_payload,
                     upsert=True
                 )
@@ -1175,6 +1199,7 @@ class LimitService:
                         "market": existing_record.get("market"),
                         "category": existing_record.get("category"),
                         "area": existing_record.get("area"),
+                        "exchange": existing_record.get("exchange", "IEX"),
                         "is_active": existing_record.get("is_active"),
                         "version": existing_record.get("version"),
                         "created_at": existing_record.get("created_at"),
@@ -1313,6 +1338,7 @@ class LimitService:
                                 "market": existing_record.get("market"),
                                 "category": existing_record.get("category"),
                                 "area": existing_record.get("area"),
+                                "exchange": existing_record.get("exchange", "IEX"),
                                 "is_active": existing_record.get("is_active"),
                                 "version": existing_record.get("version"),
                                 "created_at": existing_record.get("created_at"),
@@ -1496,7 +1522,7 @@ class LimitService:
             )
 
             if not docs:
-                return "Date,Market,Block"
+                return "Date,Market,Block,Exchange"
 
             # ✅ Correct OCF Mapping
             OCF_DB_TO_CSV_MAP = {
@@ -1527,6 +1553,7 @@ class LimitService:
                     "Date": datestr,
                     "Market": doc.get("market", "RTM"),
                     "Block": doc.get("block"),
+                    "Exchange": doc.get("exchange", "IEX"),
                     "ID_Header": csv_header,
                     "Value": doc.get("values", doc.get("value"))
                 }
@@ -1536,19 +1563,19 @@ class LimitService:
             # ✅ If no OCF data found
             if not data:
                 logger.warning(f"No OCF data found for filters: {filters}")
-                return "Date,Market,Block"
+                return "Date,Market,Block,Exchange"
 
             df = pd.DataFrame(data)
 
             # Remove duplicates
             df = df.drop_duplicates(
-                subset=["Date", "Market", "Block", "ID_Header"],
+                subset=["Date", "Market", "Block", "Exchange", "ID_Header"],
                 keep="last"
             )
 
             # Pivot
             pivot_df = df.pivot(
-                index=["Date", "Market", "Block"],
+                index=["Date", "Market", "Block", "Exchange"],
                 columns="ID_Header",
                 values="Value"
             ).reset_index()
@@ -1561,7 +1588,7 @@ class LimitService:
 
             cols = list(pivot_df.columns)
 
-            for c in ["Date", "Market", "Block"]:
+            for c in ["Date", "Market", "Block", "Exchange"]:
                 if c in cols:
                     cols.remove(c)
 
@@ -1573,7 +1600,7 @@ class LimitService:
 
             ordered_cols.extend(cols)
 
-            final_cols = ["Date", "Market", "Block"] + ordered_cols
+            final_cols = ["Date", "Market", "Block", "Exchange"] + ordered_cols
             pivot_df = pivot_df[final_cols]
 
             return pivot_df.to_csv(index=False)

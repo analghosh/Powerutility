@@ -19,41 +19,76 @@ class LimitValuesRepository:
         self.repository = GenericRepository()
         self.collection_name = getattr(settings, 'MONGODB_LIMIT_VALUES_COLLECTION', 'limit_values')
 
+    # All indexes this collection must have. Changing a spec here is enough:
+    # ensure_collection_exists drops and rebuilds any index whose definition
+    # in the database no longer matches.
+    INDEXES = [
+        # Compound unique index for the business key
+        {
+            "name": "limit_values_unique_idx",
+            "keys": [
+                ("scheduled_at", 1),
+                ("block", 1),
+                ("id", 1),
+                ("market", 1),
+                ("category", 1),
+                ("area", 1),
+                ("exchange", 1),
+            ],
+            "unique": True,
+        },
+        # Index for efficient querying by date
+        {
+            "name": "scheduled_at_desc_idx",
+            "keys": [("scheduled_at", -1)],
+            "unique": False,
+        },
+        # Index for querying by id/block
+        {
+            "name": "id_block_idx",
+            "keys": [("id", 1), ("block", 1)],
+            "unique": False,
+        },
+    ]
+
     async def ensure_collection_exists(self, collection_name: str):
         """
-        Ensures the collection exists and has the required indexes.
+        Ensures the collection has every index defined in INDEXES.
+        If an index exists under the same name but with a stale definition,
+        it is dropped and rebuilt (createIndex cannot modify an existing
+        index — it fails with IndexKeySpecsConflict).
         """
         try:
-            # Check if collection exists (optional, could just ensure indexes)
-            # Create indexes
-            # Compound unique index for the business key
-            await self.repository.create_index(
-                collection_name,
-                [
-                    ("scheduled_at", 1),
-                    ("block", 1),
-                    ("id", 1),
-                    ("market", 1),
-                    ("category", 1),
-                    ("area", 1)
-                ],
-                unique=True,
-                name="limit_values_unique_idx"
-            )
-            
-            # Index for efficient querying by date
-            await self.repository.create_index(
-                collection_name,
-                [("scheduled_at", -1)],
-                name="scheduled_at_desc_idx"
-            )
-            
-            # Index for querying by id/block
-            await self.repository.create_index(
-                collection_name,
-                [("id", 1), ("block", 1)],
-                name="id_block_idx"
-            )
+            collection = self.repository.db[collection_name]
+
+            existing = {}
+            try:
+                existing = await collection.index_information()
+            except Exception as e:
+                logger.error(f"Failed to inspect indexes on {collection_name}: {e}")
+
+            for spec in self.INDEXES:
+                name, keys, unique = spec["name"], spec["keys"], spec["unique"]
+
+                current = existing.get(name)
+                if current is not None:
+                    current_keys = [(k, int(v)) for k, v in current.get("key", [])]
+                    current_unique = bool(current.get("unique", False))
+                    if current_keys == keys and current_unique == unique:
+                        continue  # up to date
+                    logger.warning(
+                        f"Dropping stale index {name} on {collection_name}: "
+                        f"existing spec {current_keys} (unique={current_unique}) "
+                        f"!= expected {keys} (unique={unique})"
+                    )
+                    await collection.drop_index(name)
+
+                await self.repository.create_index(
+                    collection_name,
+                    keys,
+                    unique=unique,
+                    name=name
+                )
 
         except Exception as e:
             logger.error(f"Failed to ensure collection {collection_name}: {e}")
@@ -64,12 +99,14 @@ class LimitValuesRepository:
         self,
         collection_name: str,
         filters: Dict[str, Any] = None,
-        date_filter: str = None
+        date_filter: str = None,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Returns all records with latest inserted_at per key for a given date (no pagination).
         If date_filter is not provided, it uses the latest available date.
-        For each unique key (block, id, market, category, area), returns the record with the latest inserted_at.
+        For each unique key (block, id, market, category, area, exchange), returns the record with the latest inserted_at.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         try:
             pipeline = []
@@ -107,6 +144,8 @@ class LimitValuesRepository:
                 additional_match["category"] = filters["category"]
             if "area" in filters:
                 additional_match["area"] = filters["area"]
+            if exchange and exchange != "":
+                additional_match["exchange"] = exchange
             
             if additional_match:
                 pipeline.append({"$match": additional_match})
@@ -121,7 +160,8 @@ class LimitValuesRepository:
                             "id": "$id",
                             "market": "$market",
                             "category": "$category",
-                            "area": "$area"
+                            "area": "$area",
+                            "exchange": "$exchange"
                         },
                         "latest_doc": {"$first": "$$ROOT"}
                     }
@@ -143,12 +183,14 @@ class LimitValuesRepository:
         from_block: int,
         to_block: int,
         filters: Dict[str, Any] = None,
-        date_filter: str = None
+        date_filter: str = None,
+        exchange: str = None
     ) -> Dict[str, Any]:
         """
         Returns paginated records with latest inserted_at per key for a given date or max date,
         filtered by a block range.
         Uses optimized pipeline for speed.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         try:
             if date_filter and date_filter < datetime.now().strftime("%Y-%m-%d"):
@@ -202,6 +244,8 @@ class LimitValuesRepository:
                 match_filter["category"] = filters["category"]
             if "area" in filters:
                 match_filter["area"] = filters["area"]
+            if exchange and exchange != "":
+                match_filter["exchange"] = exchange
             
             base_pipeline.append({"$match": match_filter})
 
@@ -270,6 +314,8 @@ class LimitValuesRepository:
                 match_query["category"] = filters["category"]
             if "area" in filters:
                 match_query["area"] = filters["area"]
+            if "exchange" in filters:
+                match_query["exchange"] = filters["exchange"]
             
             # Count total documents
             count_pipeline = []
@@ -340,6 +386,8 @@ class LimitValuesRepository:
                 match_query["area"] = filters["area"]
             if "scheduled_at" in filters:
                 match_query["scheduled_at"] = filters["scheduled_at"]
+            if "exchange" in filters:
+                match_query["exchange"] = filters["exchange"]
             
             # Build pipeline
             pipeline = []
@@ -361,11 +409,13 @@ class LimitValuesRepository:
         end_date,
         market: str,
         id: str,
-        area: str
+        area: str,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get limit values data asynchronously.
         Accepts dates as either strings (YYYY-MM-DD) or date objects.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         from datetime import date as _date
         if isinstance(start_date, str):
@@ -384,6 +434,8 @@ class LimitValuesRepository:
             filter_query["category"] = id
         if area and area != "" and area != "NA":
             filter_query["area"] = area
+        if exchange and exchange != "":
+            filter_query["exchange"] = exchange
 
         return await self.repository.get_all(
             self.collection_name,
@@ -397,11 +449,13 @@ class LimitValuesRepository:
         market: str,
         category: str,
         area: str,
-        scheduled_at: datetime = None
+        scheduled_at: datetime = None,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get limit values by ID with latest date asynchronously.
         If scheduled_at is not provided, defaults to today at midnight.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         tomorrow_date = datetime.now() + timedelta(days=1)
         if scheduled_at is None:
@@ -417,6 +471,8 @@ class LimitValuesRepository:
                 match_filter["category"] = category
             if area and area != "" and area != "NA":
                 match_filter["area"] = area
+            if exchange and exchange != "":
+                match_filter["exchange"] = exchange
 
             result = await self.repository.get_all(
                 self.collection_name,
@@ -436,10 +492,12 @@ class LimitValuesRepository:
         ID: str,
         category: str,
         market: str,
-        area: str
+        area: str,
+        exchange: str = None
     ) -> List[Dict[str, Any]]:
         """
         Get limit values for a specific schedule date, ID, category, market and area.
+        Exchange is optional and only applied when explicitly provided (used by core functionality, not /latest UI).
         """
         try:
             target_date = parse_schedule_date_filter(schedule_date)
@@ -453,6 +511,8 @@ class LimitValuesRepository:
                 filter_query["category"] = category
             if area and area != "" and area != "NA":
                 filter_query["area"] = area
+            if exchange and exchange != "":
+                filter_query["exchange"] = exchange
 
             result = await self.repository.get_all(
                 self.collection_name,

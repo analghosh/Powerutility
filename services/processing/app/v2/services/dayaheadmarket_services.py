@@ -43,6 +43,81 @@ class DayaheadmarketService:
         self.limit_values_collection = settings.MONGODB_LIMIT_VALUES_COLLECTION
         self.dam_single_bid_data_for_approval_collection = settings.MONGODB_DAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION
 
+    async def _get_active_exchange(self) -> str:
+        """Get active exchange for limit_values filtering (parameter, default IEX)."""
+        try:
+            from .parameter_service import parameter_service
+            param_exchange = await parameter_service.get_active_exchange()
+            if param_exchange:
+                return param_exchange
+        except Exception as e:
+            logger.warning(f"Failed to get active exchange from parameter: {e}")
+        return "IEX"
+
+    async def _aggregate_limit_values_with_fallback(
+        self,
+        pipeline: List[Dict[str, Any]],
+        active_exchange: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Run a limit_values aggregate first with the active exchange filter.
+        If no results are found, fall back to documents without an exchange field
+        (legacy/default IEX data).
+        """
+        import copy
+        pipeline_with_exchange = copy.deepcopy(pipeline)
+        if pipeline_with_exchange and "$match" in pipeline_with_exchange[0]:
+            pipeline_with_exchange[0]["$match"]["exchange"] = active_exchange
+
+        result = list(await self.repo.aggregate_async(self.limit_values_collection, pipeline_with_exchange))
+        if result:
+            return result
+
+        logger.info(
+            f"No limit_values found for active exchange '{active_exchange}'; "
+            "falling back to legacy/default (no exchange) documents."
+        )
+        return list(await self.repo.aggregate_async(self.limit_values_collection, pipeline))
+
+    def _apply_active_limit_prefix(
+        self,
+        data: Dict[str, Any],
+        active_exchange: str
+    ) -> Dict[str, Any]:
+        """
+        Rename limit-values fields in single-bid-table rows so response keys
+        carry the exchange they were sourced from, following the pattern
+        {exchange_lowercase}_{original_fieldname} (e.g. iex_dam_nminusone_quantum).
+        """
+        if not data or not isinstance(data, dict):
+            return data
+
+        prefix = f"{active_exchange.lower()}_"
+        limit_field_map = {
+            "dam_forecasted_price": f"{prefix}dam_forecasted_price",
+            "ceiling_price": f"{prefix}ceiling_price",
+            "dam_buffer_value": f"{prefix}dam_buffer_value",
+            "dam_nminusone_quantum": f"{prefix}dam_nminusone_quantum",
+            "dam_noc_buy_value": f"{prefix}dam_noc_buy_value",
+            "dam_noc_sell_value": f"{prefix}dam_noc_sell_value",
+        }
+
+        table_data = data.get("table_data")
+        if not table_data or not isinstance(table_data, dict):
+            return data
+
+        for plkey, block_rows in table_data.items():
+            if not isinstance(block_rows, dict):
+                continue
+            for blk, row in block_rows.items():
+                if not isinstance(row, dict):
+                    continue
+                for old_key, new_key in limit_field_map.items():
+                    if old_key in row:
+                        row[new_key] = row.pop(old_key)
+
+        return data
+
     async def dayahead_single_bid_graph(
         self, 
         schedule_date: Optional[str], 
@@ -308,8 +383,11 @@ class DayaheadmarketService:
                     latest_limit_date = schedule_date
             
             total_availability = self.total_availability_new(availability_data_array, get_forecasted_value)
-            
-            forecasted_price = list(await self.repo.aggregate_async(self.limit_values_collection, [
+
+            # Active exchange for limit_values filtering
+            active_exchange = await self._get_active_exchange()
+
+            forecasted_price = await self._aggregate_limit_values_with_fallback([
                     {"$match": {
                         "schedule_date": latest_limit_date,
                         "ID": "DAM_forecasted_price",
@@ -317,9 +395,9 @@ class DayaheadmarketService:
                         "block": {"$gte": from_block, "$lte": to_block}
                     }},
                     {"$project": {"_id": 0}}
-                ]))
-            
-            buffer_price = list(await self.repo.aggregate_async(self.limit_values_collection, [
+                ], active_exchange)
+
+            buffer_price = await self._aggregate_limit_values_with_fallback([
                     {"$match": {
                         "schedule_date": latest_limit_date,
                         "ID": "Buffer",
@@ -327,9 +405,9 @@ class DayaheadmarketService:
                         "block": {"$gte": from_block, "$lte": to_block}
                     }},
                     {"$project": {"_id": 0}}
-                ]))
-            
-            ceiling_price = list(await self.repo.aggregate_async(self.limit_values_collection, [
+                ], active_exchange)
+
+            ceiling_price = await self._aggregate_limit_values_with_fallback([
                 {"$match": {
                     "schedule_date": latest_limit_date,
                     "ID": "Ceiling_Price",
@@ -337,10 +415,10 @@ class DayaheadmarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
-            
+            ], active_exchange)
 
-            n1_limits = list(await self.repo.aggregate_async(self.limit_values_collection, [
+
+            n1_limits = await self._aggregate_limit_values_with_fallback([
                 {"$match": {
                     "schedule_date": latest_limit_date,
                     "ID": "n_1",
@@ -348,9 +426,9 @@ class DayaheadmarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ], active_exchange)
 
-            noc_buy_limits = list(await self.repo.aggregate_async(self.limit_values_collection, [
+            noc_buy_limits = await self._aggregate_limit_values_with_fallback([
                 {"$match": {
                     "schedule_date": latest_limit_date,
                     "ID": "noc_buy",
@@ -358,9 +436,9 @@ class DayaheadmarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ], active_exchange)
 
-            noc_sell_limits = list(await self.repo.aggregate_async(self.limit_values_collection, [
+            noc_sell_limits = await self._aggregate_limit_values_with_fallback([
                 {"$match": {
                     "schedule_date": latest_limit_date,
                     "ID": "noc_sell",
@@ -368,7 +446,7 @@ class DayaheadmarketService:
                     "block": {"$gte": from_block, "$lte": to_block}
                 }},
                 {"$project": {"_id": 0}}
-            ]))
+            ], active_exchange)
 
             type_of_exchange_iex = "IEX-100"
             type_of_exchange_pxil = "PXIL-10"
@@ -568,7 +646,8 @@ class DayaheadmarketService:
                         }
                         data.setdefault('table_data', {}).setdefault(plkey, {})[blk] = row
                         plkey += 1
-                                
+
+            self._apply_active_limit_prefix(data, active_exchange)
             return data
         except Exception as e:
             logger.exception(f"[DayaheadmarketService] Failed to fetch day-ahead data: {str(e)}")

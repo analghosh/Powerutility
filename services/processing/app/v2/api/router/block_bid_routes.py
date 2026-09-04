@@ -11,6 +11,19 @@ from ....core.dependencies import get_audit_logger
 
 router = APIRouter(prefix="/block-bid", tags=["Block Bid V2"])
 
+# Day-ahead markets share one block-bid flow: IEX exposes an identical block-bid
+# API for each under its own path prefix (DAM 2.2 §9.15, GDAM 2.1 §6 item 13).
+# RTM has a different contract and keeps its own controller.
+#
+# HPDAM belongs here even though its exchange config does not exist yet: leaving it
+# out sent it to the RTM controller, which loads the RTM config and submits/cancels
+# against RTM bids. An explicit "no active HPDAM block bid exchange configuration"
+# is the correct answer; acting on another market's bids is not.
+#
+# TAM/GRTM/R-TAM/D-TAM appear in block_bid_current_data but have no block bid
+# exchange contract — do not add them here until one exists.
+DAY_AHEAD_BLOCK_MARKETS = {"DAM", "GDAM", "HPDAM"}
+
 # ── Legacy models (kept for backward compatibility) ──────────────────────────
 class PlantModel(BaseModel):
     bid_plant_name: str
@@ -54,7 +67,7 @@ class ReferenceData(BaseModel):
 class SubmitForApprovalRequest(BaseModel):
     model_config = {"populate_by_name": True}
 
-    market_type: List[str]        # "RTM" or "DAM"
+    market_type: List[str]        # "RTM", "DAM" or "GDAM"
     type: str = "Sell"              # "Sell" or "Buy"
     dates: str                      # "DD-MM-YYYY"
     trade_session: Optional[List[Union[str, int]]] = None   # RTM only; omit for DAM
@@ -67,19 +80,22 @@ class SubmitForApprovalRequest(BaseModel):
     number_of_bids: List[Union[str, int]] = []
     exchange: List[str]
     selected_for: List[str]
+    ocf: Optional[List[Optional[Union[str, int, float]]]] = None  # DAM only
+    ocf_config: Optional[List[Optional[Union[str, int, float]]]] = None  # DAM only
+
 class WithdrawRequest(BaseModel):
     bid_id: str
     remark: str = ""
-    market_type: str = "RTM"        # "RTM" or "DAM"
+    market_type: str = "RTM"        # "RTM", "DAM" or "GDAM"
 
 class CancelRequest(BaseModel):
     schedule_date: str              # "YYYY-MM-DD"
     order_ids: List[int]
-    market_type: str = "RTM"        # "RTM" or "DAM"
+    market_type: str = "RTM"        # "RTM", "DAM" or "GDAM"
 
 class SubmitToExchangeRequest(BaseModel):
     schedule_date: str              # "YYYY-MM-DD"
-    market_type: str = "RTM"        # "RTM" or "DAM"
+    market_type: str = "RTM"        # "RTM", "DAM" or "GDAM"
 
 class UpdateStatusRequest(BaseModel):
     id: List[str]
@@ -118,7 +134,7 @@ async def mark_block_bid_withdrawal(
         message=f"User {username} marking bid {post_data.get('bid_id')} for withdrawal [{market_type}]",
         username=username, correlation_id=correlation_id,
     )
-    if market_type == "DAM":
+    if market_type in DAY_AHEAD_BLOCK_MARKETS:
         return await dam_block_bid_controller.mark_withdrawal(post_data)
     return await rtm_bidding_controller.mark_block_bid_withdrawal(post_data)
 
@@ -154,8 +170,8 @@ async def cancel_block_bid(
         message=f"User {username} cancelling {market_type} block bids {post_data.get('order_ids')} for {post_data.get('schedule_date')}",
         username=username, correlation_id=correlation_id,
     )
-    if market_type == "DAM":
-        result = await dam_block_bid_controller.cancel_on_exchange(post_data, correlation_id)
+    if market_type in DAY_AHEAD_BLOCK_MARKETS:
+        result = await dam_block_bid_controller.cancel_on_exchange(post_data, correlation_id, market=market_type)
     else:
         result = await rtm_bidding_controller.cancel_block_bid(post_data, correlation_id)
     audit_logger.log_user_action(
@@ -275,7 +291,7 @@ async def get_block_bid_approval_request_list(
 @router.get("/download-excel/iex", summary="Download approved block bids as IEX Excel")
 async def download_iex_excel(
     schedule_date: str = Query(..., description="Bidding date in YYYY-MM-DD format"),
-    market_type: str = Query("RTM", description="Market type: RTM or DAM"),
+    market_type: str = Query("RTM", description="Market type: RTM, DAM or GDAM"),
     user_context: Dict[str, Any] = Depends(get_user_context),
     audit_logger: AuditLogger = Depends(get_audit_logger)
 ):
@@ -326,8 +342,8 @@ async def submit_block_bid_to_exchange(
         correlation_id=correlation_id,
     )
 
-    if market_type == "DAM":
-        result = await dam_block_bid_controller.submit_to_exchange(biding_date, username, correlation_id)
+    if market_type in DAY_AHEAD_BLOCK_MARKETS:
+        result = await dam_block_bid_controller.submit_to_exchange(biding_date, username, correlation_id, market=market_type)
     else:
         result = await rtm_bidding_controller.submit_block_bid_to_exchange(biding_date, username, correlation_id)
 
@@ -345,12 +361,19 @@ async def submit_block_bid_to_exchange(
 @router.get("/bid-submission-detail", summary="Get block bid submission details")
 async def get_block_bid_submission_details(
     schedule_date: str = Query(..., description="Bidding date in YYYY-MM-DD format"),
+    market_type: Optional[str] = Query(
+        None,
+        description="Optional market filter: rtm, dam, gdam, or hpdam. Omit to return all.",
+    ),
 ):
     """
-    Get block bid submission details grouped by correlation_id for a given date.
-    Reads from iex_integration_apilog (bid_type=block-bid, method=submitBlockBid).
+    Get block bid submission details for a given date.
+    Reads from iex_integration_apilog (bid_type=block-bid).
+    Includes RTM (submitBlockBid) and DAM/GDAM/HPDAM (submitDamBlockBid) submissions.
     """
-    return await rtm_bidding_controller.get_block_bid_submission_details(schedule_date)
+    return await rtm_bidding_controller.get_block_bid_submission_details(
+        schedule_date, market_type
+    )
 
 
 @router.get("/bid-book", summary="Get block bid book (exchange responses)")

@@ -1,0 +1,56 @@
+<!doctype html><html><head><title>Green Day Ahead Market Snapshot</title></head><body>
+<!--
+  Legacy IEX GDAM server-rendered layout: sell/MCV/final-scheduled groups each split into
+  4 sub-columns (Total / Solar / Non-Solar / Hydro), giving 14 data columns and rows of
+  17 (date+hour+block), 16 (hour+block) and 15 (block only) cells.
+  Hand-built from the column layout the parser originally targeted, kept as a
+  backwards-compatibility regression case.
+-->
+<table>
+<tr>
+  <th rowspan="2">Date</th><th rowspan="2">Hour</th><th rowspan="2">Time Block</th>
+  <th rowspan="2">Purchase Bid (MW)</th>
+  <th colspan="4">Sell Bid (MW)</th>
+  <th colspan="4">MCV (MW)</th>
+  <th colspan="4">Final Scheduled Volume (MW)</th>
+  <th rowspan="2">MCP (Rs/MWh)</th>
+</tr>
+<tr>
+  <th>Total (MW)</th><th>Solar (MW)</th><th>Non-Solar (MW)</th><th>Hydro (MW)</th>
+  <th>Total (MW)</th><th>Solar (MW)</th><th>Non-Solar (MW)</th><th>Hydro (MW)</th>
+  <th>Total (MW)</th><th>Solar (MW)</th><th>Non-Solar (MW)</th><th>Hydro (MW)</th>
+</tr>
+<tr>
+  <td rowspan="4">05-01-2026</td><td rowspan="2">1</td><td>00:00 - 00:15</td>
+  <td>3444.4</td>
+  <td>1718.7</td><td>800.1</td><td>844.6</td><td>74</td>
+  <td>889.19</td><td>400.5</td><td>435.69</td><td>53</td>
+  <td>889.19</td><td>400.5</td><td>435.69</td><td>53</td>
+  <td>4000.92</td>
+</tr>
+<tr>
+  <td>00:15 - 00:30</td>
+  <td>3473</td>
+  <td>1639.2</td><td>760.4</td><td>824.8</td><td>54</td>
+  <td>839.2</td><td>380.2</td><td>405.8</td><td>53.2</td>
+  <td>839.2</td><td>380.2</td><td>405.8</td><td>53.2</td>
+  <td>4141.29</td>
+</tr>
+<tr>
+  <td>2</td><td>00:30 - 00:45</td>
+  <td>3433.8</td>
+  <td>1622.2</td><td>750</td><td>818.8</td><td>53.4</td>
+  <td>840</td><td>381</td><td>405.6</td><td>53.4</td>
+  <td>840</td><td>381</td><td>405.6</td><td>53.4</td>
+  <td>4141.27</td>
+</tr>
+<tr>
+  <td>00:45 - 01:00</td>
+  <td>3433.3</td>
+  <td>1616</td><td>747.1</td><td>815.5</td><td>53.4</td>
+  <td>840.3</td><td>381.2</td><td>405.7</td><td>53.4</td>
+  <td>840.3</td><td>381.2</td><td>405.7</td><td>53.4</td>
+  <td>4141.34</td>
+</tr>
+</table>
+</body></html>

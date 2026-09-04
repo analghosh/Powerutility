@@ -29,21 +29,59 @@ class SingleBidBookProcessor(BaseProcessor):
         super().__init__()
         self.client = scheduler_exchange_client
         self.timezone = pytz.timezone(settings.CRON_TIMEZONE)
-        
+
         # Initialize repositories
         # This will also ensure indexes
         self.dam_approval_repo = DAMSingleBidDataForApprovalRepository()
+        self.gdam_approval_repo = DAMSingleBidDataForApprovalRepository(settings.MONGODB_GDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION)
+        self.hpdam_approval_repo = DAMSingleBidDataForApprovalRepository(settings.MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION)
         self.rtm_approval_repo = RTMSingleBidDataForApprovalRepository()
         self.dam_repo = SingleBidBookRepository("dam")
+        self.gdam_repo = SingleBidBookRepository("gdam")
+        self.hpdam_repo = SingleBidBookRepository("hpdam")
         self.rtm_repo = SingleBidBookRepository("rtm")
 
-    async def execute_dam_cron(self) -> Dict[str, Any]:
+        # Market configuration map
+        self._market_config = {
+            "dam": {
+                "repo": self.dam_repo,
+                "approval_repo": self.dam_approval_repo,
+                "get_delivery_date": self.client.get_valid_delivery_date_dam,
+                "get_single_bid": self.client.get_single_bid_dam,
+                "schedule": "0 10 * * *",
+            },
+            "gdam": {
+                "repo": self.gdam_repo,
+                "approval_repo": self.gdam_approval_repo,
+                "get_delivery_date": self.client.get_valid_delivery_date_gdam,
+                "get_single_bid": self.client.get_single_bid_gdam,
+                "schedule": "0 10 * * *",
+            },
+            "hpdam": {
+                "repo": self.hpdam_repo,
+                "approval_repo": self.hpdam_approval_repo,
+                "get_delivery_date": self.client.get_valid_delivery_date_hpdam,
+                "get_single_bid": self.client.get_single_bid_hpdam,
+                "schedule": "0 10 * * *",
+            },
+            "rtm": {
+                "repo": self.rtm_repo,
+                "approval_repo": self.rtm_approval_repo,
+                "get_delivery_date": self.client.get_valid_delivery_date_rtm,
+                "get_single_bid": self.client.get_single_bid_rtm,
+                "schedule": "*/15 * * * *",
+            },
+        }
+
+    async def _execute_single_date_cron(self, market_type: str) -> Dict[str, Any]:
         """
-        Execute DAM Single Bid Book sync.
+        Generic single-date market book sync (DAM, GDAM, HPDAM).
         """
-        job_type = "dam_book_sync"
-        job_name = "DAM Single Bid Book Sync"
-        schedule = "0 10 * * *"  # Typical DAM time
+        market_upper = market_type.upper()
+        job_type = f"{market_type}_book_sync"
+        job_name = f"{market_upper} Single Bid Book Sync"
+        cfg = self._market_config[market_type]
+        schedule = cfg["schedule"]
         start_time = datetime.now()
 
         execution_id = await self._record_job_start(job_type, job_name, schedule, start_time)
@@ -53,16 +91,15 @@ class SingleBidBookProcessor(BaseProcessor):
         self.set_correlation_id(execution_id)
 
         try:
-            logger.info("[DAM Single Bid Book Sync] Starting...")
-            
-            # Fetch valid delivery date from API
-            delivery_date_int = await self.client.get_valid_delivery_date_dam()
-            
-            logger.info(f"[DAM Single Bid Book Sync] Fetching for DeliveryDate: {delivery_date_int}")
-            
-            data = await self.client.get_single_bid_dam(delivery_date_int)
-            result = await self._process_and_store(data, "dam", delivery_date_int)
-            
+            logger.info(f"[{market_upper} Single Bid Book Sync] Starting...")
+
+            delivery_date_int = await cfg["get_delivery_date"]()
+
+            logger.info(f"[{market_upper} Single Bid Book Sync] Fetching for DeliveryDate: {delivery_date_int}")
+
+            data = await cfg["get_single_bid"](delivery_date_int)
+            result = await self._process_and_store(data, market_type, delivery_date_int)
+
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
 
@@ -86,7 +123,7 @@ class SingleBidBookProcessor(BaseProcessor):
             )
 
             return result
-            
+
         except Exception as e:
             end_time = datetime.now()
             execution_time = (end_time - start_time).total_seconds()
@@ -109,10 +146,28 @@ class SingleBidBookProcessor(BaseProcessor):
                 result=error_result,
                 error_message=str(e)
             )
-            logger.exception(f"[DAM Single Bid Book Sync] Error: {e}")
+            logger.exception(f"[{market_upper} Single Bid Book Sync] Error: {e}")
             return error_result
         finally:
             self.clear_correlation_id()
+
+    async def execute_dam_cron(self) -> Dict[str, Any]:
+        """
+        Execute DAM Single Bid Book sync.
+        """
+        return await self._execute_single_date_cron("dam")
+
+    async def execute_gdam_cron(self) -> Dict[str, Any]:
+        """
+        Execute GDAM Single Bid Book sync.
+        """
+        return await self._execute_single_date_cron("gdam")
+
+    async def execute_hpdam_cron(self) -> Dict[str, Any]:
+        """
+        Execute HPDAM Single Bid Book sync.
+        """
+        return await self._execute_single_date_cron("hpdam")
 
     async def execute_rtm_cron(self) -> Dict[str, Any]:
         """
@@ -224,7 +279,7 @@ class SingleBidBookProcessor(BaseProcessor):
         # User confirmed key is 'SingleBidDetails' for both
         bid_details = data.get("SingleBidDetails", [])
 
-        asset_details_resp = await scheduler_exchange_client.get_asset_details()
+        asset_details_resp = await scheduler_exchange_client.get_asset_details(market_type)
         
         # Extract Asset Details Logic
         asset_list = asset_details_resp.get("AssetDetails", [])
@@ -249,12 +304,12 @@ class SingleBidBookProcessor(BaseProcessor):
             return {"success": True, "processed": 0}
             
         logger.info(f"[{market_type.upper()} Book Sync] Found {len(bid_details)} bids.")
-        if market_type == "dam":
-            self.approval_repo = self.dam_approval_repo
-            self.book_repo = self.dam_repo
-        else:
-            self.approval_repo = self.rtm_approval_repo
-            self.book_repo = self.rtm_repo
+        market_cfg = self._market_config.get(market_type.lower())
+        if not market_cfg:
+            raise ValueError(f"Unsupported market type: {market_type}")
+
+        self.approval_repo = market_cfg["approval_repo"]
+        self.book_repo = market_cfg["repo"]
 
         
         # Prepare docs for upsert
@@ -285,8 +340,8 @@ class SingleBidBookProcessor(BaseProcessor):
         if docs_to_upsert:
             # Select correct repository
             orderIds = [doc["OrderId"] for doc in docs_to_upsert]
-            repo = self.dam_repo if market_type.lower() == "dam" else self.rtm_repo
-            
+            repo = self._market_config[market_type.lower()]["repo"]
+
             # Use repository driven upsert
             # This handles int validation on OrderId internally
             result_stats = await repo.upsert_bids(docs_to_upsert)

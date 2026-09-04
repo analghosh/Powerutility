@@ -28,6 +28,7 @@ class StageEditItem(BaseModel):
     market: Optional[str] = "RTM"
     category: Optional[str] = "Limits"
     area: Optional[str] = ""
+    exchange: Optional[str] = "IEX"
     values: Optional[float] = None
     action: Optional[str] = "UPSERT"
     comment: Optional[str] = None
@@ -59,6 +60,7 @@ async def get_latest(
     market: Optional[str] = None,
     category: Optional[str] = None,
     area: Optional[str] = None,
+    exchange: Optional[str] = None,
     user_context: Dict[str, Any] = Depends(get_user_context),
     audit_logger: AuditLogger = Depends(get_audit_logger)
 ):
@@ -90,7 +92,8 @@ async def get_latest(
 
         result = await limit_controller.latest_all(
             filters=filters,
-            date_filter=schedule_date
+            date_filter=schedule_date,
+            exchange=exchange
         )
         
         audit_logger.log_user_action(
@@ -430,6 +433,7 @@ class SingleUpdateItem(BaseModel):
     market: Optional[str] = "RTM"
     category: Optional[str] = "Limits"
     area: Optional[str] = ""
+    exchange: Optional[str] = "IEX"
     values: Optional[float] = None
     action: Optional[str] = "UPSERT"
     comment: Optional[str] = None
