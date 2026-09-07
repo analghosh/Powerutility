@@ -796,7 +796,7 @@ class RTMSchedulingProcessor(BaseProcessor):
             # RTM forecasted price from limit_values (id=RTM_forecasted_price), today's schedule — not exchange yesterday MCP
             # category="" so documents with category "Limits" (ingestion) match; area=Puducherry
             rtm_forecasted_price_list = await self.limit_values_repo.get_data_byID_with_latest_date(
-                "RTM_forecasted_price", "RTM", "", "Puducherry", today_dt, exchange="IEX"
+                "RTM_forecasted_price", "RTM", "", "Puducherry", today_dt #, exchange="IEX"
             )
             logger.info(
                 f"[RTMSchedulingServices] Retrieved {len(rtm_forecasted_price_list)} RTM_forecasted_price "
