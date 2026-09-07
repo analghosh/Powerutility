@@ -101,8 +101,8 @@ class LimitValuesRepository(GenericRepository):
                 match_filter["category"] = category
             if area and area != "" and area != "NA":
                 match_filter["area"] = area
-            if exchange and exchange != "":
-                match_filter["exchange"] = exchange
+            # if exchange and exchange != "":
+            #     match_filter["exchange"] = exchange
 
             result = await self.get_all(
                 self.collection_name,
