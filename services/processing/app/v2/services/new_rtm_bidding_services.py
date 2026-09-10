@@ -41,14 +41,19 @@ from ..repository.integration_api_log_repository import IntegrationApiLogReposit
 from ..repository.bid_capture_repository import CaptureServeTableDataRepository
 
 from ..repository.exchange_config_repository import ExchangeConfigRepository
+from ..services.parameter_service import parameter_service
 from libs.messaging.job_publisher import JobPublisher
 from libs.models.forecast_serve_entity import map_forecast_source_display
 
 logger = logging.getLogger(__name__)
 
-def bidPriceNOC():
-    """Equivalent of PHP's bidPriceNOC() constant."""
-    return 10000
+async def bidPriceNOC():
+    """Fetch rtm_bid_price from parameters; fallback to 10000."""
+    try:
+        return await parameter_service.get_bid_price("RTM")
+    except Exception as e:
+        logger.warning(f"Failed to fetch rtm_bid_price from parameters: {e}")
+        return 10000
 
 def to_float(v):
     try:
@@ -1521,7 +1526,7 @@ class RTMBiddingServices:
                         plant_key = plvalue
                         if plvalue == "0":
                             plant_key = f"A-{plvalue}"
-                        elif plvalue == bidPriceNOC():  # assuming bidPriceNOC() returns a string
+                        elif plvalue == await bidPriceNOC():  # assuming bidPriceNOC() returns comparable plant/price sentinel
                             plant_key = f"Z-{plvalue}"
 
                         # Initialize dictionary if not exists
@@ -1636,6 +1641,7 @@ class RTMBiddingServices:
         """
         buybiddataarray = {}
         finalbuyarraysorted = {}
+        noc_price = await bidPriceNOC()
         
         # Helper function to get block date - extract from time_block_range if time_block_dates missing
         def get_block_date(index):
@@ -1658,7 +1664,7 @@ class RTMBiddingServices:
                 buyary = {}
                 for idx, bid_price in enumerate(request[f"bid_price_{blno_index}", []]):
                     bid_volume = request[f"bid_volume_{blno_index}", []][idx]
-                    if bid_price not in [bidPriceNOC(), "0", ""] and bid_volume != "0":
+                    if bid_price not in [noc_price, "0", ""] and bid_volume != "0":
                         buyary[bid_price] = bid_volume
                         finalbuyarraysorted[bid_price] = bid_volume
                 # sort descending by price
@@ -1671,12 +1677,12 @@ class RTMBiddingServices:
         for blkey, blvalue in buybiddataarray.items():
             for price_str, vol in blvalue.items():
                 price = float(price_str)
-                if price_str not in ["0", bidPriceNOC()]:
+                if price_str not in ["0", noc_price]:
                     buypricekeys.append(price)
                     incresingprbuy2.append(price + 1)
 
         finalpricearraybuy = sorted(set(buypricekeys + incresingprbuy2))
-        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [bidPriceNOC()])))
+        finalpricearray = [0] + sorted(list(set(finalpricearraybuy + [noc_price])))
 
         # Step 3: Build bidblockarray
         bidblockarray = {}
@@ -1688,6 +1694,7 @@ class RTMBiddingServices:
             if blockno == blno_index:
                 buypriceary = list(buybiddataarray.get(blno_index, {}).values())
                 counterkey = 0
+                max_volume = max([float(v) for v in buybiddataarray.get(blno_index, {}).values()], default=0)
 
                 for pricevalue in finalpricearray:
                     pRarrayf = {}
@@ -1740,12 +1747,14 @@ class RTMBiddingServices:
                                 break
 
                         if not matched:
+                            # At the max price point (NOC), fill with the maximum bid volume
+                            fill_vol = max_volume if pricevalue == noc_price else ""
                             pRarrayf = {
                                 "bid_plant_name": f"Buy_{counterkey}",
                                 "bid_price": pricevalue,
                                 "bid_default_price": pricevalue,
-                                "bid_volume": "",
-                                "bid_default_volume": "",
+                                "bid_volume": fill_vol,
+                                "bid_default_volume": fill_vol,
                                 "sell_buy_bid_type": "buy",
                                 "biding_date": blockdate[0],
                                 "bid_plant_category": "buy",
@@ -2256,6 +2265,7 @@ class RTMBiddingServices:
         allpricearray2 = []
         buybiddataarray = {}
         finalbuyarraysorted = {} # block_no => {price: volume} sorted descending
+        noc_price = await bidPriceNOC()
 
         bidingDate = request_dict.get("bidingDate", "")
         # Convert "19-11-2025" → "2025-11-19" for comparison
@@ -2301,8 +2311,7 @@ class RTMBiddingServices:
 
                     for plkey22, plvalue22 in enumerate(price_list):
 
-                        # Skip empty OR bidPriceNOC()
-                        if plvalue22 == "" or plvalue22 == bidPriceNOC():
+                        if plvalue22 in ["", None]:
                             continue
 
                         # Validate numeric
@@ -2319,6 +2328,7 @@ class RTMBiddingServices:
                         else:
                             volume_val = ""   # PHP would give NULL → ""
 
+                        # Keep NOC so buy fill can use its volume at the cap.
                         price_key = plvalue22
 
                         buyary[price_key] = volume_val
@@ -2393,7 +2403,7 @@ class RTMBiddingServices:
         # sort($finalpricearray);
         # -----------------------------------------------------------------------
 
-        finalpricearray.append(bidPriceNOC())
+        finalpricearray.append(noc_price)
 
         # PHP sort() → numeric ascending sort
         # If mixed types, convert safely
@@ -2473,20 +2483,30 @@ class RTMBiddingServices:
 
                     blk_buydata = buybiddataarray.get(blno[1], {})
 
-                    # Find the volume at the max price point, excluding bidPriceNOC (10000).
+                    # Fill prices < NOC from highest price below NOC (old logic).
+                    # At NOC: use payload volume only when NOC is present (incl. 0);
+                    # otherwise leave NOC at 0.
+                    noc = float(noc_price)
+                    noc_keys = [k for k in blk_buydata.keys() if float(k) == noc]
+                    noc_in_payload = bool(noc_keys)
                     max_price_volume = 0.0
-                    max_price_float = 0.0
                     if blk_buydata:
-                        valid_keys = [k for k in blk_buydata.keys() if float(k) < bidPriceNOC()]
+                        valid_keys = [k for k in blk_buydata.keys() if float(k) < noc]
                         if valid_keys:
                             max_price_key = max(valid_keys, key=lambda x: float(x))
-                            max_price_float = float(max_price_key)
                             max_price_volume = to_float(blk_buydata[max_price_key])
 
-                    # Fill volume for all price points up to and including the max price.
-                    # Price points above the max price remain 0.
                     for prikey, pricevalue in enumerate(finalpricearray):
-                        fill_vol = round(max_price_volume, 1) if float(pricevalue) <= max_price_float else 0.0
+                        pv = float(pricevalue)
+                        if pv == noc:
+                            fill_vol = (
+                                round(to_float(blk_buydata[noc_keys[0]]), 1)
+                                if noc_in_payload else 0.0
+                            )
+                        elif pv < noc:
+                            fill_vol = round(max_price_volume, 1)
+                        else:
+                            fill_vol = 0.0
                         pRarrayf = {
                             "RTMPrice": pricevalue,
                             "Volume": fill_vol,
