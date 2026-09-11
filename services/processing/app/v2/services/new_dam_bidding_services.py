@@ -353,8 +353,13 @@ class DAMBiddingServices:
                 for blk, row in block_rows.items():
                     if not isinstance(row, dict):
                         continue
+                    # table_data is keyed 0-based ("0" holds time_block 1), while
+                    # limit_values is keyed by the real block number. Using the
+                    # dict key here shifted every additional market one block
+                    # late and left block 1 permanently 0 — which also made
+                    # validateBuyBid reject a buy on block 1 for GDAM/HPDAM.
                     try:
-                        block_no = int(blk)
+                        block_no = int(row.get("time_block", blk))
                     except (TypeError, ValueError):
                         continue
                     row[f"{prefix}forecasted_price"] = round(limit_values["forecasted_price"].get(block_no, 0) or 0)
