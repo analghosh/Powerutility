@@ -841,6 +841,71 @@ class DAMBiddingServices:
             splits["iex"] = 1.0
         return splits
 
+    @staticmethod
+    def _iter_single_bid_plant_rows(plants: Any):
+        """Yield (key, plant_dict) skipping withdrawal rows."""
+        if isinstance(plants, dict):
+            for plant_key, plant_data in plants.items():
+                if not isinstance(plant_data, dict):
+                    continue
+                if plant_key == "withdrawal_bid" or plant_data.get("bid_plant_name") == "withdrawal_bid":
+                    continue
+                yield plant_key, plant_data
+        elif isinstance(plants, list):
+            for plant_data in plants:
+                if not isinstance(plant_data, dict):
+                    continue
+                if plant_data.get("bid_plant_name") == "withdrawal_bid":
+                    continue
+                yield plant_data.get("bid_plant_name"), plant_data
+
+    @staticmethod
+    def _plant_row_volume(plant_data: dict) -> float:
+        vol = plant_data.get("bid_volume")
+        if vol in (None, "", "0"):
+            vol = plant_data.get("bid_default_volume") or 0.0
+        try:
+            return float(vol)
+        except (TypeError, ValueError):
+            return 0.0
+
+    @classmethod
+    def _is_buy_single_bid(cls, doc: Dict[str, Any]) -> bool:
+        side = str(doc.get("buy_sell_bid") or "").strip().lower()
+        if side in ("buy", "b"):
+            return True
+        if side in ("sell", "s"):
+            return False
+        for plant_key, plant_data in cls._iter_single_bid_plant_rows(doc.get("Plants")):
+            key = str(plant_key or "")
+            name = str(plant_data.get("bid_plant_name") or "")
+            category = str(plant_data.get("bid_plant_category") or "").strip().lower()
+            row_side = str(plant_data.get("sell_buy_bid_type") or "").strip().lower()
+            if (
+                key.startswith("Buy_")
+                or name.startswith("Buy_")
+                or category == "buy"
+                or row_side == "buy"
+            ):
+                return True
+        return False
+
+    @classmethod
+    def _single_bid_block_volume(cls, doc: Dict[str, Any]) -> float:
+        """
+        Portfolio MW for one approval block.
+        Sell: sum of per-plant volumes.
+        Buy: max volume across the price ladder — ladder steps repeat MW and are not additive.
+        """
+        plants = doc.get("Plants")
+        volumes = [cls._plant_row_volume(p) for _, p in cls._iter_single_bid_plant_rows(plants)]
+        volumes = [v for v in volumes if v]
+        if not volumes:
+            return 0.0
+        if cls._is_buy_single_bid(doc):
+            return max(volumes)
+        return sum(volumes)
+
     async def _fetch_single_bid_graph_data(
         self, formatted_date: str
     ) -> Dict[str, Any]:
@@ -882,29 +947,7 @@ class DAMBiddingServices:
                     except (ValueError, TypeError):
                         continue
 
-                    # Calculate total volume for this single bid block
-                    plants = doc.get("Plants")
-                    total_vol = 0.0
-                    if isinstance(plants, dict):
-                        for plant_key, plant_data in plants.items():
-                            if plant_key == "withdrawal_bid" or (isinstance(plant_data, dict) and plant_data.get("bid_plant_name") == "withdrawal_bid"):
-                                continue
-                            if isinstance(plant_data, dict):
-                                vol = plant_data.get("bid_volume") or plant_data.get("bid_default_volume") or 0.0
-                                try:
-                                    total_vol += float(vol)
-                                except (TypeError, ValueError):
-                                    pass
-                    elif isinstance(plants, list):
-                        for plant_data in plants:
-                            if isinstance(plant_data, dict):
-                                if plant_data.get("bid_plant_name") == "withdrawal_bid":
-                                    continue
-                                vol = plant_data.get("bid_volume") or plant_data.get("bid_default_volume") or 0.0
-                                try:
-                                    total_vol += float(vol)
-                                except (TypeError, ValueError):
-                                    pass
+                    total_vol = self._single_bid_block_volume(doc)
 
                     bid_status = str(doc.get("bid_status") or "").strip().lower()
                     ex_split_str = doc.get("Ex_split_string")
@@ -4086,28 +4129,19 @@ class DAMBiddingServices:
                     return None
             
             # Helper function to aggregate plant data
-            def aggregate_plant_data(plants_data: Dict[str, Any]) -> Dict[str, Any]:
+            def aggregate_plant_data(plants_data: Dict[str, Any], buy_sell_bid: Any = None) -> Dict[str, Any]:
                 """
                 Aggregate plant data to get total bid_price and bid_volume.
-                Returns dict with bid_price and bid_volume.
+                Buy ladders use max volume (steps are not additive); sell sums plants.
                 """
-                total_volume = 0.0
+                total_volume = self._single_bid_block_volume({
+                    "buy_sell_bid": buy_sell_bid,
+                    "Plants": plants_data,
+                })
                 total_price = 0.0
                 price_count = 0
                 
-                for plant_key, plant_data in plants_data.items():
-                    # Skip withdrawal bids
-                    if plant_key == "withdrawal_bid" or plant_data.get("bid_plant_name") == "withdrawal_bid":
-                        continue
-                    
-                    # Aggregate volume
-                    volume = plant_data.get("bid_volume") or plant_data.get("bid_default_volume") or 0
-                    try:
-                        total_volume += float(volume)
-                    except (ValueError, TypeError):
-                        pass
-                    
-                    # Aggregate price (average)
+                for _plant_key, plant_data in self._iter_single_bid_plant_rows(plants_data):
                     price = plant_data.get("bid_price") or plant_data.get("bid_default_price") or 0
                     try:
                         price_val = float(price)
@@ -4167,7 +4201,7 @@ class DAMBiddingServices:
                 # bid_price and bid_volume: aggregate from Plants data
                 plants_data = approval_record.get("Plants", {})
                 if plants_data:
-                    aggregated = aggregate_plant_data(plants_data)
+                    aggregated = aggregate_plant_data(plants_data, approval_record.get("buy_sell_bid"))
                     bid_price = aggregated.get("bid_price")
                     bid_volume = aggregated.get("bid_volume")
                     if bid_price is not None and bid_price > 0:
