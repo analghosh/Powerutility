@@ -115,6 +115,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure bid price parameter defaults: {e}")
 
+    # The analytics dashboard's peak/off-peak bands are defined in Masters →
+    # Parameters; seed the five keys empty so PTC can find and fill them.
+    try:
+        from .v2.services.analytics_service import ensure_block_band_parameters
+        created = await ensure_block_band_parameters()
+        if created:
+            logger.info(f"Auto-created analytics block band parameters: {created}")
+    except Exception as e:
+        logger.error(f"Failed to ensure analytics block band parameters: {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down EPMS Processing Service...")

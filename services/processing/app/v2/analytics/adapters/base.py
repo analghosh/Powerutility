@@ -218,13 +218,23 @@ def _as_day(value: Any, name: str) -> datetime:
 
 
 def _resolve_band(filters: dict) -> block_bands.Band:
+    """The band this filter set groups by.
+
+    A named band's ranges travel in `block_band_ranges`, stamped by the service from
+    the band's parameter when the request was accepted — so a queued export replays
+    with the definition it was made under, and this module never reads MongoDB.
+    """
     band = filters.get("block_band") or block_bands.BAND_INDIVIDUAL
     if isinstance(band, block_bands.Band):
         return band
     try:
-        return block_bands.DEFAULT_BANDS[band]
+        base = block_bands.DEFAULT_BANDS[band]
     except KeyError:
         raise ValueError(f"Unknown block band: {band}") from None
+    ranges = filters.get("block_band_ranges")
+    if ranges and band in block_bands.PARAMETER_KEYS:
+        return block_bands.band_with_ranges(base, block_bands.parse_ranges(ranges))
+    return base
 
 
 class SourceGroupAdapter(ABC):

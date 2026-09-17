@@ -14,7 +14,8 @@ Two details are silently wrong if left to the defaults:
 """
 from typing import Optional, Sequence
 
-from .block_bands import BAND_CUSTOM, BAND_INDIVIDUAL, Band, validate_block_range
+from .block_bands import (BAND_CUSTOM, BAND_INDIVIDUAL, PARAMETER_KEYS, RANGES_EXAMPLE,
+                          Band, validate_block_range)
 
 try:  # pragma: no cover - the setting lands with the analytics config block
     from ...core.config import settings
@@ -113,9 +114,10 @@ def block_key_expr(band: Band, custom: Optional[Sequence[Sequence[int]]] = None)
         branches = [_branch(lo, hi, f"{lo}-{hi}") for lo, hi in ranges]
     else:
         if not band.ranges:
+            key = PARAMETER_KEYS.get(band.code, band.code)
             raise ValueError(
-                f"Band {band.code} has no block ranges; it is inactive until PTC "
-                f"supplies them"
+                f"The {band.label} band has no block ranges yet. Set parameter "
+                f"'{key}' under Masters → Parameters (e.g. {RANGES_EXAMPLE})."
             )
         for lo, hi in band.ranges:
             validate_block_range(lo, hi)

@@ -22,7 +22,7 @@ value to stringify BSON types that this pipeline cannot produce would cost real 
 and would turn a float into a string if it ever did.
 """
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from ...core.config import settings
 from .base_repository import GenericRepository
@@ -106,6 +106,26 @@ class AnalyticsRepository(GenericRepository):
         self._db_override = value
 
     # --------------------------------------------------------------- reads
+
+    async def get_parameters(self, keys: Sequence[str],
+                             collection: str = "parameters") -> Dict[str, Any]:
+        """`para_key` → `para_value` for the keys present.
+
+        The collection carries duplicate keys in places (seven `rtm_bid_price`
+        rows locally), so the newest `updated_at` wins for each key — the same
+        row the Masters screen edits last.
+        """
+        keys = [str(k) for k in keys]
+        if not keys:
+            return {}
+        cursor = self.db[collection].find(
+            {"para_key": {"$in": keys}},
+            {"_id": 0, "para_key": 1, "para_value": 1, "updated_at": 1},
+        ).sort("updated_at", -1)
+        values: Dict[str, Any] = {}
+        async for doc in cursor:
+            values.setdefault(doc.get("para_key"), doc.get("para_value"))
+        return values
 
     async def run_pipeline(self, collection: str, pipeline: List[Dict[str, Any]],
                            max_time_ms: Optional[int] = None, *,

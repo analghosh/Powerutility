@@ -65,13 +65,24 @@ from services.processing.app.v2.services import analytics_export_service as svc 
 class RecordingRepo:
     """The analytics Mongo repository, reduced to a call recorder."""
 
-    def __init__(self, docs=None):
+    def __init__(self, docs=None, parameters=None):
         self.docs = docs or {}
         self.calls = []
+        self.parameters = dict(parameters or {})
 
     async def run_pipeline(self, collection, pipeline, max_time_ms=None):
         self.calls.append(collection)
         return self.docs.get(collection, [])
+
+    async def get_parameters(self, keys, collection="parameters"):
+        return {k: v for k, v in self.parameters.items() if k in set(keys)}
+
+
+@pytest.fixture(autouse=True)
+def _fresh_band_cache():
+    query_svc.AnalyticsService.forget_bands()
+    yield
+    query_svc.AnalyticsService.forget_bands()
 
 
 class FakeJobs:
@@ -487,6 +498,32 @@ async def test_the_stored_filters_are_complete_enough_to_regenerate():
 
 
 @pytest.mark.asyncio
+async def test_a_named_band_is_stored_with_the_ranges_it_had_when_queued():
+    """Regenerate must reproduce the file the user got, so the job carries the
+    band's ranges as they were — not a pointer to a parameter PTC may edit later."""
+    jobs = FakeJobs()
+    service = _service(jobs=jobs, repo=RecordingRepo(
+        parameters={"analytics_band_peak": "65-72, 81-88"}))
+    # 1 bucket per day, so it takes 6,000 plants x 96 days to reach the queue.
+    request = _request(days=96, plants=6000, fmt="csv", block_band="PEAK")
+    assert _cells(request, service) > 500_000
+
+    await service.export(request, _context())
+    filters = jobs.created[0]["filters"]
+    assert filters["block_band"] == "PEAK"
+    assert filters["block_band_ranges"] == [[65, 72], [81, 88]]
+
+
+@pytest.mark.asyncio
+async def test_an_undefined_named_band_is_refused_before_anything_is_queued():
+    jobs = FakeJobs()
+    service = _service(jobs=jobs)
+    with pytest.raises(ValueError, match="analytics_band_day_peak"):
+        await service.export(_request(block_band="DAY_PEAK"), _context())
+    assert jobs.created == []
+
+
+@pytest.mark.asyncio
 async def test_custom_block_ranges_are_stored_with_the_job():
     jobs = FakeJobs()
     service = _service(jobs=jobs)
@@ -593,7 +630,7 @@ async def test_the_stream_carries_the_applied_filter_header():
     header = "".join(lines[:12])
     assert "Format: csv" in header
     assert "Date range: 2026-01-01 to 2026-01-01" in header
-    assert "dataset,label,entity,unit,date,block,value\n" in lines
+    assert "dataset,label,unit,date,block,value\n" in lines
 
 
 @pytest.mark.asyncio
