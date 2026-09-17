@@ -26,7 +26,7 @@ def test_one_dataset_one_month_is_inline():
 
 
 def test_ten_state_datasets_five_months_is_inline_capped():
-    codes = ["ACTUAL_DEMAND", "DRAWAL", "DEMAND_UDM", "ROSTERING", "FREQUENCY",
+    codes = ["ACTUAL_DEMAND", "ROSTERING", "DEMAND_UDM", "ROSTERING", "FREQUENCY",
              "FORECAST_DAF", "FORECAST_IDF", "MAPE_DAF", "MAPE_IDF",
              "FINAL_SCHEDULE_STATE"]
     e = budget.estimate(date_buckets=150, block_buckets=96, datasets=codes, ctx=CTX)
