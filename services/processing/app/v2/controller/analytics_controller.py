@@ -196,6 +196,10 @@ class AnalyticsController:
                 "kind": dataset.kind,
                 "depends": list(dataset.depends),
                 "series": dataset.series,
+                # A roll-up dataset pins the date grouping for the whole request, so
+                # the UI can stop the user combining WEEK_WISE with MONTH_WISE
+                # before the server has to refuse it.
+                "fixed_grouping": dataset.fixed_grouping,
                 "availability": dataset.availability,
                 "permission": dataset.permission,
                 "permitted": AnalyticsService.has_permission(
