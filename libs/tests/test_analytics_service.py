@@ -474,3 +474,30 @@ def test_forced_grouping_reaches_the_budget():
     est = s.estimate_only(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE",
                                    from_date=date(2026, 8, 1), to_date=date(2026, 8, 31)))
     assert est.date_buckets == 6
+
+
+def test_the_page_grant_the_menu_rbac_mints_unlocks_every_dataset():
+    # Auth derives role permissions from menu rows, so a role that holds the
+    # Analytics Dashboard menu carries `analytics_dashboard:read` (and usually the
+    # parent's `analytics:read`) — never the per-group strings in the registry.
+    # PTC's page model says page access is the whole grant.
+    codes = ["ACTUAL_DEMAND", "ACP_DAM", "DC_PLANT", "OD_UD_AMOUNT"]
+    for context in (
+        {"permissions": ["analytics_dashboard:read"]},
+        {"permissions": ["analytics:read"]},
+        {"permissions": ["reports:read", "analytics_dashboard:read"]},
+        {"user": {"permissions": ["analytics_dashboard:write"]}},
+    ):
+        perms = svc.AnalyticsService.permissions_for(context)
+        assert "analytics:*" in perms
+        assert svc.AnalyticsService.filter_by_permission(codes, perms) == (codes, [])
+
+
+def test_a_role_without_the_page_still_gets_nothing():
+    # The exact shape of a real `user`-role token: 92 grants, none of them analytics.
+    codes = ["ACTUAL_DEMAND", "ACP_DAM"]
+    perms = svc.AnalyticsService.permissions_for(
+        {"permissions": ["reports:read", "forecast:read", "dam_single_bid:write"],
+         "roles": ["user"]})
+    assert "analytics:*" not in perms and "*" not in perms
+    assert svc.AnalyticsService.filter_by_permission(codes, perms) == ([], codes)
