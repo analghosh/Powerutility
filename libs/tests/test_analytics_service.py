@@ -64,10 +64,16 @@ def _today() -> date:
 class RecordingRepo:
     """Only what the executor touches, plus a record of every call."""
 
-    def __init__(self, docs=None, fail=()):
+    def __init__(self, docs=None, fail=(), parameters=None):
         self.docs = docs or {}
         self.fail = set(fail)
         self.calls = []
+        self.parameters = dict(parameters or {})
+        self.parameter_reads = 0
+
+    async def get_parameters(self, keys, collection="parameters"):
+        self.parameter_reads += 1
+        return {k: v for k, v in self.parameters.items() if k in set(keys)}
 
     async def run_pipeline(self, collection, pipeline, max_time_ms=None):
         self.calls.append({"collection": collection, "pipeline": pipeline,
@@ -105,6 +111,15 @@ def _demand_docs(*values):
         {"_id": {"d": "2026-08-01", "b": str(block)}, "ACTUAL_DEMAND": value}
         for block, value in enumerate(values, start=1)
     ]
+
+
+@pytest.fixture(autouse=True)
+def _fresh_band_cache():
+    # The band definitions are cached on the class for 30 s; a test that seeds
+    # ranges must not see (or leave behind) another test's parameters.
+    svc.AnalyticsService.forget_bands()
+    yield
+    svc.AnalyticsService.forget_bands()
 
 
 def _request(**over):
@@ -501,3 +516,69 @@ def test_a_role_without_the_page_still_gets_nothing():
          "roles": ["user"]})
     assert "analytics:*" not in perms and "*" not in perms
     assert svc.AnalyticsService.filter_by_permission(codes, perms) == ([], codes)
+
+
+# ------------------------------------------------------------ block bands
+
+
+@pytest.mark.asyncio
+async def test_a_named_band_takes_its_ranges_from_masters_parameters():
+    repo = RecordingRepo(docs={"demand_serve": _demand_docs(100.0, 101.0)},
+                         parameters={"analytics_band_peak": "65-72, 81-88"})
+    service = svc.AnalyticsService(repository=repo)
+
+    stamped = await service.with_band(_request(block_band="PEAK"))
+    assert stamped.block_band_ranges == [[65, 72], [81, 88]]
+
+    # ...and the planner keys the $group on those ranges, not on the block.
+    await service.query(_request(block_band="PEAK"), _ctx("analytics:demand"))
+    pipeline = json.dumps(repo.calls[-1]["pipeline"], default=str)
+    assert '"then": "PEAK"' in pipeline and '"$gte": ["$time_block", 65]' in pipeline
+
+
+@pytest.mark.asyncio
+async def test_a_named_band_without_ranges_is_refused_with_the_parameter_named():
+    service = svc.AnalyticsService(repository=RecordingRepo(parameters={}))
+    with pytest.raises(svc.BandInactive) as exc:
+        await service.with_band(_request(block_band="DAY_PEAK"))
+    assert exc.value.parameter_key == "analytics_band_day_peak"
+    assert "Masters" in str(exc.value)
+    assert isinstance(exc.value, ValueError)   # the routes map ValueError → 422
+
+
+@pytest.mark.asyncio
+async def test_individual_and_custom_never_depend_on_parameters():
+    class Broken(RecordingRepo):
+        async def get_parameters(self, keys, collection="parameters"):
+            raise RuntimeError("parameters collection is down")
+
+    service = svc.AnalyticsService(repository=Broken(docs={"demand_serve": []}))
+    req = await service.with_band(_request())
+    assert req.block_band == "INDIVIDUAL" and req.block_band_ranges == []
+    req = await service.with_band(_request(block_band="CUSTOM", custom_blocks=[[1, 8]]))
+    assert req.block_band == "CUSTOM"
+
+
+@pytest.mark.asyncio
+async def test_band_parameters_are_read_once_per_ttl_not_per_request():
+    repo = RecordingRepo(parameters={"analytics_band_peak": "65-88"})
+    service = svc.AnalyticsService(repository=repo)
+    for _ in range(5):
+        await service.with_band(_request(block_band="PEAK"))
+    assert repo.parameter_reads == 1
+    await service.bands(fresh=True)
+    assert repo.parameter_reads == 2
+
+
+@pytest.mark.asyncio
+async def test_changing_a_band_definition_changes_the_cache_key():
+    repo = RecordingRepo(parameters={"analytics_band_peak": "65-88"})
+    service = svc.AnalyticsService(repository=repo)
+    before = service.cache_key(await service.with_band(_request(block_band="PEAK")))
+
+    repo.parameters["analytics_band_peak"] = "61-88"
+    svc.AnalyticsService.forget_bands()
+    after = service.cache_key(await service.with_band(_request(block_band="PEAK")))
+    assert before != after
+    # ...while a plain request is unaffected by what the parameters say.
+    assert service.cache_key(_request()) == service.cache_key(_request())

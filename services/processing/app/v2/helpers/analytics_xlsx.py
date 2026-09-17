@@ -9,8 +9,11 @@ peak cost is one row.
     wb = Workbook(write_only=True)          # streams rows to a temp file
 
 The layout is the spec's: one sheet per dataset plus a `Filters` sheet. Inside a
-dataset sheet the grid is the one the user saw — `Entity | Block | <date> ...` — with
-one row per (entity, block), because a spreadsheet is opened to be read, not parsed.
+dataset sheet the grid is `Block | <date> ...`, one row per block; a per-plant,
+per-exchange or per-forecast-type dataset gets a leading `Plant` / `Exchange` /
+`Forecast` column and one row per (entity, block). A scalar sheet carries no identity
+column at all — a blank "Entity" column on 40 of 46 sheets was the first thing users
+asked to remove. A spreadsheet is opened to be read, not parsed.
 The flat long form lives in `analytics_csv`, which is the machine-readable half.
 
 Two rules this module exists to keep:
@@ -48,7 +51,26 @@ SHEET_TITLE_LIMIT = 31
 #: Characters Excel refuses in a sheet title.
 _INVALID_TITLE_CHARS = set(r"[]:*?/\"'")
 
-_IDENTITY_COLUMNS = ("Entity", "Block")
+#: The identity column a sheet gets when its series carry an entity, by series kind.
+ENTITY_COLUMN_TITLES = {
+    "per_plant": "Plant",
+    "per_exchange": "Exchange",
+    "per_forecast_type": "Forecast",
+}
+DEFAULT_ENTITY_COLUMN = "Entity"
+BLOCK_COLUMN = "Block"
+
+
+def _has_entity(entry: Dict[str, Any]) -> bool:
+    return entry.get("entity") not in (None, "")
+
+
+def identity_columns(entry: Dict[str, Any]) -> List[str]:
+    """`["Plant", "Block"]` for a per-plant series, `["Block"]` for a scalar one."""
+    if not _has_entity(entry):
+        return [BLOCK_COLUMN]
+    kind = entry.get("series_kind")
+    return [ENTITY_COLUMN_TITLES.get(kind, DEFAULT_ENTITY_COLUMN), BLOCK_COLUMN]
 
 
 class ExportWriteError(OSError):
@@ -151,21 +173,26 @@ def write_xlsx(response: Dict[str, Any], filters: Optional[Dict[str, Any]],
     row_count = 0
     try:
         sheets: Dict[str, Any] = {}
+        with_entity: Dict[str, bool] = {}
         for entry in series:
             code = str(entry.get("dataset") or "")
             sheet = sheets.get(code)
             if sheet is None:
+                # Every series of one dataset shares its kind, so the first one
+                # decides the sheet's shape.
                 sheet = workbook.create_sheet(title=titles[code])
-                sheet.append(list(_IDENTITY_COLUMNS) + dates)
+                sheet.append(identity_columns(entry) + dates)
                 sheets[code] = sheet
+                with_entity[code] = _has_entity(entry)
 
             entity = entry.get("entity_label") or entry.get("entity")
+            identity = [_cell(entity)] if with_entity[code] else []
             matrix = entry.get("values") or ()
             for bi, block in enumerate(blocks):
                 values = matrix[bi] if bi < len(matrix) else ()
                 cells = [values[di] if di < len(values) else None
                          for di in range(len(dates))]
-                sheet.append([_cell(entity), _cell(block)] + [_cell(v) for v in cells])
+                sheet.append(identity + [_cell(block)] + [_cell(v) for v in cells])
                 row_count += 1
 
         filters_sheet = workbook.create_sheet(title=FILTERS_SHEET)

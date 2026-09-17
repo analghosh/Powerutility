@@ -151,7 +151,9 @@ def test_column_header_follows_the_filter_block():
                                       [[1.0, 2.0], [3.0, 4.0]])]))
     table = _table(lines)
     assert table[0] == list(analytics_csv.COLUMNS)
-    assert "dataset" in table[0] and "entity" in table[0]
+    assert "dataset" in table[0]
+    # No entity column: it was blank on every scalar dataset, i.e. most of them.
+    assert "entity" not in table[0]
 
 
 # ------------------------------------------------------------------ the cells
@@ -172,7 +174,7 @@ def test_a_missing_value_is_an_empty_cell_never_zero_and_never_the_string_none()
     assert float(cells[("2", "2026-04-01")]) == 2850.0
 
 
-def test_entity_is_its_own_column_for_per_plant_and_per_exchange_series():
+def test_the_entity_is_folded_into_the_label_for_per_plant_and_per_exchange_series():
     values = [[1.0, 2.0], [3.0, 4.0]]
     response = _response([
         _series("DC_PLANT", "Plant wise DC", values, entity="PLANT_A"),
@@ -182,12 +184,19 @@ def test_entity_is_its_own_column_for_per_plant_and_per_exchange_series():
     ])
     table = _table(_lines(response))
     head, body = table[0], table[1:]
-    ei, dsi = head.index("entity"), head.index("dataset")
+    li, dsi = head.index("label"), head.index("dataset")
 
-    assert {r[ei] for r in body if r[dsi] == "DC_PLANT"} == {"PLANT_A", "PLANT_B"}
-    assert {r[ei] for r in body if r[dsi] == "ACP_DAM"} == {"IEX"}
-    # a portfolio-wide series has no entity, and that is an empty cell too
-    assert {r[ei] for r in body if r[dsi] == "ACTUAL_DEMAND"} == {""}
+    assert {r[li] for r in body if r[dsi] == "DC_PLANT"} == {
+        "Plant wise DC (PLANT_A)", "Plant wise DC (PLANT_B)"}
+    assert {r[li] for r in body if r[dsi] == "ACP_DAM"} == {"DAM ACP (IEX)"}
+    # a portfolio-wide series is just its label — no "(None)", no trailing " ()"
+    assert {r[li] for r in body if r[dsi] == "ACTUAL_DEMAND"} == {"Actual Demand"}
+
+
+def test_the_readable_entity_label_wins_over_the_machine_key():
+    series = _series("WEEKLY_MAPE", "Weekly MAPE", [[1.0]], entity="DAF")
+    series["entity_label"] = "Day Ahead"
+    assert analytics_csv.series_label(series) == "Weekly MAPE (Day Ahead)"
 
 
 def test_a_label_containing_a_comma_is_quoted_not_split():
@@ -239,6 +248,35 @@ def test_xlsx_has_one_sheet_per_dataset_plus_a_filters_sheet(tmp_path):
     assert result["path"] == str(out)
     assert result["bytes"] == out.stat().st_size > 0
     assert result["row_count"] == 6      # 2 blocks x (1 + 2 entity series)
+
+    # A scalar sheet has no identity column but Block; a per-plant sheet names
+    # its entity column for what it holds, and one row per (plant, block).
+    by_name = {n: _rows_of(str(out), n) for n in names if n != analytics_xlsx.FILTERS_SHEET}
+    scalar = next(rows for rows in by_name.values() if rows[0][0] == "Block")
+    plants = next(rows for rows in by_name.values() if rows[0][0] == "Entity")
+    assert scalar[0][:1] == ["Block"] and len(scalar) == 3
+    assert plants[0][:2] == ["Entity", "Block"]       # kind unknown here → generic
+    assert [r[0] for r in plants[1:]] == ["PLANT_A", "PLANT_A", "PLANT_B", "PLANT_B"]
+
+
+def test_xlsx_names_the_identity_column_after_the_series_kind(tmp_path):
+    values = [[1.0, 2.0], [3.0, 4.0]]
+    plant = _series("DC_PLANT", "Plant wise DC", values, entity="PLANT_A")
+    plant["series_kind"] = "per_plant"
+    exchange = _series("ACP_DAM", "DAM ACP", values, entity="IEX", unit="Rs/MWh")
+    exchange["series_kind"] = "per_exchange"
+    weekly = _series("WEEKLY_MAPE", "Weekly MAPE", values, entity="DAF", unit="%")
+    weekly["series_kind"] = "per_forecast_type"
+    weekly["entity_label"] = "Day Ahead"
+    out = tmp_path / "export.xlsx"
+    analytics_xlsx.write_xlsx(_response([plant, exchange, weekly]), FILTERS, str(out))
+
+    heads = {n: _rows_of(str(out), n)[0][0] for n in _sheets(str(out))
+             if n != analytics_xlsx.FILTERS_SHEET}
+    assert sorted(heads.values()) == ["Exchange", "Forecast", "Plant"]
+    weekly_rows = next(r for n, r in ((n, _rows_of(str(out), n)) for n in heads)
+                       if r[0][0] == "Forecast")
+    assert weekly_rows[1][0] == "Day Ahead"
 
 
 def test_filters_sheet_records_the_applied_filters(tmp_path):

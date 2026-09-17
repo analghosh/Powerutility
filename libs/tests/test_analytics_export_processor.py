@@ -574,7 +574,7 @@ async def test_run_job_writes_a_csv_and_marks_the_job_ready(tmp_path):
     # One filter header block and one column header for the whole file, not one
     # of each per chunk.
     assert text.count("EPMS Analytics Export") == 1
-    assert text.count("dataset,label,entity,unit,date,block,value") == 1
+    assert text.count("dataset,label,unit,date,block,value") == 1
     # Every chunk's rows made it in.
     assert len(source_dates(text)) == 10
 
@@ -585,8 +585,9 @@ def source_dates(text):
         if line.startswith("#") or line.startswith("dataset,"):
             continue
         parts = line.split(",")
-        if len(parts) >= 5 and parts[4]:
-            dates.add(parts[4])
+        # dataset,label,unit,date,block,value — date is the 4th column
+        if len(parts) >= 4 and parts[3]:
+            dates.add(parts[3])
     return dates
 
 
@@ -932,9 +933,10 @@ async def test_an_xlsx_job_merges_every_chunk_into_one_workbook(tmp_path):
     assert "Filters" in book.sheetnames
     sheet = book[book.sheetnames[0]]
     header = [cell.value for cell in next(sheet.iter_rows(max_row=1))]
-    assert header[:2] == ["Entity", "Block"]
+    # A scalar dataset: no identity column but Block.
+    assert header[:1] == ["Block"]
     # One column per chunk date, all ten of them, in one sheet.
-    assert len(header) == 2 + 10
+    assert len(header) == 1 + 10
 
 
 @pytest.mark.asyncio

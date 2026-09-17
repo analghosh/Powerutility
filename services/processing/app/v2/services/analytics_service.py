@@ -56,6 +56,7 @@ import hashlib
 import inspect
 import json
 import logging
+import time
 from datetime import date, datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
@@ -81,7 +82,7 @@ DEFAULT_EXCHANGE_COUNT = 3
 #       per_forecast_type with `entity_label` (2026-09-17).
 #   v4: FINAL_SCHEDULE_STATE / OD_UD_AMOUNT / DSM_RATE pinned to the IDF row — the
 #       cached values were HALVED by the DAF placeholder (2026-09-17).
-CACHE_VERSION = "v4"
+CACHE_VERSION = "v5"
 CACHE_PREFIX = "analytics:query"
 
 #: Bands that cannot be rendered inline. The route turns this into a 413 plus the
@@ -96,13 +97,14 @@ SUPER_ADMIN_ROLES = ("admin", "superadmin", "super_admin")
 
 #: The grants the menu-RBAC actually mints for this screen. Auth derives a role's
 #: permission strings from its menu rows (`_sync_role_permissions`): the "Analytics
-#: Dashboard" menu becomes `analytics_dashboard:<action>` and its "Analytics" parent
-#: `analytics:<action>`. Nothing ever mints `analytics:demand` or the other per-group
-#: strings the registry names — those exist for a finer model that nobody has asked
-#: for yet. Under PTC's page model (access to the page = full rights on it), holding
-#: the page is the whole grant, so any of these expands to `analytics:*`. Without
-#: this every non-super-admin role — 740 of the 818 UAT accounts — got `permitted:
-#: false` on all 52 datasets and a 200 with an empty file.
+#: Dashboard" menu (under Reports) becomes `analytics_dashboard:<action>`. Nothing
+#: ever mints `analytics:demand` or the other per-group strings the registry names —
+#: those exist for a finer model that nobody has asked for yet. Under PTC's page
+#: model (access to the page = full rights on it), holding the page is the whole
+#: grant, so any of these expands to `analytics:*`. Without this every
+#: non-super-admin role — 740 of the 818 UAT accounts — got `permitted: false` on
+#: all 52 datasets and a 200 with an empty file. `analytics:read`/`:write` stay for
+#: any environment that granted the short-lived "Analytics" root menu.
 PAGE_GRANTS = (
     "analytics_dashboard:read", "analytics_dashboard:write", "analytics_dashboard:*",
     "analytics:read", "analytics:write",
@@ -135,6 +137,24 @@ class BudgetExceeded(RuntimeError):
 
 class FixedGroupingConflict(ValueError):
     """Two selected datasets demand different fixed date groupings."""
+
+
+class BandInactive(ValueError):
+    """A named block band was requested but its parameter holds no ranges yet."""
+
+    def __init__(self, band: block_bands.Band):
+        self.band = band
+        self.parameter_key = block_bands.PARAMETER_KEYS.get(band.code)
+        super().__init__(
+            f"The {band.label} band has no block ranges yet. Set parameter "
+            f"'{self.parameter_key}' under Masters → Parameters "
+            f"(e.g. {block_bands.RANGES_EXAMPLE}).")
+
+
+#: How long a band definition read from `parameters` is reused before the
+#: collection is asked again. PTC edits these a handful of times ever; the
+#: dashboard asks on every request.
+BAND_CACHE_TTL_SECONDS = 30.0
 
 
 def forced_grouping(codes) -> Tuple[Optional[str], List[str]]:
@@ -187,6 +207,28 @@ def _as_request(request: Any) -> AnalyticsQueryRequest:
     return req
 
 
+async def ensure_block_band_parameters() -> List[str]:
+    """Create the five band parameters (empty) so they appear in Masters → Parameters.
+
+    Run at processing start-up, like the bid-price defaults. Never overwrites a
+    value PTC has entered; returns the keys it created.
+    """
+    from ..repository.parameter_repository import parameter_repository
+    created: List[str] = []
+    for code, key in block_bands.PARAMETER_KEYS.items():
+        if await parameter_repository.get_parameter_by_key(key):
+            continue
+        await parameter_repository.create_parameter({
+            "para_key": key,
+            "para_value": "",
+            "description": block_bands.PARAMETER_DESCRIPTIONS[code],
+        })
+        created.append(key)
+    if created:
+        AnalyticsService.forget_bands()
+    return created
+
+
 async def _maybe_await(value: Any) -> Any:
     """Support a sync or an async cache client behind one call site."""
     if inspect.isawaitable(value):
@@ -225,6 +267,65 @@ class AnalyticsService:
                                          budget.THRESHOLDS["inline_capped"])),
             "max": int(getattr(s, "ANALYTICS_CELLS_MAX", budget.THRESHOLDS["max"])),
         }
+
+    # ---------------------------------------------------------------- bands
+
+    _band_cache: Dict[str, Any] = {}
+
+    async def band_parameters(self) -> Dict[str, Any]:
+        """The raw parameter values behind the named bands (uncached)."""
+        return await self.repository.get_parameters(
+            list(block_bands.PARAMETER_KEYS.values()))
+
+    async def bands(self, *, fresh: bool = False) -> Dict[str, block_bands.Band]:
+        """Every band, the named ones carrying whatever PTC has put in Masters.
+
+        Cached per process for `BAND_CACHE_TTL_SECONDS`; the cache is on the class
+        so the request path and the export path share one read. A failed read
+        falls back to the defaults (all named bands inactive) rather than failing
+        the request — the Individual and Custom groupings never depend on it.
+        """
+        cache = type(self)._band_cache
+        now = time.monotonic()
+        if not fresh and cache and now - cache.get("at", 0.0) < BAND_CACHE_TTL_SECONDS:
+            return cache["bands"]
+        try:
+            values = await self.band_parameters()
+        except Exception:  # noqa: BLE001 — a parameters outage must not kill queries
+            logger.exception("Analytics: could not read block band parameters")
+            values = {}
+        bands = block_bands.bands_from_parameters(values)
+        cache.update({"at": now, "bands": bands, "values": values})
+        return bands
+
+    @classmethod
+    def forget_bands(cls) -> None:
+        cls._band_cache.clear()
+
+    async def resolve_band(self, code: str) -> block_bands.Band:
+        """The band for a request code, or `BandInactive` if it is not defined."""
+        bands = await self.bands()
+        try:
+            band = bands[code]
+        except KeyError:
+            raise ValueError(f"Unknown block band: {code}") from None
+        if not band.active:
+            raise BandInactive(band)
+        return band
+
+    async def with_band(self, request: Any) -> AnalyticsQueryRequest:
+        """The request with its named band's current ranges stamped on it.
+
+        This is the only place a band definition enters a request. Everything
+        downstream — the cache key, the planner, the job row a replay reads —
+        sees `block_band_ranges` and never touches `parameters` again.
+        """
+        req = _as_request(request)
+        band = await self.resolve_band(req.block_band)
+        ranges = [list(r) for r in band.ranges]
+        if [list(r) for r in req.block_band_ranges] != ranges:
+            req = req.model_copy(update={"block_band_ranges": ranges})
+        return req
 
     # ---------------------------------------------------------- permissions
 
@@ -354,6 +455,7 @@ class AnalyticsService:
             "to_block": req.to_block,
             "date_grouping": req.date_grouping,
             "block_band": req.block_band,
+            "block_band_ranges": [list(p) for p in req.block_band_ranges],
             "custom_blocks": [list(p) for p in req.custom_blocks],
             "plants": sorted(set(req.plants)),
             "exchanges": sorted(set(req.exchanges)),
@@ -434,7 +536,7 @@ class AnalyticsService:
         Order is the contract: permissions, then budget, then cache, then MongoDB.
         Each step is cheaper than the one after it, and each one can end the request.
         """
-        req = _as_request(request)
+        req = await self.with_band(request)
         permissions = self.permissions_for(user_context)
         allowed, denied = self.filter_by_permission(req.datasets, permissions)
 

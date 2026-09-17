@@ -39,12 +39,33 @@ class AnalyticsQueryRequest(BaseModel):
     custom_blocks: List[List[int]] = Field(
         default_factory=list,
         description="Inclusive [lo, hi] block pairs; required when block_band=CUSTOM")
+    block_band_ranges: List[List[int]] = Field(
+        default_factory=list,
+        description=("Server-stamped: the [lo, hi] pairs the named block_band resolved "
+                     "to when the request was accepted. Ignored on input — the service "
+                     "always re-reads the band's parameter — and stored on an export job "
+                     "so a replay reproduces the file it made."))
     datasets: List[str] = Field(..., min_length=1,
                                 description="Ticked dataset codes, in display order")
     plants: List[str] = Field(default_factory=list,
                               description="Plant ids; required for a per-plant dataset")
     exchanges: List[str] = Field(default_factory=list,
                                  description="Exchange names; empty means all")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _block_grouping_alias(cls, data: Any) -> Any:
+        """Accept the UI's `block_grouping` for `block_band`.
+
+        The filter panel, the stored job echo and the CSV header all call the
+        band `block_grouping`; only this model calls it `block_band`. A body
+        that sends one and not the other must not fall back to INDIVIDUAL — it
+        did, silently, for every Custom or named-band request until 2026-09-17.
+        """
+        if isinstance(data, dict) and "block_band" not in data and data.get("block_grouping"):
+            data = dict(data)
+            data["block_band"] = data["block_grouping"]
+        return data
 
     @field_validator("datasets")
     @classmethod
@@ -77,6 +98,11 @@ class AnalyticsQueryRequest(BaseModel):
                 f"{', '.join(block_bands.DEFAULT_BANDS)}")
         return v
 
+    @field_validator("block_band_ranges")
+    @classmethod
+    def _valid_band_ranges(cls, v: List[List[int]]) -> List[List[int]]:
+        return [list(p) for p in block_bands.parse_ranges(v)]
+
     @field_validator("custom_blocks")
     @classmethod
     def _valid_custom_blocks(cls, v: List[List[int]]) -> List[List[int]]:
@@ -104,11 +130,8 @@ class AnalyticsQueryRequest(BaseModel):
         if self.block_band == block_bands.BAND_CUSTOM and not self.custom_blocks:
             raise ValueError(
                 "block_band=CUSTOM requires at least one custom_blocks range")
-        band = block_bands.DEFAULT_BANDS[self.block_band]
-        if not band.active:
-            raise ValueError(
-                f"block_band {self.block_band} is inactive — PTC has not supplied its "
-                f"block ranges yet")
+        # Whether a named band is active is a Masters → Parameters fact, not a
+        # model fact: `AnalyticsService.with_band` reads it and refuses with 422.
         if not self.plants:
             per_plant = [c for c in self.datasets
                          if registry.get(c).series == "per_plant"]
@@ -131,6 +154,7 @@ class AnalyticsQueryRequest(BaseModel):
             "to_block": self.to_block,
             "date_grouping": self.date_grouping,
             "block_band": self.block_band,
+            "block_band_ranges": [list(p) for p in self.block_band_ranges],
             "custom_blocks": [list(p) for p in self.custom_blocks],
             "plants": list(self.plants),
             "exchanges": list(self.exchanges),

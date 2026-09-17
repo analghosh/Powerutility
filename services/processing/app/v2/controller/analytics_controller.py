@@ -58,7 +58,8 @@ PLANT_CACHE_TTL_SECONDS = 900
 
 #: Shown against the five bands PTC has never supplied ranges for. The UI uses it
 #: verbatim as the tooltip on the disabled pill.
-INACTIVE_BAND_NOTE = "Awaiting PTC band definitions"
+INACTIVE_BAND_NOTE = ("Not defined yet — set parameter '{key}' under Masters → Parameters "
+                      "(e.g. {example})")
 
 #: Which filter multiplies a dataset's series count, for the live cell estimate the
 #: filter panel shows before anything is submitted.
@@ -293,18 +294,34 @@ class AnalyticsController:
         return hit["payload"]
 
     async def block_bands(self, user_context: Optional[dict] = None) -> dict:
-        """The configured bands. The five peak/off-peak ones ship inactive."""
+        """The configured bands, the named ones read from Masters → Parameters.
+
+        `fresh=True`: this is the call the dashboard makes on load, and an admin
+        who has just saved a parameter expects the pill to light up on the next
+        reload, not up to 30 s later. Queries still use the short cache.
+        """
+        current = await self.service.bands(fresh=True)
+        values = type(self.service)._band_cache.get("values") or {}
+        errors = block_bands.parameter_errors(values)
         bands = []
-        for band in block_bands.DEFAULT_BANDS.values():
+        for band in current.values():
+            key = block_bands.PARAMETER_KEYS.get(band.code)
+            if band.active:
+                note = None
+            elif band.code in errors:
+                note = (f"Parameter '{key}' could not be read: {errors[band.code]}")
+            elif key:
+                note = INACTIVE_BAND_NOTE.format(key=key, example=block_bands.RANGES_EXAMPLE)
+            else:
+                note = None
             bands.append({
                 "code": band.code,
                 "label": band.label,
                 "ranges": [list(r) for r in band.ranges],
                 "active": band.active,
                 "effective_from": band.effective_from,
-                # Ranges are a data change, not a code change; until PTC supplies
-                # them the pill is disabled and this is its tooltip.
-                "note": None if band.active else INACTIVE_BAND_NOTE,
+                "parameter_key": key,
+                "note": note,
             })
         return {"data": {
             "bands": bands,
