@@ -99,6 +99,29 @@ class BaseConsumer(ABC, threading.Thread):
             finally:
                 self._cleanup()
 
+    def _cleanup(self):
+        """Close this thread's channel and connection, leaving the shared manager alone.
+
+        Called from run()'s finally: on every loop iteration, so it must tolerate
+        partially-initialised and already-closed state and must never raise —
+        an exception here escapes run() and kills the consumer thread.
+        """
+        try:
+            if self.channel is not None and self.channel.is_open:
+                self.channel.close()
+        except Exception as e:
+            logger.warning(f"Consumer [{self.queue_name}] channel close failed: {e}")
+        finally:
+            self.channel = None
+
+        try:
+            if self.connection is not None and self.connection.is_open:
+                self.connection.close()
+        except Exception as e:
+            logger.warning(f"Consumer [{self.queue_name}] connection close failed: {e}")
+        finally:
+            self.connection = None
+
     def stop(self):
         """Stop the consumer"""
         logger.info(f"Stopping consumer for {self.queue_name}")
