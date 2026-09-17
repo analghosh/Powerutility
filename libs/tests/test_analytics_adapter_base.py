@@ -299,13 +299,13 @@ def test_a_summed_dataset_carries_a_null_guard_counter():
     # uncleared HPDAM block as a traded volume of zero. The counter lets
     # rows_from tell "summed nothing" from "summed to zero".
     g = _group_of(_Demandish().build_pipeline(
-        datasets=[registry.get("OD_UD_AMOUNT")], filters=FILTERS, ctx=CTX))
+        datasets=[registry.get("TOTAL_ENERGY_MU")], filters=FILTERS, ctx=CTX))
     # The test is on $type, not on $ne: a *missing* field is not equal to null in
     # an aggregation expression, so a comparison guard counted documents that
     # contributed nothing and an absent DSM amount rendered as a real zero.
-    assert g[base.NULL_GUARD_PREFIX + "OD_UD_AMOUNT"] == {
+    assert g[base.NULL_GUARD_PREFIX + "TOTAL_ENERGY_MU"] == {
         "$sum": {"$cond": [
-            {"$in": [{"$type": "$net_dsm_amount"}, ["missing", "null"]]}, 0, 1]}}
+            {"$in": [{"$type": "$total_energy_mu"}, ["missing", "null"]]}, 0, 1]}}
 
 
 def test_an_averaged_dataset_needs_no_counter():
@@ -505,7 +505,7 @@ def test_a_sentinel_zero_becomes_a_gap_before_aggregation():
 
 
 def test_datasets_without_a_sentinel_keep_genuine_zeros():
-    """OD/UD Quantum of 0 is a real zero-deviation block, not a gap."""
-    d = registry.get("OD_UD_AMOUNT")
+    """A real 0 MW drawal is a value, not a gap — only a declared sentinel is."""
+    d = registry.get("ACTUAL_DEMAND")
     assert d.sentinel_null is None
-    assert base.value_expr(d) == "$net_dsm_amount"
+    assert base.value_expr(d) == "$drawal"
