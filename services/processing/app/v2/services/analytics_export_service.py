@@ -313,6 +313,7 @@ class AnalyticsExportService:
             "date_grouping": req.date_grouping,
             "block_grouping": req.block_band,
             "block_band": req.block_band,
+            "block_band_ranges": [list(pair) for pair in req.block_band_ranges],
             "custom_blocks": [list(pair) for pair in req.custom_blocks],
             "plants": list(req.plants),
             "exchanges": list(req.exchanges),
@@ -354,6 +355,11 @@ class AnalyticsExportService:
         """
         req = as_export_request(request)
         fmt = self.format_for(req)
+        # Stamp the named band's ranges before anything is priced, keyed or stored:
+        # `with_band` returns the base model, so re-wrap it as an export request.
+        stamped = await self.service.with_band(req)
+        if stamped.block_band_ranges != req.block_band_ranges:
+            req = req.model_copy(update={"block_band_ranges": stamped.block_band_ranges})
 
         permissions = self.service.permissions_for(user_context)
         allowed, denied = self.service.filter_by_permission(req.datasets, permissions)

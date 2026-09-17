@@ -509,3 +509,27 @@ def test_datasets_without_a_sentinel_keep_genuine_zeros():
     d = registry.get("ACTUAL_DEMAND")
     assert d.sentinel_null is None
     assert base.value_expr(d) == "$drawal"
+
+
+# ------------------------------------------------------- band resolution
+
+
+def test_a_named_band_resolves_from_the_stamped_ranges_not_from_mongo():
+    """The worker replays a job row's filters; the ranges ride in that row, so the
+    adapters never need the parameters collection."""
+    band = base._resolve_band({"block_band": "PEAK", "block_band_ranges": [[65, 72], [81, 88]]})
+    assert band.code == "PEAK" and band.active
+    assert band.ranges == ((65, 72), (81, 88))
+
+
+def test_a_named_band_with_no_stamped_ranges_stays_inactive():
+    band = base._resolve_band({"block_band": "PEAK"})
+    assert band.code == "PEAK" and not band.active and band.ranges == ()
+
+
+def test_stamped_ranges_never_touch_individual_or_custom():
+    # A stale key on a replayed row must not turn INDIVIDUAL into a one-bucket band.
+    assert base._resolve_band({"block_band": "INDIVIDUAL",
+                               "block_band_ranges": [[1, 96]]}) is bb.DEFAULT_BANDS["INDIVIDUAL"]
+    assert base._resolve_band({"block_band": "CUSTOM",
+                               "block_band_ranges": [[1, 96]]}) is bb.DEFAULT_BANDS["CUSTOM"]

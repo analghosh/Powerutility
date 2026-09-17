@@ -25,14 +25,16 @@ table + download; the table was removed the same day.)
 **Not built:** KPI cards, Chart View, Summary tab. The query engine is designed so those are
 additive — they read the same canonical response — but they are out of scope for v1.
 
-It sits **alongside** the existing reports. Nothing already delivered was changed or removed.
+It sits **under Reports** in the sidebar (`/reports/analytics-dashboard`, user decision
+2026-09-17 evening — it was briefly its own "Analytics" root). Nothing already delivered
+was changed or removed.
 
 ## 2. Where the work is
 
 | repo | branch | commits | state |
 |---|---|---|---|
-| `backend` | `feat/analytics-dashboard` | 52 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 15 | **not merged**, branched off clean `dev` |
+| `backend` | `feat/analytics-dashboard` | 53 | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 16 | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -109,7 +111,9 @@ POST /api/v2/analytics/export/{id}/cancel
 POST /api/v2/analytics/export/{id}/retry     re-queue a failed/cancelled job IN PLACE
 ```
 
-Response payloads are nested under `data` (the client reads `response.data.data`).
+Request bodies take `block_band` (`block_grouping` accepted as an alias) and, for
+`CUSTOM`, `custom_blocks`; `block_band_ranges` is server-stamped. Response payloads are
+nested under `data` (the client reads `response.data.data`).
 `series[].values` is a numeric matrix indexed `[block][date]`. **`null` means missing and must
 never render as `0`** — a stated PTC requirement.
 
@@ -239,6 +243,47 @@ written ONLY on IDF, DAF carries `0`. Unpinned, the two averaged and **DSM Sched
 are identical on both rows and stay unpinned. `CACHE_VERSION` → v4. Verified live:
 DSM Schedule 535.44, OD/UD −1.48 (= 533.96 − 535.44), Final Schedule 550.44.
 
+## 6d. Bands from Masters → Parameters, Entity column gone, Reports move (2026-09-17, night)
+
+**Group Blocks By is now parametrised.** The five named bands (Night Off-Peak, Day
+Off-Peak, Day Peak, Evening Peak, Peak) each read their block ranges from one row in
+`parameters` — `analytics_band_night_off_peak` … `analytics_band_peak` — edited on
+**Masters → Parameters** like any other key. Value is text: `1-24, 89-96` (inclusive
+blocks 1-96; `;` or whitespace also separate; a single `5` is block 5). Empty = band stays
+disabled; the pill's tooltip names the parameter. An unparsable value disables the band
+with the parse error as its tooltip rather than failing the screen. Processing seeds the
+five keys empty at start-up (`ensure_block_band_parameters`, next to the bid-price
+defaults), so PTC finds them in the list.
+
+Flow: `AnalyticsService.with_band()` is the one place a definition enters a request — it
+reads the band (30 s per-process cache, `bands(fresh=True)` for the `/block-bands` call)
+and stamps `block_band_ranges` onto the request. Everything downstream (cache key,
+planner, adapters, the stored job row, the CSV header) sees the ranges and never touches
+`parameters` again; a queued/regenerated export therefore reproduces the file it made
+even if PTC edits the band later. An inactive band → 422 `ANALYTICS_INVALID_REQUEST`
+naming the parameter. Verified live end-to-end: set `analytics_band_peak = 65-72, 81-88`
+through the real parameters API → pill lit up → UI-generated CSV `PEAK 488.5625` = hand
+mean of the 32 stored blocks.
+
+🔴 **Defect found by driving the UI (pre-existing):** the filter panel sent `block_grouping`
+but the request model only read `block_band`, so **every Custom or named-band selection
+was silently served as INDIVIDUAL** — the CSV header even said so. Fixed on both sides:
+the client now sends `block_band` (+ `custom_blocks = [[from, to]]` for Custom) and the
+model accepts `block_grouping` as an alias. Verified: Custom blocks 1-8 → `1-8 518.28`.
+
+**Entity column removed from CSV and XLSX** (user: empty on most rows). CSV columns are
+now `dataset,label,unit,date,block,value`, the entity folded into the label —
+`Declared Capacity — by plant (ABCREPL_BHDL2)`, `DAM ACP (IEX)`, `Weekly MAPE (Day
+Ahead)`. XLSX: a scalar sheet is `Block | <dates>`; a per-entity sheet gets a leading
+column named for what it holds — `Plant` / `Exchange` / `Forecast` (pivot now emits
+`series_kind`). `CACHE_VERSION` → v5.
+
+**Reports move:** page file `client/src/pages/reports/AnalyticsDashboard.jsx`, route and
+menu child `/reports/analytics-dashboard` under Reports; the "Analytics" root menu is
+gone from the seeder and from the local DB (the child row was re-parented, its 17
+`menu_roles` grants kept). `RouteProtection`/`Sidebar` bypass paths updated. The menu
+name is unchanged, so it still mints `analytics_dashboard:read`.
+
 ## 7. REMAINING WORK — the actual to-do list
 
 Ordered by priority. Items marked ✅ are **already done** — do not redo them.
@@ -298,9 +343,9 @@ Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 
 ### Blocked on PTC, not on code
 
-9. The 18 questions in §13. Only one blocks a visible feature: **peak/off-peak band
-   definitions** (⑭), without which 5 of the 7 "Group Blocks By" options stay disabled.
-   Everything else affects labelling or correctness confirmation, not function.
+9. The 18 questions in §13. **Peak/off-peak band definitions** (⑭) no longer block
+   anything in code — PTC types them into Masters → Parameters (§6d) and the pills light
+   up. Everything else affects labelling or correctness confirmation, not function.
 
 ### Before any deployment
 
@@ -333,11 +378,11 @@ systemd units as user `epms`, each service its OWN checkout under
    checkout. Idempotent. Without it `demand_serve` is a COLLSCAN on both sides.
 3. **nginx** — item 10 in `docs/EPMS-nginx-changes.md`; `nginx -t && systemctl reload nginx`.
    Non-breaking; can ride with items 1/2/6/7/8 in one reload.
-4. **Restart auth first** so the seeder creates the `Analytics` and `Analytics Dashboard`
-   `menus` rows (it adds rows it does not find; existing rows untouched). Then processing,
-   then scheduler.
-5. **Grant the menu to roles** — Admin → Roles → menu assignment → tick *Analytics* and
-   *Analytics Dashboard* (`read`) for every role that should see the screen. The grant
+4. **Restart auth first** so the seeder creates the `Analytics Dashboard` `menus` row
+   under Reports (it adds rows it does not find; existing rows untouched). Then
+   processing (which also seeds the five `analytics_band_*` parameters), then scheduler.
+5. **Grant the menu to roles** — Admin → Roles → menu assignment → tick *Reports →
+   Analytics Dashboard* (`read`) for every role that should see the screen. The grant
    runs `_sync_role_permissions`, which is what mints `analytics_dashboard:read`; users
    pick it up on their **next login** (it lives in the token).
    ⚠️ **Read the trap in §9 before doing this on PROD**: that sync REBUILDS the role's
@@ -356,6 +401,8 @@ systemd units as user `epms`, each service its OWN checkout under
    from that path, so the two different checkouts are fine on one box as one user. Set
    `ANALYTICS_EXPORT_DIR` in **both** `.env` files only if PTC wants files off the code
    volume (`mkdir -p … && chown epms:epms … && chmod 750 …`).
+7b. **Band definitions** — Masters → Parameters → fill `analytics_band_*` with PTC's
+   block ranges (§6d). Until then the five pills stay disabled with a tooltip saying so.
 8. **Verify** (in this order, each proves the previous step):
    - `GET /processing/api/v2/analytics/datasets` as a non-admin → `permitted: true`
    - small CSV as that user → 200 with rows, not a header-only file
@@ -517,7 +564,7 @@ HPDAM clears in ~0.6% of blocks; Rostering mostly zero (is zero real or N/A?);
 `peak_demand_serve` has only 15 documents; UDM is `comp_udm` and IDF-only.
 
 **Cross-cutting:** peak/off-peak band definitions **do not exist anywhere** in EPMS or legacy
-mplive — this is the only open item blocking a visible feature (5 of 7 "Group Blocks By"
-options ship disabled); which dataset list is authoritative (the docx's 46 rows include 9
+mplive — PTC now enters them in Masters → Parameters (§6d), so this is data entry, not a
+code question; which dataset list is authoritative (the docx's 46 rows include 9
 duplicates); export retention (72h default); CSV decimal precision; KPI card rules when
 several incompatible datasets are selected.

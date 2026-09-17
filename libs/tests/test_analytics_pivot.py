@@ -450,11 +450,24 @@ def test_export_request_inherits_the_query_validation():
                              datasets=["DC_PLANT"], format="csv")
 
 
-def test_request_rejects_an_inactive_block_band():
-    """The five named bands have no ranges yet, and `block_key_expr` raises on one.
-
-    Rejecting here turns a 500 deep in the pipeline builder into a 422 naming the
-    band. Not in the plan's list; added because the failure it prevents is real.
+def test_request_accepts_a_named_band_and_carries_its_stamped_ranges():
+    """Whether a named band is active lives in Masters → Parameters, so the model
+    no longer refuses one — `AnalyticsService.with_band` does, with 422 naming the
+    parameter. What the model does own is the shape of the stamped ranges.
     """
-    with pytest.raises(ValidationError, match="inactive"):
-        _req(block_band="EVENING_PEAK")
+    req = _req(block_band="EVENING_PEAK")
+    assert req.block_band_ranges == []
+    req = _req(block_band="EVENING_PEAK", block_band_ranges=[[67, 78], [83, 88]])
+    assert req.to_filters()["block_band_ranges"] == [[67, 78], [83, 88]]
+    with pytest.raises(ValidationError, match="within 1-96"):
+        _req(block_band="EVENING_PEAK", block_band_ranges=[[0, 78]])
+
+
+def test_the_uis_block_grouping_is_accepted_as_block_band():
+    """The filter panel says `block_grouping`; sending only that must not
+    silently group by INDIVIDUAL (it did, for every Custom/Peak selection)."""
+    req = _req(block_grouping="CUSTOM", custom_blocks=[[1, 48]])
+    assert req.block_band == "CUSTOM"
+    # An explicit block_band wins over the alias.
+    req = _req(block_band="PEAK", block_grouping="CUSTOM")
+    assert req.block_band == "PEAK"
