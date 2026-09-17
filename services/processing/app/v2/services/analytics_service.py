@@ -94,6 +94,21 @@ WILDCARD_PERMISSIONS = ("*", "admin:*")
 #: Roles that mean "everything", matching `guard.py`'s super-admin detection.
 SUPER_ADMIN_ROLES = ("admin", "superadmin", "super_admin")
 
+#: The grants the menu-RBAC actually mints for this screen. Auth derives a role's
+#: permission strings from its menu rows (`_sync_role_permissions`): the "Analytics
+#: Dashboard" menu becomes `analytics_dashboard:<action>` and its "Analytics" parent
+#: `analytics:<action>`. Nothing ever mints `analytics:demand` or the other per-group
+#: strings the registry names — those exist for a finer model that nobody has asked
+#: for yet. Under PTC's page model (access to the page = full rights on it), holding
+#: the page is the whole grant, so any of these expands to `analytics:*`. Without
+#: this every non-super-admin role — 740 of the 818 UAT accounts — got `permitted:
+#: false` on all 52 datasets and a 200 with an empty file.
+PAGE_GRANTS = (
+    "analytics_dashboard:read", "analytics_dashboard:write", "analytics_dashboard:*",
+    "analytics:read", "analytics:write",
+)
+ANALYTICS_WILDCARD = "analytics:*"
+
 CACHE_HIT = "hit"
 CACHE_MISS = "miss"
 CACHE_SKIPPED = "skipped"
@@ -241,6 +256,8 @@ class AnalyticsService:
         )
         if is_super:
             permissions.add("*")
+        if any(p in permissions for p in PAGE_GRANTS):
+            permissions.add(ANALYTICS_WILDCARD)
         return permissions
 
     @staticmethod

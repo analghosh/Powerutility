@@ -31,8 +31,8 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 
 | repo | branch | commits | state |
 |---|---|---|---|
-| `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 14 | **not merged**, branched off clean `dev` |
+| `backend` | `feat/analytics-dashboard` | 52 | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 15 | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -304,22 +304,74 @@ Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 
 ### Before any deployment
 
-10. The four prerequisites in §8 — export directory, nginx buffering, index migration,
-    auth reseed. Each breaks the feature in a way that mis-diagnoses as something else.
+10. The go-live checklist in §8 — indexes, nginx, reseed, **menu grant** (without it the
+    screen is admin-only), scheduler flags. Each breaks the feature in a way that
+    mis-diagnoses as something else.
 
-## 8. Deploy prerequisites — will break the feature if missed
+## 8. Go-live checklist — everything between "merged" and "working for PTC users"
 
-1. ~~`/var/lib/epms/exports` must exist~~ — **no longer required.** `ANALYTICS_EXPORT_DIR`
-   now defaults to `<repo>/exports`, which any service user can create. Setting it to a
-   dedicated volume in PROD is recommended housekeeping, not a prerequisite.
+Verified 2026-09-17 evening against the real PROD topology (single Ubuntu EC2, four
+systemd units as user `epms`, each service its OWN checkout under
+`/var/www/applications/server/production/<svc>/`, nginx path-routed `/processing/` →
+:8003, client static under `/var/www/applications/client/dist`).
 
-2. **nginx `proxy_buffering off`** on `/api/v2/analytics/export`, else CSV streaming is
-   pointless and large exports risk a proxy timeout.
-3. Run `./.venv/bin/python -m migrations.analytics_indexes_2026_09_17` — `exchange_serve`
-   and `exchange_serve_historical` had **no indexes at all**.
-4. Reseed auth so the Analytics `menus` row exists, or the screen bounces users to `/login`.
+### A. Code — done on the branch, ships with the merge
 
-Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
+| # | what | why it mattered |
+|---|---|---|
+| A1 | 🔴 **Page grant unlocks the datasets** (`analytics_service.permissions_for`) | The registry names `analytics:demand` / `:dsm` / `:forecast` / `:market` / `:schedule` / `:supply`. The menu-RBAC never mints those: a role holding the "Analytics Dashboard" menu gets `analytics_dashboard:read` (+ `analytics:read` from the parent). **Every non-super-admin role — 740 of 818 UAT accounts are `user` — got `permitted: false` on all 52 datasets and a 200 with an empty file.** Local testing never saw it because `localdev` is `admin`. Now any page grant expands to `analytics:*` (PTC's page model: access to the page = full rights). Proven live with a `user`-role account: before 0/52 permitted, after the menu grant 52/52, export returns 481 rows. |
+| A2 | 🔴 Client honours `permitted` | It ignored the field entirely, so denied rows looked tickable and Generate produced an empty file. Now: disabled, "Not granted" badge, reason text; group "All" skips them. |
+| A3 | 🟠 `openpyxl==3.1.2` added to `services/scheduler/requirements.txt` | The scheduler imports `analytics_xlsx` (openpyxl) but its requirements never listed it; locally one shared venv hid it. On PROD's per-service venv the sweep job would `ImportError` at registration — **every queued export dead, CSV included**. |
+| A4 | 🟡 nginx snippet corrected (`docs/EPMS-nginx-changes.md` §10, `docs/nginx/application-proposed.conf` [10]) | First version was `location /api/v2/analytics/export` with no `proxy_pass` — on the path-routed vhost it would never have matched. |
+
+### B. Deploy steps — in this order
+
+1. **Merge + push** both `feat/analytics-dashboard` branches. (Local `git fetch` currently
+   fails with `Invalid username or token` — the pushes need a working credential.)
+2. **Indexes** (once, against the shared Mongo, before the first user hits the screen):
+   `./.venv/bin/python -m migrations.analytics_indexes_2026_09_17` from the processing
+   checkout. Idempotent. Without it `demand_serve` is a COLLSCAN on both sides.
+3. **nginx** — item 10 in `docs/EPMS-nginx-changes.md`; `nginx -t && systemctl reload nginx`.
+   Non-breaking; can ride with items 1/2/6/7/8 in one reload.
+4. **Restart auth first** so the seeder creates the `Analytics` and `Analytics Dashboard`
+   `menus` rows (it adds rows it does not find; existing rows untouched). Then processing,
+   then scheduler.
+5. **Grant the menu to roles** — Admin → Roles → menu assignment → tick *Analytics* and
+   *Analytics Dashboard* (`read`) for every role that should see the screen. The grant
+   runs `_sync_role_permissions`, which is what mints `analytics_dashboard:read`; users
+   pick it up on their **next login** (it lives in the token).
+   ⚠️ **Read the trap in §9 before doing this on PROD**: that sync REBUILDS the role's
+   permission list from its menu rows and dropped 58 `:write`/`:delete` strings from the
+   `user` role locally.
+6. **Scheduler flags** — decide `USE_RABBITMQ_JOBS`. It defaults **true**. With it on,
+   the doorbell is live and the branch's `BaseConsumer._cleanup` fix means the consumer
+   now *reconnects* after a RabbitMQ blip instead of dying. **Before restarting the
+   scheduler**, check for a backlog the dead consumer left behind — it will be drained
+   and every message executed on startup:
+   `rabbitmqctl list_queues name messages consumers`. Purge anything stale with
+   `rabbitmqctl purge_queue <name>`. With it off, the every-minute sweep alone runs
+   exports (≤60 s added latency, nothing else lost).
+7. **Export directory** — optional. Default is `<checkout>/exports` per service; the
+   scheduler writes there and stores the ABSOLUTE path in the job row, processing serves
+   from that path, so the two different checkouts are fine on one box as one user. Set
+   `ANALYTICS_EXPORT_DIR` in **both** `.env` files only if PTC wants files off the code
+   volume (`mkdir -p … && chown epms:epms … && chmod 750 …`).
+8. **Verify** (in this order, each proves the previous step):
+   - `GET /processing/api/v2/analytics/datasets` as a non-admin → `permitted: true`
+   - small CSV as that user → 200 with rows, not a header-only file
+   - the TTFB curl in the nginx doc → first byte well before total
+   - a large by-plant XLSX → 202 → Ready within ~2 min → Download 200
+   - `grep "Analytics export" /var/log/epms/scheduler.log` shows the sweep ticking
+
+### C. Not needed (checked, so nobody re-checks)
+
+- No new `VITE_*` variable — analytics endpoints hang off the existing processing base.
+- No `client_max_body_size` change — the request body is a small JSON filter.
+- No Redis change — the cache uses the existing client; a Redis outage degrades to
+  `cache=skipped`, it does not fail the query.
+- No systemd change — `--root-path /processing` is already there and the routes build no
+  absolute URLs.
+- No `RouteProtection` change — the bypass stays until PROD has reseeded (§7 item 7).
 
 ## 9. Traps that will otherwise cost you hours
 
@@ -349,6 +401,15 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
   packages were removed; only v34 remains.
 - **`backend/.gitignore` used to hide all `*.md`/`*.txt`/`*.json`.** Scoped on this branch —
   if you branch from `dev` instead, new docs and fixtures will vanish silently.
+- **Granting a menu through the admin UI rewrites the role's whole permission list.**
+  `MenuRoleRepository._sync_role_permissions` rebuilds `roles.permissions` from the
+  role's `menu_roles` rows and nothing else. Locally the `user` role went **92 → 34**
+  strings on one Analytics grant — every `:write`/`:delete` it held (`dam_single_bid:write`,
+  `forecast:write`, `supply:write`, …) vanished because its menu rows carry `["read"]`.
+  Vendor behaviour, pre-existing, latent on the `dev` lineage (no route reads those
+  strings there) — but a live outage the day `fix/vapt-remediation`'s guards merge. Before
+  granting on PROD: `db.roles.find({}, {name:1, permissions:1})` → keep a copy → grant →
+  diff. Restore with `$set` if anything but the two `analytics*` strings changed.
 - **Login as `localdev` / `Local@Dev12345`.** Logging in as `admin` gives "Uh Oh! Something
   went wrong" — `admin` is MFA-enrolled and dev has no MFA step.
 
@@ -374,9 +435,13 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
 
 ## 11. Defects found and fixed along the way (all committed)
 
-1. `BaseConsumer._cleanup()` was called in a `finally:` but **defined nowhere** — every
-   consumer thread died on its first loop iteration. If PROD matches, RabbitMQ-triggered jobs
-   have never run there; cron jobs are unaffected, so the symptom is subtle.
+1. `BaseConsumer._cleanup()` was called in a `finally:` but **defined nowhere**. Precisely:
+   `start_consuming()` blocks, so a consumer that connected cleanly at boot works — until
+   the first broker disconnect or error, when the `finally` raises `AttributeError` and
+   the thread dies **instead of reconnecting**. On PROD that means job triggers published
+   after any RabbitMQ blip queue up unconsumed until the next scheduler restart; cron jobs
+   are unaffected, so the symptom is subtle. (An earlier revision of this note said "died
+   on its first iteration" — too strong.) See §8 B6 for the backlog check this implies.
 2. `ConsumerManager.start()` **ignored `USE_RABBITMQ_JOBS`/`_AUDIT`**.
 3. **`HOURLY_WISE` grouping returned 1 bucket instead of 24** — `scheduled_at` is stamped at
    midnight, so `%H` labelled every row identically. Hour now derives from `time_block`.
