@@ -221,3 +221,50 @@ def test_only_per_plant_datasets_are_drilldowns():
     for d in registry.DATASETS.values():
         if d.drilldown:
             assert d.series == "per_plant", d.code
+
+
+# ------------------------------------------- Final Schedule = SG (PTC sheet)
+
+def test_final_schedule_is_the_summed_sg_from_supply_serve():
+    """PTC's sheet places Final Schedule under supply_serve. It is EPMS's own
+    versioned, published scheduling output; the demand_serve `schedule` column is an
+    uploaded CSV figure that excludes one plant (PPCLGPP) and the OA_PX line."""
+    d = registry.get("SG_TOTAL")
+    assert d.label == "Final Schedule"
+    assert d.group == "supply"
+    assert d.value == "$volume" and d.match == {"dc_sg": "SG"} and d.agg == "sum"
+
+
+def test_the_demand_serve_schedule_is_labelled_for_settlement_not_as_final():
+    d = registry.get("FINAL_SCHEDULE_STATE")
+    assert d.label == "DSM Schedule"
+    assert d.group == "demand" and d.value == "$schedule"
+
+
+def test_od_ud_quantum_still_subtracts_the_dsm_schedule_not_sg():
+    """Settlement compares drawal with the schedule at the drawal point — the sheet's
+    own `drawal − schedule`. Swapping in ΣSG would put PPCLGPP's 15 MW into the money."""
+    assert registry.get("OD_UD_QUANTUM").depends == ("ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE")
+
+
+def test_no_two_datasets_share_the_label_final_schedule():
+    labels = [d.label for d in registry.DATASETS.values()]
+    assert labels.count("Final Schedule") == 1
+    assert labels.count("Final Schedule — by plant") == 1
+
+
+# ------------------------------------------- IDF-only settlement fields
+
+@pytest.mark.parametrize("code", ["FINAL_SCHEDULE_STATE", "OD_UD_AMOUNT", "DSM_RATE"])
+def test_settlement_fields_are_pinned_to_the_idf_row(code):
+    """demand_serve has a DAF and an IDF row per block. schedule / net_dsm_amount /
+    dsm_rate are written only on IDF; DAF carries 0. Unpinned, the two rows averaged
+    and every value was HALVED — DSM Schedule read 267.72 for a stored 535.44."""
+    assert registry.get(code).match == {"type": "IDF"}
+
+
+def test_shared_fields_stay_unpinned_because_both_rows_carry_the_same_value():
+    """drawal / frequency / comp_udm are identical on the DAF and IDF rows, so the
+    average is exact — and pinning would lose days where only one type exists."""
+    for code in ("ACTUAL_DEMAND", "FREQUENCY", "DEMAND_UDM"):
+        assert registry.get(code).match is None
