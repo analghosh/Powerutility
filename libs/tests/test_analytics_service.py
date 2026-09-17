@@ -421,12 +421,12 @@ def test_the_exchange_series_count_defaults_to_every_exchange():
 
 def test_a_weekly_rollup_forces_week_wise_regardless_of_the_users_choice():
     """A weekly forecast viewed block-wise is meaningless."""
-    req = svc._as_request(_request(datasets=["WEEKLY_FORECAST_DAF"], date_grouping="BLOCK_WISE"))
+    req = svc._as_request(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE"))
     assert req.date_grouping == "WEEK_WISE"
 
 
 def test_a_monthly_rollup_forces_month_wise():
-    req = svc._as_request(_request(datasets=["MONTHLY_MAPE_IDF"], date_grouping="DATE_WISE"))
+    req = svc._as_request(_request(datasets=["MONTHLY_MAPE"], date_grouping="DATE_WISE"))
     assert req.date_grouping == "MONTH_WISE"
 
 
@@ -436,39 +436,39 @@ def test_an_ordinary_request_keeps_the_users_grouping():
 
 
 def test_mixing_a_rollup_with_an_ordinary_dataset_rolls_the_whole_request_up():
-    req = svc._as_request(_request(datasets=["ACTUAL_DEMAND", "WEEKLY_FORECAST_DAF"],
+    req = svc._as_request(_request(datasets=["ACTUAL_DEMAND", "WEEKLY_FORECAST"],
                                    date_grouping="BLOCK_WISE"))
     assert req.date_grouping == "WEEK_WISE"
     grouping, by = svc.forced_grouping(req.datasets)
     assert grouping == "WEEK_WISE"
-    assert by == ["WEEKLY_FORECAST_DAF"]
+    assert by == ["WEEKLY_FORECAST"]
 
 
 def test_mixing_weekly_and_monthly_rollups_is_refused():
     with pytest.raises(svc.FixedGroupingConflict) as exc:
-        svc._as_request(_request(datasets=["WEEKLY_FORECAST_DAF", "MONTHLY_FORECAST_DAF"]))
+        svc._as_request(_request(datasets=["WEEKLY_FORECAST", "MONTHLY_FORECAST"]))
     msg = str(exc.value)
     # Human words in the message — a user does not know what MONTHLY_MAPE_IDF is.
     assert "weekly" in msg.lower() and "monthly" in msg.lower()
-    assert "Weekly Forecast (Day Ahead)" in msg
-    assert "Monthly Forecast (Day Ahead)" in msg
-    assert "WEEKLY_FORECAST_DAF" not in msg
+    assert "Weekly Forecast" in msg
+    assert "Monthly Forecast" in msg
+    assert "WEEKLY_FORECAST" not in msg
     # The codes travel in a structured field for the client's own logic.
-    assert exc.value.groups == {"WEEK_WISE": ["WEEKLY_FORECAST_DAF"],
-                                "MONTH_WISE": ["MONTHLY_FORECAST_DAF"]}
+    assert exc.value.groups == {"WEEK_WISE": ["WEEKLY_FORECAST"],
+                                "MONTH_WISE": ["MONTHLY_FORECAST"]}
 
 
 def test_forced_grouping_reaches_the_cache_key():
     """The same roll-up asked with two different user groupings is ONE cache entry."""
     s = svc.AnalyticsService(repository=object(), cache=None)
-    a = s.cache_key(_request(datasets=["WEEKLY_FORECAST_DAF"], date_grouping="BLOCK_WISE"))
-    b = s.cache_key(_request(datasets=["WEEKLY_FORECAST_DAF"], date_grouping="DATE_WISE"))
+    a = s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE"))
+    b = s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="DATE_WISE"))
     assert a == b
 
 
 def test_forced_grouping_reaches_the_budget():
     """31 days block-wise would be 2,976 cells; forced weekly it is 5 weeks × 96."""
     s = svc.AnalyticsService(repository=object(), cache=None)
-    est = s.estimate_only(_request(datasets=["WEEKLY_FORECAST_DAF"], date_grouping="BLOCK_WISE",
+    est = s.estimate_only(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE",
                                    from_date=date(2026, 8, 1), to_date=date(2026, 8, 31)))
     assert est.date_buckets == 5
