@@ -21,6 +21,7 @@ All job repositories are configured to use audit_db only.
 """
 
 import os
+from pathlib import Path
 from pickle import TRUE
 from typing import List
 from pydantic_settings import BaseSettings
@@ -315,7 +316,11 @@ class Settings(BaseSettings):
     ANALYTICS_CELLS_MAX: int = 10_000_000
     ANALYTICS_GROUP_CONCURRENCY: int = 4
     ANALYTICS_QUERY_MAX_TIME_MS: int = 20_000
-    ANALYTICS_EXPORT_DIR: str = "/var/lib/epms/exports"
+    # Generated export files. Defaults to <repo>/exports so a fresh checkout works
+    # without root: a /var/lib default failed on first use with Errno 13 because the
+    # scheduler's service user cannot create it. PROD should override this to a
+    # dedicated, service-user-owned path (see docs/EPMS-nginx-changes.md).
+    ANALYTICS_EXPORT_DIR: str = str(Path(__file__).resolve().parents[4] / "exports")
     ANALYTICS_EXPORT_RETENTION_HOURS: int = 72
     ANALYTICS_JOB_RETENTION_DAYS: int = 90
     ANALYTICS_EXPORT_DISK_BUDGET_MB: int = 5_120

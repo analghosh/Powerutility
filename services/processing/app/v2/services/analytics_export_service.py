@@ -465,6 +465,11 @@ class AnalyticsExportService:
                                  deduped=False, published=published,
                                  status="queued")
 
+    async def notify_queued(self, job_id: str, user_id: str = "") -> bool:
+        """Public doorbell for a job that is already `queued` in Mongo — used by
+        retry, where the row exists and only the broker nudge is missing."""
+        return await self._publish(job_id, user_id)
+
     async def _publish(self, job_id: str, user_id: str) -> bool:
         """Ring the doorbell. Never raises — the sweep is the primary path.
 

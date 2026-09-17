@@ -132,6 +132,16 @@ class FakeJobs:
             self.jobs[job_id].update({"status": status, **fields})
         return True
 
+    async def requeue(self, job_id):
+        self.marks.append((job_id, "requeue", {}))
+        job = self.jobs.get(job_id)
+        if not job or job["status"] not in ("failed", "cancelled"):
+            return False
+        job.update({"status": "queued", "error": None, "parts": [], "chunks_done": 0,
+                    "attempts": 0, "worker_id": None, "heartbeat_at": None,
+                    "result": None})
+        return True
+
 
 class FakePublisher:
     """Records the async publish; detonates on the blocking one."""
@@ -735,3 +745,64 @@ def test_the_download_route_is_not_excluded_from_authentication():
         stripped = line.strip()
         if stripped.startswith('"') and "analytics" in stripped:
             pytest.fail(f"analytics appears in a main.py path list: {stripped}")
+
+
+# -------------------------------------------------------------------- retry
+
+def test_retrying_someone_elses_job_is_403():
+    jobs = FakeJobs(jobs=[_job("theirs", user_id=INTRUDER, status="failed")])
+    response = _client(_service(jobs=jobs)).post("/api/v2/analytics/export/theirs/retry")
+
+    assert response.status_code == 403
+    assert jobs.marks == [], "a refused retry must not touch the row"
+
+
+def test_retrying_a_failed_job_requeues_the_same_job_not_a_sibling():
+    """The defect: 'Try again' regenerated, leaving the failed row beside its
+    replacement, one more row per attempt."""
+    jobs = FakeJobs(jobs=[_job("job-1", status="failed",
+                               error={"code": "x", "message": "Errno 13"})])
+    service = _service(jobs=jobs)
+    response = _client(service).post("/api/v2/analytics/export/job-1/retry")
+
+    assert response.status_code == 200
+    payload = response.json()["data"]
+    assert payload == {"job_id": "job-1", "status": "queued", "changed": True}
+    assert jobs.created == [], "no new job document"
+    assert jobs.jobs["job-1"]["status"] == "queued"
+    assert jobs.jobs["job-1"]["error"] is None
+    assert jobs.jobs["job-1"]["attempts"] == 0
+
+
+def test_retrying_rings_the_doorbell_like_a_first_submission():
+    jobs = FakeJobs(jobs=[_job("job-1", status="failed")])
+    service = _service(jobs=jobs)
+    _client(service).post("/api/v2/analytics/export/job-1/retry")
+
+    assert [c["payload"]["job_id"] for c in service.publisher.calls] == ["job-1"]
+
+
+def test_retrying_a_cancelled_job_is_allowed():
+    jobs = FakeJobs(jobs=[_job("job-1", status="cancelled")])
+    response = _client(_service(jobs=jobs)).post("/api/v2/analytics/export/job-1/retry")
+    assert response.status_code == 200
+    assert jobs.jobs["job-1"]["status"] == "queued"
+
+
+@pytest.mark.parametrize("status", ["queued", "running", "assembling", "ready", "expired"])
+def test_retrying_a_non_terminal_or_finished_job_is_409_not_a_silent_200(status):
+    jobs = FakeJobs(jobs=[_job("job-1", status=status)])
+    response = _client(_service(jobs=jobs)).post("/api/v2/analytics/export/job-1/retry")
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == "ANALYTICS_EXPORT_NOT_RETRYABLE"
+    assert detail["status"] == status
+    assert jobs.jobs["job-1"]["status"] == status, "must not change state"
+
+
+def test_expired_is_pointed_at_regenerate_not_retry():
+    """An expired job's file is gone; a fresh job is the honest answer there."""
+    jobs = FakeJobs(jobs=[_job("job-1", status="expired")])
+    response = _client(_service(jobs=jobs)).post("/api/v2/analytics/export/job-1/retry")
+    assert "regenerate" in response.json()["detail"]["message"].lower()
