@@ -103,3 +103,34 @@ def test_hourly_grouping_multiplies_by_24():
 def test_empty_dataset_selection_is_zero_cells():
     e = budget.estimate(date_buckets=30, block_buckets=96, datasets=[], ctx=CTX)
     assert e.cells == 0
+
+
+# ------------------------------------------------ partial weeks (user question)
+
+def test_three_days_inside_one_iso_week_is_one_bucket():
+    """Wed 26 → Fri 28 Aug 2026 — all W35."""
+    assert budget.date_bucket_count(date(2026, 8, 26), date(2026, 8, 28), "WEEK_WISE") == 1
+
+
+def test_three_days_straddling_a_week_boundary_is_two_buckets():
+    """Sat 29 → Mon 31 Aug 2026 spans W35 and W36. ceil(3/7) said 1 — an UNDERestimate,
+    which is the wrong direction for admission control."""
+    assert budget.date_bucket_count(date(2026, 8, 29), date(2026, 8, 31), "WEEK_WISE") == 2
+
+
+def test_nine_days_across_two_partial_weeks_is_two_buckets():
+    """Wed 26 Aug → Thu 3 Sep: W35 (5 days) + W36 (4 days)."""
+    assert budget.date_bucket_count(date(2026, 8, 26), date(2026, 9, 3), "WEEK_WISE") == 2
+
+
+def test_a_full_iso_week_monday_to_sunday_is_one_bucket():
+    assert budget.date_bucket_count(date(2026, 8, 24), date(2026, 8, 30), "WEEK_WISE") == 1
+
+
+def test_eight_days_monday_to_monday_is_two_buckets():
+    assert budget.date_bucket_count(date(2026, 8, 24), date(2026, 8, 31), "WEEK_WISE") == 2
+
+
+def test_week_count_survives_the_iso_year_boundary():
+    """29 Dec 2025 is 2026-W01; 22 Dec 2025 is 2025-W52. Two weeks, one year rollover."""
+    assert budget.date_bucket_count(date(2025, 12, 22), date(2025, 12, 29), "WEEK_WISE") == 2

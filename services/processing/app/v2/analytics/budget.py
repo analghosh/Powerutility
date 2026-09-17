@@ -40,7 +40,15 @@ def date_bucket_count(from_date: date, to_date: date, grouping: str) -> int:
     if grouping in ("BLOCK_WISE", "DATE_WISE"):
         return days
     if grouping == "WEEK_WISE":
-        return max(1, (days + 6) // 7)
+        # Distinct ISO weeks touched, not ceil(days/7): Sat 29 → Mon 31 Aug is 3 days
+        # but TWO weeks, and the engine keys on the ISO week, so the estimate must too.
+        # Underestimating lets a request through that is bigger than promised.
+        first = from_date.isocalendar()
+        last = to_date.isocalendar()
+        # ISO weeks are contiguous across the year boundary; count via ordinal Mondays.
+        first_monday = from_date.toordinal() - (first[2] - 1)
+        last_monday = to_date.toordinal() - (last[2] - 1)
+        return max(1, (last_monday - first_monday) // 7 + 1)
     if grouping == "MONTH_WISE":
         return max(1, (to_date.year - from_date.year) * 12 + (to_date.month - from_date.month) + 1)
     if grouping == "YEAR_WISE":
