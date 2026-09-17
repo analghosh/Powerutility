@@ -58,6 +58,7 @@ from services.scheduler.app.processors.dam_bid_capture_processor import DAMBidCa
 from services.scheduler.app.processors.gdam_bid_capture_processor import GDAMBidCaptureProcessor
 from services.scheduler.app.processors.hpdam_bid_capture_processor import HPDAMBidCaptureProcessor
 from services.scheduler.app.processors.rtm_bid_capture_processor import RTMBidCaptureProcessor
+from services.scheduler.app.processors.analytics_export_processor import analytics_export_processor
 from services.scheduler.app.services.peak_demand_service import peak_demand_service
 from services.scheduler.app.utils.log_capture import context_aware_handler
 logger = logging.getLogger(__name__)
@@ -131,6 +132,17 @@ class CronManager(BaseCronManager):
         self.gdam_bid_capture_processor = GDAMBidCaptureProcessor()
         self.hpdam_bid_capture_processor = HPDAMBidCaptureProcessor()
         self.rtm_bid_capture_processor = RTMBidCaptureProcessor()
+        self.analytics_export_processor = analytics_export_processor
+        # First job in the scheduler that writes files. ANALYTICS_EXPORT_DIR defaults
+        # to /var/lib/epms/exports, which does not exist on a fresh box; create it at
+        # startup so a permissions problem is named in the boot log rather than at
+        # the first export. Non-fatal on purpose: a broken export directory must not
+        # stop the bidding crons from registering.
+        try:
+            self.analytics_export_processor.ensure_directories()
+        except Exception as export_dir_error:
+            logger.error("Analytics export directory unavailable at startup: %s",
+                         export_dir_error)
         
         # New HPX Exchange Trade Processor
         from services.scheduler.app.processors.exchange_trade_processor import ExchangeTradeProcessor
@@ -314,6 +326,11 @@ class CronManager(BaseCronManager):
             "gdam_bid_capture_approval": self.gdam_bid_capture_processor.execute_block_capture_job,
             "hpdam_bid_capture_approval": self.hpdam_bid_capture_processor.execute_block_capture_job,
             "rtm_bid_capture_approval": self.rtm_bid_capture_processor.execute_block_capture_job,
+
+            # Analytics Dashboard export worker. Registered here, in
+            # SchedulerJobSeeder.get_default_jobs and in _register_fallback_jobs —
+            # miss any one and the job runs once at boot and never fires again.
+            "analytics_export_sweep": self.analytics_export_processor.sweep,
         }
         return job_functions.get(job_type)
     
@@ -672,6 +689,15 @@ class CronManager(BaseCronManager):
                 "name": "Data Migration to Historical",
                 "schedule": "0 3 * * *",
                 "enabled": False,
+                "timezone": settings.CRON_TIMEZONE
+            },
+            {
+                # This is the list that actually gets registered at import, because
+                # _register_service_jobs() runs before the event loop exists.
+                "job_type": "analytics_export_sweep",
+                "name": "Analytics Export Sweep",
+                "schedule": getattr(settings, "ANALYTICS_EXPORT_SWEEP_CRON", "* * * * *"),
+                "enabled": getattr(settings, "ANALYTICS_EXPORT_SWEEP_ENABLED", True),
                 "timezone": settings.CRON_TIMEZONE
             },
         ]

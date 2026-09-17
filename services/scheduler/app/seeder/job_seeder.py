@@ -574,6 +574,21 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
                 "description": "Runs DAM bid capture snapshot daily at 10:59 IST",
                 "priority": 6
+            },
+            {
+                # Analytics Dashboard export worker. Also registered in
+                # CronManager._get_job_function and _register_fallback_jobs — miss
+                # any one and the job runs once at boot and never fires again.
+                # Every minute is the floor: _add_job_to_scheduler rejects anything
+                # that is not exactly five cron fields.
+                "job_type": "analytics_export_sweep",
+                "name": "Analytics Export Sweep",
+                "type": "system_maintenance",
+                "schedule": getattr(self.settings, "ANALYTICS_EXPORT_SWEEP_CRON", "* * * * *"),
+                "enabled": getattr(self.settings, "ANALYTICS_EXPORT_SWEEP_ENABLED", True),
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'Asia/Kolkata'),
+                "description": "Claims queued analytics export jobs, writes their files, requeues abandoned ones and deletes expired exports",
+                "priority": 9
             }
         ]
 
