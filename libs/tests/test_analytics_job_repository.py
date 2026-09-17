@@ -505,3 +505,49 @@ async def test_list_for_user_is_scoped_to_that_user_and_newest_first(repo):
     assert projection == {"_id": 0}
     cursor.sort.assert_called_once_with([("created_at", -1)])
     cursor.limit.assert_called_once_with(25)
+
+
+# ------------------------------------------------------------------ requeue
+
+@pytest.mark.asyncio
+async def test_requeue_sends_the_same_job_back_to_queued(repo):
+    repo.collection.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+
+    assert await repo.requeue("job-1") is True
+
+    filt, update = repo.collection.update_one.call_args[0]
+    assert filt["job_id"] == "job-1"
+    assert update["$set"]["status"] == "queued"
+
+
+@pytest.mark.asyncio
+async def test_requeue_only_touches_terminal_failed_or_cancelled_jobs(repo):
+    repo.collection.update_one = AsyncMock(return_value=MagicMock(modified_count=0))
+
+    await repo.requeue("job-1")
+
+    filt, _ = repo.collection.update_one.call_args[0]
+    assert set(filt["status"]["$in"]) == {"failed", "cancelled"}
+
+
+@pytest.mark.asyncio
+async def test_requeue_wipes_everything_the_failed_run_left_behind(repo):
+    """The worker must start clean: no stale error, receipts, claim, or attempts."""
+    repo.collection.update_one = AsyncMock(return_value=MagicMock(modified_count=1))
+
+    await repo.requeue("job-1")
+
+    s = repo.collection.update_one.call_args[0][1]["$set"]
+    assert s["error"] is None
+    assert s["parts"] == []
+    assert s["chunks_done"] == 0
+    assert s["attempts"] == 0
+    assert s["worker_id"] is None
+    assert s["heartbeat_at"] is None
+    assert s["result"] is None
+
+
+@pytest.mark.asyncio
+async def test_requeue_reports_false_when_nothing_matched(repo):
+    repo.collection.update_one = AsyncMock(return_value=MagicMock(modified_count=0))
+    assert await repo.requeue("already-running") is False
