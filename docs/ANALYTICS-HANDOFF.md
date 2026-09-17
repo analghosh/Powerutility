@@ -23,7 +23,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 | repo | branch | commits | state |
 |---|---|---|---|
 | `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 9  | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 10 | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -312,7 +312,15 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
    Failed 1 → 0.
 9. **CSV/Excel buttons looked decorative** — disabled with no explanation until a dataset
    was picked. Now a labelled "Download as" group with a hint saying why it is disabled.
-10. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
+10. **Group "All" on Demand & DSM produced "Analytics query failed" with raw dataset
+    codes.** The server correctly refused mixing weekly and monthly roll-ups (different
+    date axes), but the UI let the user build the combination first, then showed a red
+    error listing `MONTHLY_MAPE_IDF` etc. Fixed at the source: `/datasets` now exposes
+    `fixed_grouping`; the multi-select locks the OTHER axis's roll-ups (disabled, tooltip
+    says why) once one is ticked, and group-select resolves the axis inside the batch so
+    "All" ticks 17 not 21. The server message now uses labels, not codes, and carries the
+    codes in a structured `groups` field. Verified: All → 17 selected → Apply → 200.
+11. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
    from `response.data.data`, but FastAPI's `HTTPException` puts the payload under
    `detail` — `{ detail: { code, message, estimate } }`. curl could not catch this; only
    driving the real UI did. `readEstimate` now lives in `utils/readEstimate.js` with a

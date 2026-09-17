@@ -131,10 +131,17 @@ def forced_grouping(codes) -> Tuple[Optional[str], List[str]]:
     if not forced:
         return None, []
     if len(forced) > 1:
-        detail = "; ".join(f"{g}: {', '.join(c)}" for g, c in sorted(forced.items()))
-        raise FixedGroupingConflict(
-            f"These datasets require different date groupings and cannot be combined "
-            f"in one request — {detail}")
+        pretty = {"WEEK_WISE": "weekly", "MONTH_WISE": "monthly"}
+        parts = []
+        for g, codes_ in sorted(forced.items()):
+            labels = ", ".join(registry.get(c).label for c in codes_)
+            parts.append(f"{pretty.get(g, g)} ({labels})")
+        exc = FixedGroupingConflict(
+            "Weekly and monthly roll-ups cannot be shown on one table because they "
+            "need different date axes. Please pick one or the other: "
+            + " vs ".join(parts) + ".")
+        exc.groups = {g: list(c) for g, c in forced.items()}
+        raise exc
     (grouping, by), = forced.items()
     return grouping, by
 

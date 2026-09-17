@@ -448,7 +448,14 @@ def test_mixing_weekly_and_monthly_rollups_is_refused():
     with pytest.raises(svc.FixedGroupingConflict) as exc:
         svc._as_request(_request(datasets=["WEEKLY_FORECAST_DAF", "MONTHLY_FORECAST_DAF"]))
     msg = str(exc.value)
-    assert "WEEKLY_FORECAST_DAF" in msg and "MONTHLY_FORECAST_DAF" in msg
+    # Human words in the message — a user does not know what MONTHLY_MAPE_IDF is.
+    assert "weekly" in msg.lower() and "monthly" in msg.lower()
+    assert "Weekly Forecast (Day Ahead)" in msg
+    assert "Monthly Forecast (Day Ahead)" in msg
+    assert "WEEKLY_FORECAST_DAF" not in msg
+    # The codes travel in a structured field for the client's own logic.
+    assert exc.value.groups == {"WEEK_WISE": ["WEEKLY_FORECAST_DAF"],
+                                "MONTH_WISE": ["MONTHLY_FORECAST_DAF"]}
 
 
 def test_forced_grouping_reaches_the_cache_key():
