@@ -32,7 +32,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 | repo | branch | commits | state |
 |---|---|---|---|
 | `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 13 | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 14 | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -337,6 +337,11 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
     says why) once one is ticked, and group-select resolves the axis inside the batch so
     "All" ticks 17 not 21. The server message now uses labels, not codes, and carries the
     codes in a structured `groups` field. Verified: All → 17 selected → Apply → 200.
+    **Follow-up:** the lock read as "broken" because the only explanation was a hover
+    tooltip on a disabled checkbox. Now every roll-up row carries a Weekly / Monthly tag,
+    and a notice appears at the top of the group naming the locked axis with an inline
+    "Clear the monthly selection" link. Verified: tick Monthly → notice + Weekly rows
+    disabled → click Clear → Weekly unlocks, notice gone.
 11. **Every download from My Exports was a 403** ("This download link is not valid for
     this export"). The route requires `?token=<download_token>`; the server exposes it on
     every job row; the client never sent it. Masked during verification because curl
