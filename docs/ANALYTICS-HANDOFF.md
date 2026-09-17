@@ -23,7 +23,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 | repo | branch | commits | state |
 |---|---|---|---|
 | `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 7  | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 8  | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -120,8 +120,11 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | XLSX inline | sheet per dataset + `Filters` sheet |
 | Queued export | 202 → sweep → 22/22 chunks → ready, 183KB downloaded and opened |
 | Download authz | ownership checked independently of the token |
+| **Large range in the browser** | 5 months × Plant wise DC+SG × 34 plants → Apply → **413** → budget dialog opens (9,98,784 values, 3 costed suggestions) |
+| **Suggestion round-trip** | click "Switch to Week-wise" → 200 → dialog closes → pill activates → grid renders **68 per-plant columns**, 33 DOM rows |
+| Exports panel persistence | earlier queued jobs (Ready + Failed) still listed in a fresh browser session, with the `Errno 13` message surfaced to the user |
 
-**Tests:** backend `libs/tests` 767 pass / 10 fail; client 44 pass.
+**Tests:** backend `libs/tests` 767 pass / 10 fail; client 49 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
@@ -169,6 +172,8 @@ Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 - ✅ Queued export driven end to end: 202 → Mongo sweep → 22/22 chunks → downloaded 183KB
   XLSX and opened it.
 - ✅ Budget 413, capped band, Redis cache hit, disabled-dataset 422, CSV stream, XLSX inline.
+- ✅ **Large-range path in the real browser**: 413 → budget dialog → Week-wise suggestion →
+  200 → 68-column grid. This run found and fixed the dialog-never-opens defect (§11 item 7).
 
 ### P1 — correctness
 
@@ -247,6 +252,10 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
   `* * * * *`.
 - **A new scheduler job must be registered in THREE places** or it runs once at boot and
   never again: `_get_job_function`, `get_default_jobs`, `_register_fallback_jobs`.
+- **Error responses use `detail`, success responses use `data`.** FastAPI's `HTTPException`
+  puts its payload under `detail`; our 2xx routes nest under `data`. Any client code that
+  reads an error body must look in `detail` first — the budget dialog was silently dead
+  because it did not.
 - **`GenericRepository.aggregate` swallows exceptions and returns `[]`.** Analytics must
   distinguish "no data" from "query failed", so it uses its own wrapper that raises.
 - **Client has no React Query and no Tailwind.** Both appear in the tree but are inert. Use
@@ -293,6 +302,11 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
 4. **Archival double-count** (see §10).
 5. `JobPublisher` used blocking pika in a sync function → added `publish_job_trigger_async`.
 6. `.gitignore` blanket globs scoped.
+7. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
+   from `response.data.data`, but FastAPI's `HTTPException` puts the payload under
+   `detail` — `{ detail: { code, message, estimate } }`. curl could not catch this; only
+   driving the real UI did. `readEstimate` now lives in `utils/readEstimate.js` with a
+   `node --test` case pinning the exact real 413 shape.
 
 ## 12. Commands
 
