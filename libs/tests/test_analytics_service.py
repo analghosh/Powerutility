@@ -467,8 +467,10 @@ def test_forced_grouping_reaches_the_cache_key():
 
 
 def test_forced_grouping_reaches_the_budget():
-    """31 days block-wise would be 2,976 cells; forced weekly it is 5 weeks × 96."""
+    """31 days block-wise would be 2,976 cells; forced weekly it is the ISO weeks the
+    range touches — Sat 1 Aug 2026 is W31 and Mon 31 Aug is W36, so SIX, not ceil(31/7)=5.
+    The engine keys on the ISO week, so the estimate must count the same way."""
     s = svc.AnalyticsService(repository=object(), cache=None)
     est = s.estimate_only(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE",
                                    from_date=date(2026, 8, 1), to_date=date(2026, 8, 31)))
-    assert est.date_buckets == 5
+    assert est.date_buckets == 6
