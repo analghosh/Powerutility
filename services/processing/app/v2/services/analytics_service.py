@@ -79,7 +79,9 @@ DEFAULT_EXCHANGE_COUNT = 3
 #   v2: ACTUAL_DEMAND moved from `actual` to `drawal` (2026-09-17).
 #   v3: meta gained `period_coverage` / `partial_periods`; roll-ups collapsed to
 #       per_forecast_type with `entity_label` (2026-09-17).
-CACHE_VERSION = "v3"
+#   v4: FINAL_SCHEDULE_STATE / OD_UD_AMOUNT / DSM_RATE pinned to the IDF row — the
+#       cached values were HALVED by the DAF placeholder (2026-09-17).
+CACHE_VERSION = "v4"
 CACHE_PREFIX = "analytics:query"
 
 #: Bands that cannot be rendered inline. The route turns this into a 413 plus the
