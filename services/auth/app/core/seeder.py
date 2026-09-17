@@ -95,7 +95,15 @@ DEFAULT_MENUS = [
     
     # 10. Reports (Root)
     {"name": "Reports", "icon": "📋", "parent_id": None, "path": "/reports", "order": 10},
-    {"name": "Standard Reports", "icon": "📊", "parent_id": "Reports", "path": "/reports/standard", "order": 1}
+    {"name": "Standard Reports", "icon": "📊", "parent_id": "Reports", "path": "/reports/standard", "order": 1},
+
+    # 11. Analytics (Root)
+    # Without this row RouteProtection has no menu to resolve the path against and
+    # sends the user back to /login, so the screen is unreachable however correct
+    # the frontend route is.
+    {"name": "Analytics", "icon": "📈", "parent_id": None, "path": "/analytics", "order": 11},
+    {"name": "Analytics Dashboard", "icon": "📉", "parent_id": "Analytics",
+     "path": "/analytics/dashboard", "order": 1}
 ]
 
 class DatabaseSeeder:

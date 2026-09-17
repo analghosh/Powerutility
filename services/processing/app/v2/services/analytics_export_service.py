@@ -1,0 +1,510 @@
+"""Export mode selection and job enqueue for the analytics dashboard.
+
+`AnalyticsService` answers the question; this module decides what shape the answer
+leaves the building in. There is exactly one decision — **serve it now, or queue
+it** — and four things about it are worth stating because none of them is obvious
+from the code alone.
+
+**1. The threshold is per format, and the gap between the two numbers is the
+point.** CSV yields rows as it goes: a 500k-cell stream costs constant memory,
+the first byte is out in ~200ms, and a disconnect wastes nothing. XLSX emits no
+bytes at all until openpyxl finalises the zip central directory, so the identical
+request holds a web worker for a minute with nothing to show for it. One shared
+threshold would either queue CSVs that could have streamed or block a worker on a
+large workbook. Hence `MODE_THRESHOLDS`: CSV rides `ANALYTICS_CELLS_INLINE_CAPPED`
+(500k), XLSX rides `ANALYTICS_CELLS_INLINE` (150k).
+
+The CSV ceiling is deliberately the *same* number the inline query path refuses
+above, so a request that streams here is always one `AnalyticsService.query` will
+serve; the two move together because both read the one setting.
+
+**2. RabbitMQ is a doorbell, not a dependency.** The row is written first and the
+broker is rung second, and a failure to ring it changes nothing about the outcome.
+`USE_RABBITMQ_JOBS` is false locally and the broker path has never worked in this
+codebase, so the scheduler's Mongo sweep is the *primary* path and a publish
+returning False is the normal case. The publish also has to be the async variant:
+`publish_job_trigger` opens a blocking pika connection, and a blocking call inside
+an async handler is precisely the defect that makes a login rush 401 the platform.
+
+**3. The disk budget is checked before the row is written.** This is a single EC2
+box with no HA; filling the root volume takes the bidding screens down with it,
+and bidding is the money path. A job created and *then* found unaffordable is a
+job the worker will still pick up. Dedupe runs first, because attaching to an
+in-flight job adds no bytes — refusing it would only hide a running export from
+the person waiting for it.
+
+**4. Permissions are applied before the estimate, not after.** A queued job runs
+in the scheduler, hours later, without the caller's token; whatever datasets land
+in the stored filter set are what the worker exports. A denied dataset that
+survived into the row would be an authorization hole with a 90-day lifetime. It
+also has to happen before the budget, or a dataset the user may not see could push
+an affordable export into the queue.
+
+Inline XLSX is written to a **private temp directory**, not `ANALYTICS_EXPORT_DIR`.
+That directory defaults to `/var/lib/epms/exports`, which does not exist until a
+job creates it and is not writable by an unprivileged service user on the PROD box;
+making the synchronous in-request path depend on it would fail the small exports
+that are supposed to be the easy case. The outcome carries `cleanup_dir` so the
+route can delete it in a background task once the file has been sent.
+"""
+import asyncio
+import hashlib
+import logging
+import math
+import os
+import shutil
+import tempfile
+from datetime import date
+from typing import Any, Dict, Optional, Sequence
+
+from ...core.config import settings as default_settings
+from ..analytics import budget, registry
+from ..analytics.models import AnalyticsQueryRequest, ExportRequest
+from ..helpers import analytics_csv, analytics_xlsx
+from .analytics_service import AnalyticsService, BudgetExceeded
+
+logger = logging.getLogger(__name__)
+
+MODE_STREAM = "stream"
+MODE_INLINE = "inline"
+MODE_JOB = "job"
+
+#: Default cell ceiling for an in-request export, by format. The values are read
+#: from the process settings at import so the constant matches what the service
+#: will actually do; `AnalyticsExportService.threshold_for` re-reads the injected
+#: settings and is the authoritative answer for a given instance.
+MODE_SETTING_KEYS = {
+    "csv": "ANALYTICS_CELLS_INLINE_CAPPED",
+    "xlsx": "ANALYTICS_CELLS_INLINE",
+}
+MODE_THRESHOLDS = {
+    fmt: int(getattr(default_settings, key))
+    for fmt, key in MODE_SETTING_KEYS.items()
+}
+
+MEDIA_TYPES = {
+    "csv": "text/csv",
+    "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+}
+
+DEFAULT_FORMAT = "csv"
+
+#: The job type the scheduler's sweep and the broker consumer both key on.
+JOB_TYPE = "analytics_export"
+SOURCE_SERVICE = "processing"
+
+#: §8: jobs shard by date window sized to ~50k cells per chunk. The worker owns the
+#: real split (`chunks_for`); this only sizes `chunks_total` so the progress bar has
+#: a denominator from the moment the row is created.
+CHUNK_CELLS = 50_000
+
+#: Temp directory prefix for an inline XLSX, so a stray one is identifiable.
+TEMP_PREFIX = "epms-analytics-"
+
+#: Filename slug, and the `module` echo stored with the job so Regenerate rebuilds
+#: the same name.
+MODULE_NAME = "analytics"
+
+#: Datasets named in a label before it collapses into "+N more".
+LABEL_DATASET_LIMIT = 3
+
+MEGABYTE = 1024 * 1024
+
+
+class ExportStorageExhausted(RuntimeError):
+    """The export directory is over its budget, so no new job may be queued.
+
+    Carries the numbers so the route can tell the user how much is in use rather
+    than only that they were refused.
+    """
+
+    def __init__(self, used_bytes: int, budget_bytes: int, directory: str):
+        self.used_bytes = used_bytes
+        self.budget_bytes = budget_bytes
+        self.directory = directory
+        super().__init__(
+            f"Export storage is full: {used_bytes / MEGABYTE:,.0f} MB of the "
+            f"{budget_bytes / MEGABYTE:,.0f} MB budget is in use in {directory!r}. "
+            f"Existing exports are deleted automatically after "
+            f"ANALYTICS_EXPORT_RETENTION_HOURS; raise "
+            f"ANALYTICS_EXPORT_DISK_BUDGET_MB or wait for one to expire."
+        )
+
+
+def as_export_request(request: Any) -> ExportRequest:
+    """Accept a model, an export model, or the raw filter echo a job row holds.
+
+    The stored echo says `block_grouping` (the repository's required key) while the
+    request model says `block_band`; Regenerate replays the row verbatim, so the
+    bridge belongs here rather than at every call site.
+    """
+    if isinstance(request, ExportRequest):
+        return request
+    if isinstance(request, AnalyticsQueryRequest):
+        # A plain query promoted to an export: `format` takes its default.
+        return ExportRequest(**request.model_dump())
+    if isinstance(request, dict):
+        data = dict(request)
+        if "block_band" not in data and data.get("block_grouping"):
+            data["block_band"] = data["block_grouping"]
+        return ExportRequest(**data)
+    raise TypeError(
+        f"Expected an ExportRequest, an AnalyticsQueryRequest or a filter dict, "
+        f"got {type(request).__name__}")
+
+
+def cleanup(outcome: Dict[str, Any]) -> None:
+    """Remove the temp directory an inline export wrote into.
+
+    The route calls this from a `BackgroundTask` *after* the FileResponse has been
+    sent — deleting the file before that would serve a truncated download.
+    """
+    directory = (outcome or {}).get("cleanup_dir")
+    if directory:
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+def _format_day(value: date) -> str:
+    return value.strftime("%d %b")
+
+
+class AnalyticsExportService:
+    """Chooses stream / inline / queued, and owns the enqueue."""
+
+    def __init__(self, service: Any = None, jobs: Any = None,
+                 publisher: Any = None, settings: Any = None):
+        self._service = service
+        self._jobs = jobs
+        self._publisher = publisher
+        self.settings = settings or default_settings
+
+    # ------------------------------------------------------------- plumbing
+
+    @property
+    def service(self) -> AnalyticsService:
+        """The query service. Lazy for the same reason every v2 repository is:
+        building a Motor client in `__init__` binds it to the wrong event loop."""
+        if self._service is None:
+            self._service = AnalyticsService(settings=self.settings)
+        return self._service
+
+    @property
+    def jobs(self):
+        if self._jobs is None:
+            from ..repository.analytics_job_repository import AnalyticsJobRepository
+            self._jobs = AnalyticsJobRepository()
+        return self._jobs
+
+    @property
+    def publisher(self):
+        """Imported lazily — `libs.messaging.job_publisher` pulls in pika, and the
+        broker is optional at runtime."""
+        if self._publisher is None:
+            from libs.messaging.job_publisher import JobPublisher
+            self._publisher = JobPublisher()
+        return self._publisher
+
+    @staticmethod
+    def format_for(request: Any) -> str:
+        fmt = str(getattr(request, "format", None) or DEFAULT_FORMAT).lower()
+        return fmt if fmt in MEDIA_TYPES else DEFAULT_FORMAT
+
+    def threshold_for(self, fmt: str) -> int:
+        """The in-request cell ceiling for this format, from the live settings."""
+        key = MODE_SETTING_KEYS.get(fmt, MODE_SETTING_KEYS[DEFAULT_FORMAT])
+        return int(getattr(self.settings, key, MODE_THRESHOLDS[
+            fmt if fmt in MODE_THRESHOLDS else DEFAULT_FORMAT]))
+
+    @staticmethod
+    def user_id_for(user_context: Optional[dict]) -> str:
+        """The owner of a queued job. Absent is refused, not defaulted.
+
+        `"anonymous"` is the house default for an audit field, but here the id *is*
+        the authorization boundary: every download and cancel is checked against it,
+        so a shared default would make one user's export downloadable by the next.
+        """
+        ctx = user_context or {}
+        user = ctx.get("user") if isinstance(ctx.get("user"), dict) else {}
+        for source, key in ((ctx, "user_id"), (user, "user_id"),
+                            (user, "id"), (user, "_id"), (ctx, "username")):
+            value = source.get(key)
+            if value:
+                return str(value)
+        raise ValueError(
+            "A queued export needs an authenticated owner: the job row is the "
+            "ownership record every download and cancel is checked against.")
+
+    # ---------------------------------------------------------- disk budget
+
+    def export_dir(self) -> str:
+        return str(getattr(self.settings, "ANALYTICS_EXPORT_DIR",
+                           "/var/lib/epms/exports"))
+
+    def disk_budget_bytes(self) -> int:
+        """`0` (or less) disables the check — an explicit opt-out, not a default."""
+        return max(0, int(getattr(
+            self.settings, "ANALYTICS_EXPORT_DISK_BUDGET_MB", 0))) * MEGABYTE
+
+    def disk_usage_bytes(self) -> int:
+        """Bytes held by generated exports. A missing directory holds none — it is
+        created by the first job, so "not there yet" is the normal cold state."""
+        directory = self.export_dir()
+        total = 0
+        try:
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    try:
+                        if entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:  # pragma: no cover - raced with the reaper
+                        continue
+        except FileNotFoundError:
+            return 0
+        except OSError as exc:  # pragma: no cover - permissions on PROD only
+            logger.warning("Cannot measure export directory %r: %s", directory, exc)
+            return 0
+        return total
+
+    def check_disk_budget(self) -> int:
+        """Raise `ExportStorageExhausted` if the directory is at or over budget."""
+        limit = self.disk_budget_bytes()
+        if limit <= 0:
+            return 0
+        used = self.disk_usage_bytes()
+        if used >= limit:
+            logger.warning(
+                "Analytics export refused: %s bytes used of a %s byte budget in %r",
+                used, limit, self.export_dir())
+            raise ExportStorageExhausted(used, limit, self.export_dir())
+        return used
+
+    # -------------------------------------------------------- job identity
+
+    def request_hash(self, request: Any, fmt: Optional[str] = None) -> str:
+        """Dedupe key: the canonical query hash, plus the format.
+
+        `AnalyticsService.cache_key` ignores `format` on purpose — a CSV and an XLSX
+        of the same question are the same *data*. They are not the same *file*, so
+        the job hash has to reintroduce it, or a user waiting on a CSV would be
+        handed someone's workbook.
+        """
+        req = as_export_request(request)
+        fmt = fmt or self.format_for(req)
+        blob = f"{self.service.cache_key(req)}|{fmt}"
+        return hashlib.sha256(blob.encode("utf-8")).hexdigest()
+
+    def filters_for(self, request: Any, fmt: Optional[str] = None) -> Dict[str, Any]:
+        """The complete, self-contained filter echo stored on the job row.
+
+        Every key `AnalyticsJobRepository.create` demands is present, dates are ISO
+        strings (bson cannot encode `datetime.date`), and both spellings of the
+        block band are stored: `block_grouping` for the repository and the file
+        header, `block_band` so the row replays straight back into the model.
+        """
+        req = as_export_request(request)
+        fmt = fmt or self.format_for(req)
+        return {
+            "module": MODULE_NAME,
+            "datasets": list(req.datasets),
+            "from_date": req.from_date.isoformat(),
+            "to_date": req.to_date.isoformat(),
+            "from_block": req.from_block,
+            "to_block": req.to_block,
+            "date_grouping": req.date_grouping,
+            "block_grouping": req.block_band,
+            "block_band": req.block_band,
+            "custom_blocks": [list(pair) for pair in req.custom_blocks],
+            "plants": list(req.plants),
+            "exchanges": list(req.exchanges),
+            "format": fmt,
+        }
+
+    @staticmethod
+    def label_for(request: Any, fmt: str) -> str:
+        """The one-line description shown in My Exports.
+
+        It is stored rather than rebuilt at read time because the row outlives the
+        file by 87 days and the registry's labels can change under it; the user
+        should see what they asked for, not what that dataset is called today.
+        """
+        req = as_export_request(request)
+        codes = list(req.datasets)
+        names = [registry.get(c).label for c in codes[:LABEL_DATASET_LIMIT]]
+        if len(codes) > LABEL_DATASET_LIMIT:
+            names.append(f"+{len(codes) - LABEL_DATASET_LIMIT} more")
+        return " · ".join([
+            " + ".join(names) or "No datasets",
+            f"{_format_day(req.from_date)}–{_format_day(req.to_date)}",
+            f"blocks {req.from_block}–{req.to_block}",
+            fmt.upper(),
+        ])
+
+    @staticmethod
+    def chunk_count(cells: int) -> int:
+        return max(1, math.ceil(int(cells) / CHUNK_CELLS))
+
+    # --------------------------------------------------------------- export
+
+    async def export(self, request: Any,
+                     user_context: Optional[dict] = None) -> Dict[str, Any]:
+        """Serve the export now, or queue it. The only entry point.
+
+        Order is the contract: permissions, then the budget, then the mode. Each
+        step is cheaper than the one after it and each one can end the request.
+        """
+        req = as_export_request(request)
+        fmt = self.format_for(req)
+
+        permissions = self.service.permissions_for(user_context)
+        allowed, denied = self.service.filter_by_permission(req.datasets, permissions)
+        effective = req.model_copy(update={"datasets": allowed})
+
+        estimate = self.service.estimate_only(effective)
+        if estimate.band == budget.BAND_REFUSED:
+            # Above ANALYTICS_CELLS_MAX, queueing only moves the failure to the
+            # worker — and spends the disk budget on the way. The route turns this
+            # into a 413 carrying the narrowings that would fit.
+            logger.info(
+                "Analytics export refused outright: %s cells (user=%s)",
+                estimate.cells, (user_context or {}).get("user_id", "unknown"))
+            raise BudgetExceeded(estimate)
+
+        if estimate.cells <= self.threshold_for(fmt):
+            return await self._serve_now(req, effective, fmt, estimate,
+                                         denied, user_context)
+        return await self._enqueue(effective, fmt, estimate, denied, user_context)
+
+    # ------------------------------------------------------------ in-request
+
+    async def _serve_now(self, request: ExportRequest, effective: ExportRequest,
+                         fmt: str, estimate: budget.Estimate,
+                         denied: Sequence[str],
+                         user_context: Optional[dict]) -> Dict[str, Any]:
+        """Run the query and hand back a stream (CSV) or a finished file (XLSX).
+
+        The *original* request goes to `query`, not the permission-filtered copy, so
+        the response's own `meta.denied_datasets` stays accurate; the filtered copy
+        is only what priced the request and what a job would have stored.
+        """
+        response = await self.service.query(request, user_context)
+        filters = self.filters_for(effective, fmt)
+        filename = analytics_csv.filename_for(filters, fmt)
+
+        common = {
+            "filename": filename,
+            "media_type": MEDIA_TYPES[fmt],
+            "meta": response.get("meta", {}),
+            "denied_datasets": list(denied),
+            "estimated_cells": estimate.cells,
+            "band": estimate.band,
+        }
+
+        if fmt == "csv":
+            # Not materialised: `csv_rows` is a generator, so the route's
+            # StreamingResponse pulls lines out one at a time.
+            return {"mode": MODE_STREAM,
+                    "iterator": analytics_csv.csv_rows(response, filters),
+                    **common}
+
+        directory = tempfile.mkdtemp(prefix=TEMP_PREFIX)
+        path = os.path.join(directory, filename)
+        try:
+            # openpyxl is synchronous and CPU-bound; running it on the event loop
+            # would stall every other request on this worker for its duration.
+            written = await asyncio.to_thread(
+                analytics_xlsx.write_xlsx, response, filters, path)
+        except Exception:
+            shutil.rmtree(directory, ignore_errors=True)
+            raise
+
+        return {"mode": MODE_INLINE,
+                "path": written["path"],
+                "bytes": written["bytes"],
+                "row_count": written["row_count"],
+                "cleanup_dir": directory,
+                **common}
+
+    # --------------------------------------------------------------- queued
+
+    async def _enqueue(self, effective: ExportRequest, fmt: str,
+                       estimate: budget.Estimate, denied: Sequence[str],
+                       user_context: Optional[dict]) -> Dict[str, Any]:
+        user_id = self.user_id_for(user_context)
+        request_hash = self.request_hash(effective, fmt)
+
+        # Dedupe first: attaching to an in-flight job costs no new bytes, and
+        # refusing it on a full disk would hide a running export from the person
+        # already waiting for it.
+        existing = await self.jobs.find_active_by_hash(user_id, request_hash)
+        if existing:
+            logger.info("Analytics export deduped onto job %s for user %s",
+                        existing.get("job_id"), user_id)
+            return self._job_outcome(existing.get("job_id"), estimate, denied,
+                                     deduped=True, published=False,
+                                     status=existing.get("status"))
+
+        self.check_disk_budget()
+
+        job_id = await self.jobs.create({
+            "user_id": user_id,
+            "request_hash": request_hash,
+            "filters": self.filters_for(effective, fmt),
+            "label": self.label_for(effective, fmt),
+            "cells_estimate": estimate.cells,
+            "chunks_total": self.chunk_count(estimate.cells),
+        })
+
+        # The row exists before the doorbell rings. The other order races: a worker
+        # woken by the broker would look up a job that has not been inserted yet.
+        published = await self._publish(job_id, user_id)
+
+        logger.info(
+            "Queued analytics export %s for user %s (%s cells, format=%s, broker=%s)",
+            job_id, user_id, estimate.cells, fmt, "rung" if published else "silent")
+        return self._job_outcome(job_id, estimate, denied,
+                                 deduped=False, published=published,
+                                 status="queued")
+
+    async def _publish(self, job_id: str, user_id: str) -> bool:
+        """Ring the doorbell. Never raises — the sweep is the primary path.
+
+        `USE_RABBITMQ_JOBS` is false on this deployment, so `False` is the ordinary
+        answer and means "the scheduler will pick it up within the minute", not
+        "the export failed".
+        """
+        try:
+            publisher = self.publisher
+        except Exception as exc:  # pragma: no cover - pika missing only
+            logger.warning("Analytics export %s queued without a broker: %s",
+                           job_id, exc)
+            return False
+        if publisher is None:
+            return False
+        try:
+            return bool(await publisher.publish_job_trigger_async(
+                job_type=JOB_TYPE,
+                source_service=SOURCE_SERVICE,
+                payload={"job_id": job_id, "user_id": user_id},
+                correlation_id=job_id,
+            ))
+        except Exception as exc:
+            logger.warning(
+                "Analytics export %s queued but the broker was unreachable (%s); "
+                "the scheduler sweep will claim it", job_id, exc)
+            return False
+
+    @staticmethod
+    def _job_outcome(job_id: Optional[str], estimate: budget.Estimate,
+                     denied: Sequence[str], *, deduped: bool, published: bool,
+                     status: Optional[str]) -> Dict[str, Any]:
+        return {
+            "mode": MODE_JOB,
+            "job_id": job_id,
+            "status": status,
+            "deduped": deduped,
+            "published": published,
+            "denied_datasets": list(denied),
+            "estimated_cells": estimate.cells,
+            "band": estimate.band,
+            "chunks_total": AnalyticsExportService.chunk_count(estimate.cells),
+        }
