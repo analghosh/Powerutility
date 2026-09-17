@@ -141,7 +141,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | **Suggestion round-trip** | click "Switch to Week-wise" → 200 → dialog closes → pill activates → grid renders **68 per-plant columns**, 33 DOM rows |
 | Exports panel persistence | earlier queued jobs (Ready + Failed) still listed in a fresh browser session, with the `Errno 13` message surfaced to the user |
 
-**Tests:** backend `libs/tests` 781 pass / 10 fail; client 54 pass.
+**Tests:** backend `libs/tests` 809 pass / 10 fail; client 54 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
@@ -181,6 +181,37 @@ what a code means kept serving the OLD payload for the TTL — verified live (`c
 stale 554.68). Bump it whenever a dataset's meaning changes.
 
 Absent datasets are now **2** (TAM only), down from 6.
+
+## 6b. Partial weeks, indexes, sentinel zeros (2026-09-17 evening)
+
+**Partial roll-up periods.** A 3-day range rolled up weekly returns a bucket labelled with
+the WHOLE week. The engine's average was honest; the label was not. Now: `meta.period_coverage`
+(per period: `days_covered / days_in_period / partial / from / to`), `meta.partial_periods`,
+and a CSV header line `# Partial periods: 2026-W35 (5 of 7 days); 2026-W36 (4 of 7 days)`.
+`analytics/coverage.py`, pure date arithmetic, 12 tests. **The budget also miscounted weeks**
+— `ceil(days/7)` said Sat 29 → Mon 31 Aug was 1 week (it is 2, an UNDERestimate); it now
+counts distinct ISO weeks, matching the engine. `CACHE_VERSION` → v3 (response shape changed).
+**Open for PTC:** a weekly roll-up returns 96 rows per week (a weekly-average daily profile),
+not one number per week — the docx says "aggregate week-wise"; confirm which they want.
+
+**Indexes.** `explain` on every source group for a 5-month range showed `demand_serve`
+(18 datasets, the most-used group) was COLLSCAN on BOTH serve and historical — its only
+index led with `type`, which the analytics `$match` deliberately does not filter on.
+`supply_serve_historical` and both peak collections had no index at all. Migration now
+creates 12 indexes; every group IXSCANs on both sides. Measured after: 1 day/1 dataset
+0.32s cold / 0.05s warm; 1 month/10 datasets 0.19 / 0.06; 5 months/24 market series
+0.71 / 0.10; 5 months DC+SG totals 0.69 / 0.06 (the supply revision-collapse is the only
+real query-side cost). Nothing to optimise at local volumes; the indexes are insurance
+for production growth.
+
+**Sentinel zeros.** `FREQUENCY_FORECAST` was 0.0 on 100% of recent rows — not dead:
+`demand_processor.py:991` writes 0.0 when the feed carried no value, and 320 real 49–49.5 Hz
+values exist in historical. New registry field `sentinel_null` (per dataset) maps that
+stored 0 to None BEFORE the accumulator, so a column of "0 Hz" cannot masquerade as a
+forecast. Genuine zeros elsewhere (OD/UD) are untouched. Full population audit of all 45
+live datasets: every `agg` rule is right for its unit; HPDAM's 94–99% zeros are real
+(clears ~0.6% of blocks); `FINAL_SCHEDULE_PLANT` has no rows after 3 Aug locally (data
+currency, not a defect).
 
 ## 7. REMAINING WORK — the actual to-do list
 

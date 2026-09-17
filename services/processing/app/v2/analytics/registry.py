@@ -37,6 +37,11 @@ class Dataset:
     # A per-entity breakdown of a dataset that also exists as a state-level total.
     # Listed after the totals and badged in the UI; never the default pick.
     drilldown: bool = False
+    # A stored value the SOURCE uses to mean "absent". demand_processor.py:991 writes
+    # forecasted_frequency=0.0 when the feed carried none, so 0 Hz is not a forecast
+    # of zero hertz — it is a gap, and must aggregate as None. Applied before the
+    # accumulator, per dataset, so a genuine 0 elsewhere (e.g. OD/UD) still counts.
+    sentinel_null: Optional[float] = None
 
 
 def _d(**kw) -> Dataset:
@@ -61,7 +66,7 @@ _ALL: List[Dataset] = [
        value="$frequency", unit="Hz", agg="avg", permission="analytics:demand"),
     _d(code="FREQUENCY_FORECAST", label="Forecasted Frequency", group="demand",
        value="$forecasted_frequency", unit="Hz", agg="avg",
-       match={"type": "IDF"}, permission="analytics:demand"),
+       match={"type": "IDF"}, sentinel_null=0.0, permission="analytics:demand"),
     _d(code="FORECAST_DAF", label="Day Ahead Forecast", group="demand",
        value="$forecast", unit="MW", agg="avg",
        match={"type": "DAF"}, permission="analytics:forecast"),
