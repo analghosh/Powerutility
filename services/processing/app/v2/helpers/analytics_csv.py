@@ -104,6 +104,15 @@ def filter_pairs(filters: Optional[Dict[str, Any]],
     if fmt:
         pairs.append(("Format", fmt))
 
+    # A weekly/monthly bucket that the range only partly covers is labelled with the
+    # whole period; say so, or a "W35" of three days reads as a full week.
+    cov = meta.get("period_coverage") or {}
+    partial = [k for k, v in cov.items() if isinstance(v, dict) and v.get("partial")]
+    if partial:
+        detail = "; ".join(
+            f"{k} ({cov[k]['days_covered']} of {cov[k]['days_in_period']} days)" for k in partial)
+        pairs.append(("Partial periods", detail))
+
     truncated = meta.get("truncated")
     if truncated:
         pairs.append(("Truncated", "yes - the result hit the cell cap"))

@@ -337,3 +337,24 @@ def test_filename_for_rejects_an_unsupported_format():
 
 def test_xlsx_reuses_the_same_filename_helper():
     assert analytics_xlsx.filename_for is analytics_csv.filename_for
+
+
+def test_csv_header_names_partially_covered_periods():
+    """Wed 26 → Fri 28 Aug rolled up weekly: the bucket says W35, the note says 3 of 7."""
+    from services.processing.app.v2.helpers.analytics_csv import header_lines
+    response = {"axes": {"dates": ["2026-W35"], "blocks": [1]}, "series": [],
+                "meta": {"period_coverage": {"2026-W35": {
+                    "days_covered": 3, "days_in_period": 7, "partial": True,
+                    "from": "2026-08-26", "to": "2026-08-28"}}}}
+    text = "".join(header_lines({"datasets": ["WEEKLY_FORECAST"]}, response))
+    assert "# Partial periods: 2026-W35 (3 of 7 days)" in text
+
+
+def test_csv_header_is_silent_when_every_period_is_complete():
+    from services.processing.app.v2.helpers.analytics_csv import header_lines
+    response = {"axes": {"dates": ["2026-W35"], "blocks": [1]}, "series": [],
+                "meta": {"period_coverage": {"2026-W35": {
+                    "days_covered": 7, "days_in_period": 7, "partial": False,
+                    "from": "2026-08-24", "to": "2026-08-30"}}}}
+    text = "".join(header_lines({"datasets": ["WEEKLY_FORECAST"]}, response))
+    assert "Partial periods" not in text
