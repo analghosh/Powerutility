@@ -135,34 +135,43 @@ def test_od_ud_quantum_now_depends_on_actual_demand():
 
 
 @pytest.mark.parametrize("period,grouping", [("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")])
-@pytest.mark.parametrize("t", ["DAF", "IDF"])
-def test_rollup_forecast_is_a_live_per_block_forecast_with_a_fixed_grouping(period, grouping, t):
-    d = registry.get(f"{period}_FORECAST_{t}")
+def test_rollup_forecast_is_one_tick_reported_per_forecast_type(period, grouping):
+    """DAF and IDF share the same (date, block) key, so they are two COLUMNS of one
+    table — one dataset, one tick, "Day Ahead" + "Intra Day" columns in the file."""
+    d = registry.get(f"{period}_FORECAST")
     assert d.availability == "live"
     assert d.kind == "direct"
     assert d.value == "$forecast"
-    assert d.match == {"type": t}
+    assert d.match is None, "no type discriminator — both types come back as series"
+    assert d.series == "per_forecast_type"
     assert d.agg == "avg"
     assert d.fixed_grouping == grouping
 
 
 @pytest.mark.parametrize("period,grouping", [("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")])
-@pytest.mark.parametrize("t", ["DAF", "IDF"])
-def test_rollup_mape_is_the_mean_of_per_block_mape(period, grouping, t):
-    """Same definition as daily MAPE, over more blocks — NOT recomputed from summed totals,
-    which gives a different figure (7.24% vs 7.78% on a real week)."""
-    d = registry.get(f"{period}_MAPE_{t}")
+def test_rollup_mape_is_the_mean_of_per_block_mape_per_forecast_type(period, grouping):
+    """Same definition as daily MAPE, over more blocks — NOT recomputed from summed
+    totals, which gives a different figure (7.24% vs 7.78% on a real week)."""
+    d = registry.get(f"{period}_MAPE")
     assert d.availability == "live"
-    assert d.kind == "direct"
     assert d.value == "$mape"
+    assert d.series == "per_forecast_type"
     assert d.agg == "avg"
     assert d.fixed_grouping == grouping
 
 
-def test_old_absent_rollup_codes_are_gone():
-    for code in ("WEEKLY_FORECAST", "MONTHLY_FORECAST", "WEEKLY_MAPE", "MONTHLY_MAPE"):
-        with pytest.raises(registry.UnknownDatasetError):
-            registry.get(code)
+def test_a_forecast_type_rollup_counts_two_series_in_the_budget():
+    assert registry.series_cardinality(registry.get("WEEKLY_FORECAST"), {}) == 2
+
+
+def test_the_split_daf_idf_rollup_codes_are_gone():
+    """They were replaced by one dataset per roll-up reporting both types."""
+    for period in ("WEEKLY", "MONTHLY"):
+        for kind in ("FORECAST", "MAPE"):
+            for t in ("DAF", "IDF"):
+                with pytest.raises(registry.UnknownDatasetError):
+                    registry.get(f"{period}_{kind}_{t}")
+
 
 
 def test_only_tam_remains_absent():
