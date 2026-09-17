@@ -22,7 +22,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 
 | repo | branch | commits | state |
 |---|---|---|---|
-| `backend` | `feat/analytics-dashboard` | 27 | **not merged**, branched off clean `dev` |
+| `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
 | `client`  | `feat/analytics-dashboard` | 7  | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
@@ -36,7 +36,7 @@ Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everyt
 
 ## 3. Architecture in one page
 
-A **dataset registry** maps 53 dataset codes onto ~7 MongoDB source groups, so ticking 12
+A **dataset registry** maps 56 dataset codes onto ~7 MongoDB source groups, so ticking 12
 datasets issues ~4 aggregations rather than 12. A **cell budget**, computed from the filters
 alone before any database call, decides whether a request renders inline, streams, or queues
 as a background job.
@@ -59,7 +59,7 @@ filters + ticked datasets
 
 | file | responsibility |
 |---|---|
-| `analytics/registry.py` | 53 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
+| `analytics/registry.py` | 56 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
 | `analytics/block_bands.py` | block grouping; PTC's 5 named bands seeded **inactive** |
 | `analytics/budget.py` | cell arithmetic and band classification — pure, no I/O |
 | `analytics/grouping.py` | `$dateToString` keys, block bucket `$switch`, accumulators |
@@ -110,7 +110,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 
 | check | evidence |
 |---|---|
-| Query correctness | API block 1 = 554.68; direct Mongo = 554.68 |
+| Query correctness | API block 1 = **542.68** (`drawal`); direct Mongo `drawal` = 542.68 |
 | Browser render | AG Grid, **33 rows in DOM for 96 blocks** → virtualization real |
 | Over-budget | 998,784 cells → 413 with 3 costed suggestions |
 | Capped band | 499,392 cells → 200, `capped: true`, 8 dates returned not 500k cells |
@@ -121,7 +121,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | Queued export | 202 → sweep → 22/22 chunks → ready, 183KB downloaded and opened |
 | Download authz | ownership checked independently of the token |
 
-**Tests:** backend `libs/tests` 746 pass / 10 fail; client 44 pass.
+**Tests:** backend `libs/tests` 767 pass / 10 fail; client 44 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
