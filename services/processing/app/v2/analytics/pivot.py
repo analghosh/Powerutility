@@ -177,6 +177,9 @@ def build_response(rows: Sequence[dict], *, requested: Sequence[str],
                 "entity": entity,
                 # Readers see this; `entity` stays the stable machine key.
                 "entity_label": entity_label(dataset, entity),
+                # What the entity IS (plant, exchange, forecast type) so a writer
+                # can name its column instead of a generic "Entity".
+                "series_kind": getattr(dataset, "series", None),
                 "values": matrix,
                 "quality": quality,
             })

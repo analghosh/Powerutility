@@ -73,3 +73,49 @@ def test_blocks_outside_1_to_96_are_rejected(bad):
 
 def test_valid_full_day_range_is_accepted():
     bb.validate_block_range(1, 96)  # must not raise
+
+
+# ------------------------------------------------------- parametrised bands
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("1-24, 89-96", ((1, 24), (89, 96))),
+    ("1-24;89-96", ((1, 24), (89, 96))),
+    ("1–24 89-96", ((1, 24), (89, 96))),        # en dash, whitespace separator
+    ("5", ((5, 5),)),
+    ("", ()),
+    ("   ", ()),
+    (None, ()),
+    ([[1, 4], [9, 12]], ((1, 4), (9, 12))),     # already-structured (a job row replay)
+])
+def test_parse_ranges_accepts_what_an_admin_would_type(text, expected):
+    assert bb.parse_ranges(text) == expected
+
+
+@pytest.mark.parametrize("text", ["0-5", "10-3", "1-97", "abc", "1-24-30", "1--5"])
+def test_parse_ranges_names_the_bad_piece(text):
+    with pytest.raises(ValueError) as exc:
+        bb.parse_ranges(text)
+    assert text.split(",")[0].strip() in str(exc.value) or "not valid" in str(exc.value)
+
+
+def test_bands_from_parameters_activates_only_the_bands_with_ranges():
+    bands = bb.bands_from_parameters({
+        "analytics_band_peak": "65-88",
+        "analytics_band_night_off_peak": "",
+        "analytics_band_day_peak": "garbage",     # a typo must not take the screen down
+    })
+    assert bands["PEAK"].active and bands["PEAK"].ranges == ((65, 88),)
+    assert not bands["NIGHT_OFF_PEAK"].active
+    assert not bands["DAY_PEAK"].active
+    assert bands["INDIVIDUAL"].active and bands["CUSTOM"].active
+    assert bb.parameter_errors({"analytics_band_day_peak": "garbage"}) == {
+        "DAY_PEAK": "Block range 'garbage' is not valid; expected e.g. 1-24, 89-96"}
+
+
+def test_every_named_band_has_a_parameter_key_and_a_description():
+    named = [c for c in bb.DEFAULT_BANDS if c not in (bb.BAND_INDIVIDUAL, bb.BAND_CUSTOM)]
+    assert set(named) == set(bb.PARAMETER_KEYS)
+    for code in named:
+        assert bb.PARAMETER_KEYS[code].startswith("analytics_band_")
+        assert bb.DEFAULT_BANDS[code].label in bb.PARAMETER_DESCRIPTIONS[code]

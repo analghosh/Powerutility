@@ -8,8 +8,11 @@ Nothing here builds a list of rows, calls `len()` on the series, or joins the ou
 the response's `series` is walked exactly once, lazily.
 
 Layout is flat (long) rather than pivoted, which is what makes the stream possible and
-what the spec asks for: `dataset` and `entity` identifier columns, one line per cell,
-preceded by a `#`-commented block recording the filters that produced it. An export
+what the spec asks for: a `dataset` identifier column, one line per cell, preceded by a
+`#`-commented block recording the filters that produced it. A per-plant, per-exchange
+or per-forecast-type series carries its entity inside `label` — `Declared Capacity —
+by plant (PPCLGPP)` — rather than in a column of its own: most datasets are scalar,
+and a column that is empty on most rows was the first thing users asked to remove. An export
 always re-runs from the stored filters, so that block is the only record of what the
 user actually picked — it is printed for the person who opens the file a week later
 and has to know whether they are looking at DAM or RTM.
@@ -26,9 +29,16 @@ import re
 from datetime import date, datetime
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-#: The flat column contract. `entity` is its own column so a per-plant or
-#: per-exchange series is identifiable without parsing the label.
-COLUMNS = ("dataset", "label", "entity", "unit", "date", "block", "value")
+#: The flat column contract. The entity (plant, exchange, forecast type) is folded
+#: into `label` by `series_label`; `dataset` stays the stable machine key.
+COLUMNS = ("dataset", "label", "unit", "date", "block", "value")
+
+
+def series_label(series: Dict[str, Any]) -> str:
+    """`label (entity)` when the series has an entity, else just the label."""
+    label = _text(series.get("label"))
+    entity = series.get("entity_label") or series.get("entity")
+    return f"{label} ({entity})" if entity not in (None, "") else label
 
 #: Formats `filename_for` will name. Mirrors `models.EXPORT_FORMATS`.
 SUPPORTED_FORMATS = ("csv", "xlsx")
@@ -175,8 +185,7 @@ def csv_rows(response: Dict[str, Any],
     # in the worker, and it is never counted, sorted or copied here.
     for series in (response.get("series") or ()):
         dataset = _text(series.get("dataset"))
-        label = _text(series.get("label"))
-        entity = _cell(series.get("entity_label") or series.get("entity"))
+        label = series_label(series)
         unit = _text(series.get("unit"))
         matrix = series.get("values") or ()
 
@@ -184,7 +193,7 @@ def csv_rows(response: Dict[str, Any],
             row = matrix[bi] if bi < len(matrix) else ()
             for di, day in enumerate(dates):
                 value = row[di] if di < len(row) else None
-                yield emit((dataset, label, entity, unit, day, block, _cell(value)))
+                yield emit((dataset, label, unit, day, block, _cell(value)))
 
 
 def _slug(value: Any) -> str:

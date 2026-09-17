@@ -134,7 +134,17 @@ def test_named_band_with_no_ranges_raises_rather_than_emitting_an_empty_switch()
     """The five named bands ship inactive with no ranges; $switch needs a branch."""
     with pytest.raises(ValueError) as exc:
         g.block_key_expr(bb.DEFAULT_BANDS["PEAK"])
-    assert "PEAK" in str(exc.value)
+    # The message must tell the user WHERE to define it, not just that it is missing.
+    assert "analytics_band_peak" in str(exc.value)
+    assert "Masters" in str(exc.value)
+
+
+def test_a_named_band_with_parameter_ranges_collapses_them_onto_its_code():
+    band = bb.band_with_ranges(bb.DEFAULT_BANDS["PEAK"], bb.parse_ranges("65-72, 81-88"))
+    expr = g.block_key_expr(band)
+    branches = expr["$switch"]["branches"]
+    assert len(branches) == 2
+    assert {b["then"] for b in branches} == {"PEAK"}
 
 
 def test_custom_band_gives_each_supplied_range_its_own_bucket():
