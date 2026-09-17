@@ -304,6 +304,33 @@ class Settings(BaseSettings):
     MONGODB_HPDAM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "hpdam_single_bid_data_for_approval"
     MONGODB_RTM_SINGLE_BID_DATA_FOR_APPROVAL_COLLECTION: str = "rtm_single_bid_data_for_approval"
     
+
+    # Analytics Dashboard (mirrors the processing service's block; the scheduler
+    # owns the export worker, so it also carries the worker-side knobs)
+    MONGODB_ANALYTICS_JOBS_COLLECTION: str = "analytics_export_jobs"
+    ANALYTICS_TIMEZONE: str = "Asia/Kolkata"
+    ANALYTICS_CELLS_INLINE: int = 150_000
+    ANALYTICS_CELLS_INLINE_CAPPED: int = 500_000
+    ANALYTICS_CELLS_MAX: int = 10_000_000
+    ANALYTICS_GROUP_CONCURRENCY: int = 4
+    ANALYTICS_QUERY_MAX_TIME_MS: int = 20_000
+    ANALYTICS_EXPORT_DIR: str = "/var/lib/epms/exports"
+    ANALYTICS_EXPORT_RETENTION_HOURS: int = 72
+    ANALYTICS_JOB_RETENTION_DAYS: int = 90
+    ANALYTICS_EXPORT_DISK_BUDGET_MB: int = 5_120
+
+    # Analytics export worker (scheduler-only)
+    # Sub-minute is not expressible: _add_job_to_scheduler rejects anything that is
+    # not exactly five cron fields and never passes second= to CronTrigger.
+    ANALYTICS_EXPORT_SWEEP_CRON: str = "* * * * *"
+    ANALYTICS_EXPORT_SWEEP_ENABLED: bool = True
+    ANALYTICS_EXPORT_CHUNK_CELLS: int = 50_000
+    ANALYTICS_EXPORT_CHUNK_CONCURRENCY: int = 3
+    ANALYTICS_EXPORT_CHUNK_MAX_TIME_MS: int = 120_000
+    ANALYTICS_EXPORT_JOBS_PER_SWEEP: int = 1
+    ANALYTICS_JOB_HEARTBEAT_SECONDS: int = 15
+    ANALYTICS_JOB_STALE_SECONDS: int = 120
+
     class Config:
         """Pydantic configuration for Settings class"""
         env_file = ".env"
