@@ -9,10 +9,19 @@ PTC UAT data, not inferred. Read this file first; it is self-contained.
 
 A new screen, **Power System Data Analytics Dashboard**, built to PTC's
 `Power_System_Data_Analytics_Dashboard_Developer_Explanation_Final_v2.docx` plus their HTML
-prototype. The user picks a date range, a block range and multiple datasets, gets a pivoted
-block-wise table, and downloads CSV or Excel.
+prototype. The user picks a date range, a block range and multiple datasets, chooses CSV
+or Excel, and gets a **file** — instantly for small selections, via the server queue for
+large ones.
 
-**v1 scope, by explicit user decision:** filters + table + download only.
+**The screen is file-first (user decision, 2026-09-17 afternoon).** There is NO data table
+in the browser: a 239-column result is a spreadsheet, not something anyone reads on
+screen. The filter panel spans the full width; **My Exports** beneath it is the only
+content area. The query engine, budget and pivot are unchanged — only the render surface
+was removed (`AnalyticsTable.jsx` deleted; `orientation.js` kept, it drives the file
+layout).
+
+**v1 scope, by explicit user decision:** filters + download. (Originally filters +
+table + download; the table was removed the same day.)
 **Not built:** KPI cards, Chart View, Summary tab. The query engine is designed so those are
 additive — they read the same canonical response — but they are out of scope for v1.
 
@@ -23,7 +32,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 | repo | branch | commits | state |
 |---|---|---|---|
 | `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 11 | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 14 | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -77,8 +86,13 @@ filters + ticked datasets
 Scheduler: `services/scheduler/app/processors/analytics_export_processor.py`.
 Migration: `migrations/analytics_indexes_2026_09_17.py`.
 
-**Client files** — `client/src/features/analytics/` (hooks, components, `utils/orientation.js`)
-and `client/src/pages/analytics/AnalyticsDashboard.jsx`.
+**Client files** — `client/src/features/analytics/` (hooks, components, `utils/orientation.js`,
+`utils/readEstimate.js`) and `client/src/pages/analytics/AnalyticsDashboard.jsx` (~230 lines,
+composition only). `FilterPanel` has a `layout="wide"` grid variant (ranges · data sets ·
+file layout + format picker) and the original `"sidebar"` variant. `ExportsPanel` takes
+`onAlsoAs(job, fmt)` — every Ready row offers the other format, rebuilt from the job's
+stored filters on demand rather than generated up front. `BudgetDialog mode="export-only"`
+hides the narrow/preview branches (nothing to narrow FOR without a table).
 
 ## 4. API
 
@@ -112,7 +126,9 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | check | evidence |
 |---|---|
 | Query correctness | API block 1 = **542.68** (`drawal`); direct Mongo `drawal` = 542.68 |
-| Browser render | AG Grid, **33 rows in DOM for 96 blocks** → virtualization real |
+| ~~Browser render~~ | table removed 2026-09-17 — screen is file-first |
+| **Full job lifecycle in the browser** | Also as → 202 · Cancel (confirm) → 200 → Cancelled + Try again · Try again → 200 on the **same job id** → Ready · Download → 200, valid XLSX. DB confirms 8/8 ready, no orphan. |
+| **File-first flow** | small selection → `POST /export` 200, CSV downloaded instantly (542.68 in row 1); large by-plant selection → 202, queued, no dialog; "Also as CSV" on a Ready XLSX → 202 → a CSV job with identical filters reaches Ready |
 | Over-budget | 998,784 cells → 413 with 3 costed suggestions |
 | Capped band | 499,392 cells → 200, `capped: true`, 8 dates returned not 500k cells |
 | Redis cache | miss → hit |
@@ -125,7 +141,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | **Suggestion round-trip** | click "Switch to Week-wise" → 200 → dialog closes → pill activates → grid renders **68 per-plant columns**, 33 DOM rows |
 | Exports panel persistence | earlier queued jobs (Ready + Failed) still listed in a fresh browser session, with the `Errno 13` message surfaced to the user |
 
-**Tests:** backend `libs/tests` 781 pass / 10 fail; client 49 pass.
+**Tests:** backend `libs/tests` 781 pass / 10 fail; client 54 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
@@ -321,7 +337,17 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
     says why) once one is ticked, and group-select resolves the axis inside the batch so
     "All" ticks 17 not 21. The server message now uses labels, not codes, and carries the
     codes in a structured `groups` field. Verified: All → 17 selected → Apply → 200.
-11. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
+    **Follow-up:** the lock read as "broken" because the only explanation was a hover
+    tooltip on a disabled checkbox. Now every roll-up row carries a Weekly / Monthly tag,
+    and a notice appears at the top of the group naming the locked axis with an inline
+    "Clear the monthly selection" link. Verified: tick Monthly → notice + Weekly rows
+    disabled → click Clear → Weekly unlocks, notice gone.
+11. **Every download from My Exports was a 403** ("This download link is not valid for
+    this export"). The route requires `?token=<download_token>`; the server exposes it on
+    every job row; the client never sent it. Masked during verification because curl
+    passed the token by hand. Fixed in client `1f30a8d` — `utils/downloadToken.js`, with
+    a `node --test` case pinning that the token travels as a query param.
+12. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
    from `response.data.data`, but FastAPI's `HTTPException` puts the payload under
    `detail` — `{ detail: { code, message, estimate } }`. curl could not catch this; only
    driving the real UI did. `readEstimate` now lives in `utils/readEstimate.js` with a
