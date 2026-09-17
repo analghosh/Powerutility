@@ -141,7 +141,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | **Suggestion round-trip** | click "Switch to Week-wise" → 200 → dialog closes → pill activates → grid renders **68 per-plant columns**, 33 DOM rows |
 | Exports panel persistence | earlier queued jobs (Ready + Failed) still listed in a fresh browser session, with the `Errno 13` message surfaced to the user |
 
-**Tests:** backend `libs/tests` 809 pass / 10 fail; client 54 pass.
+**Tests:** backend `libs/tests` 817 pass / 10 fail; client 54 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
@@ -212,6 +212,32 @@ forecast. Genuine zeros elsewhere (OD/UD) are untouched. Full population audit o
 live datasets: every `agg` rule is right for its unit; HPDAM's 94–99% zeros are real
 (clears ~0.6% of blocks); `FINAL_SCHEDULE_PLANT` has no rows after 3 Aug locally (data
 currency, not a defect).
+
+## 6c. Final Schedule → supply_serve, and the halving bug it exposed (2026-09-17, late)
+
+PTC's sheet places **Final Schedule under `supply_serve`**. We had it on `demand_serve.schedule`.
+Investigated before changing: the two differ by exactly **15.00 MW on every block — plant
+`PPCLGPP`** (`src=dc_sg_rollover`), plus `demand_serve.schedule` excludes the negative `OA_PX`
+exchange line and is byte-identical across days in the UAT extract (an uploaded CSV
+column, `demand_data_processing.py:168`). `supply_serve` SG is EPMS's own versioned,
+published schedule — the docx's "after applicable revisions and cut-off". My first
+explanation (losses) was WRONG: schedule is lower not higher, and the ratio wanders.
+
+Decision (user): **Final Schedule = ΣSG from `supply_serve`.** Codes unchanged:
+- `SG_TOTAL` → label "Final Schedule" (it already IS that number)
+- `SG_PLANT` → "Final Schedule — by plant"
+- `FINAL_SCHEDULE_STATE` (demand_serve) → **"DSM Schedule"** — kept because OD/UD Quantum
+  must subtract the schedule at the drawal point (the sheet's own `drawal − schedule`)
+- `FINAL_SCHEDULE_PLANT` (serve_dam_scheduling) → "DAM Schedule — by plant"
+**Open for PTC:** should PPCLGPP and OA_PX be in the Final Schedule? Only they can say.
+
+**Halving bug found while verifying** (commit `c0d2370`): `demand_serve` has a DAF and an
+IDF row per block; `schedule`, `net_dsm_amount`, `dsm_rate`, `forecasted_frequency` are
+written ONLY on IDF, DAF carries `0`. Unpinned, the two averaged and **DSM Schedule read
+267.72 for a stored 535.44 — and OD/UD Quantum and Amount were wrong too**. Pinned to
+`type: IDF` (same rule the forecast datasets already use). `drawal`/`frequency`/`comp_udm`
+are identical on both rows and stay unpinned. `CACHE_VERSION` → v4. Verified live:
+DSM Schedule 535.44, OD/UD −1.48 (= 533.96 − 535.44), Final Schedule 550.44.
 
 ## 7. REMAINING WORK — the actual to-do list
 
