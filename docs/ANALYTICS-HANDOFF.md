@@ -33,10 +33,10 @@ was changed or removed.
 
 | repo | branch | commits | state |
 |---|---|---|---|
-| `backend` | `feat/analytics-dashboard` | 16 (squashed from 53; original history at `backup/analytics-53-commits`) | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 10 (squashed from 17; original at `backup/analytics-17-commits`) | **not merged**, branched off clean `dev` |
+| `backend` | `feat/analytics-dashboard` | 16 (squashed from 53; original history at local `backup/analytics-53-commits`) | **PR #326 open on `dev`, not merged**; rebased on `origin/dev` 14 Sep |
+| `client`  | `feat/analytics-dashboard` | 10 (squashed from 17; original at local `backup/analytics-17-commits`) | **PR #192 open on `dev`, not merged**; rebased on `origin/dev` 14 Sep |
 
-Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
+Both pushed. `git log --oneline origin/dev..HEAD` in each repo lists everything.
 
 **Reference documents**
 - Design/spec: `docs/superpowers/specs/2026-09-17-analytics-dashboard-design.md`
@@ -371,8 +371,7 @@ systemd units as user `epms`, each service its OWN checkout under
 
 ### B. Deploy steps — in this order
 
-1. **Merge + push** both `feat/analytics-dashboard` branches. (Local `git fetch` currently
-   fails with `Invalid username or token` — the pushes need a working credential.)
+1. **Merge** PR #326 (backend) and PR #192 (client) into `dev`, then promote as usual.
 2. **Indexes** (once, against the shared Mongo, before the first user hits the screen):
    `./.venv/bin/python -m migrations.analytics_indexes_2026_09_17` from the processing
    checkout. Idempotent. Without it `demand_serve` is a COLLSCAN on both sides.
