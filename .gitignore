@@ -16,10 +16,14 @@ venv/
 .venv/
 env/
 .env/
-*.md
-
-*.txt
-*.json
+# Editor scratch files, not documentation or fixtures.
+# These were previously blanket *.md / *.txt / *.json globs misfiled under
+# "Virtual environments", which silently hid every new doc and test fixture.
+/*.md
+!/README.md
+/*.txt
+!/requirements*.txt
+/*.json
 *.kiro
 
 # Environment and secrets
