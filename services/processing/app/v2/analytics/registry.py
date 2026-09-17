@@ -79,12 +79,25 @@ _ALL: List[Dataset] = [
     _d(code="MAPE_IDF", label="Intra Day MAPE", group="demand",
        value="$mape", unit="%", agg="avg",
        match={"type": "IDF"}, permission="analytics:forecast"),
-    _d(code="FINAL_SCHEDULE_STATE", label="Final Schedule", group="demand",
-       value="$schedule", unit="MW", agg="avg", permission="analytics:schedule"),
+    # PTC's sheet places Final Schedule under supply_serve (= SG_TOTAL below). This
+    # demand_serve column is a DIFFERENT figure: an uploaded CSV value that excludes
+    # one plant (PPCLGPP, 15.00 MW) and the negative OA_PX exchange line, and in the
+    # UAT extract is identical across days. It is what DSM settlement subtracts from
+    # drawal (the sheet's own OD/UD formula), so it stays — under its real name.
+    # The settlement fields (schedule, net_dsm_amount, dsm_rate) are written ONLY on
+    # the IDF row of each block; the DAF row carries a 0 placeholder. Without pinning
+    # to IDF the two rows average together and every value is silently HALVED
+    # (verified: DSM Schedule read 267.72 for a stored 535.44). Same rule as the
+    # forecast datasets, which pin their own type for the same reason.
+    _d(code="FINAL_SCHEDULE_STATE", label="DSM Schedule", group="demand",
+       value="$schedule", unit="MW", agg="avg",
+       match={"type": "IDF"}, permission="analytics:schedule"),
     _d(code="OD_UD_AMOUNT", label="OD/UD Amount", group="demand",
-       value="$net_dsm_amount", unit="INR", agg="sum", permission="analytics:dsm"),
+       value="$net_dsm_amount", unit="INR", agg="sum",
+       match={"type": "IDF"}, permission="analytics:dsm"),
     _d(code="DSM_RATE", label="DSM Rate", group="demand",
-       value="$dsm_rate", unit="INR/MWh", agg="avg", permission="analytics:dsm"),
+       value="$dsm_rate", unit="INR/MWh", agg="avg",
+       match={"type": "IDF"}, permission="analytics:dsm"),
     # ---- derived ------------------------------------------------------
     _d(code="OD_UD_QUANTUM", label="OD/UD Quantum", group="demand", kind="derived",
        depends=("ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE"), expr="drawal - schedule",
@@ -102,19 +115,26 @@ _ALL: List[Dataset] = [
     _d(code="DECLARED_CAPACITY_TOTAL", label="Declared Capacity", group="supply",
        value="$volume", unit="MW", agg="sum",
        match={"dc_sg": "DC"}, permission="analytics:supply"),
-    _d(code="SG_TOTAL", label="Scheduled Generation", group="supply",
+    # "Final Schedule" per PTC's sheet: the SG rows of supply_serve, summed over plants.
+    # EPMS's own scheduling output — versioned (system_revision_number), published
+    # (schedule_published_time), changes daily — i.e. "after applicable revisions and
+    # cut-off", which is the docx definition. Code kept as SG_TOTAL: it IS that number.
+    _d(code="SG_TOTAL", label="Final Schedule", group="supply",
        value="$volume", unit="MW", agg="sum",
-       match={"dc_sg": "SG"}, permission="analytics:supply"),
+       match={"dc_sg": "SG"}, permission="analytics:schedule"),
     # Per-plant drill-downs: the same rows, one series per plant. Opt-in only —
     # they need a plant selection and are what makes a long range exceed the budget.
     _d(code="DC_PLANT", label="Declared Capacity — by plant", group="supply",
        value="$volume", unit="MW", agg="avg", series="per_plant", drilldown=True,
        match={"dc_sg": "DC"}, permission="analytics:supply"),
-    _d(code="SG_PLANT", label="Scheduled Generation — by plant", group="supply",
+    _d(code="SG_PLANT", label="Final Schedule — by plant", group="supply",
        value="$volume", unit="MW", agg="avg", series="per_plant", drilldown=True,
        match={"dc_sg": "SG"}, permission="analytics:supply"),
     # ---- scheduling ---------------------------------------------------
-    _d(code="FINAL_SCHEDULE_PLANT", label="Final Schedule — by plant",
+    # serve_dam_scheduling: the DAM-scheduling snapshot (53 plants, uploadedBy
+    # schedule_api). Not the Final Schedule — that is SG in supply_serve — so it is
+    # labelled for its source to avoid two "by plant" schedules that differ.
+    _d(code="FINAL_SCHEDULE_PLANT", label="DAM Schedule — by plant",
        group="scheduling", value="$volume", unit="MW", agg="avg",
        series="per_plant", drilldown=True, permission="analytics:schedule"),
     # ---- peak ---------------------------------------------------------
