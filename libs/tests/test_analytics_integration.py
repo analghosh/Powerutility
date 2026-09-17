@@ -630,21 +630,39 @@ async def test_the_live_archival_overlap_is_deduplicated(live):
 # ------------------------------------------------------------ known limitation
 
 @pytest.mark.asyncio
-async def test_hourly_grouping_cannot_work_off_scheduled_at(seeded):
-    """DEFECT, pinned deliberately — delete this test when it is fixed.
+async def test_hourly_grouping_derives_the_hour_from_the_block(seeded):
+    """The hour of day is only ever in `time_block`; `scheduled_at` is a trading
+    date stamped at midnight.
 
-    `scheduled_at` is a trading date stamped at midnight; the time of day lives in
-    `time_block`. Grouping the date field by hour therefore collapses a whole day
-    into one bucket labelled with whatever hour midnight maps to in the configured
-    timezone, instead of the 24 buckets `budget.date_bucket_count` promises. The
-    fix is to derive the hour from `time_block` (4 blocks per hour), which is a
-    change to `grouping.DATE_FORMATS` and its contract, not to this file.
+    Formatting the date field with %H used to label every row of a day with the
+    same hour, collapsing 24 buckets into one. The key now appends an hour derived
+    from the block (4 blocks per hour), so a full 96-block day buckets into 24.
+    This writes its own collection rather than touching the shared seed, which only
+    carries blocks 1-3.
     """
     from services.processing.app.v2.analytics import budget
-    result = await _query(["ACTUAL_DEMAND"],
-                          _filters(dt.date(2026, 1, 5), dt.date(2026, 1, 5),
-                                   date_grouping="HOURLY_WISE"))
-    buckets = {k[0] for k in _cells(result, "ACTUAL_DEMAND")}
-    assert len(buckets) == 1, buckets
+    from services.processing.app.v2.analytics.grouping import date_key_expr
+
+    coll = seeded["_hourly_probe"]
+    coll.drop()
+    day = dt.datetime(2026, 1, 5)
+    coll.insert_many([
+        {"scheduled_at": day, "time_block": b, "actual": float(b)}
+        for b in range(1, 97)
+    ])
+    try:
+        rows = list(coll.aggregate([
+            {"$group": {"_id": date_key_expr("HOURLY_WISE"), "n": {"$sum": 1}}},
+            {"$sort": {"_id": 1}},
+        ]))
+    finally:
+        coll.drop()
+
+    keys = [r["_id"] for r in rows]
+    assert len(keys) == 24, keys
+    assert keys[0] == "2026-01-05 00"
+    assert keys[-1] == "2026-01-05 23"
+    assert keys == sorted(keys), "hour must be zero-padded so keys sort lexically"
+    assert all(r["n"] == 4 for r in rows), "four 15-minute blocks per hour"
     assert budget.date_bucket_count(dt.date(2026, 1, 5), dt.date(2026, 1, 5),
-                                    "HOURLY_WISE") == 24
+                                    "HOURLY_WISE") == len(keys)

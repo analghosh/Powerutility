@@ -28,7 +28,7 @@ DATE_GROUPINGS = ("BLOCK_WISE", "DATE_WISE", "HOURLY_WISE",
 DATE_FORMATS = {
     "BLOCK_WISE": "%Y-%m-%d",
     "DATE_WISE": "%Y-%m-%d",
-    "HOURLY_WISE": "%Y-%m-%d %H",
+    "HOURLY_WISE": "%Y-%m-%d",  # the hour is appended from time_block, see below
     "WEEK_WISE": "%G-W%V",
     "MONTH_WISE": "%Y-%m",
     "YEAR_WISE": "%Y",
@@ -38,13 +38,50 @@ AGGREGATIONS = ("avg", "sum", "max", "min", "last")
 
 BLOCK_FIELD = "$time_block"
 
+BLOCKS_PER_HOUR = 4
+
+
+def hour_of_block(block: int) -> int:
+    """Hour of day (0-23) that a 15-minute block falls in.
+
+    Blocks 1-4 are hour 0, blocks 93-96 are hour 23.
+    """
+    return (int(block) - 1) // BLOCKS_PER_HOUR
+
+
+def _hour_from_block_expr() -> dict:
+    """Zero-padded hour string derived from time_block.
+
+    `scheduled_at` is a trading date stamped at midnight — the time of day is only
+    ever in `time_block`. Formatting the date field with %H therefore labels every
+    row of a day with the same hour and collapses 24 buckets into one, which is what
+    this expression exists to avoid. Padded so the key sorts lexically alongside the
+    date part.
+    """
+    hour = {"$toInt": {"$floor": {"$divide": [
+        {"$subtract": [BLOCK_FIELD, 1]}, BLOCKS_PER_HOUR,
+    ]}}}
+    return {
+        "$cond": [
+            {"$lt": [hour, 10]},
+            {"$concat": ["0", {"$toString": hour}]},
+            {"$toString": hour},
+        ]
+    }
+
 
 def date_key_expr(grouping: str, field: str = "$scheduled_at") -> dict:
     """Mongo expression producing a sortable string date key for one grouping."""
     fmt = DATE_FORMATS.get(grouping)
     if fmt is None:
         raise ValueError(f"Unknown date grouping: {grouping}")
-    return {"$dateToString": {"format": fmt, "date": field, "timezone": TIMEZONE}}
+
+    date_part = {"$dateToString": {"format": fmt, "date": field, "timezone": TIMEZONE}}
+
+    if grouping == "HOURLY_WISE":
+        return {"$concat": [date_part, " ", _hour_from_block_expr()]}
+
+    return date_part
 
 
 def _branch(lo: int, hi: int, label: str) -> dict:

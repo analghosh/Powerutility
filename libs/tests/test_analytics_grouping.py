@@ -5,6 +5,7 @@ tests assert on the expression built, which is the house convention for pipeline
 code (see `test_forecast_serve_repository.py`), and lock the two details that are
 silently wrong otherwise: ISO week keys, and the IST timezone on `$dateToString`.
 """
+import json
 import sys
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -28,7 +29,7 @@ def test_date_groupings_are_the_six_the_ui_offers():
 @pytest.mark.parametrize("grouping,fmt", [
     ("BLOCK_WISE", "%Y-%m-%d"),
     ("DATE_WISE", "%Y-%m-%d"),
-    ("HOURLY_WISE", "%Y-%m-%d %H"),
+    
     ("WEEK_WISE", "%G-W%V"),
     ("MONTH_WISE", "%Y-%m"),
     ("YEAR_WISE", "%Y"),
@@ -77,7 +78,12 @@ def test_timezone_defaults_to_ist():
 @pytest.mark.parametrize("grouping", ["BLOCK_WISE", "DATE_WISE", "HOURLY_WISE",
                                      "WEEK_WISE", "MONTH_WISE", "YEAR_WISE"])
 def test_every_date_key_carries_the_timezone(grouping):
-    assert g.date_key_expr(grouping)["$dateToString"]["timezone"] == g.TIMEZONE
+    expr = g.date_key_expr(grouping)
+    # HOURLY_WISE wraps the date part in a $concat with the hour derived from
+    # time_block, so the $dateToString sits one level down.
+    if "$concat" in expr:
+        expr = expr["$concat"][0]
+    assert expr["$dateToString"]["timezone"] == g.TIMEZONE
 
 
 def test_a_block_at_2345_ist_belongs_to_the_ist_date_not_the_utc_one():
@@ -176,3 +182,43 @@ def test_unknown_aggregation_rule_raises():
 def test_every_aggregation_rule_in_the_registry_is_supported():
     for dataset in registry.DATASETS.values():
         assert g.accumulator(dataset.agg, "$v") == {f"${dataset.agg}": "$v"}
+
+
+# --------------------------------------------------------------- hourly defect
+# `scheduled_at` is a trading date stamped at midnight; the time of day lives in
+# `time_block` (4 blocks per hour). Formatting the date field with %H therefore
+# collapsed a whole day into a single bucket instead of the 24 that
+# budget.date_bucket_count promises. The hour must be derived from the block.
+
+def _mentions(expr, needle):
+    return needle in json.dumps(expr)
+
+
+def test_hourly_key_is_derived_from_the_block_not_the_date_field():
+    expr = g.date_key_expr("HOURLY_WISE")
+    assert _mentions(expr, "$time_block"), expr
+
+
+def test_hourly_key_does_not_format_the_date_field_by_hour():
+    """%H on scheduled_at is always midnight, so it yields one bucket per day."""
+    expr = g.date_key_expr("HOURLY_WISE")
+    assert "%H" not in json.dumps(expr)
+
+
+def test_non_hourly_groupings_still_key_off_the_date_field_only():
+    for name in ("BLOCK_WISE", "DATE_WISE", "WEEK_WISE", "MONTH_WISE", "YEAR_WISE"):
+        assert not _mentions(g.date_key_expr(name), "$time_block"), name
+
+
+@pytest.mark.parametrize("block,hour", [
+    (1, 0), (4, 0), (5, 1), (8, 1), (41, 10), (89, 22), (93, 23), (96, 23),
+])
+def test_block_to_hour_mapping(block, hour):
+    assert g.hour_of_block(block) == hour
+
+
+def test_hour_is_zero_padded_so_keys_sort_lexically():
+    keys = [f"2026-01-05 {g.hour_of_block(b):02d}" for b in (1, 21, 96)]
+    assert keys == sorted(keys)
+    assert keys[0].endswith(" 00")
+    assert keys[-1].endswith(" 23")
