@@ -154,17 +154,72 @@ Contained: registry entries plus the adapter's `value` expression. PTC then only
 default, which is a labelling decision rather than a correctness one. `multiplier` is
 per-plant (≈0.9627 in samples) and already on every row.
 
-## 7. Other open work
+## 7. REMAINING WORK — the actual to-do list
 
-- **Not tested:** mid-export scheduler restart-and-resume (unit-tested only); concurrent-load
-  measurement of analytics against the bidding path; cross-user download 403 live
-  (unit-tested only).
-- **CSV number formatting:** raw float repr leaks, e.g. `522.9399999999999`. Left alone
-  because rounding precision is a reporting decision for PTC.
-- **`RouteProtection.jsx` bypass retained deliberately.** The `menus` row now ships in
-  `services/auth/app/core/seeder.py`, but UAT/PROD have not reseeded, so removing the bypass
-  would break the screen there. `/reports/forecast-report` carries the identical bypass for
-  the same reason. Remove only after PROD reseeds.
+Ordered by priority. Items marked ✅ are **already done** — do not redo them.
+
+### Already verified — do not repeat
+
+- ✅ **Browser verification was performed.** A real Chromium session logged in as `localdev`,
+  loaded `/analytics/dashboard`, set the date range, ticked Actual Demand, clicked
+  Apply & Generate, and confirmed the AG Grid rendered `554.68, 544.6, 527.54…` matching a
+  direct Mongo read. 33 rows in the DOM for a 96-block result, proving virtualization.
+  Screenshot captured. Zero analytics console errors (the 403s seen are Highcharts CDN
+  scripts, pre-existing on every EPMS page).
+- ✅ Queued export driven end to end: 202 → Mongo sweep → 22/22 chunks → downloaded 183KB
+  XLSX and opened it.
+- ✅ Budget 413, capped band, Redis cache hit, disabled-dataset 422, CSV stream, XLSX inline.
+
+### P1 — correctness
+
+1. **Fix the DC/SG loss basis** — see §6. Currently shipping gross DC against net SG with no
+   indication. This is the only thing producing numbers that look right and are not.
+
+### P2 — test coverage gaps
+
+2. **Commit a repeatable analytics e2e journey.** The browser run above was **ad-hoc and was
+   not saved**. The house convention is **Node `.mjs` scripts in `tools/e2e/`** — see the
+   existing `tools/e2e/harness.mjs` and `tools/e2e/mfa_journey.mjs`. Write
+   `tools/e2e/analytics_journey.mjs` in that style, covering: login → dashboard → set filters
+   → Apply → assert grid values → CSV download → queue an export → poll to ready.
+   ⚠️ Note `playwright` was pip-installed straight into `backend/.venv` during verification
+   and is **not in any requirements file**. Either pin it in `requirements-dev.txt` or drop
+   it and use the Node harness, which is the existing convention.
+3. **Mid-export restart-and-resume is unit-tested only.** Start a large export, kill the
+   scheduler mid-run, restart, and confirm from the job document that it resumed at the right
+   chunk rather than restarting. The chunk receipts in `parts[]` exist for this.
+4. **Cross-user download 403 is unit-tested only.** Needs a second real account to prove the
+   authorization boundary live.
+5. **Concurrent-load measurement never run.** Fire N simultaneous analytics queries while
+   timing an authenticated bidding call, and record the degradation. Analytics has its own
+   Motor client (`processing_analytics`) specifically so it cannot starve the bidding pool —
+   but that is designed, not measured.
+
+### P3 — polish / decisions
+
+6. **CSV number formatting** — raw float repr leaks, e.g. `522.9399999999999`. Deliberately
+   left alone: rounding precision is a reporting decision for PTC (question ⑰).
+7. **`RouteProtection.jsx` bypass retained deliberately.** The `menus` row now ships in
+   `services/auth/app/core/seeder.py`, but UAT/PROD have not reseeded, so removing the bypass
+   would break the screen there. `/reports/forecast-report` carries the identical bypass for
+   the same reason. Remove only after PROD reseeds.
+
+### P4 — explicitly out of v1 scope (user decision, not oversight)
+
+8. KPI cards, Chart View, Summary tab. The engine already returns everything they need; KPI
+   cards additionally depend on PTC answering question ⑱ (which dataset the cards read when
+   several incompatible ones are selected).
+
+### Blocked on PTC, not on code
+
+9. The 18 questions in §13. Only one blocks a visible feature: **peak/off-peak band
+   definitions** (⑭), without which 5 of the 7 "Group Blocks By" options stay disabled.
+   Everything else affects labelling or correctness confirmation, not function.
+
+### Before any deployment
+
+10. The four prerequisites in §8 — export directory, nginx buffering, index migration,
+    auth reseed. Each breaks the feature in a way that mis-diagnoses as something else.
 
 ## 8. Deploy prerequisites — will break the feature if missed
 
