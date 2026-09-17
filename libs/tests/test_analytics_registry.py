@@ -173,3 +173,42 @@ def test_only_tam_remains_absent():
 def test_ordinary_datasets_have_no_fixed_grouping():
     for code in ("ACTUAL_DEMAND", "FORECAST_DAF", "MAPE_IDF", "ACP_DAM", "DC_PLANT"):
         assert registry.get(code).fixed_grouping is None
+
+
+# ---------------------------------------- state-level default, plant drill-downs
+
+@pytest.mark.parametrize("total,plant", [
+    ("DECLARED_CAPACITY_TOTAL", "DC_PLANT"),
+    ("SG_TOTAL", "SG_PLANT"),
+    ("FINAL_SCHEDULE_STATE", "FINAL_SCHEDULE_PLANT"),
+])
+def test_state_level_total_is_the_default_and_per_plant_is_a_drilldown(total, plant):
+    """User decision 2026-09-17: every other dataset is one series per block, so the
+    state-level figure leads and the per-plant breakdown is opt-in."""
+    t, p_ = registry.get(total), registry.get(plant)
+    assert t.series == "scalar" and t.drilldown is False
+    assert p_.series == "per_plant" and p_.drilldown is True
+    assert "by plant" in p_.label
+    assert "by plant" not in t.label
+
+
+def test_totals_and_drilldowns_read_the_same_rows():
+    """The state figure is a SUM over the same supply_serve rows, so the basis is
+    identical to the per-plant one — there is no separate state-level row."""
+    for total, plant in (("DECLARED_CAPACITY_TOTAL", "DC_PLANT"), ("SG_TOTAL", "SG_PLANT")):
+        t, p_ = registry.get(total), registry.get(plant)
+        assert t.value == p_.value == "$volume"
+        assert t.match == p_.match
+        assert t.agg == "sum" and p_.agg == "avg"
+
+
+def test_totals_are_listed_before_their_drilldowns():
+    codes = list(registry.DATASETS)
+    assert codes.index("DECLARED_CAPACITY_TOTAL") < codes.index("DC_PLANT")
+    assert codes.index("SG_TOTAL") < codes.index("SG_PLANT")
+
+
+def test_only_per_plant_datasets_are_drilldowns():
+    for d in registry.DATASETS.values():
+        if d.drilldown:
+            assert d.series == "per_plant", d.code

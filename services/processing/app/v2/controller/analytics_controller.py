@@ -200,6 +200,8 @@ class AnalyticsController:
                 # the UI can stop the user combining WEEK_WISE with MONTH_WISE
                 # before the server has to refuse it.
                 "fixed_grouping": dataset.fixed_grouping,
+                # Per-plant breakdown of a state-level total: sorted after it, badged.
+                "drilldown": dataset.drilldown,
                 "availability": dataset.availability,
                 "permission": dataset.permission,
                 "permitted": AnalyticsService.has_permission(
