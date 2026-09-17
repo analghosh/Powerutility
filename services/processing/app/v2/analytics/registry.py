@@ -29,6 +29,9 @@ class Dataset:
     match: Optional[Dict[str, Any]] = None
     depends: Tuple[str, ...] = ()
     expr: Optional[str] = None
+    # A roll-up dataset (weekly/monthly forecast or MAPE) is meaningless at any other
+    # granularity, so the service forces this date grouping when the dataset is selected.
+    fixed_grouping: Optional[str] = None
 
 
 def _d(**kw) -> Dataset:
@@ -37,10 +40,14 @@ def _d(**kw) -> Dataset:
 
 _ALL: List[Dataset] = [
     # ---- demand group -------------------------------------------------
+    # PTC decision 2026-09-17: Actual Demand is `drawal`, not `actual`. The two are
+    # never equal (drawal ≈ 0.9676 × actual — a loss multiplier); `actual` is the gross
+    # figure. A separate DRAWAL dataset would duplicate this one, so there is none.
     _d(code="ACTUAL_DEMAND", label="Actual Demand", group="demand",
-       value="$actual", unit="MW", agg="avg", permission="analytics:demand"),
-    _d(code="DRAWAL", label="Drawal", group="demand",
        value="$drawal", unit="MW", agg="avg", permission="analytics:demand"),
+    # PTC defines UDM as actual + rostering. comp_udm IS exactly that wherever actual
+    # exists (1,864 rows, 0 mismatches) and is additionally populated on rows where
+    # actual has not landed yet, so it is the better source. (`udm` is zero everywhere.)
     _d(code="DEMAND_UDM", label="Demand (UDM)", group="demand",
        value="$comp_udm", unit="MW", agg="avg", permission="analytics:demand"),
     _d(code="ROSTERING", label="Rostering", group="demand",
@@ -70,9 +77,13 @@ _ALL: List[Dataset] = [
        value="$dsm_rate", unit="INR/MWh", agg="avg", permission="analytics:dsm"),
     # ---- derived ------------------------------------------------------
     _d(code="OD_UD_QUANTUM", label="OD/UD Quantum", group="demand", kind="derived",
-       depends=("DRAWAL", "FINAL_SCHEDULE_STATE"), expr="drawal - schedule",
+       depends=("ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE"), expr="drawal - schedule",
        unit="MW", agg="avg", permission="analytics:dsm"),
     # ---- supply group -------------------------------------------------
+    # PTC decision 2026-09-17: DC and SG are reported on `volume`, no loss variants.
+    # Be aware the field is NOT on one basis: on DC rows `volume` is GROSS
+    # (dc_afterloss = volume × multiplier) while on SG rows it is NET
+    # (sg_beforelosses = volume ÷ multiplier). This is PTC's convention, not a defect.
     _d(code="DC_PLANT", label="Plant wise DC", group="supply", value="$volume",
        unit="MW", agg="avg", series="per_plant",
        match={"dc_sg": "DC"}, permission="analytics:supply"),
@@ -99,19 +110,32 @@ _ALL: List[Dataset] = [
     _d(code="TOTAL_ENERGY_MU", label="Total Energy", group="peak",
        value="$total_energy_mu", unit="MU", agg="sum", permission="analytics:demand"),
     # ---- absent -------------------------------------------------------
-    _d(code="WEEKLY_FORECAST", label="Weekly Forecast", group="demand",
-       unit="MW", agg="avg", availability="absent", permission="analytics:forecast"),
-    _d(code="MONTHLY_FORECAST", label="Monthly Forecast", group="demand",
-       unit="MW", agg="avg", availability="absent", permission="analytics:forecast"),
-    _d(code="WEEKLY_MAPE", label="Weekly MAPE", group="demand",
-       unit="%", agg="avg", availability="absent", permission="analytics:forecast"),
-    _d(code="MONTHLY_MAPE", label="Monthly MAPE", group="demand",
-       unit="%", agg="avg", availability="absent", permission="analytics:forecast"),
     _d(code="TAM_TRADED", label="TAM Traded", group="trade",
        unit="MW", agg="sum", availability="absent", permission="analytics:market"),
     _d(code="TAM_BIDDED", label="TAM Bidded", group="trade",
        unit="MW", agg="sum", availability="absent", permission="analytics:market"),
 ]
+
+# ---- weekly / monthly roll-ups ---------------------------------------------
+# PTC's mapping is "DAF | IDF": the user picks the base forecast type and we roll the
+# PER-BLOCK values up to the week or month. Both `forecast` and `mape` are stored per
+# block (~94/day), so this is ordinary aggregation. Weekly/monthly MAPE is the MEAN of
+# the per-block MAPE — exactly how daily MAPE is already defined in
+# libs/helpers/demand_calculations.py — not a recomputation from summed totals, which
+# gives a different number nobody could reconcile with the daily figure.
+for _period, _grouping in (("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")):
+    _label = _period.title()
+    for _t, _tlabel in (("DAF", "Day Ahead"), ("IDF", "Intra Day")):
+        _ALL += [
+            _d(code=f"{_period}_FORECAST_{_t}", label=f"{_label} Forecast ({_tlabel})",
+               group="demand", value="$forecast", unit="MW", agg="avg",
+               match={"type": _t}, fixed_grouping=_grouping,
+               permission="analytics:forecast"),
+            _d(code=f"{_period}_MAPE_{_t}", label=f"{_label} MAPE ({_tlabel})",
+               group="demand", value="$mape", unit="%", agg="avg",
+               match={"type": _t}, fixed_grouping=_grouping,
+               permission="analytics:forecast"),
+        ]
 
 # ---- exchange group, generated per market -----------------------------
 for _m in MARKETS:

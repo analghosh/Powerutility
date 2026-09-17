@@ -125,7 +125,7 @@ def test_the_daf_discriminator_never_reaches_the_shared_match():
 def test_the_daf_discriminator_is_a_cond_inside_its_own_accumulator():
     g = _group_of(demand_mod.DemandAdapter().build_pipeline(
         datasets=_ds("ACTUAL_DEMAND", "MAPE_DAF"), filters=FILTERS, ctx=CTX))
-    assert g["ACTUAL_DEMAND"] == {"$avg": "$actual"}
+    assert g["ACTUAL_DEMAND"] == {"$avg": "$drawal"}
     assert g["MAPE_DAF"] == {
         "$avg": {"$cond": [{"$and": [{"$eq": ["$type", "DAF"]}]}, "$mape", None]}
     }
@@ -384,5 +384,5 @@ def test_an_absent_dataset_is_refused_rather_than_returning_nulls(adapter):
     # WEEKLY_FORECAST has no value field; {"$avg": None} would return null for
     # every block, which reads as "no data in this range", not "not built".
     with pytest.raises(ValueError):
-        adapter.build_pipeline(datasets=_ds("WEEKLY_FORECAST"),
+        adapter.build_pipeline(datasets=_ds("TAM_TRADED"),
                                filters=FILTERS, ctx=CTX)
