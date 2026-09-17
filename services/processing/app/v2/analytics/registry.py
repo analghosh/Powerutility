@@ -8,6 +8,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 MARKETS = ("DAM", "RTM", "GDAM", "HPDAM")
+FORECAST_TYPES = ("DAF", "IDF")           # Day Ahead, Intra Day
+FORECAST_TYPE_COUNT = len(FORECAST_TYPES)
 
 
 class UnknownDatasetError(KeyError):
@@ -127,25 +129,24 @@ _ALL: List[Dataset] = [
 ]
 
 # ---- weekly / monthly roll-ups ---------------------------------------------
-# PTC's mapping is "DAF | IDF": the user picks the base forecast type and we roll the
-# PER-BLOCK values up to the week or month. Both `forecast` and `mape` are stored per
-# block (~94/day), so this is ordinary aggregation. Weekly/monthly MAPE is the MEAN of
-# the per-block MAPE — exactly how daily MAPE is already defined in
-# libs/helpers/demand_calculations.py — not a recomputation from summed totals, which
-# gives a different number nobody could reconcile with the daily figure.
+# PTC's mapping is "DAF | IDF". DAF and IDF share the same (date, block) key in
+# demand_serve, so they are two COLUMNS of one table, not two tables — one tick per
+# roll-up, and the file carries a "Day Ahead" and an "Intra Day" column, the way the
+# exchange datasets carry one column per exchange. Both `forecast` and `mape` are
+# stored per block, so this is ordinary aggregation. Weekly/monthly MAPE is the MEAN
+# of the per-block MAPE — the same definition daily MAPE already uses in
+# libs/helpers/demand_calculations.py — not a recomputation from summed totals,
+# which gives a figure nobody could reconcile with the daily one.
 for _period, _grouping in (("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")):
     _label = _period.title()
-    for _t, _tlabel in (("DAF", "Day Ahead"), ("IDF", "Intra Day")):
-        _ALL += [
-            _d(code=f"{_period}_FORECAST_{_t}", label=f"{_label} Forecast ({_tlabel})",
-               group="demand", value="$forecast", unit="MW", agg="avg",
-               match={"type": _t}, fixed_grouping=_grouping,
-               permission="analytics:forecast"),
-            _d(code=f"{_period}_MAPE_{_t}", label=f"{_label} MAPE ({_tlabel})",
-               group="demand", value="$mape", unit="%", agg="avg",
-               match={"type": _t}, fixed_grouping=_grouping,
-               permission="analytics:forecast"),
-        ]
+    _ALL += [
+        _d(code=f"{_period}_FORECAST", label=f"{_label} Forecast", group="demand",
+           value="$forecast", unit="MW", agg="avg", series="per_forecast_type",
+           fixed_grouping=_grouping, permission="analytics:forecast"),
+        _d(code=f"{_period}_MAPE", label=f"{_label} MAPE", group="demand",
+           value="$mape", unit="%", agg="avg", series="per_forecast_type",
+           fixed_grouping=_grouping, permission="analytics:forecast"),
+    ]
 
 # ---- exchange group, generated per market -----------------------------
 for _m in MARKETS:
@@ -207,4 +208,6 @@ def series_cardinality(dataset: Dataset, ctx: Dict[str, int]) -> int:
         return max(1, int(ctx.get("plant_count", 1)))
     if dataset.series == "per_exchange":
         return max(1, int(ctx.get("exchange_count", 1)))
+    if dataset.series == "per_forecast_type":
+        return FORECAST_TYPE_COUNT
     return 1

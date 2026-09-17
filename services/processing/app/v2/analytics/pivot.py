@@ -29,6 +29,20 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from . import registry
 
+#: Human names for entity values that are stored as codes. Plants and exchanges
+#: are already names; forecast types are not.
+ENTITY_LABELS = {
+    "per_forecast_type": {"DAF": "Day Ahead", "IDF": "Intra Day"},
+}
+
+
+def entity_label(dataset, entity):
+    """The column name a person should read for this series' entity."""
+    if entity is None:
+        return None
+    return ENTITY_LABELS.get(getattr(dataset, "series", None), {}).get(str(entity), str(entity))
+
+
 QUALITY_COMPLETE = "complete"
 QUALITY_PARTIAL = "partial"
 QUALITY_EMPTY = "empty"
@@ -161,6 +175,8 @@ def build_response(rows: Sequence[dict], *, requested: Sequence[str],
                 "label": dataset.label,
                 "unit": dataset.unit,
                 "entity": entity,
+                # Readers see this; `entity` stays the stable machine key.
+                "entity_label": entity_label(dataset, entity),
                 "values": matrix,
                 "quality": quality,
             })

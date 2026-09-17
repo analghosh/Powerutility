@@ -159,7 +159,7 @@ def write_xlsx(response: Dict[str, Any], filters: Optional[Dict[str, Any]],
                 sheet.append(list(_IDENTITY_COLUMNS) + dates)
                 sheets[code] = sheet
 
-            entity = entry.get("entity")
+            entity = entry.get("entity_label") or entry.get("entity")
             matrix = entry.get("values") or ()
             for bi, block in enumerate(blocks):
                 values = matrix[bi] if bi < len(matrix) else ()

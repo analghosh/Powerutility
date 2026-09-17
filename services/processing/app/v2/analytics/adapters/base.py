@@ -348,7 +348,8 @@ class SourceGroupAdapter(ABC):
         `plant_id` for it would silently turn one series into thirty-four.
         """
         return bool(self.entity_field()) and any(
-            d.series in ("per_plant", "per_exchange") for d in datasets)
+            d.series in ("per_plant", "per_exchange", "per_forecast_type")
+            for d in datasets)
 
     def _group_stage(self, datasets: Sequence[Dataset], filters: dict) -> dict:
         """The analytics `$group`: one `_id` per output cell, one field per dataset."""
