@@ -259,6 +259,34 @@ class AnalyticsJobRepository(GenericRepository):
         result = await self.collection.update_one({"job_id": job_id}, {"$set": derived})
         return bool(getattr(result, "matched_count", 0))
 
+    async def requeue(self, job_id: str) -> bool:
+        """Send a failed or cancelled job back to `queued` as the SAME job.
+
+        A retry must not spawn a sibling row — the user would see the failed job
+        and its replacement side by side, and the list grows on every attempt.
+        Everything the last run left behind is wiped so the worker starts clean:
+        the error, the chunk receipts, the claim, and `attempts` (a manual retry
+        is a fresh decision, not the reaper's automatic budget). Only a terminal
+        job is eligible; a `queued`/`running` one is already on its way.
+        """
+        result = await self.collection.update_one(
+            {"job_id": job_id, "status": {"$in": [STATUS_FAILED, STATUS_CANCELLED]}},
+            {"$set": {
+                "status": STATUS_QUEUED,
+                "error": None,
+                "parts": [],
+                "chunks_done": 0,
+                "attempts": 0,
+                "worker_id": None,
+                "heartbeat_at": None,
+                "started_at": None,
+                "finished_at": None,
+                "result": None,
+                "updated_at": _utcnow(),
+            }},
+        )
+        return bool(getattr(result, "modified_count", 0))
+
     async def heartbeat(self, job_id: str, worker_id: str) -> bool:
         """Refresh liveness. False means this worker no longer owns the job.
 

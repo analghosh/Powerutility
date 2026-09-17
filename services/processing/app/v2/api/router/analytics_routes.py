@@ -59,7 +59,8 @@ from ...dependencies import get_user_context
 from ...helpers.analytics_xlsx import ExportWriteError
 from ...repository.analytics_job_repository import (ACTIVE_STATUSES,
                                                     STATUS_CANCELLED,
-                                                    STATUS_EXPIRED, STATUS_READY)
+                                                    STATUS_EXPIRED, STATUS_FAILED,
+                                                    STATUS_QUEUED, STATUS_READY)
 from ...services.analytics_export_service import (MEDIA_TYPES, MODE_INLINE,
                                                   MODE_JOB, MODE_STREAM,
                                                   AnalyticsExportService,
@@ -743,3 +744,53 @@ async def cancel_export(
     # The worker checks for this between chunks; a running job stops at the next
     # chunk boundary rather than instantly.
     return {"data": {"job_id": job_id, "status": STATUS_CANCELLED, "changed": True}}
+
+
+@router.post(
+    "/export/{job_id}/retry",
+    summary="Re-queue a failed or cancelled export as the same job",
+    response_description="The job's new status",
+)
+async def retry_export(
+    job_id: str,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    """Retry in place rather than regenerating.
+
+    Regenerate is right for an EXPIRED job (its file is gone, so a new job is the
+    honest answer). For a FAILED one it leaves the failed row beside its
+    replacement and the list grows on every attempt — so a failed job goes back
+    to `queued` as itself, and the every-minute sweep picks it up.
+    """
+    caller = _caller_id(user_context)
+    job = await _load_job(job_id)
+    if not _owns(job, caller):
+        raise _forbidden(job_id)
+
+    status = job.get("status")
+    if status not in (STATUS_FAILED, STATUS_CANCELLED):
+        raise HTTPException(
+            status_code=HTTP_CONFLICT,
+            detail={"code": "ANALYTICS_EXPORT_NOT_RETRYABLE",
+                    "message": f"Export {job_id} is {status}; only a failed or "
+                               f"cancelled export can be retried. Use regenerate "
+                               f"for an expired one.",
+                    "job_id": job_id, "status": status},
+        )
+
+    changed = await analytics_export_service.jobs.requeue(job_id)
+    if not changed:
+        raise HTTPException(
+            status_code=HTTP_CONFLICT,
+            detail={"code": "ANALYTICS_EXPORT_RETRY_FAILED",
+                    "message": f"Export {job_id} could not be re-queued — it "
+                               f"changed state while the request was in flight.",
+                    "job_id": job_id},
+        )
+
+    # Same doorbell the original enqueue rang; the sweep covers it if the broker
+    # is off, exactly as on first submission.
+    await analytics_export_service.notify_queued(job_id)
+
+    logger.info("Analytics export %s re-queued by %s", job_id, caller)
+    return {"data": {"job_id": job_id, "status": STATUS_QUEUED, "changed": True}}
