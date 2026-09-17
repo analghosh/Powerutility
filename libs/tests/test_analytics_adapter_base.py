@@ -489,3 +489,23 @@ def test_value_expr_handles_a_multi_key_discriminator():
     assert base.value_expr(d) == {"$cond": [
         {"$and": [{"$eq": ["$type", "DAF"]},
                   {"$eq": ["$market_type", "DAM"]}]}, "$drawal", None]}
+
+
+# --------------------------------------------------------------- sentinel_null
+
+def test_a_sentinel_zero_becomes_a_gap_before_aggregation():
+    """demand_processor.py writes forecasted_frequency=0.0 when the feed carried
+    none. 0 Hz is not a forecast; it must aggregate as None, never drag the average."""
+    d = registry.get("FREQUENCY_FORECAST")
+    assert d.sentinel_null == 0.0
+    expr = base.value_expr(d)
+    inner = expr["$cond"][1]                      # the value branch of the type match
+    assert inner == {"$cond": [{"$eq": ["$forecasted_frequency", 0.0]}, None,
+                               "$forecasted_frequency"]}
+
+
+def test_datasets_without_a_sentinel_keep_genuine_zeros():
+    """OD/UD Quantum of 0 is a real zero-deviation block, not a gap."""
+    d = registry.get("OD_UD_AMOUNT")
+    assert d.sentinel_null is None
+    assert base.value_expr(d) == "$net_dsm_amount"
