@@ -23,7 +23,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 | repo | branch | commits | state |
 |---|---|---|---|
 | `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 8  | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 9  | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -92,6 +92,7 @@ GET  /api/v2/analytics/exports                   this user's jobs
 GET  /api/v2/analytics/export/{id}               status + progress + download_token
 GET  /api/v2/analytics/export/{id}/download?token=…
 POST /api/v2/analytics/export/{id}/cancel
+POST /api/v2/analytics/export/{id}/retry     re-queue a failed/cancelled job IN PLACE
 ```
 
 Response payloads are nested under `data` (the client reads `response.data.data`).
@@ -124,7 +125,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | **Suggestion round-trip** | click "Switch to Week-wise" → 200 → dialog closes → pill activates → grid renders **68 per-plant columns**, 33 DOM rows |
 | Exports panel persistence | earlier queued jobs (Ready + Failed) still listed in a fresh browser session, with the `Errno 13` message surfaced to the user |
 
-**Tests:** backend `libs/tests` 767 pass / 10 fail; client 49 pass.
+**Tests:** backend `libs/tests` 781 pass / 10 fail; client 49 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
@@ -227,10 +228,10 @@ Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 
 ## 8. Deploy prerequisites — will break the feature if missed
 
-1. **`/var/lib/epms/exports` must exist and be writable by the service user.**
-   Verified failure: `Cannot create the analytics export directory '/var/lib/epms/exports':
-   [Errno 13] Permission denied`. Inline exports keep working, so this mis-diagnoses as
-   "only large downloads break". Or set `ANALYTICS_EXPORT_DIR` in the service environment.
+1. ~~`/var/lib/epms/exports` must exist~~ — **no longer required.** `ANALYTICS_EXPORT_DIR`
+   now defaults to `<repo>/exports`, which any service user can create. Setting it to a
+   dedicated volume in PROD is recommended housekeeping, not a prerequisite.
+
 2. **nginx `proxy_buffering off`** on `/api/v2/analytics/export`, else CSV streaming is
    pointless and large exports risk a proxy timeout.
 3. Run `./.venv/bin/python -m migrations.analytics_indexes_2026_09_17` — `exchange_serve`
@@ -302,7 +303,16 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
 4. **Archival double-count** (see §10).
 5. `JobPublisher` used blocking pika in a sync function → added `publish_job_trigger_async`.
 6. `.gitignore` blanket globs scoped.
-7. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
+7. **Export default dir was root-owned** (`/var/lib/epms/exports`) — first queued export
+   failed `Errno 13`. Default is now repo-relative; PROD override optional.
+8. **"Try again" on a failed export spawned a sibling job**, leaving the failed row in the
+   list forever. Added `POST /export/{id}/retry` + `AnalyticsJobRepository.requeue()`: the
+   SAME job goes back to `queued` with its run state wiped. Regenerate stays for `expired`
+   (its file is gone, so a new job is honest). Verified in the browser: rows 3 → 3,
+   Failed 1 → 0.
+9. **CSV/Excel buttons looked decorative** — disabled with no explanation until a dataset
+   was picked. Now a labelled "Download as" group with a hint saying why it is disabled.
+10. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
    from `response.data.data`, but FastAPI's `HTTPException` puts the payload under
    `detail` — `{ detail: { code, message, estimate } }`. curl could not catch this; only
    driving the real UI did. `readEstimate` now lives in `utils/readEstimate.js` with a
