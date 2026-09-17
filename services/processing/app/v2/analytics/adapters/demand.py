@@ -35,7 +35,12 @@ class DemandAdapter(SourceGroupAdapter):
     group = "demand"
     serve_collection = "demand_serve"
     historical_collection = "demand_serve_historical"
-    entity = None  # one series per dataset; demand_serve has no per-entity axis
+    # Ordinary demand datasets are one series per block. The weekly/monthly roll-ups
+    # are reported per forecast type — a "Day Ahead" and an "Intra Day" column from one
+    # tick — so `type` is the entity, and the base only keys the group on it when a
+    # `per_forecast_type` dataset is actually selected (see `_wants_entity`).
+    entity = "type"
+    entity_filter_key = None  # never filtered by the user; both types always come back
     # The vendor's own unique key — `idx_unique_demand_key` on the serve collection
     # and `find_by_unique_key(scheduled_at, time_block, type)` in the scheduler's
     # repository. Drops the copy the archival window leaves in both collections.

@@ -167,7 +167,7 @@ def csv_rows(response: Dict[str, Any],
     for series in (response.get("series") or ()):
         dataset = _text(series.get("dataset"))
         label = _text(series.get("label"))
-        entity = _cell(series.get("entity"))
+        entity = _cell(series.get("entity_label") or series.get("entity"))
         unit = _text(series.get("unit"))
         matrix = series.get("values") or ()
 

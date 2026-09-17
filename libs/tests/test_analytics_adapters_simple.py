@@ -93,10 +93,45 @@ def test_the_adapters_name_their_collections():
     assert s.historical_collection is None
 
 
-def test_only_the_scheduling_adapter_reports_an_entity():
-    assert demand_mod.DemandAdapter().entity_field() is None
+def _analytics_group(pipeline):
+    """The final analytics $group — not the serve/historical dedup group before it."""
+    return [st["$group"] for st in pipeline if "$group" in st][-1]
+
+
+def test_demand_declares_type_as_its_entity_but_peak_has_none():
+    """`type` is the entity that turns a weekly roll-up into Day Ahead + Intra Day
+    columns. Peak has no per-series axis; scheduling's is the plant."""
+    assert demand_mod.DemandAdapter().entity_field() == "type"
     assert peak_mod.PeakAdapter().entity_field() is None
     assert sched_mod.SchedulingAdapter().entity_field() == "plant_id"
+
+
+def test_an_ordinary_demand_query_is_not_split_by_forecast_type():
+    """The trap: demand rows exist for BOTH types (DAF and IDF) on every block. If
+    the group keyed on `type` for Actual Demand, one series would become two, and
+    the DAF/IDF rows carry the SAME `drawal` value — a silent duplicate column."""
+    ds = [registry.get("ACTUAL_DEMAND"), registry.get("FREQUENCY")]
+    pipeline = demand_mod.DemandAdapter().build_pipeline(datasets=ds, filters=FILTERS)
+    group = _analytics_group(pipeline)
+    assert "e" not in group["_id"], group["_id"]
+
+
+def test_a_weekly_rollup_is_split_by_forecast_type():
+    ds = [registry.get("WEEKLY_FORECAST")]
+    pipeline = demand_mod.DemandAdapter().build_pipeline(datasets=ds, filters=FILTERS)
+    group = _analytics_group(pipeline)
+    assert group["_id"]["e"] == "$type"
+
+
+def test_mixing_a_rollup_with_actual_demand_splits_both_by_type():
+    """Once one selected dataset wants the entity, the whole group is keyed on it —
+    Actual Demand then comes back per type too. That is the documented behaviour of
+    a shared $group, and the DAF/IDF drawal values are identical, so it is harmless;
+    this pins it so a future change is deliberate."""
+    ds = [registry.get("WEEKLY_FORECAST"), registry.get("ACTUAL_DEMAND")]
+    pipeline = demand_mod.DemandAdapter().build_pipeline(datasets=ds, filters=FILTERS)
+    group = _analytics_group(pipeline)
+    assert group["_id"]["e"] == "$type"
 
 
 # ------------------------------------------------- demand: one pipeline, two rules
