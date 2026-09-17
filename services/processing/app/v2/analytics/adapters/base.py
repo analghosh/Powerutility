@@ -143,10 +143,16 @@ def value_expr(dataset: Dataset) -> Union[str, dict]:
             f"Dataset {dataset.code} has no value field; it is not queryable "
             f"(availability={dataset.availability})"
         )
+    value: Union[str, dict] = dataset.value
+    sentinel = getattr(dataset, "sentinel_null", None)
+    if sentinel is not None:
+        # The source writes this value to mean "absent" (see registry.sentinel_null);
+        # turn it into a real gap before the accumulator ever sees it.
+        value = {"$cond": [{"$eq": [dataset.value, sentinel]}, None, dataset.value]}
     if not dataset.match:
-        return dataset.value
+        return value
     cond = {"$and": [{"$eq": [f"${k}", v]} for k, v in dataset.match.items()]}
-    return {"$cond": [cond, dataset.value, None]}
+    return {"$cond": [cond, value, None]}
 
 
 #: `$type` values meaning "this document carried no value". `missing` is a field

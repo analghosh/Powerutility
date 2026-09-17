@@ -40,6 +40,40 @@ ANALYTICS_INDEXES: List[Dict[str, Any]] = [
         "name": "idx_analytics_bid_trade_serve_hist",
         "unique": False,
     },
+    # Demand is the most-used source group (18 datasets) and was a COLLSCAN on both
+    # the serve and the historical side: serve's only index leads with `type`, which
+    # the analytics $match deliberately does not filter on (discriminators live in the
+    # accumulator so two datasets can share one pipeline). Range on scheduled_at first.
+    {
+        "collection": "demand_serve",
+        "keys": [("scheduled_at", 1), ("time_block", 1)],
+        "name": "idx_analytics_demand_serve",
+        "unique": False,
+    },
+    {
+        "collection": "demand_serve_historical",
+        "keys": [("scheduled_at", 1), ("time_block", 1)],
+        "name": "idx_analytics_demand_serve_hist",
+        "unique": False,
+    },
+    {
+        "collection": "supply_serve_historical",
+        "keys": [("dc_sg", 1), ("scheduled_at", 1), ("time_block", 1)],
+        "name": "idx_analytics_supply_serve_hist",
+        "unique": False,
+    },
+    {
+        "collection": "peak_demand_serve",
+        "keys": [("scheduled_at", 1), ("time_block", 1)],
+        "name": "idx_analytics_peak_serve",
+        "unique": False,
+    },
+    {
+        "collection": "peak_demand_serve_historical",
+        "keys": [("scheduled_at", 1), ("time_block", 1)],
+        "name": "idx_analytics_peak_serve_hist",
+        "unique": False,
+    },
     {
         "collection": "analytics_export_jobs",
         "keys": [("user_id", 1), ("created_at", -1)],
