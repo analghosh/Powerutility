@@ -311,7 +311,7 @@ def test_rows_for_an_unrequested_dataset_are_ignored():
     """Task 15 drops dependency-only rows; anything left over is not the user's ask."""
     rows = [
         _row("OD_UD_QUANTUM", "2026-04-01", "1", -1.48),
-        _row("DRAWAL", "2026-04-01", "1", 533.96),
+        _row("ROSTERING", "2026-04-01", "1", 533.96),
     ]
     resp = pivot.build_response(rows, requested=["OD_UD_QUANTUM"],
                                 axes_hint=None, meta={})

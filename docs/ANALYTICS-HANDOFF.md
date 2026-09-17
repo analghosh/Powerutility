@@ -22,8 +22,8 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 
 | repo | branch | commits | state |
 |---|---|---|---|
-| `backend` | `feat/analytics-dashboard` | 27 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 7  | **not merged**, branched off clean `dev` |
+| `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 8  | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -36,7 +36,7 @@ Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everyt
 
 ## 3. Architecture in one page
 
-A **dataset registry** maps 53 dataset codes onto ~7 MongoDB source groups, so ticking 12
+A **dataset registry** maps 56 dataset codes onto ~7 MongoDB source groups, so ticking 12
 datasets issues ~4 aggregations rather than 12. A **cell budget**, computed from the filters
 alone before any database call, decides whether a request renders inline, streams, or queues
 as a background job.
@@ -59,7 +59,7 @@ filters + ticked datasets
 
 | file | responsibility |
 |---|---|
-| `analytics/registry.py` | 53 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
+| `analytics/registry.py` | 56 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
 | `analytics/block_bands.py` | block grouping; PTC's 5 named bands seeded **inactive** |
 | `analytics/budget.py` | cell arithmetic and band classification — pure, no I/O |
 | `analytics/grouping.py` | `$dateToString` keys, block bucket `$switch`, accumulators |
@@ -110,7 +110,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 
 | check | evidence |
 |---|---|
-| Query correctness | API block 1 = 554.68; direct Mongo = 554.68 |
+| Query correctness | API block 1 = **542.68** (`drawal`); direct Mongo `drawal` = 542.68 |
 | Browser render | AG Grid, **33 rows in DOM for 96 blocks** → virtualization real |
 | Over-budget | 998,784 cells → 413 with 3 costed suggestions |
 | Capped band | 499,392 cells → 200, `capped: true`, 8 dates returned not 500k cells |
@@ -120,39 +120,42 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | XLSX inline | sheet per dataset + `Filters` sheet |
 | Queued export | 202 → sweep → 22/22 chunks → ready, 183KB downloaded and opened |
 | Download authz | ownership checked independently of the token |
+| **Large range in the browser** | 5 months × Plant wise DC+SG × 34 plants → Apply → **413** → budget dialog opens (9,98,784 values, 3 costed suggestions) |
+| **Suggestion round-trip** | click "Switch to Week-wise" → 200 → dialog closes → pill activates → grid renders **68 per-plant columns**, 33 DOM rows |
+| Exports panel persistence | earlier queued jobs (Ready + Failed) still listed in a fresh browser session, with the `Errno 13` message surfaced to the user |
 
-**Tests:** backend `libs/tests` 746 pass / 10 fail; client 44 pass.
+**Tests:** backend `libs/tests` 767 pass / 10 fail; client 49 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
 
-## 6. 🔴 Top of the queue — known defect, NOT fixed
+## 6. ✅ PTC dataset answers applied (2026-09-17, commit abf046c)
 
-**DC and SG are stored on opposite loss bases.** Verified on 400 rows each, zero mismatches:
+| PTC answer | what changed |
+|---|---|
+| **Actual Demand = `drawal`** (not `actual`; they are never equal, drawal ≈ 0.9676 × actual) | `ACTUAL_DEMAND` now reads `$drawal`. The duplicate `DRAWAL` dataset was removed; `OD_UD_QUANTUM` depends on `ACTUAL_DEMAND`. |
+| **Demand (UDM) = actual + rostering** | Kept `$comp_udm` — it IS exactly that where `actual` exists (1,864 rows, 0 mismatches) and also covers 1,542 rows where actual has not landed. |
+| **DC/SG stay on `volume`**, no loss variants | No change to values. Recorded in a registry comment that `volume` is GROSS on DC rows and NET on SG rows — PTC's convention, not a defect. |
+| **Final Schedule — keep both** plant and state level | Already shipped. |
+| **Weekly/Monthly Forecast & MAPE = `DAF \| IDF`** | 8 new live datasets (`WEEKLY_/MONTHLY_` × `FORECAST_/MAPE_` × `DAF/IDF`). Plain roll-ups of the per-block values with `agg avg`. |
 
-| rows | `volume` is | counterpart |
-|---|---|---|
-| `dc_sg="DC"` | **GROSS** (before losses) | `dc_afterloss` = `volume × multiplier` |
-| `dc_sg="SG"` | **NET** (after losses) | `sg_beforelosses` = `volume ÷ multiplier` |
+**Weekly/monthly MAPE is the MEAN of the per-block `mape`** — identical to how daily MAPE is
+defined in `libs/helpers/demand_calculations.py` (per block:
+`|(actual+rostering−forecast)/(actual+rostering)|×100`, verified 600 rows / 0 mismatches).
+It is deliberately NOT recomputed from summed totals, which gives a different figure
+(7.24% vs 7.78% on a real week) that nobody could reconcile with the daily number.
+Verified live: API weekly MAPE 7.784 = hand mean-of-blocks 7.784.
 
-```
-DC  KUDGI blk 71 : volume 49.50  dc_afterloss    47.65   (−3.73%)
-SG  NNTPP blk 41 : volume 25.31  sg_beforelosses 26.29   (+3.87%)
-```
+**`fixed_grouping`** is a new `Dataset` field. Roll-up datasets carry `WEEK_WISE`/`MONTH_WISE`
+and the service forces that grouping for the whole request in `_as_request()` (the single
+choke point, so budget, cache key and planner all see it). `meta.grouping_forced_by` records
+which dataset imposed it. Mixing weekly with monthly is refused with 422.
 
-All four supply datasets read `$volume` today — `DC_PLANT`, `SG_PLANT`,
-`DECLARED_CAPACITY_TOTAL`, `SG_TOTAL` — so **DC is reported gross while SG is reported net**,
-with the errors running in opposite directions (~7–8% combined). DC-vs-SG is the core
-availability-vs-dispatch comparison and both headers just say "MW". Nothing flags it.
+**`CACHE_VERSION` bumped to v2.** The cache key is built from dataset codes, so redefining
+what a code means kept serving the OLD payload for the TTL — verified live (`cache=hit`,
+stale 554.68). Bump it whenever a dataset's meaning changes.
 
-**Proposed fix:** split each into explicit before/after-losses variants so the label states
-the basis, e.g. `Plant wise DC (before losses)` → `$volume`,
-`Plant wise DC (after losses)` → `$dc_afterloss`,
-`Plant wise SG (before losses)` → `$sg_beforelosses`,
-`Plant wise SG (after losses)` → `$volume`.
-Contained: registry entries plus the adapter's `value` expression. PTC then only picks the
-default, which is a labelling decision rather than a correctness one. `multiplier` is
-per-plant (≈0.9627 in samples) and already on every row.
+Absent datasets are now **2** (TAM only), down from 6.
 
 ## 7. REMAINING WORK — the actual to-do list
 
@@ -169,11 +172,12 @@ Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 - ✅ Queued export driven end to end: 202 → Mongo sweep → 22/22 chunks → downloaded 183KB
   XLSX and opened it.
 - ✅ Budget 413, capped band, Redis cache hit, disabled-dataset 422, CSV stream, XLSX inline.
+- ✅ **Large-range path in the real browser**: 413 → budget dialog → Week-wise suggestion →
+  200 → 68-column grid. This run found and fixed the dialog-never-opens defect (§11 item 7).
 
 ### P1 — correctness
 
-1. **Fix the DC/SG loss basis** — see §6. Currently shipping gross DC against net SG with no
-   indication. This is the only thing producing numbers that look right and are not.
+1. ~~Fix the DC/SG loss basis~~ — **closed by PTC decision**: both stay on `volume`. See §6.
 
 ### P2 — test coverage gaps
 
@@ -248,6 +252,10 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
   `* * * * *`.
 - **A new scheduler job must be registered in THREE places** or it runs once at boot and
   never again: `_get_job_function`, `get_default_jobs`, `_register_fallback_jobs`.
+- **Error responses use `detail`, success responses use `data`.** FastAPI's `HTTPException`
+  puts its payload under `detail`; our 2xx routes nest under `data`. Any client code that
+  reads an error body must look in `detail` first — the budget dialog was silently dead
+  because it did not.
 - **`GenericRepository.aggregate` swallows exceptions and returns `[]`.** Analytics must
   distinguish "no data" from "query failed", so it uses its own wrapper that raises.
 - **Client has no React Query and no Tailwind.** Both appear in the tree but are inert. Use
@@ -294,6 +302,11 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
 4. **Archival double-count** (see §10).
 5. `JobPublisher` used blocking pika in a sync function → added `publish_job_trigger_async`.
 6. `.gitignore` blanket globs scoped.
+7. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
+   from `response.data.data`, but FastAPI's `HTTPException` puts the payload under
+   `detail` — `{ detail: { code, message, estimate } }`. curl could not catch this; only
+   driving the real UI did. `readEstimate` now lives in `utils/readEstimate.js` with a
+   `node --test` case pinning the exact real 413 shape.
 
 ## 12. Commands
 
@@ -316,12 +329,14 @@ cd backend && ./.venv/bin/python -m migrations.analytics_indexes_2026_09_17
 
 Full text with reasoning is in §14 of the spec and in the session transcript. Headlines:
 
-**No data source exists (6 datasets):** Weekly Forecast, Monthly Forecast, Weekly MAPE,
-Monthly MAPE, TAM Traded, TAM Bidded.
+**No data source exists (2 datasets):** TAM Traded, TAM Bidded. ~~Weekly/Monthly Forecast
+and MAPE~~ — **answered**: built as roll-ups of the per-block DAF/IDF values (§6).
 
 **Source ambiguous:** Declared Capacity vs Plant wise DC (same rows — is the difference
-aggregation level?); Final Schedule plant-level vs state-level; **DC/SG loss basis (see §6)**;
-OD/UD Amount stored vs recomputed; "Traded"/"Bidded" meaning ours or the whole market.
+aggregation level?); ~~Final Schedule level~~ **answered: keep both**; ~~DC/SG loss basis~~
+**answered: `volume`**; ~~Actual Demand~~ **answered: `drawal`**; ~~UDM~~ **answered:
+actual+rostering = `comp_udm`**; OD/UD Amount stored vs recomputed; "Traded"/"Bidded"
+meaning ours or the whole market.
 
 **Data thin or odd — confirm expected:** portfolio GDAM/HPDAM have no rows at all;
 HPDAM clears in ~0.6% of blocks; Rostering mostly zero (is zero real or N/A?);

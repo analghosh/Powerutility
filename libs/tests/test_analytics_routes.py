@@ -154,7 +154,7 @@ def test_the_dataset_catalogue_lists_absent_datasets_so_the_ui_can_disable_them(
     # Every registered code is offered, including the ones with no storage — the UI
     # renders those disabled rather than pretending they do not exist.
     assert set(by_code) == set(registry.DATASETS)
-    assert by_code["WEEKLY_FORECAST"]["availability"] == "absent"
+    assert by_code["TAM_TRADED"]["availability"] == "absent"
     assert by_code["ACTUAL_DEMAND"]["availability"] == "live"
     # bid_trade_serve has no GDAM rows yet: selectable, but honest about it.
     assert by_code["PF_TRADED_GDAM"]["availability"] == "empty"
@@ -340,11 +340,11 @@ def test_a_per_plant_dataset_with_no_plants_is_rejected_before_it_can_fan_out():
 def test_a_dataset_with_no_storage_is_refused_by_name_not_rendered_empty():
     repo = StubRepo()
     response = _client(repo=repo).post(
-        "/api/v2/analytics/query", json=_query_body(datasets=["WEEKLY_FORECAST"]))
+        "/api/v2/analytics/query", json=_query_body(datasets=["TAM_TRADED"]))
 
     assert response.status_code == 422
     detail = response.json()["detail"]
-    assert "WEEKLY_FORECAST" in detail["datasets"]
+    assert "TAM_TRADED" in detail["datasets"]
     assert repo.calls == []
 
 

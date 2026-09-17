@@ -72,7 +72,10 @@ DEFAULT_EXCHANGE_COUNT = 3
 
 #: Bumped whenever the cached payload's shape changes, so a deploy cannot serve a
 #: yesterday-shaped response to today's frontend out of a 24-hour entry.
-CACHE_VERSION = "v1"
+# Bump whenever a dataset's MEANING changes (field, formula, grouping) — the key is built
+# from dataset codes, so a redefinition would otherwise keep serving the old payload for
+# the length of the TTL. v2: ACTUAL_DEMAND moved from `actual` to `drawal` (2026-09-17).
+CACHE_VERSION = "v2"
 CACHE_PREFIX = "analytics:query"
 
 #: Bands that cannot be rendered inline. The route turns this into a 413 plus the
@@ -109,14 +112,51 @@ class BudgetExceeded(RuntimeError):
         ))
 
 
+class FixedGroupingConflict(ValueError):
+    """Two selected datasets demand different fixed date groupings."""
+
+
+def forced_grouping(codes) -> Tuple[Optional[str], List[str]]:
+    """The date grouping the selected datasets impose, if any, and who imposed it.
+
+    A weekly forecast viewed block-wise is meaningless, so a roll-up dataset carries a
+    `fixed_grouping` that overrides the user's choice for the whole request. Mixing a
+    weekly and a monthly roll-up in one request has no sensible answer and is refused.
+    """
+    forced: Dict[str, List[str]] = {}
+    for code in codes:
+        fg = registry.get(code).fixed_grouping
+        if fg:
+            forced.setdefault(fg, []).append(code)
+    if not forced:
+        return None, []
+    if len(forced) > 1:
+        detail = "; ".join(f"{g}: {', '.join(c)}" for g, c in sorted(forced.items()))
+        raise FixedGroupingConflict(
+            f"These datasets require different date groupings and cannot be combined "
+            f"in one request — {detail}")
+    (grouping, by), = forced.items()
+    return grouping, by
+
+
 def _as_request(request: Any) -> AnalyticsQueryRequest:
-    """Accept a validated model or the raw filter dict a stored export job holds."""
+    """Accept a validated model or the raw filter dict a stored export job holds.
+
+    Also the single choke point where a dataset's `fixed_grouping` overrides the
+    user's `date_grouping`, so the budget, the cache key and the planner all see the
+    same, already-forced value.
+    """
     if isinstance(request, AnalyticsQueryRequest):
-        return request
-    if isinstance(request, dict):
-        return AnalyticsQueryRequest(**request)
-    raise TypeError(
-        f"Expected an AnalyticsQueryRequest or a filter dict, got {type(request).__name__}")
+        req = request
+    elif isinstance(request, dict):
+        req = AnalyticsQueryRequest(**request)
+    else:
+        raise TypeError(
+            f"Expected an AnalyticsQueryRequest or a filter dict, got {type(request).__name__}")
+    grouping, _ = forced_grouping(req.datasets)
+    if grouping and grouping != req.date_grouping:
+        req = req.model_copy(update={"date_grouping": grouping})
+    return req
 
 
 async def _maybe_await(value: Any) -> Any:
@@ -405,9 +445,13 @@ class AnalyticsService:
         )
 
         rows = derived.resolve(result.rows, allowed)
+        _, forced_by = forced_grouping(allowed)
         response = pivot.build_response(rows, requested=allowed, meta={
             "failed_datasets": result.failed_datasets,
             "partial": result.partial,
+            # Part of the question, not the caller, so it belongs in the cached payload.
+            "date_grouping": req.date_grouping,
+            "grouping_forced_by": forced_by,
         })
 
         if result.partial:

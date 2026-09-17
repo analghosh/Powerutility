@@ -18,7 +18,7 @@ from services.processing.app.v2.analytics import registry  # noqa: E402
 def test_actual_demand_maps_to_the_demand_group():
     d = registry.get("ACTUAL_DEMAND")
     assert d.group == "demand"
-    assert d.value == "$actual"
+    assert d.value == "$drawal"
     assert d.unit == "MW"
     assert d.agg == "avg"
 
@@ -31,7 +31,7 @@ def test_udm_reads_comp_udm_not_udm():
 def test_od_ud_quantum_is_derived_from_same_collection_fields():
     d = registry.get("OD_UD_QUANTUM")
     assert d.kind == "derived"
-    assert set(d.depends) == {"DRAWAL", "FINAL_SCHEDULE_STATE"}
+    assert set(d.depends) == {"ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE"}
 
 
 def test_od_ud_amount_is_stored_not_computed():
@@ -43,7 +43,7 @@ def test_od_ud_amount_is_stored_not_computed():
 
 
 @pytest.mark.parametrize("code", [
-    "WEEKLY_FORECAST", "MONTHLY_FORECAST", "WEEKLY_MAPE", "MONTHLY_MAPE",
+    "TAM_TRADED", "TAM_TRADED", "TAM_TRADED", "TAM_TRADED",
     "TAM_TRADED", "TAM_BIDDED",
 ])
 def test_datasets_with_no_storage_are_absent(code):
@@ -115,3 +115,61 @@ def test_gdam_acv_projects_the_total_subfield():
     """GDAM acv is a sub-document; every other market's acv is a scalar."""
     assert registry.get("ACV_GDAM").value == "$acv.total"
     assert registry.get("ACV_DAM").value == "$acv"
+
+
+# ------------------------------------------------- PTC answers, 2026-09-17
+
+def test_actual_demand_is_drawal_not_the_gross_actual_field():
+    """PTC: Actual Demand = drawal. The two are never equal (drawal ≈ 0.9676 × actual)."""
+    assert registry.get("ACTUAL_DEMAND").value == "$drawal"
+
+
+def test_there_is_no_separate_drawal_dataset():
+    """It would be an exact duplicate of ACTUAL_DEMAND."""
+    with pytest.raises(registry.UnknownDatasetError):
+        registry.get("DRAWAL")
+
+
+def test_od_ud_quantum_now_depends_on_actual_demand():
+    assert registry.get("OD_UD_QUANTUM").depends == ("ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE")
+
+
+@pytest.mark.parametrize("period,grouping", [("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")])
+@pytest.mark.parametrize("t", ["DAF", "IDF"])
+def test_rollup_forecast_is_a_live_per_block_forecast_with_a_fixed_grouping(period, grouping, t):
+    d = registry.get(f"{period}_FORECAST_{t}")
+    assert d.availability == "live"
+    assert d.kind == "direct"
+    assert d.value == "$forecast"
+    assert d.match == {"type": t}
+    assert d.agg == "avg"
+    assert d.fixed_grouping == grouping
+
+
+@pytest.mark.parametrize("period,grouping", [("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")])
+@pytest.mark.parametrize("t", ["DAF", "IDF"])
+def test_rollup_mape_is_the_mean_of_per_block_mape(period, grouping, t):
+    """Same definition as daily MAPE, over more blocks — NOT recomputed from summed totals,
+    which gives a different figure (7.24% vs 7.78% on a real week)."""
+    d = registry.get(f"{period}_MAPE_{t}")
+    assert d.availability == "live"
+    assert d.kind == "direct"
+    assert d.value == "$mape"
+    assert d.agg == "avg"
+    assert d.fixed_grouping == grouping
+
+
+def test_old_absent_rollup_codes_are_gone():
+    for code in ("WEEKLY_FORECAST", "MONTHLY_FORECAST", "WEEKLY_MAPE", "MONTHLY_MAPE"):
+        with pytest.raises(registry.UnknownDatasetError):
+            registry.get(code)
+
+
+def test_only_tam_remains_absent():
+    absent = sorted(d.code for d in registry.DATASETS.values() if d.availability == "absent")
+    assert absent == ["TAM_BIDDED", "TAM_TRADED"]
+
+
+def test_ordinary_datasets_have_no_fixed_grouping():
+    for code in ("ACTUAL_DEMAND", "FORECAST_DAF", "MAPE_IDF", "ACP_DAM", "DC_PLANT"):
+        assert registry.get(code).fixed_grouping is None
