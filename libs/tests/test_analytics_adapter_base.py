@@ -220,7 +220,7 @@ def test_each_datasets_discriminator_is_guarded_inside_its_own_accumulator():
     ds = [registry.get("ACTUAL_DEMAND"), registry.get("MAPE_DAF")]
     g = _group_of(_Demandish().build_pipeline(datasets=ds, filters=FILTERS, ctx=CTX))
     assert _value_fields(g) == ["ACTUAL_DEMAND", "MAPE_DAF"]
-    assert g["ACTUAL_DEMAND"] == {"$avg": "$actual"}
+    assert g["ACTUAL_DEMAND"] == {"$avg": "$drawal"}
     assert g["MAPE_DAF"] == {
         "$avg": {"$cond": [{"$and": [{"$eq": ["$type", "DAF"]}]}, "$mape", None]}
     }
@@ -281,10 +281,10 @@ def test_an_adapter_without_an_entity_ignores_the_plant_filter():
 
 
 def test_each_dataset_gets_its_own_accumulator_in_one_pipeline():
-    ds = [registry.get("ACTUAL_DEMAND"), registry.get("DRAWAL"),
+    ds = [registry.get("ACTUAL_DEMAND"), registry.get("ROSTERING"),
           registry.get("FREQUENCY")]
     g = _group_of(_Demandish().build_pipeline(datasets=ds, filters=FILTERS, ctx=CTX))
-    assert _value_fields(g) == ["ACTUAL_DEMAND", "DRAWAL", "FREQUENCY"]
+    assert _value_fields(g) == ["ACTUAL_DEMAND", "ROSTERING", "FREQUENCY"]
     assert g["FREQUENCY"] == {"$avg": "$frequency"}
 
 
@@ -365,9 +365,9 @@ def test_rows_from_carries_the_entity_through():
 
 
 def test_rows_from_fans_one_document_out_to_one_row_per_dataset():
-    ds = [registry.get("ACTUAL_DEMAND"), registry.get("DRAWAL")]
-    rows = _Demandish().rows_from([_doc(ACTUAL_DEMAND=1.0, DRAWAL=2.0)], ds)
-    assert [r["dataset"] for r in rows] == ["ACTUAL_DEMAND", "DRAWAL"]
+    ds = [registry.get("ACTUAL_DEMAND"), registry.get("ROSTERING")]
+    rows = _Demandish().rows_from([_doc(ACTUAL_DEMAND=1.0, ROSTERING=2.0)], ds)
+    assert [r["dataset"] for r in rows] == ["ACTUAL_DEMAND", "ROSTERING"]
     assert [r["value"] for r in rows] == [1.0, 2.0]
 
 
@@ -438,7 +438,7 @@ def test_entity_field_defaults_to_none():
 def test_a_dataset_with_no_value_field_is_rejected_before_it_reaches_mongo():
     # `absent` datasets carry value=None; building an accumulator on them would
     # emit {"$avg": None} and silently return nulls for every block.
-    absent = registry.get("WEEKLY_FORECAST")
+    absent = registry.get("TAM_TRADED")
     assert absent.value is None
     with pytest.raises(ValueError):
         _Demandish().build_pipeline(datasets=[absent], filters=FILTERS, ctx=CTX)
@@ -480,7 +480,7 @@ def test_a_derived_dataset_never_reaches_a_pipeline():
 
 
 def test_value_expr_leaves_an_undiscriminated_dataset_alone():
-    assert base.value_expr(registry.get("ACTUAL_DEMAND")) == "$actual"
+    assert base.value_expr(registry.get("ACTUAL_DEMAND")) == "$drawal"
 
 
 def test_value_expr_handles_a_multi_key_discriminator():
@@ -488,4 +488,4 @@ def test_value_expr_handles_a_multi_key_discriminator():
                 match={"type": "DAF", "market_type": "DAM"})
     assert base.value_expr(d) == {"$cond": [
         {"$and": [{"$eq": ["$type", "DAF"]},
-                  {"$eq": ["$market_type", "DAM"]}]}, "$actual", None]}
+                  {"$eq": ["$market_type", "DAM"]}]}, "$drawal", None]}

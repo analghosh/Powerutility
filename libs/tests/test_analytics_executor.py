@@ -38,7 +38,7 @@ from services.processing.app.v2.repository import analytics_repository as repo_m
 
 # Twelve datasets across four source groups — the central claim of the design.
 TWELVE = [
-    "ACTUAL_DEMAND", "DRAWAL", "MAPE_DAF", "MAPE_IDF",          # demand
+    "ACTUAL_DEMAND", "ROSTERING", "MAPE_DAF", "MAPE_IDF",          # demand
     "DC_PLANT", "DECLARED_CAPACITY_TOTAL",                       # supply
     "ACP_DAM", "ACV_DAM", "ACP_RTM",                             # exchange
     "PEAK_DEMAND", "MIN_DEMAND", "AVG_DEMAND",                   # peak
@@ -204,19 +204,19 @@ def test_a_derived_dataset_plans_its_dependencies_and_not_itself():
     plans = planner.plan(["OD_UD_QUANTUM"], FILTERS)
     assert len(plans) == 1
     codes = [d.code for d in plans[0]["datasets"]]
-    assert codes == ["DRAWAL", "FINAL_SCHEDULE_STATE"]
+    assert codes == ["ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE"]
     assert "OD_UD_QUANTUM" not in codes
 
 
 def test_a_dependency_ticked_in_its_own_right_is_not_fetched_twice():
-    plans = planner.plan(["OD_UD_QUANTUM", "DRAWAL"], FILTERS)
+    plans = planner.plan(["OD_UD_QUANTUM", "ROSTERING"], FILTERS)
     codes = [d.code for d in plans[0]["datasets"]]
-    assert codes.count("DRAWAL") == 1
+    assert codes.count("ROSTERING") == 1
 
 
 def test_duplicate_codes_collapse():
-    plans = planner.plan(["DRAWAL", "DRAWAL", "DRAWAL"], FILTERS)
-    assert [d.code for d in plans[0]["datasets"]] == ["DRAWAL"]
+    plans = planner.plan(["ROSTERING", "ROSTERING", "ROSTERING"], FILTERS)
+    assert [d.code for d in plans[0]["datasets"]] == ["ROSTERING"]
 
 
 def test_plan_requires_at_least_one_dataset():
@@ -233,8 +233,8 @@ def test_an_absent_dataset_is_refused_by_name():
     """`absent` has no storage at all. Dropping it quietly would report success for
     a column the user ticked and will never see."""
     with pytest.raises(planner.UnavailableDatasetError) as excinfo:
-        planner.plan(["ACTUAL_DEMAND", "WEEKLY_FORECAST"], FILTERS)
-    assert "WEEKLY_FORECAST" in str(excinfo.value)
+        planner.plan(["ACTUAL_DEMAND", "TAM_TRADED"], FILTERS)
+    assert "TAM_TRADED" in str(excinfo.value)
 
 
 def test_an_empty_dataset_is_planned_not_refused():
@@ -244,12 +244,12 @@ def test_an_empty_dataset_is_planned_not_refused():
 
 
 def test_plan_accepts_dataset_objects_as_well_as_codes():
-    plans = planner.plan([registry.get("DRAWAL")], FILTERS)
-    assert [d.code for d in plans[0]["datasets"]] == ["DRAWAL"]
+    plans = planner.plan([registry.get("ROSTERING")], FILTERS)
+    assert [d.code for d in plans[0]["datasets"]] == ["ROSTERING"]
 
 
 def test_plan_group_order_follows_the_request():
-    plans = planner.plan(["ACP_DAM", "DRAWAL", "PEAK_DEMAND"], FILTERS)
+    plans = planner.plan(["ACP_DAM", "ROSTERING", "PEAK_DEMAND"], FILTERS)
     assert [p["group"] for p in plans] == ["exchange", "demand", "peak"]
 
 
@@ -259,11 +259,11 @@ def test_plan_group_order_follows_the_request():
 @pytest.mark.asyncio
 async def test_execute_returns_rows_from_every_group():
     plans = [
-        stub_plan("demand", "demand_serve", ["DRAWAL"]),
+        stub_plan("demand", "demand_serve", ["ROSTERING"]),
         stub_plan("peak", "peak_demand_serve", ["PEAK_DEMAND"]),
     ]
     repo = RecordingRepo(docs={
-        "demand_serve": [{"_id": {"d": "2026-08-01", "b": "1"}, "DRAWAL": 10.0}],
+        "demand_serve": [{"_id": {"d": "2026-08-01", "b": "1"}, "ROSTERING": 10.0}],
         "peak_demand_serve": [{"_id": {"d": "2026-08-01", "b": "89"},
                                "PEAK_DEMAND": 900.0}],
     })
@@ -271,21 +271,21 @@ async def test_execute_returns_rows_from_every_group():
 
     assert isinstance(result, executor.ExecutionResult)
     assert [(r["dataset"], r["value"]) for r in result.rows] == [
-        ("DRAWAL", 10.0), ("PEAK_DEMAND", 900.0)]
+        ("ROSTERING", 10.0), ("PEAK_DEMAND", 900.0)]
     assert result.failed_groups == []
     assert result.failed_datasets == []
 
 
 @pytest.mark.asyncio
 async def test_rows_come_from_the_adapter_with_that_plans_datasets():
-    plans = [stub_plan("demand", "demand_serve", ["DRAWAL", "ACTUAL_DEMAND"])]
+    plans = [stub_plan("demand", "demand_serve", ["ROSTERING", "ACTUAL_DEMAND"])]
     repo = RecordingRepo(docs={"demand_serve": [
-        {"_id": {"d": "2026-08-01", "b": "1"}, "DRAWAL": 1.0, "ACTUAL_DEMAND": None}]})
+        {"_id": {"d": "2026-08-01", "b": "1"}, "ROSTERING": 1.0, "ACTUAL_DEMAND": None}]})
     await executor.execute(plans, repo)
 
     docs, datasets = plans[0]["adapter"].rows_from_calls[0]
     assert len(docs) == 1
-    assert [d.code for d in datasets] == ["DRAWAL", "ACTUAL_DEMAND"]
+    assert [d.code for d in datasets] == ["ROSTERING", "ACTUAL_DEMAND"]
 
 
 @pytest.mark.asyncio
@@ -299,7 +299,7 @@ async def test_a_missing_value_survives_as_none():
 
 @pytest.mark.asyncio
 async def test_max_time_ms_is_passed_on_every_call():
-    plans = [stub_plan("demand", "demand_serve", ["DRAWAL"]),
+    plans = [stub_plan("demand", "demand_serve", ["ROSTERING"]),
              stub_plan("peak", "peak_demand_serve", ["PEAK_DEMAND"]),
              stub_plan("exchange", "exchange_serve", ["ACP_DAM"])]
     repo = RecordingRepo()
@@ -310,14 +310,14 @@ async def test_max_time_ms_is_passed_on_every_call():
 @pytest.mark.asyncio
 async def test_max_time_ms_defaults_to_twenty_seconds():
     repo = RecordingRepo()
-    await executor.execute([stub_plan("demand", "demand_serve", ["DRAWAL"])], repo)
+    await executor.execute([stub_plan("demand", "demand_serve", ["ROSTERING"])], repo)
     assert repo.calls[0]["max_time_ms"] == 20_000
 
 
 @pytest.mark.asyncio
 async def test_each_plan_queries_its_own_collection_with_its_own_pipeline():
     pipeline = [{"$match": {"time_block": 1}}]
-    plans = [stub_plan("demand", "demand_serve", ["DRAWAL"], pipeline)]
+    plans = [stub_plan("demand", "demand_serve", ["ROSTERING"], pipeline)]
     repo = RecordingRepo()
     await executor.execute(plans, repo)
     assert repo.calls[0]["collection"] == "demand_serve"
@@ -326,7 +326,7 @@ async def test_each_plan_queries_its_own_collection_with_its_own_pipeline():
 
 @pytest.mark.asyncio
 async def test_groups_run_concurrently_under_the_semaphore():
-    plans = [stub_plan(f"g{i}", f"c{i}", ["DRAWAL"]) for i in range(5)]
+    plans = [stub_plan(f"g{i}", f"c{i}", ["ROSTERING"]) for i in range(5)]
     repo = RecordingRepo()
     await executor.execute(plans, repo, concurrency=2)
     assert repo.peak == 2, repo.peak
@@ -335,7 +335,7 @@ async def test_groups_run_concurrently_under_the_semaphore():
 
 @pytest.mark.asyncio
 async def test_default_concurrency_runs_groups_in_parallel():
-    plans = [stub_plan(f"g{i}", f"c{i}", ["DRAWAL"]) for i in range(6)]
+    plans = [stub_plan(f"g{i}", f"c{i}", ["ROSTERING"]) for i in range(6)]
     repo = RecordingRepo()
     await executor.execute(plans, repo)
     assert 1 < repo.peak <= 4, repo.peak
@@ -344,16 +344,16 @@ async def test_default_concurrency_runs_groups_in_parallel():
 @pytest.mark.asyncio
 async def test_one_group_failing_does_not_fail_the_request():
     plans = [
-        stub_plan("demand", "demand_serve", ["DRAWAL"]),
+        stub_plan("demand", "demand_serve", ["ROSTERING"]),
         stub_plan("exchange", "exchange_serve", ["ACP_DAM", "ACV_DAM"]),
     ]
     repo = RecordingRepo(
-        docs={"demand_serve": [{"_id": {"d": "2026-08-01", "b": "1"}, "DRAWAL": 5.0}]},
+        docs={"demand_serve": [{"_id": {"d": "2026-08-01", "b": "1"}, "ROSTERING": 5.0}]},
         fail=["exchange_serve"],
     )
     result = await executor.execute(plans, repo)
 
-    assert [r["dataset"] for r in result.rows] == ["DRAWAL"]
+    assert [r["dataset"] for r in result.rows] == ["ROSTERING"]
     assert result.failed_datasets == ["ACP_DAM", "ACV_DAM"]
     assert [f["group"] for f in result.failed_groups] == ["exchange"]
     assert "boom on exchange_serve" in result.failed_groups[0]["error"]
@@ -362,28 +362,28 @@ async def test_one_group_failing_does_not_fail_the_request():
 @pytest.mark.asyncio
 async def test_a_failure_is_distinguishable_from_an_empty_result():
     """Both return no rows. Only one of them may be reported as success."""
-    empty = [stub_plan("demand", "demand_serve", ["DRAWAL"])]
+    empty = [stub_plan("demand", "demand_serve", ["ROSTERING"])]
     empty_result = await executor.execute(empty, RecordingRepo())
     assert empty_result.rows == []
     assert empty_result.failed_datasets == []
     assert empty_result.failed_groups == []
 
-    failed = [stub_plan("demand", "demand_serve", ["DRAWAL"])]
+    failed = [stub_plan("demand", "demand_serve", ["ROSTERING"])]
     failed_result = await executor.execute(
         failed, RecordingRepo(fail=["demand_serve"]))
     assert failed_result.rows == []
-    assert failed_result.failed_datasets == ["DRAWAL"]
+    assert failed_result.failed_datasets == ["ROSTERING"]
     assert failed_result.failed_groups
 
 
 @pytest.mark.asyncio
 async def test_every_group_failing_still_returns_a_result_not_an_exception():
-    plans = [stub_plan("demand", "demand_serve", ["DRAWAL"]),
+    plans = [stub_plan("demand", "demand_serve", ["ROSTERING"]),
              stub_plan("peak", "peak_demand_serve", ["PEAK_DEMAND"])]
     repo = RecordingRepo(fail=["demand_serve", "peak_demand_serve"])
     result = await executor.execute(plans, repo)
     assert result.rows == []
-    assert result.failed_datasets == ["DRAWAL", "PEAK_DEMAND"]
+    assert result.failed_datasets == ["ROSTERING", "PEAK_DEMAND"]
     assert len(result.failed_groups) == 2
 
 
@@ -403,7 +403,7 @@ async def test_cancellation_propagates_rather_than_being_logged_as_a_failure():
 
     with pytest.raises(asyncio.CancelledError):
         await executor.execute(
-            [stub_plan("demand", "demand_serve", ["DRAWAL"])], Cancelling())
+            [stub_plan("demand", "demand_serve", ["ROSTERING"])], Cancelling())
 
 
 def test_execution_result_defaults_are_independent():
@@ -423,7 +423,7 @@ def _repo(collections):
 
 @pytest.mark.asyncio
 async def test_run_pipeline_returns_the_documents():
-    docs = [{"_id": {"d": "2026-08-01", "b": "1"}, "DRAWAL": 12.5}]
+    docs = [{"_id": {"d": "2026-08-01", "b": "1"}, "ROSTERING": 12.5}]
     col = fake_collection(docs)
     result = await _repo({"demand_serve": col}).run_pipeline(
         "demand_serve", [{"$match": {}}])

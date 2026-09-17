@@ -28,7 +28,7 @@ from services.processing.app.v2.analytics import registry  # noqa: E402
 
 
 QUANTUM = "OD_UD_QUANTUM"
-DRAWAL = "DRAWAL"
+DRAWAL = "ACTUAL_DEMAND"
 SCHEDULE = "FINAL_SCHEDULE_STATE"
 
 
@@ -212,9 +212,9 @@ def test_both_dependencies_ticked_both_survive():
 
 
 def test_untouched_datasets_pass_straight_through():
-    rows = [_row("ACTUAL_DEMAND", 42.0), _row(DRAWAL, 1.0), _row(SCHEDULE, 2.0)]
-    out = derived.resolve(rows, ["ACTUAL_DEMAND", QUANTUM])
-    assert _one(out, "ACTUAL_DEMAND")["value"] == pytest.approx(42.0)
+    rows = [_row("FREQUENCY", 42.0), _row(DRAWAL, 1.0), _row(SCHEDULE, 2.0)]
+    out = derived.resolve(rows, ["FREQUENCY", QUANTUM])
+    assert _one(out, "FREQUENCY")["value"] == pytest.approx(42.0)
 
 
 def test_no_derived_requested_returns_the_rows_unchanged():
@@ -362,5 +362,5 @@ def test_a_derived_dataset_with_the_wrong_dependency_count_raises(monkeypatch):
 
 
 def test_source_codes_walks_a_nested_derived_chain(monkeypatch):
-    _inject(monkeypatch, _derived("OUTER", (QUANTUM, "ACTUAL_DEMAND"), "q - a"))
-    assert derived.source_codes(["OUTER"]) == [DRAWAL, SCHEDULE, "ACTUAL_DEMAND"]
+    _inject(monkeypatch, _derived("OUTER", (QUANTUM, "FREQUENCY"), "q - f"))
+    assert derived.source_codes(["OUTER"]) == [DRAWAL, SCHEDULE, "FREQUENCY"]

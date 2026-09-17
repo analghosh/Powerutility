@@ -410,10 +410,10 @@ def test_a_failed_workbook_write_is_a_500_that_says_what_failed():
 def test_exporting_a_dataset_with_no_storage_is_refused_by_name():
     service = _service()
     response = _client(service).post("/api/v2/analytics/export",
-                                     json=_export_body(datasets=["WEEKLY_FORECAST"]))
+                                     json=_export_body(datasets=["TAM_TRADED"]))
 
     assert response.status_code == 422
-    assert "WEEKLY_FORECAST" in response.json()["detail"]["datasets"]
+    assert "TAM_TRADED" in response.json()["detail"]["datasets"]
 
 
 def test_an_unauthenticated_export_is_refused_before_a_job_can_be_created():
