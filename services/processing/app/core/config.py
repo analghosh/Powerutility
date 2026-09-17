@@ -197,6 +197,22 @@ class Settings(BaseSettings):
     MONGODB_DAM_SCHEDULING_COLLECTION: str = "serve_dam_scheduling"
     MONGODB_DAM_SCHEDULING_STAGING_COLLECTION: str = "dam_scheduling_staging"
 
+    # Analytics Dashboard
+    MONGODB_ANALYTICS_JOBS_COLLECTION: str = "analytics_export_jobs"
+    ANALYTICS_TIMEZONE: str = "Asia/Kolkata"
+    ANALYTICS_CELLS_INLINE: int = 150_000
+    ANALYTICS_CELLS_INLINE_CAPPED: int = 500_000
+    ANALYTICS_CELLS_MAX: int = 10_000_000
+    ANALYTICS_MAX_CONCURRENT: int = 8
+    ANALYTICS_GROUP_CONCURRENCY: int = 4
+    ANALYTICS_QUERY_MAX_TIME_MS: int = 20_000
+    ANALYTICS_CACHE_TTL_SECONDS: int = 300
+    ANALYTICS_CACHE_TTL_PAST_SECONDS: int = 86_400
+    ANALYTICS_EXPORT_DIR: str = "/var/lib/epms/exports"
+    ANALYTICS_EXPORT_RETENTION_HOURS: int = 72
+    ANALYTICS_JOB_RETENTION_DAYS: int = 90
+    ANALYTICS_EXPORT_DISK_BUDGET_MB: int = 5_120
+
     SERVER_DEPLOYMENT: bool = True
     
     @model_validator(mode='after')
