@@ -32,6 +32,9 @@ class Dataset:
     # A roll-up dataset (weekly/monthly forecast or MAPE) is meaningless at any other
     # granularity, so the service forces this date grouping when the dataset is selected.
     fixed_grouping: Optional[str] = None
+    # A per-entity breakdown of a dataset that also exists as a state-level total.
+    # Listed after the totals and badged in the UI; never the default pick.
+    drilldown: bool = False
 
 
 def _d(**kw) -> Dataset:
@@ -69,7 +72,7 @@ _ALL: List[Dataset] = [
     _d(code="MAPE_IDF", label="Intra Day MAPE", group="demand",
        value="$mape", unit="%", agg="avg",
        match={"type": "IDF"}, permission="analytics:forecast"),
-    _d(code="FINAL_SCHEDULE_STATE", label="Final Schedule (State)", group="demand",
+    _d(code="FINAL_SCHEDULE_STATE", label="Final Schedule", group="demand",
        value="$schedule", unit="MW", agg="avg", permission="analytics:schedule"),
     _d(code="OD_UD_AMOUNT", label="OD/UD Amount", group="demand",
        value="$net_dsm_amount", unit="INR", agg="sum", permission="analytics:dsm"),
@@ -84,22 +87,29 @@ _ALL: List[Dataset] = [
     # Be aware the field is NOT on one basis: on DC rows `volume` is GROSS
     # (dc_afterloss = volume × multiplier) while on SG rows it is NET
     # (sg_beforelosses = volume ÷ multiplier). This is PTC's convention, not a defect.
-    _d(code="DC_PLANT", label="Plant wise DC", group="supply", value="$volume",
-       unit="MW", agg="avg", series="per_plant",
-       match={"dc_sg": "DC"}, permission="analytics:supply"),
-    _d(code="SG_PLANT", label="Plant wise SG", group="supply", value="$volume",
-       unit="MW", agg="avg", series="per_plant",
-       match={"dc_sg": "SG"}, permission="analytics:supply"),
+    # State-level totals lead (user decision 2026-09-17): every other dataset on the
+    # screen is one series per block, and these are what "Declared capacity data for
+    # mapped power plants" means in PTC's document. Summed over supply_serve rows —
+    # there is no separate state-level row — so the basis matches the per-plant
+    # figures exactly.
     _d(code="DECLARED_CAPACITY_TOTAL", label="Declared Capacity", group="supply",
        value="$volume", unit="MW", agg="sum",
        match={"dc_sg": "DC"}, permission="analytics:supply"),
-    _d(code="SG_TOTAL", label="Scheduled Generation (Total)", group="supply",
+    _d(code="SG_TOTAL", label="Scheduled Generation", group="supply",
        value="$volume", unit="MW", agg="sum",
        match={"dc_sg": "SG"}, permission="analytics:supply"),
+    # Per-plant drill-downs: the same rows, one series per plant. Opt-in only —
+    # they need a plant selection and are what makes a long range exceed the budget.
+    _d(code="DC_PLANT", label="Declared Capacity — by plant", group="supply",
+       value="$volume", unit="MW", agg="avg", series="per_plant", drilldown=True,
+       match={"dc_sg": "DC"}, permission="analytics:supply"),
+    _d(code="SG_PLANT", label="Scheduled Generation — by plant", group="supply",
+       value="$volume", unit="MW", agg="avg", series="per_plant", drilldown=True,
+       match={"dc_sg": "SG"}, permission="analytics:supply"),
     # ---- scheduling ---------------------------------------------------
-    _d(code="FINAL_SCHEDULE_PLANT", label="Final Schedule (Plant wise)",
+    _d(code="FINAL_SCHEDULE_PLANT", label="Final Schedule — by plant",
        group="scheduling", value="$volume", unit="MW", agg="avg",
-       series="per_plant", permission="analytics:schedule"),
+       series="per_plant", drilldown=True, permission="analytics:schedule"),
     # ---- peak ---------------------------------------------------------
     _d(code="PEAK_DEMAND", label="Peak Demand", group="peak",
        value="$peak_demand", unit="MW", agg="max", permission="analytics:demand"),

@@ -23,7 +23,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 | repo | branch | commits | state |
 |---|---|---|---|
 | `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 10 | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 11 | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -138,6 +138,7 @@ Backend collection still aborts with exactly **6** pre-existing errors; we added
 | **Demand (UDM) = actual + rostering** | Kept `$comp_udm` — it IS exactly that where `actual` exists (1,864 rows, 0 mismatches) and also covers 1,542 rows where actual has not landed. |
 | **DC/SG stay on `volume`**, no loss variants | No change to values. Recorded in a registry comment that `volume` is GROSS on DC rows and NET on SG rows — PTC's convention, not a defect. |
 | **Final Schedule — keep both** plant and state level | Already shipped. |
+| **State-level is the default; per-plant is a drill-down** (user decision, later same day) | Codes unchanged. `DECLARED_CAPACITY_TOTAL` → "Declared Capacity", `SG_TOTAL` → "Scheduled Generation", `FINAL_SCHEDULE_STATE` → "Final Schedule" lead their groups. `DC_PLANT` / `SG_PLANT` / `FINAL_SCHEDULE_PLANT` are relabelled "— by plant", flagged `drilldown: true`, sorted after the totals and badged "By plant". A 5-month Declared Capacity + SG request now renders inline with no plant selector and no 413. Verified: state total 475.33 = latest-revision sum over 25 plants in Mongo. |
 | **Weekly/Monthly Forecast & MAPE = `DAF \| IDF`** | 8 new live datasets (`WEEKLY_/MONTHLY_` × `FORECAST_/MAPE_` × `DAF/IDF`). Plain roll-ups of the per-block values with `agg avg`. |
 
 **Weekly/monthly MAPE is the MEAN of the per-block `mape`** — identical to how daily MAPE is
