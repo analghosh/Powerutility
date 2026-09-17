@@ -32,7 +32,7 @@ It sits **alongside** the existing reports. Nothing already delivered was change
 | repo | branch | commits | state |
 |---|---|---|---|
 | `backend` | `feat/analytics-dashboard` | 32 | **not merged**, branched off clean `dev` |
-| `client`  | `feat/analytics-dashboard` | 12 | **not merged**, branched off clean `dev` |
+| `client`  | `feat/analytics-dashboard` | 13 | **not merged**, branched off clean `dev` |
 
 Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everything.
 
@@ -127,6 +127,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 |---|---|
 | Query correctness | API block 1 = **542.68** (`drawal`); direct Mongo `drawal` = 542.68 |
 | ~~Browser render~~ | table removed 2026-09-17 — screen is file-first |
+| **Full job lifecycle in the browser** | Also as → 202 · Cancel (confirm) → 200 → Cancelled + Try again · Try again → 200 on the **same job id** → Ready · Download → 200, valid XLSX. DB confirms 8/8 ready, no orphan. |
 | **File-first flow** | small selection → `POST /export` 200, CSV downloaded instantly (542.68 in row 1); large by-plant selection → 202, queued, no dialog; "Also as CSV" on a Ready XLSX → 202 → a CSV job with identical filters reaches Ready |
 | Over-budget | 998,784 cells → 413 with 3 costed suggestions |
 | Capped band | 499,392 cells → 200, `capped: true`, 8 dates returned not 500k cells |
@@ -140,7 +141,7 @@ the every-minute Mongo sweep is the primary path, not a fallback.
 | **Suggestion round-trip** | click "Switch to Week-wise" → 200 → dialog closes → pill activates → grid renders **68 per-plant columns**, 33 DOM rows |
 | Exports panel persistence | earlier queued jobs (Ready + Failed) still listed in a fresh browser session, with the `Errno 13` message surfaced to the user |
 
-**Tests:** backend `libs/tests` 781 pass / 10 fail; client 49 pass.
+**Tests:** backend `libs/tests` 781 pass / 10 fail; client 54 pass.
 The 10 failures are **pre-existing vendor rot** (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`) — failing before this work.
 Backend collection still aborts with exactly **6** pre-existing errors; we added none.
@@ -336,7 +337,12 @@ Items 1 and 2 are recorded in `docs/EPMS-nginx-changes.md`.
     says why) once one is ticked, and group-select resolves the axis inside the batch so
     "All" ticks 17 not 21. The server message now uses labels, not codes, and carries the
     codes in a structured `groups` field. Verified: All → 17 selected → Apply → 200.
-11. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
+11. **Every download from My Exports was a 403** ("This download link is not valid for
+    this export"). The route requires `?token=<download_token>`; the server exposes it on
+    every job row; the client never sent it. Masked during verification because curl
+    passed the token by hand. Fixed in client `1f30a8d` — `utils/downloadToken.js`, with
+    a `node --test` case pinning that the token travels as a query param.
+12. **The budget dialog never opened on 413** (client `085cf53`). The hook read the estimate
    from `response.data.data`, but FastAPI's `HTTPException` puts the payload under
    `detail` — `{ detail: { code, message, estimate } }`. curl could not catch this; only
    driving the real UI did. `readEstimate` now lives in `utils/readEstimate.js` with a
