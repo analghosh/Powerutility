@@ -45,7 +45,7 @@ Neither has been pushed. `git log --oneline dev..HEAD` in each repo lists everyt
 
 ## 3. Architecture in one page
 
-A **dataset registry** maps 56 dataset codes onto ~7 MongoDB source groups, so ticking 12
+A **dataset registry** maps 52 dataset codes onto ~7 MongoDB source groups, so ticking 12
 datasets issues ~4 aggregations rather than 12. A **cell budget**, computed from the filters
 alone before any database call, decides whether a request renders inline, streams, or queues
 as a background job.
@@ -68,7 +68,7 @@ filters + ticked datasets
 
 | file | responsibility |
 |---|---|
-| `analytics/registry.py` | 56 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
+| `analytics/registry.py` | 52 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
 | `analytics/block_bands.py` | block grouping; PTC's 5 named bands seeded **inactive** |
 | `analytics/budget.py` | cell arithmetic and band classification — pure, no I/O |
 | `analytics/grouping.py` | `$dateToString` keys, block bucket `$switch`, accumulators |
@@ -155,7 +155,7 @@ Backend collection still aborts with exactly **6** pre-existing errors; we added
 | **DC/SG stay on `volume`**, no loss variants | No change to values. Recorded in a registry comment that `volume` is GROSS on DC rows and NET on SG rows — PTC's convention, not a defect. |
 | **Final Schedule — keep both** plant and state level | Already shipped. |
 | **State-level is the default; per-plant is a drill-down** (user decision, later same day) | Codes unchanged. `DECLARED_CAPACITY_TOTAL` → "Declared Capacity", `SG_TOTAL` → "Scheduled Generation", `FINAL_SCHEDULE_STATE` → "Final Schedule" lead their groups. `DC_PLANT` / `SG_PLANT` / `FINAL_SCHEDULE_PLANT` are relabelled "— by plant", flagged `drilldown: true`, sorted after the totals and badged "By plant". A 5-month Declared Capacity + SG request now renders inline with no plant selector and no 413. Verified: state total 475.33 = latest-revision sum over 25 plants in Mongo. |
-| **Weekly/Monthly Forecast & MAPE = `DAF \| IDF`** | 8 new live datasets (`WEEKLY_/MONTHLY_` × `FORECAST_/MAPE_` × `DAF/IDF`). Plain roll-ups of the per-block values with `agg avg`. |
+| **Weekly/Monthly Forecast & MAPE = `DAF \| IDF`** | **4** live datasets (`WEEKLY_FORECAST`, `WEEKLY_MAPE`, `MONTHLY_FORECAST`, `MONTHLY_MAPE`), each `series: per_forecast_type` → **one tick yields a "Day Ahead" and an "Intra Day" column**. Originally shipped as 8 split `_DAF`/`_IDF` datasets on a mis-reading of the sheet; collapsed the same day on the user's question. DAF and IDF share the same `(date, block)` key, so they are columns of one table, not two tables. |
 
 **Weekly/monthly MAPE is the MEAN of the per-block `mape`** — identical to how daily MAPE is
 defined in `libs/helpers/demand_calculations.py` (per block:
@@ -163,6 +163,13 @@ defined in `libs/helpers/demand_calculations.py` (per block:
 It is deliberately NOT recomputed from summed totals, which gives a different figure
 (7.24% vs 7.78% on a real week) that nobody could reconcile with the daily number.
 Verified live: API weekly MAPE 7.784 = hand mean-of-blocks 7.784.
+
+**`per_forecast_type`** is a new series kind: the demand adapter declares `type` as its
+entity, and the base only keys `$group` on it when such a dataset is selected — an
+ordinary Actual Demand query is NOT split by type (pinned by test; the DAF/IDF rows carry
+identical `drawal`, so a split would be a silent duplicate column). The pivot emits
+`entity_label` ("Day Ahead"/"Intra Day") beside the stable `entity` key; the CSV/XLSX
+writers prefer the label. Verified live: weekly MAPE DAF 7.784 (matches hand calc), IDF 4.499.
 
 **`fixed_grouping`** is a new `Dataset` field. Roll-up datasets carry `WEEK_WISE`/`MONTH_WISE`
 and the service forces that grouping for the whole request in `_as_request()` (the single
