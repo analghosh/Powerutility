@@ -1,4 +1,5 @@
 
+import asyncio
 import json
 import logging
 import pika
@@ -79,3 +80,29 @@ class JobPublisher:
                     connection.close()
                 except Exception:
                     pass
+
+    async def publish_job_trigger_async(
+        self,
+        job_type: str,
+        source_service: str,
+        payload: Optional[Dict[str, Any]] = None,
+        correlation_id: Optional[str] = None
+    ) -> bool:
+        """Async-safe publish.
+
+        publish_job_trigger opens a blocking pika connection. Awaiting it directly
+        from a FastAPI route would stall the event loop for the whole TCP handshake,
+        so it runs on a worker thread instead. Returns False on any failure — the
+        caller is expected to treat the broker as an accelerator, not a dependency.
+        """
+        try:
+            return await asyncio.to_thread(
+                self.publish_job_trigger,
+                job_type=job_type,
+                source_service=source_service,
+                payload=payload,
+                correlation_id=correlation_id,
+            )
+        except Exception as e:
+            logger.error(f"Async publish of '{job_type}' failed: {e}")
+            return False
