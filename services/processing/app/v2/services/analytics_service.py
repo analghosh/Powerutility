@@ -96,8 +96,11 @@ WILDCARD_PERMISSIONS = ("*", "admin:*")
 SUPER_ADMIN_ROLES = ("admin", "superadmin", "super_admin")
 
 #: The grants the menu-RBAC actually mints for this screen. Auth derives a role's
-#: permission strings from its menu rows (`_sync_role_permissions`): the "Analytics
-#: Dashboard" menu (under Reports) becomes `analytics_dashboard:<action>`. Nothing
+#: permission strings from its menu rows (`_sync_role_permissions`): the menu row
+#: under Reports becomes `<name lowercased, spaces to underscores>:<action>`. The row
+#: was renamed "Analytics Dashboard" → "Reports Dashboard" on 2026-09-18, so BOTH
+#: spellings are listed — an environment seeded under the old name still holds
+#: `analytics_dashboard:read`, and dropping it would lock those users out. Nothing
 #: ever mints `analytics:demand` or the other per-group strings the registry names —
 #: those exist for a finer model that nobody has asked for yet. Under PTC's page
 #: model (access to the page = full rights on it), holding the page is the whole
@@ -106,6 +109,7 @@ SUPER_ADMIN_ROLES = ("admin", "superadmin", "super_admin")
 #: all 52 datasets and a 200 with an empty file. `analytics:read`/`:write` stay for
 #: any environment that granted the short-lived "Analytics" root menu.
 PAGE_GRANTS = (
+    "reports_dashboard:read", "reports_dashboard:write", "reports_dashboard:*",
     "analytics_dashboard:read", "analytics_dashboard:write", "analytics_dashboard:*",
     "analytics:read", "analytics:write",
 )

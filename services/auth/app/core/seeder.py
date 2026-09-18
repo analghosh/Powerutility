@@ -97,11 +97,17 @@ DEFAULT_MENUS = [
     {"name": "Reports", "icon": "📋", "parent_id": None, "path": "/reports", "order": 10},
     {"name": "Standard Reports", "icon": "📊", "parent_id": "Reports", "path": "/reports/standard", "order": 1},
     # The Power System Data Analytics Dashboard lives under Reports (user decision
-    # 2026-09-17). Without this row RouteProtection has no menu to resolve the path
-    # against and sends the user back to /login, however correct the frontend route.
-    # Its menu name mints `analytics_dashboard:read`, which is the grant the
-    # analytics service treats as full access to the screen.
-    {"name": "Analytics Dashboard", "icon": "📉", "parent_id": "Reports",
+    # 2026-09-17), renamed "Reports Dashboard" 2026-09-18. Without this row
+    # RouteProtection has no menu to resolve the path against and sends the user back
+    # to /login, however correct the frontend route.
+    # 🔴 The NAME mints the permission: `_get_resource_name_from_menu` falls back to
+    # `name.lower().replace(" ", "_")`, so this row mints `reports_dashboard:read`
+    # where it used to mint `analytics_dashboard:read`. `AnalyticsService.PAGE_GRANTS`
+    # accepts BOTH, so an environment seeded under either name keeps working — do not
+    # drop the old string until every deployment has been reseeded.
+    # The PATH is deliberately unchanged: it is in RouteProtection's bypass list and
+    # in every bookmark.
+    {"name": "Reports Dashboard", "icon": "📉", "parent_id": "Reports",
      "path": "/reports/analytics-dashboard", "order": 2}
 ]
 
