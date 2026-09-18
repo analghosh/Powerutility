@@ -511,11 +511,36 @@ systemd units as user `epms`, each service its OWN checkout under
    Non-breaking; can ride with items 1/2/6/7/8 in one reload.
 4. **Insert the `menus` row BY HAND, then restart the services.** 🔴 A restart does
    *not* create it — see the correction above §7: `seed_menus` returns immediately if
-   any menu exists, and `force_reload=True` would delete every menu on the box. Insert
-   `{name: "Reports Dashboard", path: "/reports/analytics-dashboard", parent_id: <Reports _id>,
-   order: 2}` into `auth_db.menus`, copying the field shape from an existing child of
-   Reports. Then restart auth, then processing (which seeds the five `analytics_band_*`
-   parameters), then scheduler.
+   any menu exists, and `force_reload=True` would delete every menu on the box.
+
+   🪤 **`parent_id` is a STRING, not an ObjectId** — verified against the seeded rows
+   (`DSM Overview.parent_id = '68c6e887df51823617d696a6'`, a str). An ObjectId here
+   builds no tree and the item never renders. `menu_roles.menu_id` is a string too.
+   The statement below resolves the parent itself, so neither can be got wrong:
+
+   ```javascript
+   // auth_db — must return 0, or you are about to create a duplicate sidebar entry
+   db.menus.countDocuments({ path: "/reports/analytics-dashboard" })
+
+   db.menus.insertOne({
+     name: "Reports Dashboard",                 // the NAME mints reports_dashboard:read (§6e)
+     icon: "📉",
+     parent_id: db.menus.findOne({ path: "/reports", is_deleted: false })._id.toString(),
+     path: "/reports/analytics-dashboard",      // unchanged — RouteProtection bypasses it
+     order: 2,
+     is_active: true,
+     is_deleted: false,
+     created_at: new Date(),
+     updated_at: new Date()
+   })
+   ```
+
+   Field shape verified field-by-field against a working row: same 10 keys, same types.
+   Check `order` against the other children of Reports on the box if the position in the
+   sidebar matters.
+
+   Then restart auth, then processing (which seeds the five `analytics_band_*`
+   parameters and ensures the analytics indexes), then scheduler.
 5. **Grant the menu to roles** — Admin → Roles → menu assignment → tick *Reports →
    Reports Dashboard* (`read`) for every role that should see the screen. The grant
    runs `_sync_role_permissions`, which mints `reports_dashboard:read` from the row's
