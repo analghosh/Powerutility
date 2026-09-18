@@ -120,6 +120,11 @@ _ALL: List[Dataset] = [
     # mapped power plants" means in PTC's document. Summed over supply_serve rows —
     # there is no separate state-level row — so the basis matches the per-plant
     # figures exactly.
+    # PTC capture these at 01:00 the morning after the delivery day, from the last
+    # revision received by then. That needs no rule here or in the adapter: the
+    # revision collapse already returns the last revision, and the value is frozen at
+    # midnight because the ingest window shuts then. Investigated 2026-09-18; see the
+    # supply adapter's module docstring before adding a cut-off.
     _d(code="DECLARED_CAPACITY_TOTAL", label="Declared Capacity", group="supply",
        value="$volume", unit="MW", agg="sum",
        match={"dc_sg": "DC"}, permission="analytics:supply"),
