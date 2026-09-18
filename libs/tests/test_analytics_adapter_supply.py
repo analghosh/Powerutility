@@ -131,6 +131,21 @@ def test_collapse_runs_after_the_union_so_boundary_duplicates_collapse(adapter):
     assert _indexes(pipeline, "$sort")[0] > _indexes(pipeline, "$unionWith")[0]
 
 
+def test_nothing_filters_between_the_union_and_the_revision_collapse(adapter):
+    """No cut-off stage. A filter here could only ever delete a row.
+
+    An 01:00 capture cut-off lived here briefly on 2026-09-18. It was removed: the
+    collapse already returns the last revision received, the ingest window shuts at
+    midnight, and a later revision reaches the historical collection with
+    `system_revision_number = 1` and loses the collapse anyway. See the module
+    docstring before reintroducing anything here.
+    """
+    pipeline = _build(adapter, [DC_TOTAL])
+    union = _indexes(pipeline, "$unionWith")[0]
+    collapse = _indexes(pipeline, "$sort")[0]
+    assert collapse == union + 1, "a stage was inserted between the union and the collapse"
+
+
 def test_collapse_runs_before_the_analytics_group(adapter):
     pipeline = _build(adapter, [DC_PLANT])
     groups = _indexes(pipeline, "$group")

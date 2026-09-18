@@ -22,6 +22,19 @@ key, put it back at the root. Nothing filters after that point — the date, blo
 and plant predicates all run in the initial `$match`, which is also what rides
 into the union, so the sort only ever sees rows the user asked for.
 
+**Why there is no 01:00 cut-off here.** PTC define Declared Capacity and Final
+Schedule as the figures captured at 01:00 the next morning from the last revision
+received by then, and a cut-off stage was built for it on 2026-09-18 and then
+removed: the collapse below already returns exactly that value, and a filter could
+only ever delete a row, never improve one. The ingest window shuts at midnight —
+`supply_processor` routes a delivery date to `supply_serve` only while it is
+"today or tomorrow", and a later revision goes straight to the historical
+collection with `system_revision_number = 1`, which loses this collapse to the
+archived copy. So the value is already frozen an hour before PTC's capture time.
+Measured over the whole UAT extract: the latest revision lands at +14.05 h and the
+last write at +23.94 h, both inside the delivery day. Do not reintroduce a cut-off
+without first re-checking those two facts.
+
 One further supply-only wrinkle: this is the only group holding both per-plant
 datasets (`DC_PLANT`, `SG_PLANT`) and whole-portfolio totals
 (`DECLARED_CAPACITY_TOTAL`, `SG_TOTAL`). Ticking one of each forces `plant_id`
