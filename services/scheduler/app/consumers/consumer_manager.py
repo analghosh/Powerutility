@@ -6,6 +6,7 @@ from typing import Optional
 from services.scheduler.app.consumers.audit_consumer import AuditConsumer
 from services.scheduler.app.consumers.job_consumer import JobConsumer
 from services.scheduler.app.services.cron_manager import CronManager
+from libs.messaging.rabbitmq_config import config
 
 logger = logging.getLogger(__name__)
 
@@ -22,28 +23,33 @@ class ConsumerManager:
         self.is_running = False
 
     def start(self):
-        """Start all consumers"""
+        """Start the consumers whose feature flag is enabled."""
         if self.is_running:
             return
 
+        if not config.USE_RABBITMQ_JOBS and not config.USE_RABBITMQ_AUDIT:
+            logger.info("ConsumerManager: RabbitMQ consumers disabled by configuration")
+            self.is_running = True
+            return
+
         logger.info("Starting ConsumerManager...")
-        
+
         try:
-            # Create consumers
-            self.audit_consumer = AuditConsumer()
-            # Pass the event loop to the job consumer
-            self.job_consumer = JobConsumer(self.cron_manager, self.event_loop)
-            
-            # Start consumer threads
-            if self.audit_consumer:
+            if config.USE_RABBITMQ_AUDIT:
+                self.audit_consumer = AuditConsumer()
                 self.audit_consumer.start()
-            
-            if self.job_consumer:
+            else:
+                logger.info("ConsumerManager: audit consumer disabled (USE_RABBITMQ_AUDIT=false)")
+
+            if config.USE_RABBITMQ_JOBS:
+                self.job_consumer = JobConsumer(self.cron_manager, self.event_loop)
                 self.job_consumer.start()
-                
+            else:
+                logger.info("ConsumerManager: job consumer disabled (USE_RABBITMQ_JOBS=false)")
+
             self.is_running = True
             logger.info("ConsumerManager started successfully")
-            
+
         except Exception as e:
             logger.error(f"Failed to start ConsumerManager: {e}")
 
