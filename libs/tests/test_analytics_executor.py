@@ -204,7 +204,7 @@ def test_a_derived_dataset_plans_its_dependencies_and_not_itself():
     plans = planner.plan(["OD_UD_QUANTUM"], FILTERS)
     assert len(plans) == 1
     codes = [d.code for d in plans[0]["datasets"]]
-    assert codes == ["ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE"]
+    assert codes == ["DRAWAL", "FINAL_SCHEDULE_STATE"]
     assert "OD_UD_QUANTUM" not in codes
 
 

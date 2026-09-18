@@ -28,7 +28,7 @@ from services.processing.app.v2.analytics import registry  # noqa: E402
 
 
 QUANTUM = "OD_UD_QUANTUM"
-DRAWAL = "ACTUAL_DEMAND"
+DRAWAL = "DRAWAL"
 SCHEDULE = "FINAL_SCHEDULE_STATE"
 
 

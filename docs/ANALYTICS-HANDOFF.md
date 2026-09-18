@@ -154,7 +154,7 @@ Backend collection still aborts with exactly **6** pre-existing errors; we added
 
 | PTC answer | what changed |
 |---|---|
-| **Actual Demand = `drawal`** (not `actual`; they are never equal, drawal ≈ 0.9676 × actual) | `ACTUAL_DEMAND` now reads `$drawal`. The duplicate `DRAWAL` dataset was removed; `OD_UD_QUANTUM` depends on `ACTUAL_DEMAND`. |
+| ~~Actual Demand = `drawal`~~ → **superseded 2026-09-18: Actual Demand = `actual`** | `actual` is what every existing EPMS chart labels "Actual Demand" (they read `comp_act_demand`, which IS `actual` wherever an actual exists). `demand_processor.py:816` computes it as **drawal + SG of plant PPCLGPP** (own generation; verified `actual − drawal` = PPCLGPP's SG). `DRAWAL` is back as its own dataset ("Drawal", the raw feed value DSM settles on) and **`OD_UD_QUANTUM` depends on `DRAWAL`**, not on Actual Demand. Live 29 Aug blk 41: Actual 330.13 · Drawal 318.53 · DSM Schedule 430.38 · OD/UD −111.85 · Final Schedule 445.38. `CACHE_VERSION` v6. |
 | **Demand (UDM) = actual + rostering** | Kept `$comp_udm` — it IS exactly that where `actual` exists (1,864 rows, 0 mismatches) and also covers 1,542 rows where actual has not landed. |
 | **DC/SG stay on `volume`**, no loss variants | No change to values. Recorded in a registry comment that `volume` is GROSS on DC rows and NET on SG rows — PTC's convention, not a defect. |
 | **Final Schedule — keep both** plant and state level | Already shipped. |
@@ -305,6 +305,9 @@ Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 ### P1 — correctness
 
 1. ~~Fix the DC/SG loss basis~~ — **closed by PTC decision**: both stay on `volume`. See §6.
+   **The one PTC answer that matters now is B2/A8 on the question page** — whether
+   PPCLGPP's own generation sits inside the state's load and schedule. `actual` (includes
+   it) and `drawal` (excludes it) are both shipped; Final Schedule = Σ SG (includes it).
 
 ### P2 — test coverage gaps
 
@@ -554,7 +557,9 @@ and MAPE~~ — **answered**: built as roll-ups of the per-block DAF/IDF values (
 
 **Source ambiguous:** Declared Capacity vs Plant wise DC (same rows — is the difference
 aggregation level?); ~~Final Schedule level~~ **answered: keep both**; ~~DC/SG loss basis~~
-**answered: `volume`**; ~~Actual Demand~~ **answered: `drawal`**; ~~UDM~~ **answered:
+**answered: `volume`**; Actual Demand — PTC said `drawal`, **user decided 2026-09-18:
+`actual`** (matches every existing chart), `drawal` shipped beside it as "Drawal"; is
+PTC's "Load Data" row one of these or a third figure? ~~UDM~~ **answered:
 actual+rostering = `comp_udm`**; OD/UD Amount stored vs recomputed; "Traded"/"Bidded"
 meaning ours or the whole market.
 

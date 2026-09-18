@@ -82,7 +82,7 @@ DEFAULT_EXCHANGE_COUNT = 3
 #       per_forecast_type with `entity_label` (2026-09-17).
 #   v4: FINAL_SCHEDULE_STATE / OD_UD_AMOUNT / DSM_RATE pinned to the IDF row — the
 #       cached values were HALVED by the DAF placeholder (2026-09-17).
-CACHE_VERSION = "v5"
+CACHE_VERSION = "v6"
 CACHE_PREFIX = "analytics:query"
 
 #: Bands that cannot be rendered inline. The route turns this into a 413 plus the
