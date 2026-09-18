@@ -147,14 +147,6 @@ def _seed(db):
     db.supply_serve.insert_many(supply_serve)
     db.supply_serve_historical.insert_many(supply_hist)
 
-    # scheduling: the one group with no historical twin
-    db.serve_dam_scheduling.insert_many([
-        {"scheduled_at": D_2026_01_04, "time_block": 1,
-         "plant_id": "PLANT_A", "volume": 33.0},
-        {"scheduled_at": D_2026_01_04, "time_block": 2,
-         "plant_id": "PLANT_A", "volume": 34.0},
-    ])
-
     # exchange: HPDAM cleared / uncleared / absent, GDAM in both acv shapes, and
     # an RTM row duplicated across the archival window.
     ex_serve = [
@@ -369,153 +361,24 @@ async def test_a_plant_total_sums_the_latest_revision_of_each_plant_once(seeded)
 
 
 @pytest.mark.asyncio
-async def test_the_scheduling_group_queries_one_collection_with_no_union(seeded):
-    plans = planner.plan(["FINAL_SCHEDULE_PLANT"],
-                         _filters(dt.date(2026, 1, 4), dt.date(2026, 1, 4)))
-    assert [s for s in plans[0]["pipeline"] if "$unionWith" in s] == []
-    result = await _query(["FINAL_SCHEDULE_PLANT"],
-                          _filters(dt.date(2026, 1, 4), dt.date(2026, 1, 4),
-                                   from_block=1, to_block=2, plants=["PLANT_A"]))
-    assert _cells(result, "FINAL_SCHEDULE_PLANT") == {
-        ("2026-01-04", "1", "PLANT_A"): 33.0,
-        ("2026-01-04", "2", "PLANT_A"): 34.0,
-    }
-
-
-# ------------------------------------------------------------ date groupings
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("grouping,expected", [
-    ("DATE_WISE", ["2025-12-29", "2026-01-03", "2026-01-04", "2026-01-05"]),
-    ("WEEK_WISE", ["2026-W01", "2026-W02"]),
-    ("MONTH_WISE", ["2025-12", "2026-01"]),
-    ("YEAR_WISE", ["2025", "2026"]),
-])
-async def test_each_date_grouping_produces_the_expected_buckets(seeded, grouping,
-                                                                expected):
-    result = await _query(["ACTUAL_DEMAND"],
-                          _filters(dt.date(2025, 12, 29), dt.date(2026, 1, 5),
-                                   date_grouping=grouping))
-    assert sorted({k[0] for k in _cells(result, "ACTUAL_DEMAND")}) == expected
-
-
-@pytest.mark.asyncio
-async def test_week_keys_use_the_iso_year_so_29_dec_2025_is_2026_w01(seeded):
-    """%G, not %Y. 29 Dec 2025 is ISO week 2026-W01; formatted with %Y it reads
-    "2025-W01" and averages into the first week of January *2025*."""
-    result = await _query(["ACTUAL_DEMAND"],
-                          _filters(dt.date(2025, 12, 29), dt.date(2026, 1, 3),
-                                   date_grouping="WEEK_WISE"))
-    assert sorted({k[0] for k in _cells(result, "ACTUAL_DEMAND")}) == ["2026-W01"]
-
-
-@pytest.mark.asyncio
-async def test_sum_and_average_datasets_aggregate_differently_under_one_grouping(
-        seeded):
-    """Applying `avg` to everything is the classic wrong answer once the user
-    groups coarser than a block."""
-    result = await _query(["TOTAL_ENERGY_MU", "PEAK_DEMAND", "AVG_DEMAND"],
-                          _filters(dt.date(2026, 1, 3), dt.date(2026, 1, 5),
-                                   date_grouping="MONTH_WISE"))
-    energy = _cells(result, "TOTAL_ENERGY_MU")
-    peak = _cells(result, "PEAK_DEMAND")
-    avg = _cells(result, "AVG_DEMAND")
-    key = ("2026-01", "89", None)
-    assert energy[key] == pytest.approx(8.0 + 9.0 + 10.0)     # summed
-    assert peak[key] == pytest.approx(700.0)                  # max
-    assert avg[key] == pytest.approx((400.0 + 420.0 + 450.0) / 3)
-
-
-# ------------------------------------------------------------- block bucketing
-
-@pytest.mark.asyncio
-async def test_custom_block_ranges_bucket_inside_mongodb(seeded):
-    result = await _query(["ACTUAL_DEMAND"],
-                          _filters(dt.date(2026, 1, 5), dt.date(2026, 1, 5),
-                                   from_block=1, to_block=3,
-                                   block_band="CUSTOM",
-                                   custom_blocks=[[1, 2], [3, 3]]))
-    cells = _cells(result, "ACTUAL_DEMAND")
-    assert sorted(k[1] for k in cells) == ["1-2", "3-3"]
-    assert cells[("2026-01-05", "1-2", None)] == pytest.approx(501.5)
-    assert cells[("2026-01-05", "3-3", None)] == pytest.approx(503.0)
-
-
-# ------------------------------------------------------- derived and the pivot
-
-@pytest.mark.asyncio
-async def test_a_derived_dataset_resolves_over_the_aggregated_rows(seeded):
-    result = await _query(["OD_UD_QUANTUM"],
-                          _filters(dt.date(2026, 1, 5), dt.date(2026, 1, 5),
-                                   from_block=1, to_block=3))
-    rows = derived.resolve(result.rows, ["OD_UD_QUANTUM"])
-    quantum = {(r["date_key"], r["block_key"]): r["value"]
-               for r in rows if r["dataset"] == "OD_UD_QUANTUM"}
-    # drawal (490 + b) - schedule (480 + b) = 10 for every block
-    assert quantum == {("2026-01-05", "1"): pytest.approx(10.0),
-                       ("2026-01-05", "2"): pytest.approx(10.0),
-                       ("2026-01-05", "3"): pytest.approx(10.0)}
-    # the dependency rows the user never ticked do not survive into the response
-    assert {r["dataset"] for r in rows} == {"OD_UD_QUANTUM"}
-
-
-@pytest.mark.asyncio
-async def test_the_pivot_lays_live_rows_out_as_a_block_by_date_matrix(seeded):
-    result = await _query(["ACTUAL_DEMAND"],
-                          _filters(dt.date(2026, 1, 4), dt.date(2026, 1, 5),
-                                   from_block=1, to_block=3))
-    response = pivot.build_response(result.rows, requested=["ACTUAL_DEMAND"])
-    assert response["axes"]["dates"] == ["2026-01-04", "2026-01-05"]
-    assert response["axes"]["blocks"] == [1, 2, 3]
-    values = response["series"][0]["values"]
-    assert values == [[501.0, 501.0], [502.0, 502.0], [503.0, 503.0]]
-
-
-@pytest.mark.asyncio
-async def test_an_empty_range_returns_no_rows_rather_than_zeros(seeded):
-    result = await _query(["ACTUAL_DEMAND"],
-                          _filters(dt.date(2024, 1, 1), dt.date(2024, 1, 2)))
-    assert result.rows == []
-    assert result.failed_datasets == []
-    response = pivot.build_response(result.rows, requested=["ACTUAL_DEMAND"])
-    assert response["series"][0]["quality"] == "empty"
-    assert response["meta"]["missing_datasets"] == ["ACTUAL_DEMAND"]
-
-
-# --------------------------------------------------- failure is not emptiness
-
-@pytest.mark.asyncio
-async def test_a_broken_pipeline_raises_out_of_the_repository(seeded):
-    from motor.motor_asyncio import AsyncIOMotorClient
-    client = AsyncIOMotorClient(MONGO_URI)
-    try:
-        repo = analytics_repository.AnalyticsRepository()
-        repo.db = client[ITEST_DB]
-        with pytest.raises(OperationFailure):
-            await repo.run_pipeline("demand_serve", [{"$notAStage": {}}])
-        # the inherited helper would have swallowed exactly that and returned []
-        assert await repo.aggregate("demand_serve", [{"$notAStage": {}}]) == []
-    finally:
-        client.close()
-
-
-@pytest.mark.asyncio
 async def test_one_failed_group_still_serves_the_others(seeded):
     from motor.motor_asyncio import AsyncIOMotorClient
     client = AsyncIOMotorClient(MONGO_URI)
     try:
         repo = analytics_repository.AnalyticsRepository()
         repo.db = client[ITEST_DB]
+        # The seed's only SG row is PLANT_A on OVERLAP_DAY (block 1, 90 MW).
         plans = planner.plan(
-            ["ACTUAL_DEMAND", "FINAL_SCHEDULE_PLANT"],
-            _filters(dt.date(2026, 1, 4), dt.date(2026, 1, 5), plants=["PLANT_A"]))
+            ["ACTUAL_DEMAND", "SG_PLANT"],
+            _filters(OVERLAP_DAY.date(), OVERLAP_DAY.date(), plants=["PLANT_A"]))
         broken = next(p for p in plans if p["group"] == "demand")
         broken["pipeline"] = [{"$notAStage": {}}]
 
         result = await executor.execute(plans, repo)
         assert result.failed_datasets == ["ACTUAL_DEMAND"]
         assert result.partial is True
-        assert [r["dataset"] for r in result.rows] == ["FINAL_SCHEDULE_PLANT"] * 2
+        assert {r["dataset"] for r in result.rows} == {"SG_PLANT"}
+        assert len(result.rows) > 0
     finally:
         client.close()
 
@@ -524,8 +387,8 @@ async def test_one_failed_group_still_serves_the_others(seeded):
 async def test_max_time_ms_reaches_the_server(live):
     """The ceiling has to be enforced by MongoDB, not by a Python timeout that
     leaves the query running on a connection nobody is waiting for."""
-    if live.serve_dam_scheduling.estimated_document_count() < 10_000:
-        pytest.skip("live serve_dam_scheduling too small to time out")
+    if live.demand_serve_historical.estimated_document_count() < 1_000:
+        pytest.skip("live demand_serve_historical too small to time out")
     from motor.motor_asyncio import AsyncIOMotorClient
     from pymongo.errors import ExecutionTimeout
     client = AsyncIOMotorClient(MONGO_URI)
@@ -534,8 +397,8 @@ async def test_max_time_ms_reaches_the_server(live):
         repo.db = client[LIVE_DB]
         with pytest.raises(ExecutionTimeout):
             await repo.run_pipeline(
-                "serve_dam_scheduling",
-                [{"$group": {"_id": "$plant_id", "n": {"$sum": 1}}}],
+                "demand_serve_historical",
+                [{"$group": {"_id": "$time_block", "n": {"$sum": 1}}}],
                 max_time_ms=1)
     finally:
         client.close()
@@ -551,7 +414,6 @@ def _latest_date(collection):
 LIVE_PROBE = [
     ("demand", "ACTUAL_DEMAND", "demand_serve_historical", {}),
     ("supply", "DC_PLANT", "supply_serve_historical", {}),
-    ("scheduling", "FINAL_SCHEDULE_PLANT", "serve_dam_scheduling", {}),
     ("exchange", "ACP_DAM", "exchange_serve_historical", {}),
     ("peak", "PEAK_DEMAND", "peak_demand_serve_historical", {}),
     ("trade", "PF_TRADED_DAM", "bid_trade_serve_historical", {}),

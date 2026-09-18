@@ -195,17 +195,19 @@ def test_the_plant_list_comes_from_the_collection_the_dataset_actually_reads():
     client = _client(repo=repo)
 
     supply = client.get("/api/v2/analytics/plants?dataset=DC_PLANT").json()["data"]
-    scheduling = client.get(
-        "/api/v2/analytics/plants?dataset=FINAL_SCHEDULE_PLANT").json()["data"]
 
     assert supply["collection"] == "supply_serve"
-    assert scheduling["collection"] == "serve_dam_scheduling"
-    # The whole reason this endpoint is dataset-aware: the two universes differ.
     assert supply["count"] == 34
-    assert scheduling["count"] == 53
     assert [p["id"] for p in supply["plants"]] == sorted(SUPPLY_PLANTS)
-    assert [p["id"] for p in scheduling["plants"]] != [p["id"] for p in supply["plants"]]
-    assert repo.collections == ["supply_serve", "serve_dam_scheduling"]
+    # Only the dataset's own collection is read — never a master list, which does
+    # not match the data (plant_master has 35 ids, supply_serve 34).
+    assert repo.collections == ["supply_serve"]
+
+
+def test_the_removed_dam_schedule_dataset_is_unknown_to_the_plant_endpoint():
+    client = _client(repo=StubRepo(entities={"supply_serve": SUPPLY_PLANTS}))
+    response = client.get("/api/v2/analytics/plants?dataset=FINAL_SCHEDULE_PLANT")
+    assert response.status_code in (404, 422)
 
 
 def test_a_second_plant_lookup_is_served_from_memory():

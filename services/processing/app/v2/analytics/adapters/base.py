@@ -16,10 +16,11 @@ than loud:
    same document is in both and the union returns it twice. Every adapter with a
    historical twin therefore declares a `dedupe_key` and the base class splices
    `dedupe_stages` in after the union — without it every `$sum` dataset reads
-   exactly double on the most recent dates. `serve_dam_scheduling` is the one group
-   with no historical twin — for it `historical_collection` is `None`, no union is
-   emitted and no dedupe is paid for, because unioning a collection that does not
-   exist is not an error either, it just returns nothing.
+   exactly double on the most recent dates. A group with no historical twin sets
+   `historical_collection = None`: no union is emitted and no dedupe is paid for.
+   (No live group is like that since the DAM-schedule group was removed on
+   2026-09-18, but the base keeps the path — unioning a collection that does not
+   exist is not an error either, it just returns nothing.)
 
 2. **A dataset's own discriminator goes inside its accumulator.** `MAPE_DAF` is
    `type="DAF"`; `ACTUAL_DEMAND` has no discriminator at all. Putting `type="DAF"`

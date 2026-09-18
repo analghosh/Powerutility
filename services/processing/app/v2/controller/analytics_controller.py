@@ -16,17 +16,17 @@ ones it cannot use as disabled with a reason. The flag is a convenience for the
 screen, never a control: `/query` re-checks the grant server-side and drops what the
 caller may not see, which is the check that actually matters.
 
-**2. The plant list is per dataset, because the plant universes genuinely differ.**
-`supply_serve` carries 34 plant ids and `serve_dam_scheduling` carries 53 — counted
-in the local UAT import. They are not interchangeable and there is no master list
-that covers both (`plant_master` has 35, and matches neither). Offering the wrong
-one produces a selection that matches no document and a table of empty cells, which
-reads as "no data in this range" rather than as the wrong dropdown. So the plant
-list is read from the collection the ticked dataset actually queries.
+**2. The plant list is read from the collection the ticked dataset queries.**
+`supply_serve` carries 34 plant ids while `plant_master` has 35 and they do not
+match — counted in the local UAT import. (Until 2026-09-18 a second per-plant
+source, `serve_dam_scheduling` with 53 ids, made the two lists non-interchangeable;
+it is gone, but the per-dataset read stays because a master list that matches the
+data still does not exist.) Offering the wrong list produces a selection that
+matches no document and a table of empty cells, which reads as "no data in this
+range" rather than as the wrong dropdown.
 
-That read is a distinct over an unindexed field — on `serve_dam_scheduling` that is
-a scan of ~470k documents — and it is triggered by ticking a checkbox, so it would
-run on every dashboard load. It is therefore cached in process for
+That read is a distinct over an unindexed field and it is triggered by ticking a
+checkbox, so it would run on every dashboard load. It is therefore cached in process for
 `PLANT_CACHE_TTL_SECONDS`. The list changes when a plant is commissioned, which is a
 quarterly event, not a per-request one. This is an ordinary dict rather than Redis
 on purpose: it must not be able to fail, and a per-worker copy of a 53-element list
