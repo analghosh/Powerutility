@@ -69,6 +69,45 @@ def test_absent_datasets_are_not_selectable():
     assert "PF_TRADED_GDAM" in codes  # empty is still selectable
 
 
+# --- temporarily hidden datasets (user decision 2026-09-18) ------------------
+#
+# These pin the hide as a CATALOGUE policy: the entries, the engine and the 113
+# per-plant tests elsewhere are untouched, so emptying HIDDEN_CODES restores them.
+
+
+def test_hidden_datasets_are_withheld_from_the_catalogue():
+    visible = {d.code for d in registry.visible()}
+    for code in registry.HIDDEN_CODES:
+        assert code not in visible, f"{code} is still offered"
+
+
+def test_hidden_datasets_are_not_selectable_either():
+    codes = {d.code for d in registry.selectable()}
+    for code in registry.HIDDEN_CODES:
+        assert code not in codes
+
+
+def test_a_hidden_dataset_is_still_a_real_registry_entry():
+    # Hidden is not deleted. The pipeline, the budget and a replayed export job all
+    # still resolve the code — which is what makes the hide reversible.
+    for code in registry.HIDDEN_CODES:
+        assert registry.get(code).code == code
+        assert code in registry.DATASETS
+
+
+def test_emptying_hidden_codes_restores_every_dataset(monkeypatch):
+    monkeypatch.setattr(registry, "HIDDEN_CODES", ())
+    assert {d.code for d in registry.visible()} == set(registry.DATASETS)
+
+
+def test_the_hidden_set_is_exactly_the_two_per_plant_drilldowns():
+    # A guard on scope: hiding a state-level total would take the screen's default
+    # selection with it. Change this test deliberately, never to make a run go green.
+    assert set(registry.HIDDEN_CODES) == {"DC_PLANT", "SG_PLANT"}
+    for code in registry.HIDDEN_CODES:
+        assert registry.get(code).drilldown is True
+
+
 def test_plant_datasets_declare_per_plant_series():
     for code in ("DC_PLANT", "SG_PLANT"):
         assert registry.get(code).series == "per_plant"

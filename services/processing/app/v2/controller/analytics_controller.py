@@ -202,7 +202,8 @@ class AnalyticsController:
         entries: List[Dict[str, Any]] = []
         groups: Dict[str, List[str]] = {}
 
-        for dataset in registry.DATASETS.values():
+        # `visible()` drops the temporarily hidden codes — see registry.HIDDEN_CODES.
+        for dataset in registry.visible():
             entries.append({
                 "code": dataset.code,
                 "label": dataset.label,

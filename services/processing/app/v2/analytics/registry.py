@@ -217,6 +217,38 @@ for _m in MARKETS:
 
 DATASETS: Dict[str, Dataset] = {d.code: d for d in _ALL}
 
+# ---------------------------------------------------------------------------
+# TEMPORARILY HIDDEN — user decision 2026-09-18
+# ---------------------------------------------------------------------------
+# The two per-plant supply drill-downs are withheld from the catalogue while PTC
+# settle the "last received revision" definition (§6e of the handoff). They are
+# NOT deleted: the definitions above, the supply adapter's entity folding and all
+# 113 tests that exercise per-plant behaviour stay exactly as they are, so this is
+# reversible without re-deriving anything.
+#
+#   TO RESTORE: empty this tuple — `HIDDEN_CODES: Tuple[str, ...] = ()`.
+#               Nothing else needs to change.
+#
+# Hidden is stronger than `availability="absent"` on purpose: absent still renders
+# the row, disabled, with a reason. These should not appear at all.
+#
+# The hide is a CATALOGUE policy, not an engine rule — deliberately not enforced in
+# the planner. The pipeline, the adapter's entity folding and the budget still work
+# on these codes, so an export job queued before the hide still replays and produces
+# its file. The client prunes codes the catalogue no longer offers, so a saved
+# preference naming one simply drops it.
+HIDDEN_CODES: Tuple[str, ...] = ("DC_PLANT", "SG_PLANT")
+
+
+def is_hidden(code: str) -> bool:
+    """Withheld from the catalogue, and refused if posted directly."""
+    return code in HIDDEN_CODES
+
+
+def visible() -> List[Dataset]:
+    """Everything the catalogue may list at all."""
+    return [d for d in DATASETS.values() if not is_hidden(d.code)]
+
 
 def get(code: str) -> Dataset:
     try:
@@ -227,7 +259,7 @@ def get(code: str) -> Dataset:
 
 def selectable() -> List[Dataset]:
     """Everything the UI may offer — `absent` datasets are rendered disabled."""
-    return [d for d in DATASETS.values() if d.availability != "absent"]
+    return [d for d in visible() if d.availability != "absent"]
 
 
 def by_group(codes) -> Dict[str, List[Dataset]]:
