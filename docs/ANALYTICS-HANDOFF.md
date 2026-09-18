@@ -289,6 +289,124 @@ gone from the seeder and from the local DB (the child row was re-parented, its 1
 `menu_roles` grants kept). `RouteProtection`/`Sidebar` bypass paths updated. The menu
 name is unchanged, so it still mints `analytics_dashboard:read`.
 
+## 6e. Capture cut-off, saved defaults, named files (2026-09-18)
+
+Four changes, all driven through the real UI before being called done
+(`tools/e2e/analytics_journey.mjs`, 13 steps, all passing).
+
+**The ℹ "no rows yet" marker is gone.** `DatasetMultiSelect` put a warning glyph and a
+tooltip on any dataset the registry flags `availability: "empty"` — four rows, the
+GDAM/HPDAM Portfolio Traded/Bidded pair. It is a claim about storage made before any
+query has run, and PTC read it as a claim about their data. The rows stay selectable
+and the after-the-fact "No data in this range" note, which reports what a query
+actually returned, is untouched.
+
+**Declared Capacity and Final Schedule: no cut-off, and none needed.** PTC define
+these as the figure captured at 01:00 the next morning from the last revision
+received by then. A cut-off stage was built for it and then **removed the same day** —
+it could only ever delete a row, never improve one, and there is provably nothing for
+it to catch:
+
+* The stored row **is** the last received revision. `supply_serve` keeps one document
+  per key and rewrites it in place (zero duplicate `(scheduled_at, time_block,
+  plant_id, dc_sg)` in either collection; `dc_sg` has a literal `unique=True` index
+  plus an upsert). The existing revision collapse already returns it.
+* **The ingest window shuts at midnight.** `supply_processor.py:440` routes a delivery
+  date into `dc_sg` → `supply_serve` only while it is "today or tomorrow". After that
+  a revision goes down the `historical_data` branch straight to
+  `supply_serve_historical` with `system_revision_number = 1` hardcoded
+  (`supply_processor.py:553`) — which **loses** the collapse to the archived copy
+  carrying the real number (2144, 2147…). So it cannot change the answer.
+* Measured over all 63,648 rows: latest grid stamp **+14.05 h**, last write **+23.94 h**
+  (= 23:56 on the delivery day, exactly where the code says the window shuts). Nothing
+  is within an hour of 01:00.
+
+So the value is frozen ~1 hour **before** PTC's capture time, and the requirement is
+met by the collapse alone. `CACHE_VERSION` stays **v6** — no dataset changed meaning.
+`test_nothing_filters_between_the_union_and_the_revision_collapse` is the regression
+guard. Read the supply adapter's module docstring before reintroducing anything here.
+
+⚠️ Archival is **not** the freeze: `process_daily_archival_and_cleanup` deliberately
+re-mirrors, *"so the historical table remains a true mirror of the serve table"*
+(`supply_serve_repository.py:321`). The freeze is the ingest window, plus
+`cleanup_cutoff = today - 3 days` deleting the serve row.
+
+**Renamed "Analytics Dashboard" → "Reports Dashboard"** (user, 2026-09-18). Header,
+sidebar, the not-granted hint and the Masters → Parameters help text. The **route,
+files and `features/analytics/` folder keep their old names on purpose** — the path is
+in RouteProtection's bypass list and in every bookmark.
+🔴 **The menu NAME mints the permission.** `_get_resource_name_from_menu` falls back to
+`name.lower().replace(" ", "_")`, so the row now mints `reports_dashboard:read` where
+it minted `analytics_dashboard:read`. `AnalyticsService.PAGE_GRANTS` accepts **both** —
+do not drop the old spelling until every deployment has been reseeded, or every role
+granted under the old name loses all 52 datasets and gets a 200 with an empty file.
+
+**The filter selection is saved per user, in MongoDB.** `analytics_user_preferences`,
+one row per `user_id` (unique index), holding `datasets`, `plants` and `format`;
+`GET`/`PUT`/`DELETE /api/v2/analytics/preferences`, owner-only, no user id in any
+signature. The screen applies it **once**, when the catalogue and the preference have
+both arrived — a default that reapplied itself would fight the user for the form — and
+thereafter only when they press Load. The header carries *My default · Save current ·
+Load · Clear*. Codes the registry has since lost, or a grant since revoked, are dropped
+on read and reported rather than replayed into a disabled row. A preference is never
+authority: `/query` re-checks the registry and the grant on every request.
+
+**The user names the file.** A "File name" box sits under the format picker and rides
+the request as `file_name`, so it applies to the instant download and to a queued job
+alike; blank keeps the generated `analytics_<from>_to_<to>`. A finished export can also
+be renamed from My Exports (`PATCH /export/{id}/filename`), which moves
+`result.filename` and `filters.file_name` only — the bytes stay where the worker put
+them, because the reaper and the disk-budget sweep both find files by `result.path`.
+An empty rename restores the generated name. `request_hash` now includes the name, or
+asking for the same data under a second name would be deduped onto the first job and
+its first file name.
+
+`analytics_csv.safe_file_stem` is the one sanitiser: it drops a supplied extension
+(`report.exe` must not become `report.exe.csv`), turns everything outside
+`[A-Za-z0-9_.-]` into `_` — which is what defeats traversal, since a `..` with no
+separator left is just two dots — strips leading dots (hidden file) and trailing dots
+and spaces (Windows renames those silently), and truncates to 120. A name that
+sanitises away to nothing falls back to the generated one: the file is what the user
+asked for, and its name is not worth losing it over.
+
+🔴 **Defect found by driving the UI (pre-existing, affects every browser download):**
+processing's CORS middleware set `allow_headers` but not `expose_headers`, and
+`allow_headers` governs the *request*. A response header is unreadable to JavaScript
+unless it is exposed — so `Content-Disposition` was invisible to the browser, `curl`
+saw it throughout, and `useAnalyticsExports` silently saved every export under its own
+`analytics-<from>-to-<to>` guess. Fixed in `services/processing/app/main.py`. PROD is
+path-routed and therefore same-origin, so it never bit there; any deployment that puts
+the API on its own host would have. The client fallback now also honours the typed name
+(`features/analytics/utils/fileName.js`, 11 tests) so a proxy that strips the header
+degrades to the right name instead of the wrong one.
+
+**Tests:** backend `libs/tests` **861 pass / 10 fail** — the same 10 pre-existing
+vendor-rot failures (`test_supply_csv_parser.py`, `test_grid_india_parser.py`,
+`test_demand_supply_entities.py`), unchanged. Client `node --test` **113 pass**.
+Browser journey **13/13**.
+
+🔴 **Correction to step B4 — restarting auth does NOT create the menu row.**
+`DatabaseSeeder.seed_menus` bails on the first line if *any* menu exists
+(`if existing_menus and not force_reload: return True`, `seeder.py:190`), and there is
+no add-missing path. UAT and PROD both have menus, so a restart seeds nothing. The
+only other branch, `force_reload=True`, **deletes every menu first** — which would
+destroy every `menu_roles` grant on the box. Neither is usable.
+Insert the row directly instead, then grant it (step B5):
+
+```javascript
+db.menus.insertOne({
+  name: "Reports Dashboard",            // mints reports_dashboard:read — see §6e
+  icon: "📉",
+  parent_id: <the _id of the "Reports" menu>,
+  path: "/reports/analytics-dashboard", // unchanged; RouteProtection bypasses it
+  order: 2,
+  is_active: true
+})
+```
+
+Verify the row's field names against an existing child of Reports before inserting —
+copy that document's shape rather than this snippet's.
+
 ## 7. REMAINING WORK — the actual to-do list
 
 Ordered by priority. Items marked ✅ are **already done** — do not redo them.
