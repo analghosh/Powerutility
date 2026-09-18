@@ -50,10 +50,17 @@ def _d(**kw) -> Dataset:
 
 _ALL: List[Dataset] = [
     # ---- demand group -------------------------------------------------
-    # PTC decision 2026-09-17: Actual Demand is `drawal`, not `actual`. The two are
-    # never equal (drawal ≈ 0.9676 × actual — a loss multiplier); `actual` is the gross
-    # figure. A separate DRAWAL dataset would duplicate this one, so there is none.
+    # User decision 2026-09-18: Actual Demand is `actual`, the number every existing
+    # EPMS screen labels "Actual Demand" (they read `comp_act_demand`, which IS
+    # `actual` wherever an actual exists; its forecast fallback is deliberately not
+    # used here — a forecast must not appear in a historical export as an actual).
+    # `actual` is computed by demand_processor as drawal + SG of plant PPCLGPP, i.e.
+    # grid drawal plus own generation. `drawal` is shipped beside it: it is the raw
+    # feed value at the drawal point and what DSM settles on, so OD/UD Quantum is
+    # built on DRAWAL, not on this.
     _d(code="ACTUAL_DEMAND", label="Actual Demand", group="demand",
+       value="$actual", unit="MW", agg="avg", permission="analytics:demand"),
+    _d(code="DRAWAL", label="Drawal", group="demand",
        value="$drawal", unit="MW", agg="avg", permission="analytics:demand"),
     # PTC defines UDM as actual + rostering. comp_udm IS exactly that wherever actual
     # exists (1,864 rows, 0 mismatches) and is additionally populated on rows where
@@ -99,8 +106,9 @@ _ALL: List[Dataset] = [
        value="$dsm_rate", unit="INR/MWh", agg="avg",
        match={"type": "IDF"}, permission="analytics:dsm"),
     # ---- derived ------------------------------------------------------
+    # Deviation is settled at the drawal point: drawal − schedule, never actual.
     _d(code="OD_UD_QUANTUM", label="OD/UD Quantum", group="demand", kind="derived",
-       depends=("ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE"), expr="drawal - schedule",
+       depends=("DRAWAL", "FINAL_SCHEDULE_STATE"), expr="drawal - schedule",
        unit="MW", agg="avg", permission="analytics:dsm"),
     # ---- supply group -------------------------------------------------
     # PTC decision 2026-09-17: DC and SG are reported on `volume`, no loss variants.

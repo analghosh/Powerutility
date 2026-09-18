@@ -18,7 +18,7 @@ from services.processing.app.v2.analytics import registry  # noqa: E402
 def test_actual_demand_maps_to_the_demand_group():
     d = registry.get("ACTUAL_DEMAND")
     assert d.group == "demand"
-    assert d.value == "$drawal"
+    assert d.value == "$actual"
     assert d.unit == "MW"
     assert d.agg == "avg"
 
@@ -31,7 +31,7 @@ def test_udm_reads_comp_udm_not_udm():
 def test_od_ud_quantum_is_derived_from_same_collection_fields():
     d = registry.get("OD_UD_QUANTUM")
     assert d.kind == "derived"
-    assert set(d.depends) == {"ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE"}
+    assert set(d.depends) == {"DRAWAL", "FINAL_SCHEDULE_STATE"}
 
 
 def test_od_ud_amount_is_stored_not_computed():
@@ -119,19 +119,26 @@ def test_gdam_acv_projects_the_total_subfield():
 
 # ------------------------------------------------- PTC answers, 2026-09-17
 
-def test_actual_demand_is_drawal_not_the_gross_actual_field():
-    """PTC: Actual Demand = drawal. The two are never equal (drawal ≈ 0.9676 × actual)."""
-    assert registry.get("ACTUAL_DEMAND").value == "$drawal"
+def test_actual_demand_is_the_actual_field_every_other_screen_shows():
+    """User decision 2026-09-18: Actual Demand = `actual` (drawal + PPCLGPP's SG, the
+    number the Demand Forecast / Demand-Supply / Management charts all label
+    "Actual Demand"). Not `comp_act_demand` — its forecast fallback would put a
+    forecast into a historical export."""
+    assert registry.get("ACTUAL_DEMAND").value == "$actual"
 
 
-def test_there_is_no_separate_drawal_dataset():
-    """It would be an exact duplicate of ACTUAL_DEMAND."""
-    with pytest.raises(registry.UnknownDatasetError):
-        registry.get("DRAWAL")
+def test_drawal_is_its_own_dataset_beside_actual_demand():
+    """The raw feed value at the drawal point — what DSM settles on. Never equal to
+    actual (actual = drawal + PPCLGPP SG), so it is not a duplicate."""
+    d = registry.get("DRAWAL")
+    assert d.value == "$drawal" and d.group == "demand" and d.agg == "avg"
+    assert d.label == "Drawal"
 
 
-def test_od_ud_quantum_now_depends_on_actual_demand():
-    assert registry.get("OD_UD_QUANTUM").depends == ("ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE")
+def test_od_ud_quantum_depends_on_drawal_not_actual():
+    """Deviation is drawal − schedule. Built on `actual` it would carry PPCLGPP's
+    own generation into the over-drawal figure."""
+    assert registry.get("OD_UD_QUANTUM").depends == ("DRAWAL", "FINAL_SCHEDULE_STATE")
 
 
 @pytest.mark.parametrize("period,grouping", [("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")])
@@ -244,7 +251,7 @@ def test_the_demand_serve_schedule_is_labelled_for_settlement_not_as_final():
 def test_od_ud_quantum_still_subtracts_the_dsm_schedule_not_sg():
     """Settlement compares drawal with the schedule at the drawal point — the sheet's
     own `drawal − schedule`. Swapping in ΣSG would put PPCLGPP's 15 MW into the money."""
-    assert registry.get("OD_UD_QUANTUM").depends == ("ACTUAL_DEMAND", "FINAL_SCHEDULE_STATE")
+    assert registry.get("OD_UD_QUANTUM").depends == ("DRAWAL", "FINAL_SCHEDULE_STATE")
 
 
 def test_no_two_datasets_share_the_label_final_schedule():

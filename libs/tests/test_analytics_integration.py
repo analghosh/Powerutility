@@ -251,15 +251,15 @@ async def test_a_single_day_of_actual_demand_matches_a_hand_written_find(seeded)
     for doc in seeded.demand_serve.find({"scheduled_at": D_2026_01_05}):
         if doc["time_block"] > 3:
             continue
-        expected.setdefault(doc["time_block"], []).append(doc["drawal"])
+        expected.setdefault(doc["time_block"], []).append(doc["actual"])
     hand = {("2026-01-05", str(b), None): sum(v) / len(v)
             for b, v in expected.items()}
 
     assert _cells(result, "ACTUAL_DEMAND") == hand
-    # ACTUAL_DEMAND reads `drawal` (PTC decision 2026-09-17); the seed is 490 + block.
-    assert hand == {("2026-01-05", "1", None): 491.0,
-                    ("2026-01-05", "2", None): 492.0,
-                    ("2026-01-05", "3", None): 493.0}
+    # ACTUAL_DEMAND reads `actual` (user decision 2026-09-18); the seed is 500 + block.
+    assert hand == {("2026-01-05", "1", None): 501.0,
+                    ("2026-01-05", "2", None): 502.0,
+                    ("2026-01-05", "3", None): 503.0}
 
 
 @pytest.mark.asyncio
@@ -437,8 +437,8 @@ async def test_custom_block_ranges_bucket_inside_mongodb(seeded):
                                    custom_blocks=[[1, 2], [3, 3]]))
     cells = _cells(result, "ACTUAL_DEMAND")
     assert sorted(k[1] for k in cells) == ["1-2", "3-3"]
-    assert cells[("2026-01-05", "1-2", None)] == pytest.approx(491.5)
-    assert cells[("2026-01-05", "3-3", None)] == pytest.approx(493.0)
+    assert cells[("2026-01-05", "1-2", None)] == pytest.approx(501.5)
+    assert cells[("2026-01-05", "3-3", None)] == pytest.approx(503.0)
 
 
 # ------------------------------------------------------- derived and the pivot
@@ -468,7 +468,7 @@ async def test_the_pivot_lays_live_rows_out_as_a_block_by_date_matrix(seeded):
     assert response["axes"]["dates"] == ["2026-01-04", "2026-01-05"]
     assert response["axes"]["blocks"] == [1, 2, 3]
     values = response["series"][0]["values"]
-    assert values == [[491.0, 491.0], [492.0, 492.0], [493.0, 493.0]]
+    assert values == [[501.0, 501.0], [502.0, 502.0], [503.0, 503.0]]
 
 
 @pytest.mark.asyncio
@@ -582,11 +582,11 @@ async def test_live_actual_demand_for_one_day_matches_a_hand_written_find(live):
     hand = {}
     for doc in live.demand_serve_historical.find(
             {"scheduled_at": start, "time_block": {"$lte": 4}}):
-        value = doc.get("drawal")
+        value = doc.get("actual")
         if value is not None:
             hand.setdefault(doc["time_block"], []).append(value)
     if not hand:
-        pytest.skip(f"no `drawal` values on {day} in the live database")
+        pytest.skip(f"no `actual` values on {day} in the live database")
 
     result = await _query(["ACTUAL_DEMAND"],
                           _filters(day, day, from_block=1, to_block=4),
