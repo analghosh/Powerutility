@@ -503,13 +503,19 @@ systemd units as user `epms`, each service its OWN checkout under
    checkout. Idempotent. Without it `demand_serve` is a COLLSCAN on both sides.
 3. **nginx** — item 10 in `docs/EPMS-nginx-changes.md`; `nginx -t && systemctl reload nginx`.
    Non-breaking; can ride with items 1/2/6/7/8 in one reload.
-4. **Restart auth first** so the seeder creates the `Analytics Dashboard` `menus` row
-   under Reports (it adds rows it does not find; existing rows untouched). Then
-   processing (which also seeds the five `analytics_band_*` parameters), then scheduler.
+4. **Insert the `menus` row BY HAND, then restart the services.** 🔴 A restart does
+   *not* create it — see the correction above §7: `seed_menus` returns immediately if
+   any menu exists, and `force_reload=True` would delete every menu on the box. Insert
+   `{name: "Reports Dashboard", path: "/reports/analytics-dashboard", parent_id: <Reports _id>,
+   order: 2}` into `auth_db.menus`, copying the field shape from an existing child of
+   Reports. Then restart auth, then processing (which seeds the five `analytics_band_*`
+   parameters), then scheduler.
 5. **Grant the menu to roles** — Admin → Roles → menu assignment → tick *Reports →
-   Analytics Dashboard* (`read`) for every role that should see the screen. The grant
-   runs `_sync_role_permissions`, which is what mints `analytics_dashboard:read`; users
-   pick it up on their **next login** (it lives in the token).
+   Reports Dashboard* (`read`) for every role that should see the screen. The grant
+   runs `_sync_role_permissions`, which mints `reports_dashboard:read` from the row's
+   NAME (§6e); `PAGE_GRANTS` also still accepts `analytics_dashboard:*`, so a box seeded
+   under the old name keeps working. Users pick the grant up on their **next login**
+   (it lives in the token).
    ⚠️ **Read the trap in §9 before doing this on PROD**: that sync REBUILDS the role's
    permission list from its menu rows and dropped 58 `:write`/`:delete` strings from the
    `user` role locally.
