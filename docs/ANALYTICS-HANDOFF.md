@@ -331,29 +331,41 @@ re-mirrors, *"so the historical table remains a true mirror of the serve table"*
 (`supply_serve_repository.py:321`). The freeze is the ingest window, plus
 `cleanup_cutoff = today - 3 days` deleting the serve row.
 
-**Two per-plant datasets temporarily hidden (user, 2026-09-18).** `DC_PLANT`
-("Declared Capacity — by plant") and `SG_PLANT` ("Final Schedule — by plant") are
-withheld from the catalogue while PTC settle the last-received-revision definition.
-The state-level totals — "Declared Capacity" and "Final Schedule" — stay live and
-remain what the screen opens with. Catalogue is 50 of 52.
+**Two per-plant datasets: restored, relabelled, and no plant picker (2026-09-18).**
+Three changes in sequence, all user decisions:
 
-`registry.HIDDEN_CODES`. **To restore: empty the tuple, `HIDDEN_CODES = ()`.** Nothing
-else changes — five tests pin exactly that, including one that asserts the set is
-those two codes and nothing else, so hiding a state-level total can't happen by
-accident.
+1. `DC_PLANT` / `SG_PLANT` were briefly hidden, then **restored** once it was
+   established that "Plant wise DC / Plant wise SG" were the OLD LABELS of these same
+   two codes, not a separate pair. Verified from the stored job rows: a label reading
+   `Plant wise DC + Plant wise SG` carries `datasets: ['DC_PLANT','SG_PLANT']`.
+   `registry.HIDDEN_CODES` is now `()`; the mechanism stays as the cheap way to
+   withhold a dataset (catalogue policy, never enforced in the planner, so a queued
+   export still replays).
+2. **Labels restored** to `Plant wise DC` / `Plant wise SG` — what PTC call them and
+   what the pre-relabel job rows read. `drilldown` is unchanged, so they still sort
+   after the state-level totals, which remain the default. `CACHE_VERSION` → **v7**:
+   values did not move, but `series[].label` is in the cached payload and the writers
+   print it, so a past-date query cached under v6 would emit the old label into files
+   for the full 24 h TTL.
+3. **No plant picker — every plant, always.** `PlantSelector` is no longer rendered
+   and the client no longer calls `GET /analytics/plants` at all.
 
-Deliberately a **catalogue policy, not an engine rule**: not enforced in the planner.
-The definitions, the supply adapter's entity folding, the budget's plant cardinality
-and all 113 per-plant tests are untouched, so an export job queued before the hide
-still replays and produces its file. The client prunes codes the catalogue no longer
-offers, so a saved preference naming one simply drops it. That is why this cost two
-test edits rather than commenting out 113 references.
+🔴 **The trap in (3), and why the resolution sits where it does.** An empty `plants`
+list used to be a 422; it now means *all*. But `context_for` prices `plant_count` from
+`len(req.plants)`, so left empty it would price **34 series as 1** and wave through a
+request far over the inline cap — silent, because the response looks fine until the
+file is enormous. So `AnalyticsService.with_plants` resolves the full list **before
+anything is priced, keyed or stored**, exactly as `with_band` stamps its ranges:
 
-⚠️ **"Plant wise DC" / "Plant wise SG" are the OLD LABELS of these same two codes**,
-renamed 2026-09-17 when state-level became the default. They survive in stored export
-job labels (`label` is frozen at creation on purpose, so a user sees what they asked
-for) — verified: a row reading `Plant wise DC + Plant wise SG` carries
-`datasets: ['DC_PLANT','SG_PLANT']`. There is no third pair of plant datasets.
+* the budget sees the real series count (verified: 25 series returned, priced 25, not 1);
+* the stored job row records the plants the file was built from, so a replay months
+  later reproduces that file rather than gaining a newly commissioned plant.
+
+The list is one cached distinct scan per source group (900 s TTL, read once then
+cached — pinned by test). A failed lookup leaves `plants` empty rather than raising:
+no plant filter is the same set of rows, and losing the query is worse than
+under-pricing one request. The model's "plants must be selected" validator is gone;
+three tests that pinned the old refusal now pin the new behaviour.
 
 **Renamed "Analytics Dashboard" → "Reports Dashboard"** (user, 2026-09-18). Header,
 sidebar, the not-granted hint and the Masters → Parameters help text. The **route,

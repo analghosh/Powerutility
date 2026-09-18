@@ -152,9 +152,8 @@ def test_the_dataset_catalogue_lists_absent_datasets_so_the_ui_can_disable_them(
     by_code = {d["code"]: d for d in payload["datasets"]}
 
     # Every registered code is offered, including the ones with no storage — the UI
-    # renders those disabled rather than pretending they do not exist. The only
-    # omissions are the temporarily hidden ones, which is a different statement:
-    # absent means "never built", hidden means "withheld while PTC decide".
+    # renders those disabled rather than pretending they do not exist. `HIDDEN_CODES`
+    # is empty; a code added there would be subtracted here.
     assert set(by_code) == set(registry.DATASETS) - set(registry.HIDDEN_CODES)
     assert by_code["TAM_TRADED"]["availability"] == "absent"
     assert by_code["ACTUAL_DEMAND"]["availability"] == "live"
@@ -168,12 +167,8 @@ def test_the_catalogue_carries_the_series_cardinality_the_budget_multiplies_by()
 
     assert by_code["ACTUAL_DEMAND"]["series"] == "scalar"
     assert by_code["ACTUAL_DEMAND"]["cardinality_basis"] is None
-    # The per-plant codes are hidden for now, so the contract is asserted against the
-    # registry entry and the mapping the catalogue applies to it. Restoring
-    # HIDDEN_CODES to () puts DC_PLANT back in `by_code` with exactly these values.
-    assert "DC_PLANT" not in by_code
-    assert registry.get("DC_PLANT").series == "per_plant"
-    assert ctrl.CARDINALITY_BASIS["per_plant"] == "plants"
+    assert by_code["DC_PLANT"]["series"] == "per_plant"
+    assert by_code["DC_PLANT"]["cardinality_basis"] == "plants"
     # An untouched exchange filter means all three exchanges, so the default
     # multiplier the UI shows before anything is narrowed is 3, not 1.
     assert by_code["ACP_DAM"]["cardinality_basis"] == "exchanges"
@@ -336,13 +331,16 @@ def test_an_unknown_dataset_code_is_rejected_by_the_request_model():
     assert repo.calls == []
 
 
-def test_a_per_plant_dataset_with_no_plants_is_rejected_before_it_can_fan_out():
+def test_a_per_plant_dataset_with_no_plants_runs_over_every_plant():
+    # User decision 2026-09-18: no plant picker, so no plants means all of them. This
+    # used to be a 422. The service resolves the list before pricing, so the request
+    # is served rather than refused.
     repo = StubRepo()
     response = _client(repo=repo).post(
         "/api/v2/analytics/query", json=_query_body(datasets=["DC_PLANT"], plants=[]))
 
-    assert response.status_code == 422
-    assert repo.calls == []
+    assert response.status_code == 200
+    assert repo.calls, "the query never reached the repository"
 
 
 def test_a_dataset_with_no_storage_is_refused_by_name_not_rendered_empty():
