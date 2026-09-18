@@ -44,6 +44,10 @@ def series_label(series: Dict[str, Any]) -> str:
 SUPPORTED_FORMATS = ("csv", "xlsx")
 
 DEFAULT_MODULE = "analytics"
+
+#: Longest stem a caller-supplied file name may contribute. Well under every
+#: filesystem's 255-byte limit, with room for the extension and a job suffix.
+MAX_FILENAME_STEM = 120
 TITLE_LINE = "EPMS Analytics Export"
 COMMENT_PREFIX = "# "
 
@@ -210,12 +214,50 @@ def _date_slug(value: Any) -> str:
     return _UNSAFE_FILENAME.sub("", _text(value)[:10].strip()) or "unknown"
 
 
+def safe_file_stem(value: Any) -> str:
+    """A caller-supplied file name reduced to a stem this server will write.
+
+    Everything here is defence, in order of how badly it goes wrong:
+
+    * The name travels in a `Content-Disposition` header, so a `"`, a newline or a
+      `;` is header injection, not a cosmetic problem.
+    * It is joined onto the export directory, so `..`, `/` and `\\` are a path
+      traversal — `os.path.join(dir, "../../etc/x")` escapes the directory.
+    * A leading dot hides the file; a trailing dot or space is silently stripped by
+      Windows, which is where PTC opens these.
+
+    Whatever survives is truncated, and an empty result means "the caller gave us
+    nothing usable" — the caller then falls back to the generated name rather than
+    writing a file called `.csv`.
+    """
+    text = _text(value).strip()
+    if not text:
+        return ""
+    # A supplied extension is dropped: the format decides it, and `report.exe` must
+    # not become `report.exe.csv` in a mail client that trusts the first one.
+    for suffix in SUPPORTED_FORMATS:
+        if text.lower().endswith("." + suffix):
+            text = text[: -(len(suffix) + 1)]
+            break
+    # `/` and `\` are not in the allow-list, so they become `_` here — which is what
+    # defeats traversal: once there is no separator left, a surviving `..` is just
+    # two dots in a name. Stripping leading dots then stops a hidden file, and
+    # trailing dots and spaces stop the silent rename Windows performs.
+    text = _UNSAFE_FILENAME.sub("_", text).strip("._ ")
+    return text[:MAX_FILENAME_STEM]
+
+
 def filename_for(filters: Optional[Dict[str, Any]], fmt: str) -> str:
     """`analytics_2026-04-01_to_2026-08-31.csv` — module name and date range.
 
     The date range is in the name because that is what people search their Downloads
     folder by, and it is deterministic so a regenerated export overwrites the stale
     copy rather than accumulating `(1)` suffixes.
+
+    `filters["file_name"]` overrides the whole stem when the user typed one. The
+    override is sanitised, never trusted: see `safe_file_stem`. A name that sanitises
+    away to nothing falls back to the generated one rather than failing the export —
+    the file is the thing the user asked for, and its name is not worth losing it over.
     """
     normalised = _text(fmt).strip().lower().lstrip(".")
     if normalised not in SUPPORTED_FORMATS:
@@ -224,6 +266,11 @@ def filename_for(filters: Optional[Dict[str, Any]], fmt: str) -> str:
             f"{', '.join(SUPPORTED_FORMATS)}")
 
     filters = filters or {}
+
+    chosen = safe_file_stem(filters.get("file_name"))
+    if chosen:
+        return f"{chosen}.{normalised}"
+
     module = _slug(filters.get("module")) or DEFAULT_MODULE
     start = _date_slug(filters.get("from_date"))
     end = _date_slug(filters.get("to_date"))

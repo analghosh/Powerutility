@@ -287,6 +287,28 @@ class AnalyticsJobRepository(GenericRepository):
         )
         return bool(getattr(result, "modified_count", 0))
 
+    async def rename(self, job_id: str, file_name: str, filename: str) -> bool:
+        """Change what a finished export is called, not where it lives.
+
+        Only `result.filename` — the name the download is served under — and the raw
+        `filters.file_name` move. `result.path` is untouched: the bytes stay where the
+        worker put them, and the reaper and the disk-budget sweep both find files by
+        path. Renaming the file on disk instead would be one more way for the row and
+        the filesystem to disagree, for no benefit the user can see.
+
+        Only a `ready` job is eligible. Renaming a running one would be overwritten by
+        the worker the moment it assembles, which looks like the rename being ignored.
+        """
+        result = await self.collection.update_one(
+            {"job_id": job_id, "status": STATUS_READY},
+            {"$set": {
+                "filters.file_name": file_name,
+                "result.filename": filename,
+                "updated_at": _utcnow(),
+            }},
+        )
+        return bool(getattr(result, "matched_count", 0))
+
     async def heartbeat(self, job_id: str, worker_id: str) -> bool:
         """Refresh liveness. False means this worker no longer owns the job.
 

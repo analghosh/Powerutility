@@ -22,6 +22,10 @@ from .grouping import DATE_GROUPINGS
 DEFAULT_DATE_GROUPING = "BLOCK_WISE"
 EXPORT_FORMATS = ("csv", "xlsx")
 
+#: Sanity cap on a caller-supplied file name, before sanitising. Generous:
+#: the stem that actually reaches disk is capped much lower.
+MAX_FILE_NAME_INPUT = 200
+
 
 class AnalyticsQueryRequest(BaseModel):
     """One dashboard query: a date range, a block range, and what to plot in it."""
@@ -166,6 +170,51 @@ class ExportRequest(AnalyticsQueryRequest):
 
     format: Literal["csv", "xlsx"] = Field(
         "csv", description="Export file format: csv or xlsx")
+    file_name: str = Field(
+        "", max_length=MAX_FILE_NAME_INPUT,
+        description=("What to call the file. Empty means the generated "
+                     "`analytics_<from>_to_<to>` name. Sanitised before it reaches a "
+                     "filesystem or a Content-Disposition header — see "
+                     "`analytics_csv.safe_file_stem` — so this bound is only a sanity "
+                     "cap on the raw input, not the safety check."))
+
+    @field_validator("file_name")
+    @classmethod
+    def _trimmed_file_name(cls, v: str) -> str:
+        return (v or "").strip()
+
+
+class RenameExportRequest(BaseModel):
+    """A new name for a finished export. Empty means the generated name."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    file_name: str = Field("", max_length=MAX_FILE_NAME_INPUT,
+                           description="Stem only; the format decides the extension")
+
+    @field_validator("file_name")
+    @classmethod
+    def _trimmed(cls, v: str) -> str:
+        return (v or "").strip()
+
+
+class PreferenceRequest(BaseModel):
+    """The filter defaults one user wants this screen to open with.
+
+    `extra="forbid"` because the document is replayed straight back into the filter
+    panel: an unvalidated blob replayed into a form is how a preference turns into a
+    payload. The dataset codes themselves are checked against the registry in
+    `analytics_preference_repository.validate`, which is also what the caps live in.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    datasets: List[str] = Field(default_factory=list,
+                                description="Dataset codes to tick on load")
+    plants: List[str] = Field(default_factory=list,
+                              description="Plant ids to preselect for by-plant datasets")
+    format: Literal["csv", "xlsx"] = Field(
+        "csv", description="File format the Generate button opens on")
 
 
 class AnalyticsAxes(BaseModel):
