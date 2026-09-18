@@ -47,7 +47,7 @@ Both pushed. `git log --oneline origin/dev..HEAD` in each repo lists everything.
 
 ## 3. Architecture in one page
 
-A **dataset registry** maps 52 dataset codes onto ~7 MongoDB source groups, so ticking 12
+A **dataset registry** maps 52 dataset codes onto 5 MongoDB source groups, so ticking 12
 datasets issues ~4 aggregations rather than 12. A **cell budget**, computed from the filters
 alone before any database call, decides whether a request renders inline, streams, or queues
 as a background job.
@@ -74,7 +74,7 @@ filters + ticked datasets
 | `analytics/block_bands.py` | block grouping; PTC's 5 named bands seeded **inactive** |
 | `analytics/budget.py` | cell arithmetic and band classification — pure, no I/O |
 | `analytics/grouping.py` | `$dateToString` keys, block bucket `$switch`, accumulators |
-| `analytics/adapters/` | one adapter per source group (demand, supply, scheduling, exchange, trade, peak) |
+| `analytics/adapters/` | one adapter per source group (demand, supply, exchange, trade, peak) |
 | `analytics/derived.py` | OD/UD Quantum = drawal − schedule |
 | `analytics/planner.py` / `executor.py` | plan + concurrent execution + per-group failure capture |
 | `analytics/pivot.py` / `models.py` | canonical response, request validation |
@@ -232,7 +232,12 @@ Decision (user): **Final Schedule = ΣSG from `supply_serve`.** Codes unchanged:
 - `SG_PLANT` → "Final Schedule — by plant"
 - `FINAL_SCHEDULE_STATE` (demand_serve) → **"DSM Schedule"** — kept because OD/UD Quantum
   must subtract the schedule at the drawal point (the sheet's own `drawal − schedule`)
-- `FINAL_SCHEDULE_PLANT` (serve_dam_scheduling) → "DAM Schedule — by plant"
+- ~~`FINAL_SCHEDULE_PLANT` (serve_dam_scheduling) → "DAM Schedule — by plant"~~ **removed
+  2026-09-18 (user decision): one plant-wise schedule, `SG_PLANT` from `supply_serve`.**
+  `serve_dam_scheduling` is the bid-construction snapshot `schedule_api` uploads — no
+  revisions, non-plant lines (`IEX_IMPORT`…), 4 Feb → 3 Aug in UAT, never overlapping the
+  supply data (4 Aug →) so the two could not even be compared. The scheduling adapter and
+  its tests went with it; 5 source groups remain. 52 datasets.
 **Open for PTC:** should PPCLGPP and OA_PX be in the Final Schedule? Only they can say.
 
 **Halving bug found while verifying** (commit `c0d2370`): `demand_serve` has a DAF and an
@@ -470,8 +475,8 @@ systemd units as user `epms`, each service its OWN checkout under
 - **OD/UD needs no join** — `drawal` and `schedule` are on the same document.
   OD/UD Amount is already stored as `net_dsm_amount`; the CERC band maths in
   `dsm_calculation.py` is not re-run.
-- **Plant universes differ per dataset**: `supply_serve` 34, `serve_dam_scheduling` 53,
-  `plant_master` 35. The plant selector is dataset-aware because of this.
+- **Plant universes differ**: `supply_serve` 34 vs `plant_master` 35 (and the removed
+  `serve_dam_scheduling` had 53). The plant selector reads the dataset's own collection.
 - **HPDAM is real but sparse** — clears in ~0.6% of blocks, always at the ₹20,000 cap.
   Uncleared blocks are `null`.
 - **Market-wide "Traded" IS `exchange_serve.acv`** — the same field as ACV, not a second dataset.
@@ -479,8 +484,7 @@ systemd units as user `epms`, each service its OWN checkout under
   pre-submission bid ladder.
 - **The archival leaves duplicates** — the same document sits in both `exchange_serve` and
   `exchange_serve_historical`, so `$unionWith` double-counts without dedup. Handled.
-- `serve_dam_scheduling` has **no historical twin** and no duplicate revisions.
-  `supply_serve` **does** carry revisions and needs latest-per-key collapsing.
+- `supply_serve` carries revisions and needs latest-per-key collapsing.
 
 ## 11. Defects found and fixed along the way (all committed)
 

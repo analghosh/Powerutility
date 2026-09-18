@@ -10,6 +10,6 @@ them `base.get_adapter("demand")` raises `KeyError` and every analytics query fa
 which is why the planner imports this package rather than `base` directly.
 """
 from . import base  # noqa: F401  (imported first: the others register against it)
-from . import demand, exchange, peak, scheduling, supply, trade  # noqa: F401
+from . import demand, exchange, peak, supply, trade  # noqa: F401
 
-__all__ = ["base", "demand", "exchange", "peak", "scheduling", "supply", "trade"]
+__all__ = ["base", "demand", "exchange", "peak", "supply", "trade"]
