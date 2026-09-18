@@ -92,6 +92,15 @@ ANALYTICS_INDEXES: List[Dict[str, Any]] = [
         "name": "idx_analytics_jobs_dedupe",
         "unique": False,
     },
+    # One preference row per user. Unique because the row is written by an upsert:
+    # two saves racing on a first-ever save would otherwise insert two documents and
+    # the screen would then read whichever Mongo returned first.
+    {
+        "collection": "analytics_user_preferences",
+        "keys": [("user_id", 1)],
+        "name": "idx_analytics_prefs_by_user",
+        "unique": True,
+    },
 ]
 
 

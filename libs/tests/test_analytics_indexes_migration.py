@@ -35,10 +35,28 @@ def test_every_spec_has_an_explicit_name():
         assert s["name"], f"{s['collection']} index needs an explicit name"
 
 
-def test_no_index_is_declared_unique():
-    """These are read-path indexes. A stray unique would reject legitimate writes."""
+#: Collections analytics only READS. A unique index on one of these would reject a
+#: legitimate write made by whichever pipeline owns it — which is not a failure this
+#: feature would even see.
+READ_ONLY_COLLECTIONS = {
+    s["collection"] for s in mig.ANALYTICS_INDEXES
+} - {"analytics_export_jobs", "analytics_user_preferences"}
+
+
+def test_no_index_on_a_read_path_collection_is_unique():
+    """A stray unique on a source collection would reject legitimate writes."""
     for s in mig.ANALYTICS_INDEXES:
-        assert s.get("unique", False) is False
+        if s["collection"] in READ_ONLY_COLLECTIONS:
+            assert s.get("unique", False) is False, s["name"]
+
+
+def test_one_preference_row_per_user_is_enforced_by_the_index():
+    # The row is written by an upsert; without the unique index two saves racing on a
+    # first-ever save insert two documents and the screen reads whichever comes back.
+    spec = next(s for s in mig.ANALYTICS_INDEXES
+                if s["collection"] == "analytics_user_preferences")
+    assert spec["keys"] == [("user_id", 1)]
+    assert spec["unique"] is True
 
 
 @pytest.mark.asyncio

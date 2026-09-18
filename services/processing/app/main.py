@@ -314,6 +314,13 @@ app.add_middleware(
     allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
+    # `allow_headers` governs the REQUEST; a response header stays unreadable to
+    # JavaScript unless it is exposed. Without this the analytics export saves under
+    # the client's own guess at a name: the server sends
+    # `Content-Disposition: attachment; filename="..."`, curl sees it, and the
+    # browser cannot — so a user-chosen file name silently never reached the file.
+    # Found by driving the real UI; the API had looked correct throughout.
+    expose_headers=["Content-Disposition"],
 )
 
 

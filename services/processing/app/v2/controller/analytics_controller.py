@@ -47,6 +47,7 @@ from ..analytics import block_bands, registry
 from ..analytics.adapters import base as adapters
 from ..analytics.grouping import DATE_GROUPINGS
 from ..analytics.models import AnalyticsQueryRequest
+from ..repository import analytics_preference_repository as preferences_repo
 from ..services.analytics_service import DEFAULT_EXCHANGE_COUNT, AnalyticsService
 
 logger = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ class AnalyticsController:
         self._cache_resolved = cache is not None
         self.settings = settings or default_settings
         self._plants: Dict[str, Dict[str, Any]] = {}
+        self._preference_repository = None
 
     # ------------------------------------------------------------- plumbing
 
@@ -106,6 +108,19 @@ class AnalyticsController:
     def repository(self, value):
         self._repository = value
         self._service = None  # a rebuilt service must not keep the old repository
+
+    @property
+    def preference_repository(self):
+        """Lazy for the same reason as `repository` — see its docstring."""
+        if self._preference_repository is None:
+            from ..repository.analytics_preference_repository import \
+                AnalyticsPreferenceRepository
+            self._preference_repository = AnalyticsPreferenceRepository()
+        return self._preference_repository
+
+    @preference_repository.setter
+    def preference_repository(self, value):
+        self._preference_repository = value
 
     @property
     def cache(self):
@@ -336,6 +351,44 @@ class AnalyticsController:
         """One dashboard query. Permissions, budget, cache and Mongo live below."""
         response = await self.service.query(request, user_context)
         return {"data": response}
+
+    # ---------------------------------------------------------- preferences
+
+    async def preferences(self, user_id: str) -> dict:
+        """This user's saved filter defaults, with stale dataset codes dropped.
+
+        `has_preference` is separate from an empty `datasets` list on purpose: a
+        user who deliberately saved "nothing ticked" and a user who has never saved
+        look identical otherwise, and the screen renders the two differently.
+        """
+        stored = await self.preference_repository.get(user_id)
+        preference, dropped = preferences_repo.sanitize(stored)
+        return {"data": {
+            "preference": preference,
+            "has_preference": stored is not None,
+            "dropped_datasets": dropped,
+        }}
+
+    async def save_preferences(self, preference: dict, user_id: str) -> dict:
+        """Replace this user's defaults. Raises `InvalidPreference` on bad input."""
+        stored = await self.preference_repository.save(user_id, preference)
+        payload, dropped = preferences_repo.sanitize(stored)
+        logger.info("Analytics preferences saved for %s: %d dataset(s)",
+                    user_id, len(payload["datasets"]))
+        return {"data": {
+            "preference": payload,
+            "has_preference": True,
+            "dropped_datasets": dropped,
+        }}
+
+    async def clear_preferences(self, user_id: str) -> dict:
+        """Forget this user's defaults. Clearing what was never set is not an error."""
+        deleted = await self.preference_repository.clear(user_id)
+        return {"data": {
+            "preference": preferences_repo.empty_preference(),
+            "has_preference": False,
+            "deleted": deleted,
+        }}
 
 
 analytics_controller = AnalyticsController()
