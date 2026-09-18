@@ -371,6 +371,13 @@ class AnalyticsExportService:
         if stamped.block_band_ranges != req.block_band_ranges:
             req = req.model_copy(update={"block_band_ranges": stamped.block_band_ranges})
 
+        # Same reasoning for the plant list: an empty one means every plant, and it is
+        # resolved HERE so the budget prices the real series count and the stored job
+        # row records the plants this file was actually built from.
+        stamped = await self.service.with_plants(req)
+        if list(stamped.plants) != list(req.plants):
+            req = req.model_copy(update={"plants": list(stamped.plants)})
+
         permissions = self.service.permissions_for(user_context)
         allowed, denied = self.service.filter_by_permission(req.datasets, permissions)
         effective = req.model_copy(update={"datasets": allowed})

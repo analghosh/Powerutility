@@ -582,3 +582,69 @@ async def test_changing_a_band_definition_changes_the_cache_key():
     assert before != after
     # ...while a plain request is unaffected by what the parameters say.
     assert service.cache_key(_request()) == service.cache_key(_request())
+
+
+# ------------------------------------------------- all plants by default (2026-09-18)
+#
+# The per-plant datasets lost their picker: an empty `plants` list means every plant.
+# The resolution has to happen BEFORE the budget prices the request, or 34 series get
+# priced as one and a request far over the inline cap is waved through — a silent
+# failure, because the response looks fine until the file is enormous.
+
+def _plant_repo(ids=("ALPHA", "BRAVO", "CHARLIE")):
+    return RecordingRepo(docs={"supply_serve": [{"_id": i} for i in ids]})
+
+
+@pytest.mark.asyncio
+async def test_an_empty_plant_list_is_resolved_to_every_plant():
+    service = svc.AnalyticsService(repository=_plant_repo())
+    req = await service.with_plants(_request(datasets=["DC_PLANT"], plants=[]))
+    assert req.plants == ["ALPHA", "BRAVO", "CHARLIE"]
+
+
+@pytest.mark.asyncio
+async def test_an_explicit_plant_list_is_left_alone():
+    service = svc.AnalyticsService(repository=_plant_repo())
+    req = await service.with_plants(_request(datasets=["DC_PLANT"], plants=["BRAVO"]))
+    assert req.plants == ["BRAVO"]
+
+
+@pytest.mark.asyncio
+async def test_a_request_with_no_per_plant_dataset_resolves_nothing():
+    # No pointless distinct scan for a query that has no plant dimension at all.
+    repo = _plant_repo()
+    service = svc.AnalyticsService(repository=repo)
+    req = await service.with_plants(_request(datasets=["SG_TOTAL"], plants=[]))
+    assert req.plants == []
+    assert repo.calls == []
+
+
+@pytest.mark.asyncio
+async def test_the_budget_prices_the_resolved_plants_not_one_series():
+    # The whole point. Unresolved, `context_for` reads len([]) -> 1.
+    service = svc.AnalyticsService(repository=_plant_repo())
+    raw = _request(datasets=["DC_PLANT"], plants=[])
+    assert service.context_for(raw)["plant_count"] == 1
+
+    resolved = await service.with_plants(raw)
+    assert service.context_for(resolved)["plant_count"] == 3
+    assert (service.estimate_only(resolved).cells
+            == 3 * service.estimate_only(raw).cells)
+
+
+@pytest.mark.asyncio
+async def test_the_plant_list_is_read_once_and_then_cached():
+    repo = _plant_repo()
+    service = svc.AnalyticsService(repository=repo)
+    for _ in range(3):
+        await service.with_plants(_request(datasets=["DC_PLANT"], plants=[]))
+    assert len(repo.calls) == 1, f"{len(repo.calls)} distinct scans, expected 1"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_plant_lookup_leaves_the_request_alone():
+    # No plant filter is the same set of rows, so a plant-list blip must not fail the
+    # query. The budget under-prices that one request; losing it entirely is worse.
+    service = svc.AnalyticsService(repository=RecordingRepo(fail=["supply_serve"]))
+    req = await service.with_plants(_request(datasets=["DC_PLANT"], plants=[]))
+    assert req.plants == []

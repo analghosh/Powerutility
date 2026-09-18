@@ -63,6 +63,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from ...core.config import settings as default_settings
 from ..analytics import (block_bands, budget, coverage, derived, executor, pivot,
                          planner, registry)
+from ..analytics.adapters import base as adapters
 from ..analytics.models import AnalyticsQueryRequest
 
 logger = logging.getLogger(__name__)
@@ -71,6 +72,13 @@ logger = logging.getLogger(__name__)
 #: `exchange_serve` carries IEX, PXIL and HPX; an empty `exchanges` filter means all
 #: three, so the budget has to price three series rather than one.
 DEFAULT_EXCHANGE_COUNT = 3
+
+#: `series` value marking a dataset reported one line per plant.
+PER_PLANT_SERIES = "per_plant"
+
+#: How long a resolved plant list is trusted, in seconds. Long on purpose: it changes
+#: when a plant is commissioned, and the alternative is a distinct scan per request.
+PLANT_CACHE_TTL_SECONDS = 900
 
 #: Bumped whenever the cached payload's shape changes, so a deploy cannot serve a
 #: yesterday-shaped response to today's frontend out of a 24-hour entry.
@@ -82,7 +90,11 @@ DEFAULT_EXCHANGE_COUNT = 3
 #       per_forecast_type with `entity_label` (2026-09-17).
 #   v4: FINAL_SCHEDULE_STATE / OD_UD_AMOUNT / DSM_RATE pinned to the IDF row — the
 #       cached values were HALVED by the DAF placeholder (2026-09-17).
-CACHE_VERSION = "v6"
+#   v7: DC_PLANT / SG_PLANT relabelled back to "Plant wise DC" / "Plant wise SG".
+#       Values are unchanged, but `series[].label` is IN the cached payload and the
+#       writers print it, so a past-date query cached under v6 would keep emitting the
+#       old label into downloaded files for the full 24 h TTL (2026-09-18).
+CACHE_VERSION = "v7"
 CACHE_PREFIX = "analytics:query"
 
 #: Bands that cannot be rendered inline. The route turns this into a 413 plus the
@@ -248,6 +260,8 @@ class AnalyticsService:
         self._repository = repository
         self.cache = cache
         self.settings = settings or default_settings
+        # {group: {"at": monotonic, "ids": [...]}} — see `plant_ids`.
+        self._plant_ids_cache: Dict[str, Dict[str, Any]] = {}
 
     # ------------------------------------------------------------- plumbing
 
@@ -330,6 +344,76 @@ class AnalyticsService:
         if [list(r) for r in req.block_band_ranges] != ranges:
             req = req.model_copy(update={"block_band_ranges": ranges})
         return req
+
+    # --------------------------------------------------------------- plants
+
+    async def plant_ids(self, group: str) -> List[str]:
+        """Every plant id present in a source group's serve collection.
+
+        Cached in process for `PLANT_CACHE_TTL_SECONDS`: the list changes when a
+        plant is commissioned, which is a quarterly event, not a per-request one.
+        A failed read returns `[]` — the caller then stamps nothing and the pipeline
+        falls back to "no plant filter", which is the same set of rows. Raising here
+        would turn a plant-list blip into a failed query for no gain.
+        """
+        hit = self._plant_ids_cache.get(group)
+        if hit and time.monotonic() - hit["at"] <= PLANT_CACHE_TTL_SECONDS:
+            return list(hit["ids"])
+
+        adapter = adapters.get_adapter(group)
+        field = adapter.entity_field()
+        if not field:
+            return []
+        try:
+            docs = await self.repository.run_pipeline(
+                adapter.serve_collection,
+                [{"$match": {field: {"$ne": None}}},
+                 {"$group": {"_id": f"${field}"}},
+                 {"$sort": {"_id": 1}}],
+                max_time_ms=int(getattr(
+                    self.settings, "ANALYTICS_QUERY_MAX_TIME_MS", 20_000)),
+            )
+        except Exception as exc:
+            logger.warning("Analytics plant list unavailable for '%s': %s", group, exc)
+            return []
+
+        ids = sorted({str(d.get("_id")) for d in docs
+                      if d.get("_id") not in (None, "")})
+        self._plant_ids_cache[group] = {"at": time.monotonic(), "ids": ids}
+        return list(ids)
+
+    async def with_plants(self, request: Any) -> AnalyticsQueryRequest:
+        """The request with every plant stamped on it when none were chosen.
+
+        User decision 2026-09-18: the per-plant datasets have no plant picker — they
+        always mean *all* plants. An empty `plants` list is resolved to the full set
+        HERE, once, for the same reason `with_band` stamps its ranges here:
+
+        * the **budget** prices `plant_count` from `len(req.plants)`, so leaving it
+          empty would price 34 series as 1 and wave through a request far over the
+          inline cap;
+        * the **stored job row** then records the plants the file was actually built
+          from, so a replay months later reproduces that file rather than silently
+          gaining a plant commissioned in the meantime.
+
+        Everything downstream stays pure and sees an explicit list.
+        """
+        req = _as_request(request)
+        if req.plants:
+            return req
+        groups = {registry.get(c).group for c in req.datasets
+                  if registry.get(c).series == PER_PLANT_SERIES}
+        if not groups:
+            return req
+
+        ids: List[str] = []
+        for group in sorted(groups):
+            for plant in await self.plant_ids(group):
+                if plant not in ids:
+                    ids.append(plant)
+        if not ids:
+            return req
+        return req.model_copy(update={"plants": ids})
 
     # ---------------------------------------------------------- permissions
 
@@ -541,6 +625,7 @@ class AnalyticsService:
         Each step is cheaper than the one after it, and each one can end the request.
         """
         req = await self.with_band(request)
+        req = await self.with_plants(req)
         permissions = self.permissions_for(user_context)
         allowed, denied = self.filter_by_permission(req.datasets, permissions)
 

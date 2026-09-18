@@ -137,10 +137,14 @@ _ALL: List[Dataset] = [
        match={"dc_sg": "SG"}, permission="analytics:schedule"),
     # Per-plant drill-downs: the same rows, one series per plant. Opt-in only —
     # they need a plant selection and are what makes a long range exceed the budget.
-    _d(code="DC_PLANT", label="Declared Capacity — by plant", group="supply",
+    # Labels restored 2026-09-18 to "Plant wise DC" / "Plant wise SG" — what they were
+    # called before the 2026-09-17 relabel, what PTC call them, and what the export job
+    # rows created before that relabel still read. `drilldown` is unchanged: these still
+    # sort after the state-level totals, which remain the screen's default.
+    _d(code="DC_PLANT", label="Plant wise DC", group="supply",
        value="$volume", unit="MW", agg="avg", series="per_plant", drilldown=True,
        match={"dc_sg": "DC"}, permission="analytics:supply"),
-    _d(code="SG_PLANT", label="Final Schedule — by plant", group="supply",
+    _d(code="SG_PLANT", label="Plant wise SG", group="supply",
        value="$volume", unit="MW", agg="avg", series="per_plant", drilldown=True,
        match={"dc_sg": "SG"}, permission="analytics:supply"),
     # ---- scheduling ---------------------------------------------------
@@ -218,30 +222,22 @@ for _m in MARKETS:
 DATASETS: Dict[str, Dataset] = {d.code: d for d in _ALL}
 
 # ---------------------------------------------------------------------------
-# TEMPORARILY HIDDEN — user decision 2026-09-18
+# Datasets withheld from the catalogue
 # ---------------------------------------------------------------------------
-# The two per-plant supply drill-downs are withheld from the catalogue while PTC
-# settle the "last received revision" definition (§6e of the handoff). They are
-# NOT deleted: the definitions above, the supply adapter's entity folding and all
-# 113 tests that exercise per-plant behaviour stay exactly as they are, so this is
-# reversible without re-deriving anything.
+# Empty. The two per-plant supply drill-downs were hidden here briefly on
+# 2026-09-18 and restored the same day, once it was established that "Plant wise
+# DC / Plant wise SG" were the OLD LABELS of DC_PLANT and SG_PLANT rather than a
+# separate pair of datasets — see the label note beside their definitions.
 #
-#   TO RESTORE: empty this tuple — `HIDDEN_CODES: Tuple[str, ...] = ()`.
-#               Nothing else needs to change.
-#
-# Hidden is stronger than `availability="absent"` on purpose: absent still renders
-# the row, disabled, with a reason. These should not appear at all.
-#
-# The hide is a CATALOGUE policy, not an engine rule — deliberately not enforced in
-# the planner. The pipeline, the adapter's entity folding and the budget still work
-# on these codes, so an export job queued before the hide still replays and produces
-# its file. The client prunes codes the catalogue no longer offers, so a saved
-# preference naming one simply drops it.
-HIDDEN_CODES: Tuple[str, ...] = ("DC_PLANT", "SG_PLANT")
+# The mechanism is kept because it is the cheap way to withhold a dataset: add its
+# code here and it leaves the catalogue, while the definition, the pipeline and the
+# tests stay intact. It is a CATALOGUE policy, not an engine rule — deliberately
+# not enforced in the planner, so a queued export job still replays.
+HIDDEN_CODES: Tuple[str, ...] = ()
 
 
 def is_hidden(code: str) -> bool:
-    """Withheld from the catalogue, and refused if posted directly."""
+    """Withheld from the catalogue. Still queryable — see the note above."""
     return code in HIDDEN_CODES
 
 
