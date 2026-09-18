@@ -125,6 +125,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure analytics block band parameters: {e}")
 
+    # Analytics read-path indexes, plus the unique user_id on the preference rows.
+    # Runs here rather than as a manual deploy step for the same reason every block
+    # above does: a step that must be remembered is a step that gets missed, and the
+    # failure mode is silent — `demand_serve` COLLSCANs on both sides and the screen
+    # merely feels slow. Idempotent, `background=True`, and each index is caught
+    # individually inside `apply`, so a restart costs nothing and cannot be blocked by
+    # one bad index. Still runnable by hand ahead of a deploy:
+    #   ./.venv/bin/python -m migrations.analytics_indexes_2026_09_17
+    try:
+        from migrations.analytics_indexes_2026_09_17 import apply as apply_analytics_indexes
+        from .v2.repository.analytics_repository import AnalyticsRepository
+        created = await apply_analytics_indexes(AnalyticsRepository().db)
+        logger.info(f"Analytics indexes ensured: {len(created)}")
+    except Exception as e:
+        logger.error(f"Failed to ensure analytics indexes: {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down EPMS Processing Service...")

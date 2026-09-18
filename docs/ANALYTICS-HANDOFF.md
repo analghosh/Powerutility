@@ -498,9 +498,15 @@ systemd units as user `epms`, each service its OWN checkout under
 ### B. Deploy steps — in this order
 
 1. **Merge** PR #326 (backend) and PR #192 (client) into `dev`, then promote as usual.
-2. **Indexes** (once, against the shared Mongo, before the first user hits the screen):
+2. **Indexes — automatic since 2026-09-18, no manual step.** The processing lifespan
+   runs `migrations.analytics_indexes_2026_09_17.apply` at start-up, next to the five
+   other `ensure_*_indexes` blocks already there. Idempotent, `background=True`, each
+   index caught individually, so a restart costs nothing and one bad index cannot block
+   boot. Confirm after the restart in step 5:
+   `grep "Analytics indexes ensured" <processing log>` → should read **13**.
+   Still runnable by hand if you want them in place before the deploy:
    `./.venv/bin/python -m migrations.analytics_indexes_2026_09_17` from the processing
-   checkout. Idempotent. Without it `demand_serve` is a COLLSCAN on both sides.
+   checkout. Without them `demand_serve` COLLSCANs on both sides — silent, just slow.
 3. **nginx** — item 10 in `docs/EPMS-nginx-changes.md`; `nginx -t && systemctl reload nginx`.
    Non-breaking; can ride with items 1/2/6/7/8 in one reload.
 4. **Insert the `menus` row BY HAND, then restart the services.** 🔴 A restart does
