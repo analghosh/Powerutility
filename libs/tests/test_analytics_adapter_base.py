@@ -220,7 +220,7 @@ def test_each_datasets_discriminator_is_guarded_inside_its_own_accumulator():
     ds = [registry.get("ACTUAL_DEMAND"), registry.get("MAPE_DAF")]
     g = _group_of(_Demandish().build_pipeline(datasets=ds, filters=FILTERS, ctx=CTX))
     assert _value_fields(g) == ["ACTUAL_DEMAND", "MAPE_DAF"]
-    assert g["ACTUAL_DEMAND"] == {"$avg": "$drawal"}
+    assert g["ACTUAL_DEMAND"] == {"$avg": "$actual"}
     assert g["MAPE_DAF"] == {
         "$avg": {"$cond": [{"$and": [{"$eq": ["$type", "DAF"]}]}, "$mape", None]}
     }
@@ -480,7 +480,7 @@ def test_a_derived_dataset_never_reaches_a_pipeline():
 
 
 def test_value_expr_leaves_an_undiscriminated_dataset_alone():
-    assert base.value_expr(registry.get("ACTUAL_DEMAND")) == "$drawal"
+    assert base.value_expr(registry.get("ACTUAL_DEMAND")) == "$actual"
 
 
 def test_value_expr_handles_a_multi_key_discriminator():
@@ -488,7 +488,7 @@ def test_value_expr_handles_a_multi_key_discriminator():
                 match={"type": "DAF", "market_type": "DAM"})
     assert base.value_expr(d) == {"$cond": [
         {"$and": [{"$eq": ["$type", "DAF"]},
-                  {"$eq": ["$market_type", "DAM"]}]}, "$drawal", None]}
+                  {"$eq": ["$market_type", "DAM"]}]}, "$actual", None]}
 
 
 # --------------------------------------------------------------- sentinel_null
@@ -505,10 +505,10 @@ def test_a_sentinel_zero_becomes_a_gap_before_aggregation():
 
 
 def test_datasets_without_a_sentinel_keep_genuine_zeros():
-    """A real 0 MW drawal is a value, not a gap — only a declared sentinel is."""
+    """A real 0 MW actual is a value, not a gap — only a declared sentinel is."""
     d = registry.get("ACTUAL_DEMAND")
     assert d.sentinel_null is None
-    assert base.value_expr(d) == "$drawal"
+    assert base.value_expr(d) == "$actual"
 
 
 # ------------------------------------------------------- band resolution

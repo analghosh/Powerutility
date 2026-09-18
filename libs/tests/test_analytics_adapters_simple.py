@@ -160,7 +160,7 @@ def test_the_daf_discriminator_never_reaches_the_shared_match():
 def test_the_daf_discriminator_is_a_cond_inside_its_own_accumulator():
     g = _group_of(demand_mod.DemandAdapter().build_pipeline(
         datasets=_ds("ACTUAL_DEMAND", "MAPE_DAF"), filters=FILTERS, ctx=CTX))
-    assert g["ACTUAL_DEMAND"] == {"$avg": "$drawal"}
+    assert g["ACTUAL_DEMAND"] == {"$avg": "$actual"}
     assert g["MAPE_DAF"] == {
         "$avg": {"$cond": [{"$and": [{"$eq": ["$type", "DAF"]}]}, "$mape", None]}
     }
