@@ -115,6 +115,32 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure bid price parameter defaults: {e}")
 
+    # The analytics dashboard's peak/off-peak bands are defined in Masters →
+    # Parameters; seed the five keys empty so PTC can find and fill them.
+    try:
+        from .v2.services.analytics_service import ensure_block_band_parameters
+        created = await ensure_block_band_parameters()
+        if created:
+            logger.info(f"Auto-created analytics block band parameters: {created}")
+    except Exception as e:
+        logger.error(f"Failed to ensure analytics block band parameters: {e}")
+
+    # Analytics read-path indexes, plus the unique user_id on the preference rows.
+    # Runs here rather than as a manual deploy step for the same reason every block
+    # above does: a step that must be remembered is a step that gets missed, and the
+    # failure mode is silent — `demand_serve` COLLSCANs on both sides and the screen
+    # merely feels slow. Idempotent, `background=True`, and each index is caught
+    # individually inside `apply`, so a restart costs nothing and cannot be blocked by
+    # one bad index. Still runnable by hand ahead of a deploy:
+    #   ./.venv/bin/python -m migrations.analytics_indexes_2026_09_17
+    try:
+        from migrations.analytics_indexes_2026_09_17 import apply as apply_analytics_indexes
+        from .v2.repository.analytics_repository import AnalyticsRepository
+        created = await apply_analytics_indexes(AnalyticsRepository().db)
+        logger.info(f"Analytics indexes ensured: {len(created)}")
+    except Exception as e:
+        logger.error(f"Failed to ensure analytics indexes: {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down EPMS Processing Service...")
@@ -176,6 +202,7 @@ from .v2.api.router.exchange_config_routes import router as exchange_config_rout
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
 from .v2.api.router.power_exchange_parameter_routes import router as power_exchange_parameter_router
+from .v2.api.router.analytics_routes import router as analytics_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -303,6 +330,13 @@ app.add_middleware(
     allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
+    # `allow_headers` governs the REQUEST; a response header stays unreadable to
+    # JavaScript unless it is exposed. Without this the analytics export saves under
+    # the client's own guess at a name: the server sends
+    # `Content-Disposition: attachment; filename="..."`, curl sees it, and the
+    # browser cannot — so a user-chosen file name silently never reached the file.
+    # Found by driving the real UI; the API had looked correct throughout.
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -358,6 +392,7 @@ v2_app.include_router(exchange_config_router)
 v2_app.include_router(realtimemarket_router)
 v2_app.include_router(cron_orchestrator_router)
 v2_app.include_router(power_exchange_parameter_router)
+v2_app.include_router(analytics_router)
 
 
 
