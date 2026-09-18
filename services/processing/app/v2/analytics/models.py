@@ -136,13 +136,11 @@ class AnalyticsQueryRequest(BaseModel):
                 "block_band=CUSTOM requires at least one custom_blocks range")
         # Whether a named band is active is a Masters → Parameters fact, not a
         # model fact: `AnalyticsService.with_band` reads it and refuses with 422.
-        if not self.plants:
-            per_plant = [c for c in self.datasets
-                         if registry.get(c).series == "per_plant"]
-            if per_plant:
-                raise ValueError(
-                    f"plants must be selected for per-plant dataset(s): "
-                    f"{', '.join(per_plant)}")
+        # An empty `plants` list means EVERY plant (user decision 2026-09-18: the
+        # per-plant datasets have no picker). It used to be refused here. The service
+        # resolves it to the full list before anything is priced or stored — see
+        # `AnalyticsService.with_plants` — so nothing downstream ever sees the empty
+        # form, and the budget cannot mistake 34 series for one.
         return self
 
     def to_filters(self) -> Dict[str, Any]:

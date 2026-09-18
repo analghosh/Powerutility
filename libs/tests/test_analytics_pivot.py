@@ -383,9 +383,12 @@ def test_request_rejects_an_unknown_dataset_code():
         _req(datasets=["ACTUAL_DEMAND", "NOT_A_DATASET"])
 
 
-def test_request_rejects_a_per_plant_dataset_with_no_plants():
-    with pytest.raises(ValidationError, match="plant"):
-        _req(datasets=["DC_PLANT"])
+def test_an_empty_plant_list_is_accepted_and_means_every_plant():
+    # User decision 2026-09-18: the per-plant datasets have no picker, so an empty
+    # list is the normal case, not an error. `AnalyticsService.with_plants` resolves
+    # it to the full set before the budget prices it — the model must not refuse it.
+    r = _req(datasets=["DC_PLANT"])
+    assert r.plants == []
 
 
 def test_request_accepts_a_per_plant_dataset_with_plants():
@@ -445,9 +448,15 @@ def test_export_request_rejects_an_unsupported_format():
 
 
 def test_export_request_inherits_the_query_validation():
-    with pytest.raises(ValidationError, match="plant"):
+    # The export model must refuse exactly what the query model refuses. Asserted on
+    # a rule that still holds — an unknown dataset code — since the per-plant/no-plants
+    # combination is now legal on both.
+    with pytest.raises(ValidationError):
         models.ExportRequest(from_date=date(2026, 4, 1), to_date=date(2026, 4, 3),
-                             datasets=["DC_PLANT"], format="csv")
+                             datasets=["NOT_A_DATASET"], format="csv")
+    ok = models.ExportRequest(from_date=date(2026, 4, 1), to_date=date(2026, 4, 3),
+                              datasets=["DC_PLANT"], format="csv")
+    assert ok.plants == []
 
 
 def test_request_accepts_a_named_band_and_carries_its_stamped_ranges():

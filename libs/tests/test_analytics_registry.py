@@ -100,12 +100,11 @@ def test_emptying_hidden_codes_restores_every_dataset(monkeypatch):
     assert {d.code for d in registry.visible()} == set(registry.DATASETS)
 
 
-def test_the_hidden_set_is_exactly_the_two_per_plant_drilldowns():
-    # A guard on scope: hiding a state-level total would take the screen's default
-    # selection with it. Change this test deliberately, never to make a run go green.
-    assert set(registry.HIDDEN_CODES) == {"DC_PLANT", "SG_PLANT"}
-    for code in registry.HIDDEN_CODES:
-        assert registry.get(code).drilldown is True
+def test_nothing_is_hidden_right_now():
+    # The mechanism stays; the set is empty. A code appearing here silently removes a
+    # dataset from the screen, so it should never grow without a decision behind it.
+    assert registry.HIDDEN_CODES == ()
+    assert {d.code for d in registry.visible()} == set(registry.DATASETS)
 
 
 def test_plant_datasets_declare_per_plant_series():
@@ -242,8 +241,12 @@ def test_state_level_total_is_the_default_and_per_plant_is_a_drilldown(total, pl
     t, p_ = registry.get(total), registry.get(plant)
     assert t.series == "scalar" and t.drilldown is False
     assert p_.series == "per_plant" and p_.drilldown is True
-    assert "by plant" in p_.label
-    assert "by plant" not in t.label
+    # The two must be tellable apart in the picker. Asserted as "distinct", not as a
+    # fixed phrase — the wording has moved twice ("Plant wise DC" → "… — by plant" →
+    # back) and pinning the phrase made that a test failure rather than a decision.
+    assert p_.label != t.label
+    assert "plant" in p_.label.lower()
+    assert "plant" not in t.label.lower()
 
 
 def test_totals_and_drilldowns_read_the_same_rows():
@@ -295,7 +298,22 @@ def test_od_ud_quantum_still_subtracts_the_dsm_schedule_not_sg():
 def test_no_two_datasets_share_the_label_final_schedule():
     labels = [d.label for d in registry.DATASETS.values()]
     assert labels.count("Final Schedule") == 1
-    assert labels.count("Final Schedule — by plant") == 1
+
+
+def test_the_per_plant_supply_labels_are_the_ones_ptc_use():
+    # Restored 2026-09-18. These were briefly "Declared Capacity — by plant" and
+    # "Final Schedule — by plant"; PTC know them as Plant wise DC/SG, and the export
+    # job rows created before that relabel still read that way.
+    assert registry.get("DC_PLANT").label == "Plant wise DC"
+    assert registry.get("SG_PLANT").label == "Plant wise SG"
+
+
+def test_every_dataset_label_is_unique():
+    # Two rows reading the same thing in the picker is a support ticket nobody can
+    # answer — the user cannot tell which one they ticked.
+    labels = [d.label for d in registry.DATASETS.values()]
+    assert len(labels) == len(set(labels)), \
+        f"duplicate labels: {sorted({l for l in labels if labels.count(l) > 1})}"
 
 
 # ------------------------------------------- IDF-only settlement fields
