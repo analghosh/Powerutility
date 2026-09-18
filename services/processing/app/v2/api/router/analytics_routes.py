@@ -51,12 +51,15 @@ from libs.audit_queue.simple_logger import AuditLogger
 
 from ....core.dependencies import get_audit_logger
 from ...analytics import planner, registry
-from ...analytics.models import AnalyticsQueryRequest, ExportRequest
+from ...analytics.models import (AnalyticsQueryRequest, ExportRequest,
+                                 PreferenceRequest, RenameExportRequest)
 from ...controller.analytics_controller import (DatasetHasNoPlantsError,
                                                 EntityListUnavailableError,
                                                 analytics_controller)
 from ...dependencies import get_user_context
+from ...helpers import analytics_csv
 from ...helpers.analytics_xlsx import ExportWriteError
+from ...repository.analytics_preference_repository import InvalidPreference
 from ...repository.analytics_job_repository import (ACTIVE_STATUSES,
                                                     STATUS_CANCELLED,
                                                     STATUS_EXPIRED, STATUS_FAILED,
@@ -746,6 +749,69 @@ async def cancel_export(
     return {"data": {"job_id": job_id, "status": STATUS_CANCELLED, "changed": True}}
 
 
+@router.patch(
+    "/export/{job_id}/filename",
+    summary="Rename a finished export",
+    response_description="The name the file will now download under",
+)
+async def rename_export(
+    job_id: str,
+    body: RenameExportRequest,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    """Change what the file is called, not what is in it.
+
+    Only `ready` jobs. A running job is renamed by the worker the moment it
+    assembles, so accepting the rename there would look like it had been ignored —
+    and the fix, for a job still queued, is to cancel it and generate again with
+    the name wanted.
+
+    The bytes do not move: the download route serves `result.path` and names it with
+    `result.filename`, so a rename is one field. That also means an empty name is a
+    real request — "go back to the generated name" — and is honoured rather than
+    refused.
+    """
+    caller = _caller_id(user_context)
+    job = await _load_job(job_id)
+    if not _owns(job, caller):
+        raise _forbidden(job_id)
+
+    status = job.get("status")
+    if status != STATUS_READY:
+        raise HTTPException(
+            status_code=HTTP_CONFLICT,
+            detail={"code": "ANALYTICS_EXPORT_NOT_RENAMEABLE",
+                    "message": f"Export {job_id} is {status}; only a finished export "
+                               f"can be renamed.",
+                    "job_id": job_id, "status": status},
+        )
+
+    fmt = str((job.get("filters") or {}).get("format") or "csv")
+    filters = dict(job.get("filters") or {}, file_name=body.file_name)
+    try:
+        filename = analytics_csv.filename_for(filters, fmt)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=HTTP_UNPROCESSABLE,
+            detail={"code": "ANALYTICS_INVALID_FILENAME", "message": str(exc)},
+        )
+
+    changed = await analytics_export_service.jobs.rename(
+        job_id, body.file_name, filename)
+    if not changed:
+        raise HTTPException(
+            status_code=HTTP_CONFLICT,
+            detail={"code": "ANALYTICS_EXPORT_RENAME_FAILED",
+                    "message": f"Export {job_id} could not be renamed — it changed "
+                               f"state while the request was in flight.",
+                    "job_id": job_id},
+        )
+
+    logger.info("Analytics export %s renamed to %s by %s", job_id, filename, caller)
+    return {"data": {"job_id": job_id, "filename": filename,
+                     "file_name": body.file_name}}
+
+
 @router.post(
     "/export/{job_id}/retry",
     summary="Re-queue a failed or cancelled export as the same job",
@@ -794,3 +860,77 @@ async def retry_export(
 
     logger.info("Analytics export %s re-queued by %s", job_id, caller)
     return {"data": {"job_id": job_id, "status": STATUS_QUEUED, "changed": True}}
+
+
+# ===========================================================================
+# Preferences
+# ===========================================================================
+#
+# What one person wants the filter panel to open with. Owned by that person and by
+# nobody else: there is no user_id in any of these three signatures, because the only
+# id they will ever act on is `_caller_id`'s. An admin editing someone else's default
+# selection is not a feature anybody asked for, and a route that could do it is a
+# route that has to be guarded forever.
+#
+# A preference is replayed into the form, never into a query. `/query` re-checks the
+# grant and the registry on every request, so a stored code cannot widen what its
+# owner may see — which is what lets the GET stay defensive (a failed read is "no
+# preference", not a 500) without that leniency costing anything.
+
+
+@router.get(
+    "/preferences",
+    summary="This user's saved filter defaults",
+    response_description="The stored selection, minus any dataset the registry has lost",
+)
+async def get_preferences(
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    return await analytics_controller.preferences(_caller_id(user_context))
+
+
+@router.put(
+    "/preferences",
+    summary="Save this user's filter defaults",
+    response_description="The stored selection, as it will be replayed",
+)
+async def put_preferences(
+    preference: PreferenceRequest,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    caller = _caller_id(user_context)
+    try:
+        return await analytics_controller.save_preferences(
+            preference.model_dump(), caller)
+    except InvalidPreference as exc:
+        raise HTTPException(
+            status_code=HTTP_UNPROCESSABLE,
+            detail={"code": "ANALYTICS_INVALID_PREFERENCE", "message": str(exc)},
+        )
+    except Exception as exc:
+        logger.exception("Saving analytics preferences failed for %s", caller)
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ANALYTICS_PREFERENCE_SAVE_FAILED",
+                    "message": f"Your default selection could not be saved: {exc}"},
+        )
+
+
+@router.delete(
+    "/preferences",
+    summary="Forget this user's filter defaults",
+    response_description="An empty preference; clearing what was never set is not an error",
+)
+async def delete_preferences(
+    user_context: Dict[str, Any] = Depends(get_user_context),
+):
+    caller = _caller_id(user_context)
+    try:
+        return await analytics_controller.clear_preferences(caller)
+    except Exception as exc:
+        logger.exception("Clearing analytics preferences failed for %s", caller)
+        raise HTTPException(
+            status_code=500,
+            detail={"code": "ANALYTICS_PREFERENCE_CLEAR_FAILED",
+                    "message": f"Your default selection could not be cleared: {exc}"},
+        )

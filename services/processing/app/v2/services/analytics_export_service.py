@@ -287,10 +287,15 @@ class AnalyticsExportService:
         of the same question are the same *data*. They are not the same *file*, so
         the job hash has to reintroduce it, or a user waiting on a CSV would be
         handed someone's workbook.
+
+        The chosen file name is in the blob for the same reason. Dedupe attaches a
+        repeat request to a job already in flight; without the name in the key, asking
+        for the same data under a second name would silently hand back the first job
+        and its first file name.
         """
         req = as_export_request(request)
         fmt = fmt or self.format_for(req)
-        blob = f"{self.service.cache_key(req)}|{fmt}"
+        blob = f"{self.service.cache_key(req)}|{fmt}|{req.file_name}"
         return hashlib.sha256(blob.encode("utf-8")).hexdigest()
 
     def filters_for(self, request: Any, fmt: Optional[str] = None) -> Dict[str, Any]:
@@ -318,6 +323,11 @@ class AnalyticsExportService:
             "plants": list(req.plants),
             "exchanges": list(req.exchanges),
             "format": fmt,
+            # What the user called it, raw. `filename_for` sanitises on the way out,
+            # every time — storing a pre-sanitised name would mean the rule that made
+            # it safe is frozen at the moment the job was queued, and a job row lives
+            # 90 days.
+            "file_name": req.file_name,
         }
 
     @staticmethod

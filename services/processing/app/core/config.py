@@ -199,6 +199,7 @@ class Settings(BaseSettings):
 
     # Analytics Dashboard
     MONGODB_ANALYTICS_JOBS_COLLECTION: str = "analytics_export_jobs"
+    MONGODB_ANALYTICS_PREFS_COLLECTION: str = "analytics_user_preferences"
     ANALYTICS_TIMEZONE: str = "Asia/Kolkata"
     ANALYTICS_CELLS_INLINE: int = 150_000
     ANALYTICS_CELLS_INLINE_CAPPED: int = 500_000

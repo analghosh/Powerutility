@@ -368,6 +368,55 @@ def test_filename_for_uses_the_module_when_the_filters_name_one():
     assert "demand_analytics" in name
 
 
+def test_a_user_supplied_name_replaces_the_generated_one():
+    name = analytics_csv.filename_for(dict(FILTERS, file_name="Aug DC report"), "csv")
+    assert name == "Aug_DC_report.csv"
+
+
+def test_a_user_supplied_name_never_carries_its_own_extension():
+    # `report.exe.csv` is a file a mail client may open on the first extension.
+    assert analytics_csv.filename_for(
+        dict(FILTERS, file_name="report.csv"), "csv") == "report.csv"
+    assert analytics_csv.filename_for(
+        dict(FILTERS, file_name="report.xlsx"), "csv") == "report.csv"
+
+
+@pytest.mark.parametrize("supplied", [
+    "../../etc/passwd",
+    "..\\..\\windows\\system32\\evil",
+    "sub/dir/report",
+])
+def test_a_user_supplied_name_cannot_escape_the_export_directory(supplied):
+    import os
+    name = analytics_csv.filename_for(dict(FILTERS, file_name=supplied), "csv")
+    assert "/" not in name and "\\" not in name
+    joined = os.path.normpath(os.path.join("/srv/exports", name))
+    assert joined.startswith("/srv/exports" + os.sep)
+
+
+@pytest.mark.parametrize("supplied", ['inject"; drop', "line\nbreak", "semi;colon"])
+def test_a_user_supplied_name_cannot_inject_a_content_disposition_header(supplied):
+    name = analytics_csv.filename_for(dict(FILTERS, file_name=supplied), "csv")
+    assert not set(name) & set('";\r\n')
+
+
+@pytest.mark.parametrize("supplied", ["", "   ", "....", "///"])
+def test_an_unusable_name_falls_back_to_the_generated_one(supplied):
+    # The file is what the user asked for; its name is not worth failing the export.
+    name = analytics_csv.filename_for(dict(FILTERS, file_name=supplied), "csv")
+    assert name == analytics_csv.filename_for(FILTERS, "csv")
+
+
+def test_a_user_supplied_name_is_truncated_rather_than_rejected():
+    name = analytics_csv.filename_for(dict(FILTERS, file_name="a" * 400), "csv")
+    assert name == "a" * analytics_csv.MAX_FILENAME_STEM + ".csv"
+
+
+def test_a_leading_dot_cannot_make_the_export_a_hidden_file():
+    assert analytics_csv.filename_for(
+        dict(FILTERS, file_name=".hidden"), "csv") == "hidden.csv"
+
+
 def test_filename_for_rejects_an_unsupported_format():
     with pytest.raises(ValueError):
         analytics_csv.filename_for(FILTERS, "pdf")
