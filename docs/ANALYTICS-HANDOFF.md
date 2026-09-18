@@ -331,6 +331,30 @@ re-mirrors, *"so the historical table remains a true mirror of the serve table"*
 (`supply_serve_repository.py:321`). The freeze is the ingest window, plus
 `cleanup_cutoff = today - 3 days` deleting the serve row.
 
+**Two per-plant datasets temporarily hidden (user, 2026-09-18).** `DC_PLANT`
+("Declared Capacity — by plant") and `SG_PLANT` ("Final Schedule — by plant") are
+withheld from the catalogue while PTC settle the last-received-revision definition.
+The state-level totals — "Declared Capacity" and "Final Schedule" — stay live and
+remain what the screen opens with. Catalogue is 50 of 52.
+
+`registry.HIDDEN_CODES`. **To restore: empty the tuple, `HIDDEN_CODES = ()`.** Nothing
+else changes — five tests pin exactly that, including one that asserts the set is
+those two codes and nothing else, so hiding a state-level total can't happen by
+accident.
+
+Deliberately a **catalogue policy, not an engine rule**: not enforced in the planner.
+The definitions, the supply adapter's entity folding, the budget's plant cardinality
+and all 113 per-plant tests are untouched, so an export job queued before the hide
+still replays and produces its file. The client prunes codes the catalogue no longer
+offers, so a saved preference naming one simply drops it. That is why this cost two
+test edits rather than commenting out 113 references.
+
+⚠️ **"Plant wise DC" / "Plant wise SG" are the OLD LABELS of these same two codes**,
+renamed 2026-09-17 when state-level became the default. They survive in stored export
+job labels (`label` is frozen at creation on purpose, so a user sees what they asked
+for) — verified: a row reading `Plant wise DC + Plant wise SG` carries
+`datasets: ['DC_PLANT','SG_PLANT']`. There is no third pair of plant datasets.
+
 **Renamed "Analytics Dashboard" → "Reports Dashboard"** (user, 2026-09-18). Header,
 sidebar, the not-granted hint and the Masters → Parameters help text. The **route,
 files and `features/analytics/` folder keep their old names on purpose** — the path is

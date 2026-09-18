@@ -152,8 +152,10 @@ def test_the_dataset_catalogue_lists_absent_datasets_so_the_ui_can_disable_them(
     by_code = {d["code"]: d for d in payload["datasets"]}
 
     # Every registered code is offered, including the ones with no storage — the UI
-    # renders those disabled rather than pretending they do not exist.
-    assert set(by_code) == set(registry.DATASETS)
+    # renders those disabled rather than pretending they do not exist. The only
+    # omissions are the temporarily hidden ones, which is a different statement:
+    # absent means "never built", hidden means "withheld while PTC decide".
+    assert set(by_code) == set(registry.DATASETS) - set(registry.HIDDEN_CODES)
     assert by_code["TAM_TRADED"]["availability"] == "absent"
     assert by_code["ACTUAL_DEMAND"]["availability"] == "live"
     # bid_trade_serve has no GDAM rows yet: selectable, but honest about it.
@@ -166,8 +168,12 @@ def test_the_catalogue_carries_the_series_cardinality_the_budget_multiplies_by()
 
     assert by_code["ACTUAL_DEMAND"]["series"] == "scalar"
     assert by_code["ACTUAL_DEMAND"]["cardinality_basis"] is None
-    assert by_code["DC_PLANT"]["series"] == "per_plant"
-    assert by_code["DC_PLANT"]["cardinality_basis"] == "plants"
+    # The per-plant codes are hidden for now, so the contract is asserted against the
+    # registry entry and the mapping the catalogue applies to it. Restoring
+    # HIDDEN_CODES to () puts DC_PLANT back in `by_code` with exactly these values.
+    assert "DC_PLANT" not in by_code
+    assert registry.get("DC_PLANT").series == "per_plant"
+    assert ctrl.CARDINALITY_BASIS["per_plant"] == "plants"
     # An untouched exchange filter means all three exchanges, so the default
     # multiplier the UI shows before anything is narrowed is 3, not 1.
     assert by_code["ACP_DAM"]["cardinality_basis"] == "exchanges"
