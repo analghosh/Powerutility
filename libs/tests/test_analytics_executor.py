@@ -189,8 +189,11 @@ def test_plan_pipeline_is_what_that_groups_adapter_builds():
 def test_importing_the_adapters_package_registers_every_group():
     """The planner resolves groups through `base.ADAPTERS`; an unwired package
     would make every query a KeyError."""
-    assert {"demand", "supply", "scheduling", "exchange", "trade", "peak"} <= set(
+    assert {"demand", "supply", "exchange", "trade", "peak"} <= set(
         adapter_base.ADAPTERS)
+    # Every group the registry names must resolve — the real guard.
+    from services.processing.app.v2.analytics import registry
+    assert {d.group for d in registry.DATASETS.values()} <= set(adapter_base.ADAPTERS)
 
 
 def test_ctx_reaches_the_adapter():

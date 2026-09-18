@@ -70,7 +70,7 @@ def test_absent_datasets_are_not_selectable():
 
 
 def test_plant_datasets_declare_per_plant_series():
-    for code in ("DC_PLANT", "SG_PLANT", "FINAL_SCHEDULE_PLANT"):
+    for code in ("DC_PLANT", "SG_PLANT"):
         assert registry.get(code).series == "per_plant"
 
 
@@ -196,7 +196,6 @@ def test_ordinary_datasets_have_no_fixed_grouping():
 @pytest.mark.parametrize("total,plant", [
     ("DECLARED_CAPACITY_TOTAL", "DC_PLANT"),
     ("SG_TOTAL", "SG_PLANT"),
-    ("FINAL_SCHEDULE_STATE", "FINAL_SCHEDULE_PLANT"),
 ])
 def test_state_level_total_is_the_default_and_per_plant_is_a_drilldown(total, plant):
     """User decision 2026-09-17: every other dataset is one series per block, so the

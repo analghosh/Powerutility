@@ -1,4 +1,4 @@
-"""Demand, peak and scheduling adapters — the three source groups with the simple
+"""Demand and peak adapters — the two source groups with the simple
 shape: no revision selection, one document per `(date, block)` or
 `(date, block, plant)`.
 
@@ -11,9 +11,8 @@ Two of them exist to catch silent-wrong-answer bugs rather than crashes:
 * `type="DAF"` belongs inside `MAPE_DAF`'s accumulator. In the shared `$match` it
   would delete every `ACTUAL_DEMAND` row from the same query and the user would see
   an empty column, not an error.
-* `serve_dam_scheduling` has no `_historical` twin. `$unionWith` on a collection
-  that does not exist is not an error in Mongo — it contributes nothing — so an
-  accidental union here is invisible until someone reads the profiler.
+* (The scheduling group — the one with no `_historical` twin — was removed on
+  2026-09-18 with its dataset; the no-union path is covered in test_analytics_adapter_base.)
 """
 import sys
 from datetime import date, datetime
@@ -28,7 +27,6 @@ from services.processing.app.v2.analytics import registry  # noqa: E402
 from services.processing.app.v2.analytics.adapters import base  # noqa: E402
 from services.processing.app.v2.analytics.adapters import demand as demand_mod  # noqa: E402
 from services.processing.app.v2.analytics.adapters import peak as peak_mod  # noqa: E402
-from services.processing.app.v2.analytics.adapters import scheduling as sched_mod  # noqa: E402
 
 
 FILTERS = {
@@ -69,28 +67,30 @@ def _ds(*codes):
 
 # ------------------------------------------------------------- registration
 
-def test_the_three_adapters_register_themselves_under_their_registry_group():
+def test_the_two_adapters_register_themselves_under_their_registry_group():
     # The planner looks an adapter up by the dataset's `group`, so these strings
     # have to match registry.Dataset.group exactly or the group is unroutable.
     assert isinstance(base.get_adapter("demand"), demand_mod.DemandAdapter)
     assert isinstance(base.get_adapter("peak"), peak_mod.PeakAdapter)
-    assert isinstance(base.get_adapter("scheduling"), sched_mod.SchedulingAdapter)
 
 
-def test_every_group_named_in_the_registry_for_these_three_has_an_adapter():
-    for code in ("ACTUAL_DEMAND", "PEAK_DEMAND", "FINAL_SCHEDULE_PLANT"):
+def test_every_group_named_in_the_registry_for_these_two_has_an_adapter():
+    for code in ("ACTUAL_DEMAND", "PEAK_DEMAND"):
         assert base.get_adapter(registry.get(code).group) is not None
 
 
+def test_no_dataset_names_the_removed_scheduling_group():
+    assert all(d.group != "scheduling" for d in registry.DATASETS.values())
+    with pytest.raises(KeyError):
+        base.get_adapter("scheduling")
+
+
 def test_the_adapters_name_their_collections():
-    d, p, s = (demand_mod.DemandAdapter(), peak_mod.PeakAdapter(),
-               sched_mod.SchedulingAdapter())
+    d, p = demand_mod.DemandAdapter(), peak_mod.PeakAdapter()
     assert (d.serve_collection, d.historical_collection) == (
         "demand_serve", "demand_serve_historical")
     assert (p.serve_collection, p.historical_collection) == (
         "peak_demand_serve", "peak_demand_serve_historical")
-    assert s.serve_collection == "serve_dam_scheduling"
-    assert s.historical_collection is None
 
 
 def _analytics_group(pipeline):
@@ -100,10 +100,9 @@ def _analytics_group(pipeline):
 
 def test_demand_declares_type_as_its_entity_but_peak_has_none():
     """`type` is the entity that turns a weekly roll-up into Day Ahead + Intra Day
-    columns. Peak has no per-series axis; scheduling's is the plant."""
+    columns. Peak has no per-series axis."""
     assert demand_mod.DemandAdapter().entity_field() == "type"
     assert peak_mod.PeakAdapter().entity_field() is None
-    assert sched_mod.SchedulingAdapter().entity_field() == "plant_id"
 
 
 def test_an_ordinary_demand_query_is_not_split_by_forecast_type():
@@ -327,85 +326,17 @@ def test_an_empty_peak_range_yields_no_rows_rather_than_zeros():
     assert peak_mod.PeakAdapter().rows_from([], _ds("PEAK_DEMAND")) == []
 
 
-# -------------------------------------------------------------- scheduling
-
-def test_the_scheduling_pipeline_emits_no_union():
-    # serve_dam_scheduling has no _historical twin. $unionWith on a missing
-    # collection is not an error in Mongo, so this would never surface at runtime.
-    p = sched_mod.SchedulingAdapter().build_pipeline(
-        datasets=_ds("FINAL_SCHEDULE_PLANT"), filters=FILTERS, ctx=CTX)
-    assert _stage(p, "$unionWith") == []
-    assert [next(iter(s)) for s in p] == ["$match", "$group"]
-
-
-def test_the_scheduling_group_keys_on_plant_id():
-    _id = _group_of(sched_mod.SchedulingAdapter().build_pipeline(
-        datasets=_ds("FINAL_SCHEDULE_PLANT"), filters=FILTERS, ctx=CTX))["_id"]
-    assert _id[base.ID_ENTITY] == "$plant_id"
-
-
-def test_the_scheduling_adapter_restricts_to_the_requested_plants():
-    f = dict(FILTERS, plants=["NNTPP", "ABCREPL_BHDL2"])
-    m = sched_mod.SchedulingAdapter().build_pipeline(
-        datasets=_ds("FINAL_SCHEDULE_PLANT"), filters=f, ctx=CTX)[0]["$match"]
-    assert m["plant_id"] == {"$in": ["NNTPP", "ABCREPL_BHDL2"]}
-
-
-def test_the_plant_restriction_is_applied_before_the_group():
-    # 469k documents in serve_dam_scheduling locally; filtering after $group
-    # would read all 53 plants to report one.
-    f = dict(FILTERS, plants=["NNTPP"])
-    p = sched_mod.SchedulingAdapter().build_pipeline(
-        datasets=_ds("FINAL_SCHEDULE_PLANT"), filters=f, ctx=CTX)
-    assert "plant_id" in p[0]["$match"]
-    assert "$match" not in p[-1]
-
-
-def test_no_plant_filter_leaves_the_match_unrestricted():
-    m = sched_mod.SchedulingAdapter().build_pipeline(
-        datasets=_ds("FINAL_SCHEDULE_PLANT"), filters=FILTERS, ctx=CTX)[0]["$match"]
-    assert "plant_id" not in m
-
-
-def test_the_scheduling_adapter_carries_the_plant_into_the_row():
-    rows = sched_mod.SchedulingAdapter().rows_from(
-        [_doc(entity="NNTPP", FINAL_SCHEDULE_PLANT=120.0)],
-        _ds("FINAL_SCHEDULE_PLANT"))
-    assert rows[0]["entity"] == "NNTPP"
-    assert rows[0]["value"] == 120.0
-
-
-def test_the_scheduling_adapter_preserves_a_null_schedule():
-    rows = sched_mod.SchedulingAdapter().rows_from(
-        [_doc(entity="NNTPP", FINAL_SCHEDULE_PLANT=None)],
-        _ds("FINAL_SCHEDULE_PLANT"))
-    assert rows[0]["value"] is None
-
-
-def test_the_scheduling_adapter_needs_no_revision_collapse():
-    # Verified against the local UAT import: every (date, block, plant) key in
-    # serve_dam_scheduling appears exactly once (3,168 keys on 2026-02-04, all
-    # with count 1), unlike supply_serve which really does carry revisions.
-    p = sched_mod.SchedulingAdapter().build_pipeline(
-        datasets=_ds("FINAL_SCHEDULE_PLANT"), filters=FILTERS, ctx=CTX)
-    assert _stage(p, "$sort") == []
-    assert _stage(p, "$replaceRoot") == []
-    assert len(_stage(p, "$group")) == 1
-
-
 # ------------------------------------------------------- shared refusals
 
 @pytest.mark.parametrize("adapter", [
-    demand_mod.DemandAdapter(), peak_mod.PeakAdapter(),
-    sched_mod.SchedulingAdapter()])
+    demand_mod.DemandAdapter(), peak_mod.PeakAdapter()])
 def test_no_adapter_builds_a_pipeline_for_an_empty_selection(adapter):
     with pytest.raises(ValueError):
         adapter.build_pipeline(datasets=[], filters=FILTERS, ctx=CTX)
 
 
 @pytest.mark.parametrize("adapter", [
-    demand_mod.DemandAdapter(), peak_mod.PeakAdapter(),
-    sched_mod.SchedulingAdapter()])
+    demand_mod.DemandAdapter(), peak_mod.PeakAdapter()])
 def test_no_adapter_scans_an_unbounded_date_range(adapter):
     f = {k: v for k, v in FILTERS.items() if k != "to_date"}
     with pytest.raises(ValueError):
@@ -413,8 +344,7 @@ def test_no_adapter_scans_an_unbounded_date_range(adapter):
 
 
 @pytest.mark.parametrize("adapter", [
-    demand_mod.DemandAdapter(), peak_mod.PeakAdapter(),
-    sched_mod.SchedulingAdapter()])
+    demand_mod.DemandAdapter(), peak_mod.PeakAdapter()])
 def test_an_absent_dataset_is_refused_rather_than_returning_nulls(adapter):
     # WEEKLY_FORECAST has no value field; {"$avg": None} would return null for
     # every block, which reads as "no data in this range", not "not built".

@@ -139,12 +139,10 @@ _ALL: List[Dataset] = [
        value="$volume", unit="MW", agg="avg", series="per_plant", drilldown=True,
        match={"dc_sg": "SG"}, permission="analytics:supply"),
     # ---- scheduling ---------------------------------------------------
-    # serve_dam_scheduling: the DAM-scheduling snapshot (53 plants, uploadedBy
-    # schedule_api). Not the Final Schedule — that is SG in supply_serve — so it is
-    # labelled for its source to avoid two "by plant" schedules that differ.
-    _d(code="FINAL_SCHEDULE_PLANT", label="DAM Schedule — by plant",
-       group="scheduling", value="$volume", unit="MW", agg="avg",
-       series="per_plant", drilldown=True, permission="analytics:schedule"),
+    # User decision 2026-09-18: there is ONE plant-wise schedule, SG_PLANT above. The
+    # earlier "DAM Schedule — by plant" read serve_dam_scheduling — the bid-construction
+    # snapshot `schedule_api` uploads (no revisions, non-plant lines such as IEX_IMPORT,
+    # frozen at 3 Aug in UAT) — and was removed together with its adapter.
     # ---- peak ---------------------------------------------------------
     _d(code="PEAK_DEMAND", label="Peak Demand", group="peak",
        value="$peak_demand", unit="MW", agg="max", permission="analytics:demand"),

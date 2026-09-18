@@ -47,9 +47,10 @@ class _Demandish(base.SourceGroupAdapter):
 
 
 class _Plantish(base.SourceGroupAdapter):
-    """Stand-in for a per-entity group with no historical twin."""
+    """Stand-in for a per-entity group with no historical twin (no live group is
+    shaped like this since the DAM-schedule group went; the base path stays)."""
     group = "plantish"
-    serve_collection = "serve_dam_scheduling"
+    serve_collection = "plantish_serve"
     historical_collection = None
     entity = "plant_id"
 
@@ -151,9 +152,9 @@ def test_an_adapter_that_unions_without_a_dedupe_key_is_refused():
 
 
 def test_group_with_no_historical_twin_emits_no_union():
-    # serve_dam_scheduling has no _historical collection; unioning would 500.
+    # A group without a _historical collection must not union one; that would 500.
     p = _Plantish().build_pipeline(
-        datasets=[registry.get("FINAL_SCHEDULE_PLANT")], filters=FILTERS, ctx=CTX)
+        datasets=[registry.get("SG_PLANT")], filters=FILTERS, ctx=CTX)
     assert _stage(p, "$unionWith") == []
 
 
@@ -263,14 +264,14 @@ def test_a_scalar_only_selection_leaves_the_entity_out_of_the_group_id():
 
 def test_a_per_plant_dataset_puts_the_entity_into_the_group_id():
     p = _Plantish().build_pipeline(
-        datasets=[registry.get("FINAL_SCHEDULE_PLANT")], filters=FILTERS, ctx=CTX)
+        datasets=[registry.get("SG_PLANT")], filters=FILTERS, ctx=CTX)
     assert _group_of(p)["_id"][base.ID_ENTITY] == "$plant_id"
 
 
 def test_the_plant_filter_lands_in_the_initial_match_not_after_grouping():
     f = dict(FILTERS, plants=["NNTPP", "ABCREPL_BHDL2"])
     p = _Plantish().build_pipeline(
-        datasets=[registry.get("FINAL_SCHEDULE_PLANT")], filters=f, ctx=CTX)
+        datasets=[registry.get("SG_PLANT")], filters=f, ctx=CTX)
     assert p[0]["$match"]["plant_id"] == {"$in": ["NNTPP", "ABCREPL_BHDL2"]}
 
 
@@ -359,8 +360,8 @@ def test_a_summed_group_that_really_totals_zero_stays_zero():
 
 def test_rows_from_carries_the_entity_through():
     rows = _Plantish().rows_from(
-        [_doc(entity="NNTPP", FINAL_SCHEDULE_PLANT=120.0)],
-        [registry.get("FINAL_SCHEDULE_PLANT")])
+        [_doc(entity="NNTPP", SG_PLANT=120.0)],
+        [registry.get("SG_PLANT")])
     assert rows[0]["entity"] == "NNTPP"
 
 

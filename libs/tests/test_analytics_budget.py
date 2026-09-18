@@ -50,7 +50,7 @@ def test_plant_wise_plus_a_second_dataset_goes_async_only():
 
 def test_absurd_request_is_refused_outright():
     e = budget.estimate(date_buckets=3650, block_buckets=96,
-                        datasets=["DC_PLANT", "SG_PLANT", "FINAL_SCHEDULE_PLANT"], ctx=CTX)
+                        datasets=["DC_PLANT", "SG_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
     assert e.band == budget.BAND_REFUSED
 
 
