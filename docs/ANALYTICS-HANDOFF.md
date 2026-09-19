@@ -443,6 +443,59 @@ db.menus.insertOne({
 Verify the row's field names against an existing child of Reports before inserting —
 copy that document's shape rather than this snippet's.
 
+## 6f. Excel is the default export format (2026-09-19)
+
+The Generate As toggle now lists **Excel first and opens on it**; CSV is the second
+button. PTC read this screen in Excel — one sheet per dataset with a `Block | <date>`
+grid is what they open — and the CSV long form is the machine-readable half that was
+never the common case. Verified in the browser
+(`tools/e2e/analytics_journey.mjs`, **18 steps, all passing**), including a step that
+clears the saved default and the per-device localStorage copy and asserts the screen
+comes back on Excel.
+
+Default flipped in five places, because "the default" is not one constant:
+
+| Where | Was | Is |
+|---|---|---|
+| `analytics_export_service.DEFAULT_FORMAT` | `csv` | `xlsx` |
+| `models.ExportRequest.format` | `csv` | `xlsx` |
+| `models.PreferenceRequest.format` | `csv` | `xlsx` |
+| `analytics_preference_repository.FORMATS[0]` | `csv` | `xlsx` |
+| client `FORMATS[0]` / `readStoredFormat` fallback | `csv` | `xlsx` |
+
+`FORMATS[0]` in the preference repository is load-bearing: `validate`, `sanitize` and
+`empty_preference` all take the default from it, so the tuple order **is** the default.
+The client mirror is the same shape — `FORMATS[0]` is both the first button and what
+`readStoredFormat` falls back to, so the button order and the default cannot drift.
+
+Three things this deliberately did **not** change:
+
+* **A saved preference still wins.** A user who saved CSV as their default keeps
+  opening on CSV. The new default is what a user with no saved preference gets.
+* **The `or "csv"` fallbacks in `analytics_routes` and the export processor stay.**
+  Those read the format of a job that was already written, to name a file that is
+  already on disk. A legacy row with no `format` key is a CSV file; relabelling it
+  `.xlsx` would hand the user a workbook that is not one.
+* **`extensionFor` still coerces to `csv`.** It is fed `formatOfJob`, which reads the
+  stored filename — a file not ending `.xlsx` really is a CSV.
+
+**The cost, and it is real.** XLSX rides the lower of the two in-request ceilings
+(`ANALYTICS_CELLS_INLINE`, 150k) where CSV rides `ANALYTICS_CELLS_INLINE_CAPPED`
+(500k) — see the module docstring on `analytics_export_service` for why the two
+numbers differ. So a range between those two ceilings used to stream instantly and
+now **queues** and lands in My Exports. That is the intended trade (a 150k-cell
+workbook holds a web worker for about a minute with nothing to show), but it means
+more jobs through the scheduler sweep, and the disk budget and the 72h retention
+matter more than they did. If PTC complain that exports that used to be instant now
+queue, the lever is `ANALYTICS_CELLS_INLINE`, not the default.
+
+**Tests:** backend `libs/tests` **872 pass / 10 fail** — the same 10 pre-existing
+vendor-rot failures (`test_supply_csv_parser.py`, `test_grid_india_parser.py`,
+`test_demand_supply_entities.py`), confirmed unchanged by re-running them on a
+stashed tree. Analytics alone: **761 pass**. Client `node --test` **114 pass**
+(one new case: the download fallback names an `.xlsx` when given no format).
+Browser journey **18/18**.
+
 ## 7. REMAINING WORK — the actual to-do list
 
 Ordered by priority. Items marked ✅ are **already done** — do not redo them.

@@ -556,11 +556,20 @@ async def test_a_stored_job_echo_replays_as_a_request():
     assert replayed.from_date == date(2026, 1, 1)
 
 
-def test_a_plain_query_request_exports_as_csv():
+def test_a_plain_query_request_exports_as_excel():
+    """A query promoted to an export takes the default format, which is XLSX."""
     plain = AnalyticsQueryRequest(
         from_date=date(2026, 1, 1), to_date=date(2026, 1, 1),
         datasets=["ACTUAL_DEMAND"])
-    assert svc.as_export_request(plain).format == "csv"
+    assert svc.as_export_request(plain).format == "xlsx"
+
+
+def test_an_export_request_that_names_no_format_is_excel():
+    """The toggle opens on Excel, and a caller that omits `format` gets the same."""
+    req = ExportRequest(
+        from_date=date(2026, 1, 1), to_date=date(2026, 1, 1),
+        datasets=["ACTUAL_DEMAND"])
+    assert req.format == svc.DEFAULT_FORMAT == "xlsx"
 
 
 # ----------------------------------------------------------------- permissions
