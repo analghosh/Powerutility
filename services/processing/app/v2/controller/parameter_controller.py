@@ -237,6 +237,49 @@ class ParameterController:
             logger.error(f"Error in active exchange controller set: {e}")
             raise
 
+    async def get_shifts(self) -> List[Dict[str, str]]:
+        try:
+            return await parameter_service.get_shifts()
+        except Exception as e:
+            logger.error("Error in shifts controller get: %s", e)
+            raise
+
+    async def create_shift(
+        self,
+        shift_name: Any,
+        shift_timing: Any,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        try:
+            return await parameter_service.create_shift(
+                shift_name, shift_timing, user_id=user_id
+            )
+        except Exception as e:
+            logger.error("Error in shifts controller create: %s", e)
+            raise
+
+    async def update_shift(
+        self,
+        shift_id: str,
+        shift_name: Any = None,
+        shift_timing: Any = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, str]]:
+        try:
+            return await parameter_service.update_shift(
+                shift_id, shift_name, shift_timing, user_id=user_id
+            )
+        except Exception as e:
+            logger.error("Error in shifts controller update: %s", e)
+            raise
+
+    async def delete_shift(self, shift_id: str) -> bool:
+        try:
+            return await parameter_service.delete_shift(shift_id)
+        except Exception as e:
+            logger.error("Error in shifts controller delete: %s", e)
+            raise
+
 
 # Create singleton instance
 parameter_controller = ParameterController()
