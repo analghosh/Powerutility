@@ -4,6 +4,8 @@ Service layer for parameter business logic
 """
 
 import logging
+import re
+import uuid
 from typing import List, Dict, Any, Optional
 
 from libs.constants.idf_forecast import IDF_FORECAST_SWITCH_KEY
@@ -47,6 +49,12 @@ DEFAULT_BID_CONFIGURATION = {
 }
 
 BID_CONFIGURATION_KEY = "bid_configuration"
+SHIFTS_KEY = "shifts"
+SHIFT_TIMING_PATTERN = re.compile(r"^([1-9]|1[0-9]|2[0-4])-([1-9]|1[0-9]|2[0-4])$")
+RESERVED_PARAMETER_KEYS = {SHIFTS_KEY}
+SHIFTS_RESERVED_MESSAGE = (
+    "Shifts must be managed via /parameters/shifts, not generic parameter CRUD"
+)
 
 # Default NOC / ceiling bid prices per market (auto-created if missing).
 DEFAULT_BID_PRICES = {
@@ -92,6 +100,8 @@ class ParameterService:
             
             if "para_value" not in parameter_data:
                 raise ValueError("para_value is required")
+
+            self._reject_reserved_parameter_key(parameter_data.get("para_key"))
             
             # Check if parameter with same key already exists
             existing = await parameter_repository.get_parameter_by_key(parameter_data["para_key"])
@@ -121,6 +131,7 @@ class ParameterService:
                     raise ValueError("All parameters must have para_key")
                 if "para_value" not in param:
                     raise ValueError("All parameters must have para_value")
+                self._reject_reserved_parameter_key(param.get("para_key"))
             
             # Check for duplicate keys in the input
             keys = [param["para_key"] for param in parameters]
@@ -226,6 +237,10 @@ class ParameterService:
             if not existing:
                 return None
 
+            self._reject_reserved_parameter_key(existing.get("para_key"))
+            if "para_key" in update_data:
+                self._reject_reserved_parameter_key(update_data["para_key"])
+
             # Don't allow updating para_key to avoid conflicts
             if "para_key" in update_data:
                 # Check if new key already exists
@@ -276,6 +291,9 @@ class ParameterService:
             True if deleted, False otherwise
         """
         try:
+            existing = await parameter_repository.get_parameter_by_id(parameter_id)
+            if existing:
+                self._reject_reserved_parameter_key(existing.get("para_key"))
             return await parameter_repository.delete_parameter(parameter_id)
             
         except Exception as e:
@@ -557,6 +575,151 @@ class ParameterService:
             "para_value": record.get("para_value") if record else normalized,
             "message": "Active exchange saved successfully"
         }
+
+    # ------------------------------------------------------------------
+    # Shift master (parameter key: shifts)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _reject_reserved_parameter_key(para_key: Optional[str]) -> None:
+        if para_key in RESERVED_PARAMETER_KEYS:
+            raise ValueError(SHIFTS_RESERVED_MESSAGE)
+
+    @staticmethod
+    def _normalize_shift_name(shift_name: Any) -> str:
+        name = str(shift_name or "").strip()
+        if not name:
+            raise ValueError("shift_name is required")
+        return name
+
+    @staticmethod
+    def _normalize_shift_timing(shift_timing: Any) -> str:
+        timing = str(shift_timing or "").strip()
+        if not SHIFT_TIMING_PATTERN.fullmatch(timing):
+            raise ValueError(
+                "shift_timing must be start-end hours in 1-24 format, e.g. '1-8' or '1-24'"
+            )
+        start_str, end_str = timing.split("-", 1)
+        start, end = int(start_str), int(end_str)
+        return f"{start}-{end}"
+
+    @staticmethod
+    def _normalize_shift_record(raw: Any) -> Optional[Dict[str, str]]:
+        if not isinstance(raw, dict):
+            return None
+        shift_id = str(raw.get("id") or "").strip()
+        if not shift_id:
+            return None
+        try:
+            return {
+                "id": shift_id,
+                "shift_name": ParameterService._normalize_shift_name(raw.get("shift_name")),
+                "shift_timing": ParameterService._normalize_shift_timing(
+                    raw.get("shift_timing")
+                ),
+            }
+        except ValueError:
+            logger.warning("Skipping invalid stored shift record: %r", raw)
+            return None
+
+    async def _load_shifts(self) -> List[Dict[str, str]]:
+        record = await parameter_repository.get_parameter_by_key(SHIFTS_KEY)
+        if not record:
+            return []
+        value = record.get("para_value")
+        if not isinstance(value, list):
+            return []
+        shifts: List[Dict[str, str]] = []
+        for item in value:
+            normalized = self._normalize_shift_record(item)
+            if normalized:
+                shifts.append(normalized)
+        return shifts
+
+    async def _save_shifts(
+        self,
+        shifts: List[Dict[str, str]],
+        user_id: Optional[str] = None,
+    ) -> List[Dict[str, str]]:
+        payload: Dict[str, Any] = {"para_value": shifts}
+        if user_id:
+            payload["updated_by"] = user_id
+        record = await parameter_repository.update_parameter_by_key(SHIFTS_KEY, payload)
+        saved = record.get("para_value") if record else shifts
+        if not isinstance(saved, list):
+            return shifts
+        return saved
+
+    @staticmethod
+    def _ensure_unique_shift_name(
+        shifts: List[Dict[str, str]],
+        shift_name: str,
+        exclude_id: Optional[str] = None,
+    ) -> None:
+        target = shift_name.casefold()
+        for shift in shifts:
+            if exclude_id and shift.get("id") == exclude_id:
+                continue
+            if str(shift.get("shift_name") or "").casefold() == target:
+                raise ValueError(f"Shift name '{shift_name}' already exists")
+
+    async def get_shifts(self) -> List[Dict[str, str]]:
+        try:
+            return await self._load_shifts()
+        except Exception as e:
+            logger.error("Error fetching shifts: %s", e)
+            raise
+
+    async def create_shift(
+        self,
+        shift_name: Any,
+        shift_timing: Any,
+        user_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        name = self._normalize_shift_name(shift_name)
+        timing = self._normalize_shift_timing(shift_timing)
+        shifts = await self._load_shifts()
+        self._ensure_unique_shift_name(shifts, name)
+        created = {
+            "id": str(uuid.uuid4()),
+            "shift_name": name,
+            "shift_timing": timing,
+        }
+        shifts.append(created)
+        await self._save_shifts(shifts, user_id)
+        return created
+
+    async def update_shift(
+        self,
+        shift_id: str,
+        shift_name: Any = None,
+        shift_timing: Any = None,
+        user_id: Optional[str] = None,
+    ) -> Optional[Dict[str, str]]:
+        if shift_name is None and shift_timing is None:
+            raise ValueError("No fields to update")
+        shifts = await self._load_shifts()
+        index = next((i for i, s in enumerate(shifts) if s.get("id") == shift_id), None)
+        if index is None:
+            return None
+        updated = dict(shifts[index])
+        if shift_name is not None:
+            name = self._normalize_shift_name(shift_name)
+            self._ensure_unique_shift_name(shifts, name, exclude_id=shift_id)
+            updated["shift_name"] = name
+        if shift_timing is not None:
+            updated["shift_timing"] = self._normalize_shift_timing(shift_timing)
+        shifts[index] = updated
+        await self._save_shifts(shifts, user_id)
+        return updated
+
+    async def delete_shift(self, shift_id: str) -> bool:
+        shifts = await self._load_shifts()
+        remaining = [s for s in shifts if s.get("id") != shift_id]
+        if len(remaining) == len(shifts):
+            return False
+        await self._save_shifts(remaining)
+        return True
 
 
 # Create singleton instance
