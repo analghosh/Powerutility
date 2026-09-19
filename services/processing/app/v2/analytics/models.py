@@ -167,7 +167,7 @@ class ExportRequest(AnalyticsQueryRequest):
     """A query plus the file it should become. Everything else validates identically."""
 
     format: Literal["csv", "xlsx"] = Field(
-        "csv", description="Export file format: csv or xlsx")
+        "xlsx", description="Export file format: xlsx or csv")
     file_name: str = Field(
         "", max_length=MAX_FILE_NAME_INPUT,
         description=("What to call the file. Empty means the generated "
@@ -212,7 +212,7 @@ class PreferenceRequest(BaseModel):
     plants: List[str] = Field(default_factory=list,
                               description="Plant ids to preselect for by-plant datasets")
     format: Literal["csv", "xlsx"] = Field(
-        "csv", description="File format the Generate button opens on")
+        "xlsx", description="File format the Generate button opens on")
 
 
 class AnalyticsAxes(BaseModel):

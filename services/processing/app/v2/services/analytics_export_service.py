@@ -87,7 +87,12 @@ MEDIA_TYPES = {
     "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 }
 
-DEFAULT_FORMAT = "csv"
+#: What a request that names no format gets. XLSX, because the dashboard is read
+#: in Excel: one sheet per dataset with a block-by-date grid is what PTC opens,
+#: and the flat CSV long form is the machine-readable half nobody asked for by
+#: default. The cost is deliberate — XLSX rides the lower of the two thresholds
+#: (see MODE_THRESHOLDS), so a range that would have streamed as CSV now queues.
+DEFAULT_FORMAT = "xlsx"
 
 #: The job type the scheduler's sweep and the broker consumer both key on.
 JOB_TYPE = "analytics_export"
