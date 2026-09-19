@@ -77,7 +77,7 @@ def test_validate_refuses_a_plant_id_long_enough_to_be_a_payload():
 
 
 def test_validate_defaults_the_format_rather_than_storing_none():
-    assert prefs.validate({})["format"] == "csv"
+    assert prefs.validate({})["format"] == "xlsx"
 
 
 # --------------------------------------------------------------------- sanitize
@@ -91,13 +91,13 @@ def test_sanitize_drops_a_dataset_the_registry_has_lost_and_reports_it():
 
 def test_sanitize_of_a_missing_row_is_the_empty_preference():
     preference, dropped = prefs.sanitize(None)
-    assert preference["datasets"] == [] and preference["format"] == "csv"
+    assert preference["datasets"] == [] and preference["format"] == "xlsx"
     assert dropped == []
 
 
 def test_sanitize_repairs_a_format_that_is_no_longer_supported():
     preference, _ = prefs.sanitize({"format": "pdf"})
-    assert preference["format"] == "csv"
+    assert preference["format"] == "xlsx"
 
 
 # ------------------------------------------------------------------- repository
