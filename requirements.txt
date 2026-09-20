@@ -24,6 +24,8 @@ numpy>=1.26.0
 matplotlib>=3.8.0
 seaborn>=0.13.0
 openpyxl>=3.1.0
+# Reads the exchange Daily Obligation Report PDFs (pure Python, no system binary).
+pdfplumber>=0.11.0
 psutil>=5.9.0
 paramiko>=3.4.0
 
