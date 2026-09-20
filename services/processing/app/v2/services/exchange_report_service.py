@@ -33,6 +33,14 @@ from ..repository.exchange_report_repository import exchange_report_repository
 
 logger = logging.getLogger(__name__)
 
+#: How the form's fields are named to the operator. The message they read
+#: should use the labels on the screen, not the names of the stored fields.
+FIELD_LABELS = {
+    "market_type": "Market",
+    "exchange": "Exchange",
+    "delivery_date": "Delivery Date",
+}
+
 
 class UploadRejected(Exception):
     """
@@ -229,6 +237,7 @@ class ExchangeReportService:
             mismatches.append(
                 {
                     "field": "market_type",
+                    "label": FIELD_LABELS["market_type"],
                     "selected": market_type,
                     "found_in_file": detected_market,
                 }
@@ -239,6 +248,7 @@ class ExchangeReportService:
             mismatches.append(
                 {
                     "field": "exchange",
+                    "label": FIELD_LABELS["exchange"],
                     "selected": exchange,
                     "found_in_file": file_exchange,
                 }
@@ -249,6 +259,7 @@ class ExchangeReportService:
             mismatches.append(
                 {
                     "field": "delivery_date",
+                    "label": FIELD_LABELS["delivery_date"],
                     "selected": delivery_date,
                     "found_in_file": file_delivery_date,
                 }
@@ -258,7 +269,8 @@ class ExchangeReportService:
             return
 
         described = "; ".join(
-            f"{m['field']}: you selected {m['selected']}, the file says {m['found_in_file']}"
+            f"{m['label']}: you selected "
+            f"{m['selected']}, the file says {m['found_in_file']}"
             for m in mismatches
         )
         raise UploadRejected(
