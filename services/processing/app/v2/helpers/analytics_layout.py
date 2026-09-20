@@ -98,12 +98,17 @@ def _value_at(series: Dict[str, Any], block_index: int, date_index: int) -> Any:
 
 
 def data_rows(response: Optional[Dict[str, Any]],
-              filters: Optional[Dict[str, Any]] = None) -> Iterator[List[Any]]:
+              filters: Optional[Dict[str, Any]] = None,
+              on_row=None) -> Iterator[List[Any]]:
     """One row per (day, block), lazily.
 
     Nothing here builds a list of rows or joins the output: the streaming CSV tier
     depends on this staying a generator, and a long range is hundreds of thousands
     of rows.
+
+    `on_row(count)` is called after each row when given. It is how a background
+    export reports real progress — rows written against `row_count()` — rather than
+    a spinner that cannot say how far along it is.
     """
     response = response or {}
     axes = response.get("axes") or {}
@@ -112,10 +117,14 @@ def data_rows(response: Optional[Dict[str, Any]],
     series = series_list(response)
     code = grouping_of(response, filters)
 
+    done = 0
     for di, day in enumerate(dates):
         for bi, block in enumerate(blocks):
             identity = grouping.identity_values(code, day, block_label(block))
             yield identity + [_value_at(s, bi, di) for s in series]
+            done += 1
+            if on_row is not None:
+                on_row(done)
 
 
 def row_count(response: Optional[Dict[str, Any]]) -> int:

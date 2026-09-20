@@ -114,6 +114,10 @@ async def test_create_writes_exactly_the_spec_schema(repo):
         "download_token", "token_expires_at", "error", "attempts", "max_attempts",
         "worker_id", "heartbeat_at", "created_at", "started_at", "finished_at",
         "expires_at",
+        # Rows are what an in-process background build counts (2026-09-20); the
+        # chunk counters belong to the scheduler worker, which still owns the
+        # queued rows. Both are written, and the status route reads rows first.
+        "rows_total", "rows_done",
     }
 
 

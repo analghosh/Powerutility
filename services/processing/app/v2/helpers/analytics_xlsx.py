@@ -94,7 +94,7 @@ def _cell(sheet, value: Any) -> Any:
 
 
 def write_xlsx(response: Dict[str, Any], filters: Optional[Dict[str, Any]],
-               path: str) -> Dict[str, Any]:
+               path: str, on_row=None) -> Dict[str, Any]:
     """Write the `Data` sheet plus `Filters`; return `{path, bytes, row_count}`.
 
     `row_count` counts data rows only — the heading row and the `Filters` sheet are
@@ -112,7 +112,8 @@ def write_xlsx(response: Dict[str, Any], filters: Optional[Dict[str, Any]],
         sheet.append(analytics_layout.column_titles(response, filters))
         # `data_rows` is a generator and is kept one: a year of individual blocks is
         # 35,040 rows wide enough to matter, and write-only mode streams each away.
-        for row in analytics_layout.data_rows(response, filters):
+        # `on_row` is how a background export reports its progress.
+        for row in analytics_layout.data_rows(response, filters, on_row=on_row):
             sheet.append([_cell(sheet, value) for value in row])
             row_count += 1
 
