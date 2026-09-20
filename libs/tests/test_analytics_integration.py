@@ -498,13 +498,33 @@ async def test_hourly_grouping_derives_the_hour_from_the_block(seeded):
     date stamped at midnight.
 
     Formatting the date field with %H used to label every row of a day with the
-    same hour, collapsing 24 buckets into one. The key now appends an hour derived
-    from the block (4 blocks per hour), so a full 96-block day buckets into 24.
+    same hour, collapsing 24 buckets into one. The key appends an hour derived from
+    the block (4 blocks per hour) instead, so a full 96-block day buckets into 24.
+
+    Since 2026-09-20 no pipeline asks for this key at all — Hourly is a column in
+    the file, written by `grouping.hour_label` — so what this proves is the
+    equivalence against MongoDB itself: the hour a reader sees beside a block is the
+    hour Mongo groups that block into. If the two ever drift, the column is a lie.
+    The key is rebuilt here rather than imported, because the engine no longer has
+    one to import.
+
     This writes its own collection rather than touching the shared seed, which only
     carries blocks 1-3.
     """
     from services.processing.app.v2.analytics import budget
-    from services.processing.app.v2.analytics.grouping import date_key_expr
+    from services.processing.app.v2.analytics import grouping as g
+
+    # The hour key the engine used to build, reconstructed from its two published
+    # pieces: the day key, and the hour derived from the block.
+    hour_expr = {"$toInt": {"$floor": {"$divide": [
+        {"$subtract": ["$time_block", 1]}, g.BLOCKS_PER_HOUR]}}}
+    date_key_expr = lambda _: {"$concat": [
+        g.day_key_expr(),
+        " ",
+        {"$cond": [{"$lt": [hour_expr, 10]},
+                   {"$concat": ["0", {"$toString": hour_expr}]},
+                   {"$toString": hour_expr}]},
+    ]}
 
     coll = seeded["_hourly_probe"]
     coll.drop()
@@ -527,5 +547,12 @@ async def test_hourly_grouping_derives_the_hour_from_the_block(seeded):
     assert keys[-1] == "2026-01-05 23"
     assert keys == sorted(keys), "hour must be zero-padded so keys sort lexically"
     assert all(r["n"] == 4 for r in rows), "four 15-minute blocks per hour"
+
+    # The file's Hourly column must name the same hour, one-based beside the blocks.
+    for block in (1, 4, 5, 92, 93, 96):
+        mongo_hour = int(keys[(block - 1) // 4].split(" ")[1])
+        assert g.hour_label(block) == f"Hour {mongo_hour + 1}"
+
+    # And the budget no longer multiplies a day by 24 for it: one bucket per day.
     assert budget.date_bucket_count(dt.date(2026, 1, 5), dt.date(2026, 1, 5),
-                                    "HOURLY_WISE") == len(keys)
+                                    "HOURLY_WISE") == 1

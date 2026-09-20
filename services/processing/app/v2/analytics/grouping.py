@@ -1,18 +1,37 @@
-"""Grouping is pushed into Mongo's $group, never done in Python.
+"""Block bucketing is pushed into Mongo's `$group`; date bucketing is not.
 
-This is what makes long ranges tractable: month-wise over five months returns about
-five rows per dataset instead of 14,400. The pathological case is only ever a long
-range at individual-block granularity.
+**Group Date By is a label, not an aggregation** (user decision, 2026-09-20). Every
+dashboard query groups on the trading *day*, whatever the user picked, and the chosen
+grouping only decides which identity columns the exported file carries — a Week
+column, an Hourly column, and so on. A week-wise file therefore holds the same block
+values a block-wise one does, with a week number beside them, rather than seven days
+averaged into one.
+
+That is a deliberate reversal of the original design, and it removes two defects with
+it. `BLOCK_WISE` and `DATE_WISE` both formatted `%Y-%m-%d` and left the block axis to
+`block_band`, so they produced byte-identical files — two pills, one behaviour; they
+are now the single `BLOCK_DATE_WISE`. And `HOURLY_WISE` keyed on the hour while the
+block axis still keyed on the block, which merely scattered 96 values across 24 sparse
+columns, because a block *is* a quarter hour. As a column, the hour finally reads.
+
+The old codes still arrive from stored export jobs and saved preferences, so
+`canonical` maps them forward; nothing on disk needs rewriting.
+
+Nothing aggregates over a period any more. The weekly and monthly Forecast/MAPE
+datasets were removed on 2026-09-20 — they read the same stored fields as the daily
+ones and differed only in aggregation period, so the daily columns cover them — and
+`date_key_expr` went with them. One date key remains: the trading day.
 
 Two details are silently wrong if left to the defaults:
 
-* Week keys use the ISO year (%G), not the calendar year (%Y). 29 Dec 2025 is ISO
-  week 2026-W01; formatted with %Y it reads "2025-W01" and averages into the same
-  bucket as the first week of January 2025.
-* Every date key carries an explicit timezone. EPMS stores UTC instants, the day is
-  an IST trading day, and blocks 1-4 of every day fall on the previous UTC date.
+* Week labels use the ISO year (%G), not the calendar year (%Y). 29 Dec 2025 is ISO
+  week 2026-W01; formatted with %Y it reads "2025-W01" and collides with the first
+  week of January 2025.
+* The day key carries an explicit timezone. EPMS stores UTC instants, the day is an
+  IST trading day, and blocks 1-4 of every day fall on the previous UTC date.
 """
-from typing import Optional, Sequence
+from datetime import date, datetime
+from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 from .block_bands import (BAND_CUSTOM, BAND_INDIVIDUAL, PARAMETER_KEYS, RANGES_EXAMPLE,
                           Band, validate_block_range)
@@ -23,17 +42,37 @@ try:  # pragma: no cover - the setting lands with the analytics config block
 except Exception:  # pragma: no cover - keeps the module importable standalone
     TIMEZONE = "Asia/Kolkata"
 
-DATE_GROUPINGS = ("BLOCK_WISE", "DATE_WISE", "HOURLY_WISE",
-                  "WEEK_WISE", "MONTH_WISE", "YEAR_WISE")
+#: The pill values the dashboard offers. `BLOCK_DATE_WISE` is the 2026-09-20 merge of
+#: the old `BLOCK_WISE` and `DATE_WISE`, which were the same file.
+BLOCK_DATE_WISE = "BLOCK_DATE_WISE"
+HOURLY_WISE = "HOURLY_WISE"
+WEEK_WISE = "WEEK_WISE"
+MONTH_WISE = "MONTH_WISE"
+YEAR_WISE = "YEAR_WISE"
 
-DATE_FORMATS = {
-    "BLOCK_WISE": "%Y-%m-%d",
-    "DATE_WISE": "%Y-%m-%d",
-    "HOURLY_WISE": "%Y-%m-%d",  # the hour is appended from time_block, see below
-    "WEEK_WISE": "%G-W%V",
-    "MONTH_WISE": "%Y-%m",
-    "YEAR_WISE": "%Y",
+DATE_GROUPINGS = (BLOCK_DATE_WISE, HOURLY_WISE, WEEK_WISE, MONTH_WISE, YEAR_WISE)
+
+#: Retired codes, and what they mean now. Stored export jobs and saved preferences
+#: hold these; they are canonicalised on the way in rather than migrated on disk.
+LEGACY_GROUPINGS: Dict[str, str] = {
+    "BLOCK_WISE": BLOCK_DATE_WISE,
+    "DATE_WISE": BLOCK_DATE_WISE,
 }
+
+
+def canonical(grouping: Optional[str]) -> str:
+    """The current code for a grouping, accepting the two retired spellings."""
+    value = str(grouping or "").strip().upper()
+    value = LEGACY_GROUPINGS.get(value, value)
+    if value not in DATE_GROUPINGS:
+        raise ValueError(
+            f"Unknown date grouping: {grouping!r}; expected one of "
+            f"{', '.join(DATE_GROUPINGS)}")
+    return value
+
+
+#: The trading day, and the only key any pipeline groups on.
+DAY_FORMAT = "%Y-%m-%d"
 
 AGGREGATIONS = ("avg", "sum", "max", "min", "last")
 
@@ -50,40 +89,103 @@ def hour_of_block(block: int) -> int:
     return (int(block) - 1) // BLOCKS_PER_HOUR
 
 
-def _hour_from_block_expr() -> dict:
-    """Zero-padded hour string derived from time_block.
+def day_key_expr(field: str = "$scheduled_at") -> dict:
+    """The trading-day key every dashboard query groups on."""
+    return {"$dateToString": {"format": DAY_FORMAT, "date": field, "timezone": TIMEZONE}}
 
-    `scheduled_at` is a trading date stamped at midnight — the time of day is only
-    ever in `time_block`. Formatting the date field with %H therefore labels every
-    row of a day with the same hour and collapses 24 buckets into one, which is what
-    this expression exists to avoid. Padded so the key sorts lexically alongside the
-    date part.
+
+# ------------------------------------------------------- identity columns
+
+#: Column headings, coarse to fine, for each pill. `Date` and `Time block` are on
+#: every file; the chosen grouping adds its own column in front of (or between)
+#: them. Matches the layout PTC drew on 2026-09-20.
+COLUMN_DATE = "Date"
+COLUMN_BLOCK = "Time block"
+COLUMN_WEEK = "Week"
+COLUMN_HOURLY = "Hourly"
+COLUMN_MONTH = "Month"
+COLUMN_YEAR = "Year"
+
+IDENTITY_COLUMNS: Dict[str, Tuple[str, ...]] = {
+    BLOCK_DATE_WISE: (COLUMN_DATE, COLUMN_BLOCK),
+    HOURLY_WISE: (COLUMN_DATE, COLUMN_HOURLY, COLUMN_BLOCK),
+    WEEK_WISE: (COLUMN_WEEK, COLUMN_DATE, COLUMN_BLOCK),
+    MONTH_WISE: (COLUMN_MONTH, COLUMN_DATE, COLUMN_BLOCK),
+    YEAR_WISE: (COLUMN_YEAR, COLUMN_DATE, COLUMN_BLOCK),
+}
+
+_MONTH_NAMES = ("Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def identity_columns(grouping: str) -> Tuple[str, ...]:
+    """The identity column headings this grouping puts in front of the data."""
+    return IDENTITY_COLUMNS[canonical(grouping)]
+
+
+def parse_day(day_key: str) -> date:
+    """`"2026-09-19"` -> a `date`. The day key is the only date the pipeline emits."""
+    return datetime.strptime(str(day_key), DAY_FORMAT).date()
+
+
+def hour_label(block: Union[int, str]) -> Optional[str]:
+    """`"Hour 1"` for blocks 1-4, `"Hour 24"` for 93-96.
+
+    One-based to match the block numbering beside it: a spreadsheet that starts
+    blocks at 1 and hours at 0 invites an off-by-one in every formula written
+    against it. `None` for a banded block key, which spans hours and has no one hour.
     """
-    hour = {"$toInt": {"$floor": {"$divide": [
-        {"$subtract": [BLOCK_FIELD, 1]}, BLOCKS_PER_HOUR,
-    ]}}}
-    return {
-        "$cond": [
-            {"$lt": [hour, 10]},
-            {"$concat": ["0", {"$toString": hour}]},
-            {"$toString": hour},
-        ]
-    }
+    try:
+        block_no = int(block)
+    except (TypeError, ValueError):
+        return None
+    return f"Hour {hour_of_block(block_no) + 1}"
 
 
-def date_key_expr(grouping: str, field: str = "$scheduled_at") -> dict:
-    """Mongo expression producing a sortable string date key for one grouping."""
-    fmt = DATE_FORMATS.get(grouping)
-    if fmt is None:
-        raise ValueError(f"Unknown date grouping: {grouping}")
+def week_label(day: date) -> str:
+    """`"W38 2026"`. ISO week and ISO year, which disagree with the calendar year
+    for a handful of days every New Year — see the module docstring."""
+    iso = day.isocalendar()
+    return f"W{iso[1]} {iso[0]}"
 
-    date_part = {"$dateToString": {"format": fmt, "date": field, "timezone": TIMEZONE}}
 
-    if grouping == "HOURLY_WISE":
-        return {"$concat": [date_part, " ", _hour_from_block_expr()]}
+def month_label(day: date) -> str:
+    """`"Sep 2026"`."""
+    return f"{_MONTH_NAMES[day.month - 1]} {day.year}"
 
-    return date_part
 
+def year_label(day: date) -> str:
+    """`"2026"`."""
+    return str(day.year)
+
+
+def identity_values(grouping: str, day_key: str,
+                    block_key: Union[int, str]) -> List[Union[str, date, int, None]]:
+    """The identity cells for one row, in `identity_columns` order.
+
+    `block_key` is a block number for INDIVIDUAL and a band label otherwise, and it
+    is passed through as given: "Night Off-Peak" is what the user chose, so it is
+    what the Time block column says.
+    """
+    day = parse_day(day_key)
+    out: List[Union[str, date, int, None]] = []
+    for column in identity_columns(grouping):
+        if column == COLUMN_WEEK:
+            out.append(week_label(day))
+        elif column == COLUMN_MONTH:
+            out.append(month_label(day))
+        elif column == COLUMN_YEAR:
+            out.append(year_label(day))
+        elif column == COLUMN_DATE:
+            out.append(day)
+        elif column == COLUMN_HOURLY:
+            out.append(hour_label(block_key))
+        elif column == COLUMN_BLOCK:
+            out.append(block_key)
+    return out
+
+
+# ------------------------------------------------------------- block keys
 
 def _branch(lo: int, hi: int, label: str) -> dict:
     return {
@@ -101,6 +203,9 @@ def block_key_expr(band: Band, custom: Optional[Sequence[Sequence[int]]] = None)
     supplied range its own "lo-hi" bucket. Blocks outside every range key to None,
     never to 0 — a block that belongs to no bucket has no value, it does not have
     zero.
+
+    CUSTOM left the filter panel on 2026-09-20 but stays reachable here: stored
+    export jobs still hold it, and a replay has to reproduce the file it made.
     """
     if band.code == BAND_INDIVIDUAL:
         return {"$toString": BLOCK_FIELD}

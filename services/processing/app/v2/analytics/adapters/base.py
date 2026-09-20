@@ -62,9 +62,6 @@ ENTITY_FILTER_KEYS = {
     "exchange": "exchanges",
 }
 
-DEFAULT_GROUPING = "BLOCK_WISE"
-
-
 class CanonicalRow(TypedDict):
     """One value, fully addressed. Every adapter returns these and nothing else."""
     dataset: str
@@ -369,13 +366,19 @@ class SourceGroupAdapter(ABC):
             for d in datasets)
 
     def _group_stage(self, datasets: Sequence[Dataset], filters: dict) -> dict:
-        """The analytics `$group`: one `_id` per output cell, one field per dataset."""
-        date_grouping = filters.get("date_grouping") or DEFAULT_GROUPING
+        """The analytics `$group`: one `_id` per output cell, one field per dataset.
+
+        The date key is always the trading **day**. The user's Group Date By never
+        reaches here: it chooses identity columns in the file, not buckets in Mongo.
+        Before 2026-09-20 it keyed this `_id`, which is how Block-wise and Date-wise
+        came to produce identical files, and how one ticked weekly dataset silently
+        rewrote the date axis for everything else in the request.
+        """
         band = _resolve_band(filters)
         custom = filters.get("custom_blocks", filters.get("custom"))
 
         _id: Dict[str, Any] = {
-            ID_DATE: grouping.date_key_expr(date_grouping, f"${self.date_field}"),
+            ID_DATE: grouping.day_key_expr(f"${self.date_field}"),
             ID_BLOCK: grouping.block_key_expr(band, custom),
         }
         if self._wants_entity(datasets):

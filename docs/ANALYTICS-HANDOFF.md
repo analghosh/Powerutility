@@ -47,10 +47,10 @@ Both pushed. `git log --oneline origin/dev..HEAD` in each repo lists everything.
 
 ## 3. Architecture in one page
 
-A **dataset registry** maps 52 dataset codes onto 5 MongoDB source groups, so ticking 12
+A **dataset registry** maps 48 dataset codes onto 5 MongoDB source groups, so ticking 12
 datasets issues ~4 aggregations rather than 12. A **cell budget**, computed from the filters
-alone before any database call, decides whether a request renders inline, streams, or queues
-as a background job.
+alone before any database call, decides whether a request renders inline, streams, or is
+refused with a 413 carrying priced narrowings (it used to queue — see §6g).
 
 ```
 filters + ticked datasets
@@ -70,10 +70,10 @@ filters + ticked datasets
 
 | file | responsibility |
 |---|---|
-| `analytics/registry.py` | 52 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
+| `analytics/registry.py` | 48 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
 | `analytics/block_bands.py` | block grouping; PTC's 5 named bands seeded **inactive** |
 | `analytics/budget.py` | cell arithmetic and band classification — pure, no I/O |
-| `analytics/grouping.py` | `$dateToString` keys, block bucket `$switch`, accumulators |
+| `analytics/grouping.py` | the trading-day key, block bucket `$switch`, accumulators, and the identity **columns** each Group Date By puts in the file (§6g) |
 | `analytics/adapters/` | one adapter per source group (demand, supply, exchange, trade, peak) |
 | `analytics/derived.py` | OD/UD Quantum = drawal − schedule |
 | `analytics/planner.py` / `executor.py` | plan + concurrent execution + per-group failure capture |
@@ -81,20 +81,24 @@ filters + ticked datasets
 | `repository/analytics_repository.py` | runs pipelines; **raises** on failure (unlike `GenericRepository.aggregate`, which swallows and returns `[]`) |
 | `repository/analytics_job_repository.py` | export job documents |
 | `services/analytics_service.py` | budget → permissions → cache → plan → execute → pivot |
-| `services/analytics_export_service.py` | CSV stream / XLSX inline / queue decision |
-| `helpers/analytics_csv.py`, `analytics_xlsx.py` | writers (CSV is a generator; XLSX is write-only mode) |
+| `services/analytics_export_service.py` | CSV stream / XLSX inline / **413** decision; writes the history row |
+| `helpers/analytics_layout.py` | **the one table both writers emit** — identity columns + one column per series |
+| `helpers/analytics_csv.py`, `analytics_xlsx.py` | writers (CSV is a generator; XLSX is write-only mode, one `Data` sheet) |
 | `api/router/analytics_routes.py`, `controller/analytics_controller.py` | HTTP |
 
 Scheduler: `services/scheduler/app/processors/analytics_export_processor.py`.
 Migration: `migrations/analytics_indexes_2026_09_17.py`.
 
-**Client files** — `client/src/features/analytics/` (hooks, components, `utils/orientation.js`,
-`utils/readEstimate.js`) and `client/src/pages/analytics/AnalyticsDashboard.jsx` (~230 lines,
-composition only). `FilterPanel` has a `layout="wide"` grid variant (ranges · data sets ·
-file layout + format picker) and the original `"sidebar"` variant. `ExportsPanel` takes
-`onAlsoAs(job, fmt)` — every Ready row offers the other format, rebuilt from the job's
-stored filters on demand rather than generated up front. `BudgetDialog mode="export-only"`
-hides the narrow/preview branches (nothing to narrow FOR without a table).
+**Client files** — `client/src/features/analytics/` (hooks, components,
+`utils/readEstimate.js`) and `client/src/pages/reports/AnalyticsDashboard.jsx`
+(composition only). `FilterPanel` has a `layout="wide"` grid variant (ranges · data
+sets · format picker + file name) and the original `"sidebar"` variant.
+`ExportsPanel` takes `onExecute(job)` — each row shows its file name, a *View
+configuration* disclosure and an *Execute* button that loads those filters back into
+the panel (§6g). `BudgetDialog mode="narrow-only"` shows the priced narrowings and
+nothing else, since there is no longer a server-side alternative to offer.
+`utils/orientation.js` is unreferenced — the File layout toggles it served were
+removed with the single-table layout.
 
 ## 4. API
 
@@ -103,10 +107,13 @@ GET  /api/v2/analytics/datasets                  registry + availability
 GET  /api/v2/analytics/plants?dataset=CODE       dataset-aware plant list
 GET  /api/v2/analytics/block-bands               configured bands
 POST /api/v2/analytics/query                     200 {data} | 413 {estimate+suggestions}
-POST /api/v2/analytics/export                    200 stream | 200 file | 202 {job_id}
-GET  /api/v2/analytics/exports                   this user's jobs
+POST /api/v2/analytics/export                    200 stream | 200 file | 202 {job_id} | 413 (memory cap)
+GET  /api/v2/analytics/exports                   this user's export history
 GET  /api/v2/analytics/export/{id}               status + progress + download_token
-GET  /api/v2/analytics/export/{id}/download?token=…
+#   ^ polled every 1s while a background build runs (§6h)
+GET  /api/v2/analytics/export/{id}/download?token=…   fetched automatically when ready
+# Below: still served, no longer reachable from the dashboard (§6g). They exist for
+# the queued rows already in Mongo; the screen never creates new ones.
 POST /api/v2/analytics/export/{id}/cancel
 POST /api/v2/analytics/export/{id}/retry     re-queue a failed/cancelled job IN PLACE
 ```
@@ -117,13 +124,20 @@ nested under `data` (the client reads `response.data.data`).
 `series[].values` is a numeric matrix indexed `[block][date]`. **`null` means missing and must
 never render as `0`** — a stated PTC requirement.
 
-**Cell budget bands** (`cells = date_buckets × block_buckets × Σ series_cardinality`):
-≤150k inline · ≤500k inline-capped · >500k async-only (**413**) · >10M refused.
-All configurable via `ANALYTICS_CELLS_*`.
+**Cell budget bands** (`cells = date_buckets × block_buckets × Σ series_cardinality`
+= the file's `rows × columns`): ≤1.5M inline · ≤3M inline-capped · >3M built in the
+background with progress · >20M refused on **memory** grounds. All configurable via
+`ANALYTICS_CELLS_*`; re-scaled 2026-09-20, see §6h. `date_buckets` is **one per
+trading day** whatever the Group Date By — the pill names a column, not a bucket (§6g).
 
-**Export modes:** CSV ≤500k streams; XLSX ≤150k builds inline; anything larger queues.
-**MongoDB is the queue; RabbitMQ is only a doorbell** — `USE_RABBITMQ_JOBS=false` locally, so
-the every-minute Mongo sweep is the primary path, not a fallback.
+**Export modes (2026-09-20):** under the ceiling a file is built inside the request —
+CSV streams, XLSX is written and sent. Over it, the **processing service** builds it
+as a background task reporting `rows_done`/`rows_total`, the client polls and
+downloads it automatically (§6h). Nothing is refused for being merely large. The old
+scheduler queue (`_enqueue`, the worker, the retry route) still owns the rows already
+in Mongo: **MongoDB is the queue; RabbitMQ is only a doorbell** —
+`USE_RABBITMQ_JOBS=false` locally, so the every-minute Mongo sweep is the primary
+path, not a fallback.
 
 ## 5. Verified working (live, 2026-09-17)
 
@@ -187,6 +201,13 @@ stale 554.68). Bump it whenever a dataset's meaning changes.
 Absent datasets are now **2** (TAM only), down from 6.
 
 ## 6b. Partial weeks, indexes, sentinel zeros (2026-09-17 evening)
+
+> Superseded by §6g (2026-09-20): the roll-up datasets were removed, so
+> `analytics/coverage.py`, `meta.period_coverage`, `meta.partial_periods` and the
+> `# Partial periods` header line are all gone. The ISO-week counting fix below is
+> also moot — every grouping counts one bucket per trading day now. Kept as the
+> record of why they existed. The "Open for PTC" question at the end was answered
+> by removing the feature.
 
 **Partial roll-up periods.** A 3-day range rolled up weekly returns a bucket labelled with
 the WHOLE week. The engine's average was honest; the label was not. Now: `meta.period_coverage`
@@ -443,23 +464,344 @@ db.menus.insertOne({
 Verify the row's field names against an existing child of Reports before inserting —
 copy that document's shape rather than this snippet's.
 
+## 6f. Excel is the default export format (2026-09-19)
+
+> Superseded in part by §6g (2026-09-20): the workbook is one `Data` sheet, not one
+> sheet per dataset, and nothing queues. Excel-first is unchanged and still current.
+
+The Generate As toggle now lists **Excel first and opens on it**; CSV is the second
+button. PTC read this screen in Excel — one sheet per dataset with a `Block | <date>`
+grid is what they open — and the CSV long form is the machine-readable half that was
+never the common case. Verified in the browser
+(`tools/e2e/analytics_journey.mjs`, **18 steps, all passing**), including a step that
+clears the saved default and the per-device localStorage copy and asserts the screen
+comes back on Excel.
+
+Default flipped in five places, because "the default" is not one constant:
+
+| Where | Was | Is |
+|---|---|---|
+| `analytics_export_service.DEFAULT_FORMAT` | `csv` | `xlsx` |
+| `models.ExportRequest.format` | `csv` | `xlsx` |
+| `models.PreferenceRequest.format` | `csv` | `xlsx` |
+| `analytics_preference_repository.FORMATS[0]` | `csv` | `xlsx` |
+| client `FORMATS[0]` / `readStoredFormat` fallback | `csv` | `xlsx` |
+
+`FORMATS[0]` in the preference repository is load-bearing: `validate`, `sanitize` and
+`empty_preference` all take the default from it, so the tuple order **is** the default.
+The client mirror is the same shape — `FORMATS[0]` is both the first button and what
+`readStoredFormat` falls back to, so the button order and the default cannot drift.
+
+Three things this deliberately did **not** change:
+
+* **A saved preference still wins.** A user who saved CSV as their default keeps
+  opening on CSV. The new default is what a user with no saved preference gets.
+* **The `or "csv"` fallbacks in `analytics_routes` and the export processor stay.**
+  Those read the format of a job that was already written, to name a file that is
+  already on disk. A legacy row with no `format` key is a CSV file; relabelling it
+  `.xlsx` would hand the user a workbook that is not one.
+* **`extensionFor` still coerces to `csv`.** It is fed `formatOfJob`, which reads the
+  stored filename — a file not ending `.xlsx` really is a CSV.
+
+**The cost, and it is real.** XLSX rides the lower of the two in-request ceilings
+(`ANALYTICS_CELLS_INLINE`, 150k) where CSV rides `ANALYTICS_CELLS_INLINE_CAPPED`
+(500k) — see the module docstring on `analytics_export_service` for why the two
+numbers differ. So a range between those two ceilings used to stream instantly and
+now **queues** and lands in My Exports. That is the intended trade (a 150k-cell
+workbook holds a web worker for about a minute with nothing to show), but it means
+more jobs through the scheduler sweep, and the disk budget and the 72h retention
+matter more than they did. If PTC complain that exports that used to be instant now
+queue, the lever is `ANALYTICS_CELLS_INLINE`, not the default.
+
+> **Since §6g that range is refused, not queued** — the lever is the same setting,
+> and it now decides what is possible at all rather than what waits.
+
+**Tests:** backend `libs/tests` **872 pass / 10 fail** — the same 10 pre-existing
+vendor-rot failures (`test_supply_csv_parser.py`, `test_grid_india_parser.py`,
+`test_demand_supply_entities.py`), confirmed unchanged by re-running them on a
+stashed tree. Analytics alone: **761 pass**. Client `node --test` **114 pass**
+(one new case: the download fallback names an `.xlsx` when given no format).
+Browser journey **18/18**.
+
+## 6g. One table, grouping-as-a-column, immediate download (2026-09-20)
+
+The largest change since the feature was built, and it reverses three of its
+original decisions. PTC drove it after asking a question the code could not answer:
+**"why does Group Date By make no difference to the sheet?"**
+
+Three separate defects were behind that one question:
+
+1. **Block-wise and Date-wise were the same file.** Both formatted `%Y-%m-%d` and
+   left the block axis to Group Blocks By, so they were byte-identical — two pills,
+   one behaviour. They are now the single **Block & Date wise**.
+2. **Hourly was inert at Individual Blocks.** A block *is* a quarter hour, so adding
+   an hour to the group key merely scattered 96 values across 24 sparse columns.
+   Measured: 24 date columns × 96 block rows holding 96 non-null cells on a
+   diagonal.
+3. **A ticked weekly dataset silently rewrote the whole request.** `forced_grouping`
+   applied a roll-up's `fixed_grouping` to every dataset in the file, so a user
+   asking for block-wise Declared Capacity got ISO-week columns — with the
+   Block-wise pill still lit and the Filters sheet still printing `BLOCK_WISE`.
+   Reproduced live on the user's own range before the fix:
+
+   ```
+   asked for             : BLOCK_WISE
+   meta.date_grouping    = WEEK_WISE
+   meta.grouping_forced_by = ['WEEKLY_FORECAST']
+   axes.dates            = ['2026-W37']
+   ```
+
+### What the screen does now
+
+**Group Date By is a label, not an aggregation.** Every dashboard query groups on the
+trading **day** whatever the pill says; the pill decides which identity columns the
+file carries. A week-wise file holds the same block values a block-wise one does,
+with a week number beside them.
+
+| Pill | Columns, coarse to fine |
+|---|---|
+| Block & Date wise | `Date · Time block` |
+| Hourly | `Date · Hourly · Time block` |
+| Week-wise | `Week · Date · Time block` |
+| Month-wise | `Month · Date · Time block` |
+| Year-wise | `Year · Date · Time block` |
+
+**One sheet, one row per (day, block), one column per series.** The workbook's
+sheet-per-dataset layout is gone: two datasets a user wants to compare now sit on the
+same row instead of on two sheets. A series is a dataset *plus its entity*, so one
+ticked Plant wise DC becomes 34 columns and one ticked DAM ACP becomes three. The CSV
+emits the identical table; its old flat `dataset,label,unit,date,block,value` form is
+gone.
+
+```
+Week      Date         Time block   Actual Demand (MW)   Weekly Forecast · Day Ahead (MW)
+W38 2026  14 Sep 2026           1              4821.30                            4798.20
+W38 2026  14 Sep 2026           2              4805.70                            4798.20
+```
+
+Other changes in the same batch:
+
+* **No queue.** A file is generated inside the request and downloaded, or refused
+  with **413** plus priced narrowings. My Exports is now a **history of
+  configurations** — file name, a *View configuration* disclosure, and *Execute*,
+  which loads the filters back so the user can press Apply & Generate. Download,
+  cancel, retry and also-as are gone.
+* **Button reads "Apply & Generate"**; the spinner shows elapsed seconds. Real
+  progress is not available for a single request and a percentage would be invented.
+* **File layout (orientation toggles) removed** — one canonical layout now.
+* **Custom block band removed from the UI.** The server still understands it so
+  stored rows replay; the panel does not offer it.
+* **From/To block inputs appear only for Individual Blocks.** A named band shows its
+  own blocks read-only, and the Time block column then reads `Peak`, not a code.
+* **The Filters sheet reports what actually ran**, read from `meta`, not from the
+  request. That is the line that used to lie.
+* **Dates are real Excel dates** (`dd mmm yyyy`), not text — they were unsortable.
+
+### The roll-ups were removed (Weekly/Monthly Forecast and MAPE)
+
+They first got their own pipeline, so they could stop hijacking the request. Then
+PTC looked at what they actually were and removed them outright the same day.
+
+They read the **same stored fields** as the datasets beside them and differed only
+in aggregation period:
+
+```python
+FORECAST_DAF     value="$forecast"  agg="avg"  match={"type":"DAF"}          # per day
+WEEKLY_FORECAST  value="$forecast"  agg="avg"  fixed_grouping="WEEK_WISE"    # per week
+```
+
+Nothing is stored as an average anywhere — the average was computed at read time —
+so a user who wants the weekly picture averages the daily columns, which are still
+on the picker as **Day Ahead / Intra Day Forecast** and **Day Ahead / Intra Day
+MAPE**. The catalogue went 52 → 48 datasets.
+
+What went with them:
+
+| Removed | Why it existed |
+|---|---|
+| `Dataset.fixed_grouping` | only the four roll-ups set it — it *was* the hijack mechanism |
+| `grouping.date_key_expr`, `DATE_FORMATS` | bucketing by a period other than the day |
+| `grouping.period_key` / `period_day_map` / `days_in_range` | mapping a period back onto its days |
+| `planner._split_by_rollup` / `_rollup_expander`, `GroupPlan["post"]` | the separate pipeline and the broadcast |
+| `adapters.base.ROLLUP_GROUPING_KEY` | the filter key that selected a period |
+| `analytics/coverage.py` + its tests | labelling partially-covered periods |
+| `analytics_service.rollup_families`, `_rollup_coverage` | reporting which families were ticked |
+| `meta.rollup_families` / `period_coverage` / `partial_periods` | the response fields |
+| `Rolled-up columns` / `Partial periods` in the Filters sheet | explaining the repeated columns |
+| the client's `Weekly`/`Monthly` badge in the picker | naming the roll-up family |
+
+That also closes the partial-period caveat by deleting it: there is no longer a
+period that can be partially covered.
+
+**One deliberate piece of dead code left in place.** `per_forecast_type` had exactly
+these four users, so `DemandAdapter.entity = "type"`, `_wants_entity`, the
+`series_cardinality` branch and `pivot.ENTITY_LABELS` are now inert. They are kept
+because `dedupe_key` includes `type` and because removing them touches the grouping
+behaviour of **every** demand dataset for no functional gain. `test_analytics_
+adapters_simple.py` pins that no demand dataset is `per_forecast_type` today, so a
+future one has to clear the trap deliberately.
+
+**Compatibility.** Saved preferences were already safe — `analytics_preference_
+repository.sanitize` drops codes the registry no longer knows. Stored export rows
+were not: 13 rows in local Mongo name `WEEKLY_FORECAST` or `MONTHLY_MAPE`, and
+replaying one would 422. The client's Execute therefore filters the stored dataset
+list against the live catalogue and tells the user what it left out.
+
+### Budget arithmetic changed with it
+
+`date_bucket_count` is now **one bucket per trading day, whatever the grouping** — the
+`grouping` argument is accepted and ignored. Two suggestions changed as a result:
+`coarser_dates` ("switch to Week-wise") was **removed** because following it now
+changes the cell count by nothing, and `fewer_plants` became `fewer_datasets` since
+there is no plant picker to narrow. `shorter_range` is new. The practical effect:
+a week-wise or month-wise request that used to price at a handful of buckets now
+prices at its real size, so some selections that were accepted before are refused.
+That is the estimate becoming honest, not a regression.
+
+### Compatibility
+
+`BLOCK_WISE` and `DATE_WISE` still arrive from stored export rows and saved user
+preferences. They are canonicalised forward to `BLOCK_DATE_WISE` in
+`grouping.canonical`, at the request model's validator and in the client's
+`canonicalDateGrouping` — nothing on disk was migrated. The query cache version was
+bumped **v7 → v8**: a v7 entry cached under `WEEK_WISE` holds week buckets the new
+writers would read as days.
+
+### What this leaves behind
+
+`services/scheduler/app/processors/analytics_export_processor.py` and the four job
+routes (`/export/{id}`, `/download`, `/cancel`, `/retry`) are no longer reachable from
+the dashboard. They are intact and still tested, because the rows already in Mongo
+need them. Delete them once those rows have aged out — not before.
+
+**New file:** `services/processing/app/v2/helpers/analytics_layout.py` — the one table,
+shared by both writers. **Deleted:** `client/src/features/analytics/components/DisplayOptions.jsx`.
+
+**Tests:** backend analytics **748 pass**, full `libs/tests` **859 pass / 10 fail** —
+the same 10 pre-existing vendor-rot failures (`test_supply_csv_parser.py`,
+`test_grid_india_parser.py`, `test_demand_supply_entities.py`). Client `node --test`
+**114 pass**. New browser journey `tools/e2e/analytics_layout_journey.mjs`
+**18/18 steps**, which drives the real UI and reads the real downloaded workbook —
+including a step proving an older history row that names a removed dataset still
+Executes. While the roll-ups still existed they were recomputed straight from
+`demand_serve` ∪ `demand_serve_historical` (deduped as the pipeline does) and
+compared with the API cell by cell: **800 cells, 0 mismatches** — which is the
+evidence that the daily columns they were removed in favour of carry the same data.
+
+## 6h. Large exports build with progress instead of being refused (2026-09-20)
+
+PTC hit `Large export — this request is larger than the analytics screen will render
+in the browser` on a selection that **builds in 3.5 seconds**. Two things were wrong,
+and the second was hiding the first.
+
+### The budget was measuring the wrong thing
+
+`cells = date_buckets x block_buckets x series` was calibrated when this screen
+rendered an on-screen grid and the workbook was a sheet per dataset, so a "cell" was
+something the browser had to lay out. Under the single-table layout (§6g) the same
+number buys far more: the refused request was **3,936 rows x 84 columns**. Measured
+XLSX write time on this data set, which is the dominant cost (Mongo and the pivot are
+~1s even for a year):
+
+| rows x cols | cells | xlsx | size |
+|---|---|---|---|
+| 2,880 x 20 | 57,600 | 0.4s | 0.2 MB |
+| 35,040 x 20 | 700,800 | 4.8s | 2.0 MB |
+| 35,040 x 140 | 4,905,600 | 25.8s | 11.3 MB |
+| 105,120 x 140 | 14,716,800 | 77.4s | 33.7 MB |
+
+≈190k cells/s. The thresholds were re-scaled to match, and their meaning changed:
+
+| band | was | is | meaning now |
+|---|---|---|---|
+| `inline` | 150k | **1.5M** | served inside the request (≈8s) |
+| `inline_capped` | 500k | **3.0M** | also inside the request; CSV only, which streams |
+| `max` | 10M | **20M** | the only refusal, and it is a **memory** limit |
+
+`max` is no longer "too big to render". The pivot holds the whole value matrix in
+Python lists — ~24 bytes a float before list overhead — so 20M cells is already
+~460MB resident on a box that also serves the bidding screens. Three years of every
+live dataset (14.7M) fits under it; four does not, and that is the intended line.
+
+### Above `inline`, it is built rather than refused
+
+The file is produced **in the processing service** as an asyncio background task,
+which is the part that makes this usable: the scheduler's queue would not have
+started for up to a minute, and the whole point is that the user is waiting.
+
+```
+POST /analytics/export   -> 202 {job_id, status: "running", rows_total}
+GET  /analytics/export/{id}   -> {status, progress, rows_done, rows_total}   (polled 1s)
+GET  /analytics/export/{id}/download?token=…   -> the file, fetched automatically
+```
+
+The client polls, shows `Building… 47%` on the button with a bar and
+`16,000 of 35,040 rows` beneath it, and downloads the file by itself the moment it is
+ready. From the user's side the only difference from a short range is the wait.
+
+Progress is real, not a spinner: `analytics_layout.data_rows` takes an `on_row`
+callback, and the writer reports every `PROGRESS_EVERY_ROWS` (500) — a Mongo write
+per row would cost more than the export. `rows_total` is seeded from the estimate and
+**corrected once the query returns**, because the date axis carries the days that have
+data, not the days that were asked for; on this machine a request for 35,136 rows
+settles at 4,128.
+
+New fields on the job row: `rows_total` / `rows_done`. `_progress` in the routes reads
+those first and falls back to `chunks_*`, which is the scheduler worker's unit and
+still owns the queued rows already in Mongo.
+
+### Two defects found in the browser, not by tests
+
+Both would have shipped: the unit tests use a fake job store and a fake query
+service, and neither reproduces these.
+
+1. **Every background build failed the instant it started.** `_build` called
+   `service.query()`, which applies its *own* inline-render ceiling — so a request
+   admitted for background building was immediately refused by the next layer down.
+   The user saw a bar that never moved and then "Export failed". `query()` now takes
+   `enforce_budget=False`, used by that path and no other; the memory cap is still
+   enforced, before the job row is written.
+2. **Progress never left 0%.** `_write_file` runs on a worker thread via
+   `asyncio.to_thread` and read the event loop with `asyncio.get_running_loop()`
+   *inside* that thread, where there is none — so every update was silently dropped.
+   The loop is captured on the event loop and passed in.
+   `libs/tests/test_analytics_export_progress.py` now pins this: it drives a year of
+   dense rows through the writer and asserts the updates are plural, monotonic,
+   throttled, and land exactly on the row count.
+
+### Also fixed: the dialog said "Size unknown"
+
+The server sent `cells: 411264` and three priced suggestions; the dialog rendered
+*"Size unknown"* and *"the server offered no narrowing"*. `useAnalyticsExports` read
+`data.data ?? data` for the 413 body, but FastAPI's `HTTPException` puts it under
+`detail` — and `utils/readEstimate.js`, which exists precisely to handle that and is
+unit-tested, was not being called at that site. It is now. Only reachable at the
+memory cap, but it has to tell the truth when it is.
+
+**Tests:** backend `libs/tests` **869 pass / 10 fail** — the same 10 pre-existing
+vendor-rot failures. Client **115 pass**. Browser journey
+`tools/e2e/analytics_layout_journey.mjs` **22/22**, including a step that drives a
+large range through the real UI and asserts the button shows `Building… N%` and the
+workbook downloads itself.
+
 ## 7. REMAINING WORK — the actual to-do list
 
 Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 
 ### Already verified — do not repeat
 
-- ✅ **Browser verification was performed.** A real Chromium session logged in as `localdev`,
-  loaded `/analytics/dashboard`, set the date range, ticked Actual Demand, clicked
-  Apply & Generate, and confirmed the AG Grid rendered `554.68, 544.6, 527.54…` matching a
-  direct Mongo read. 33 rows in the DOM for a 96-block result, proving virtualization.
-  Screenshot captured. Zero analytics console errors (the 403s seen are Highcharts CDN
-  scripts, pre-existing on every EPMS page).
+- ✅ **Browser verification was performed**, and is now repeatable — see item 2 below.
+  Two committed journeys: `tools/e2e/analytics_journey.mjs` (18 steps) and
+  `tools/e2e/analytics_layout_journey.mjs` (17 steps, §6g), both driving a real
+  Chromium session as `localdev` and reading the real downloaded workbook.
+  The 403s seen in the console are Highcharts CDN scripts, pre-existing on every
+  EPMS page and unrelated to this screen, which draws no charts.
 - ✅ Queued export driven end to end: 202 → Mongo sweep → 22/22 chunks → downloaded 183KB
-  XLSX and opened it.
+  XLSX and opened it. **Historical** — the dashboard stopped queueing on 2026-09-20
+  (§6g); this proves the worker, which still serves the rows already in Mongo.
 - ✅ Budget 413, capped band, Redis cache hit, disabled-dataset 422, CSV stream, XLSX inline.
-- ✅ **Large-range path in the real browser**: 413 → budget dialog → Week-wise suggestion →
-  200 → 68-column grid. This run found and fixed the dialog-never-opens defect (§11 item 7).
+- ✅ **The four roll-ups checked against raw Mongo**: 800 cells recomputed from
+  `demand_serve` ∪ `demand_serve_historical` and compared with the API, 0 mismatches.
 
 ### P1 — correctness
 
@@ -470,25 +812,33 @@ Ordered by priority. Items marked ✅ are **already done** — do not redo them.
 
 ### P2 — test coverage gaps
 
-2. **Commit a repeatable analytics e2e journey.** The browser run above was **ad-hoc and was
-   not saved**. The house convention is **Node `.mjs` scripts in `tools/e2e/`** — see the
-   existing `tools/e2e/harness.mjs` and `tools/e2e/mfa_journey.mjs`. Write
-   `tools/e2e/analytics_journey.mjs` in that style, covering: login → dashboard → set filters
-   → Apply → assert grid values → CSV download → queue an export → poll to ready.
-   ⚠️ Note `playwright` was pip-installed straight into `backend/.venv` during verification
-   and is **not in any requirements file**. Either pin it in `requirements-dev.txt` or drop
-   it and use the Node harness, which is the existing convention.
+2. ✅ **Repeatable e2e journeys exist** — `tools/e2e/analytics_journey.mjs` (18 steps)
+   and `tools/e2e/analytics_layout_journey.mjs` (17 steps). Both are Node `.mjs` in
+   the house style. ⚠️ They live in the **workspace root** `tools/`, which is not a
+   git repository — they are not version-controlled with either repo. Move them into
+   `backend/tools/e2e/` if they should ship.
+   ⚠️ Note `playwright` was pip-installed straight into `backend/.venv` during earlier
+   verification and is **not in any requirements file**; the journeys use the Node
+   Playwright instead, which is the existing convention.
 3. **Mid-export restart-and-resume is unit-tested only.** Start a large export, kill the
    scheduler mid-run, restart, and confirm from the job document that it resumed at the right
    chunk rather than restarting. The chunk receipts in `parts[]` exist for this.
+   *Lower priority since §6g*: the dashboard no longer creates queued jobs, so this
+   path only runs for rows already in Mongo.
 4. **Cross-user download 403 is unit-tested only.** Needs a second real account to prove the
-   authorization boundary live.
+   authorization boundary live. Same caveat as item 3.
 5. **Concurrent-load measurement never run.** Fire N simultaneous analytics queries while
    timing an authenticated bidding call, and record the degradation. Analytics has its own
    Motor client (`processing_analytics`) specifically so it cannot starve the bidding pool —
    but that is designed, not measured.
 
 ### P3 — polish / decisions
+
+5b. **Decide when the queue comes out.** `analytics_export_processor.py` and the four
+   job routes are unreachable from the dashboard but still serve the queued rows in
+   Mongo. Once those age out (72h retention, 87-day row retention), delete the worker,
+   the routes, `_enqueue`, and `utils/orientation.js` on the client, which the removed
+   File layout toggles were the only consumer of.
 
 6. **CSV number formatting** — raw float repr leaks, e.g. `522.9399999999999`. Deliberately
    left alone: rounding precision is a reporting decision for PTC (question ⑰).
@@ -735,9 +1085,17 @@ cd ~/Desktop/infiscopelabs && ./start.sh          # ./stop.sh to halt
 # backend tests — NEVER bare pytest, the tests/ tree aborts collection
 cd backend && ./.venv/bin/python -m pytest libs/tests/ -q
 
+# backend — analytics only
+cd backend && ./.venv/bin/python -m pytest libs/tests -k analytics -q
+
 # client
-cd client && node --test src/features/analytics/utils/orientation.test.js
+cd client && node --test $(find src -name "*.test.js" | grep -v node_modules)
 cd client && npm run build      # npm run lint is DEAD, do not trust it
+
+# browser journeys (stack must be up; client on :3005)
+cd ~/Desktop/infiscopelabs && node tools/e2e/analytics_journey.mjs
+cd ~/Desktop/infiscopelabs && node tools/e2e/analytics_layout_journey.mjs
+#   E2E_HEADED=1 to watch it; artifacts land in /tmp/epms-analytics-*-e2e
 
 # indexes
 cd backend && ./.venv/bin/python -m migrations.analytics_indexes_2026_09_17

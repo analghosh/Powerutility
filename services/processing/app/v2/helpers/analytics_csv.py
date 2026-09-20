@@ -7,15 +7,17 @@ streaming tier, and a worker that materialised its chunk would defeat the chunki
 Nothing here builds a list of rows, calls `len()` on the series, or joins the output;
 the response's `series` is walked exactly once, lazily.
 
-Layout is flat (long) rather than pivoted, which is what makes the stream possible and
-what the spec asks for: a `dataset` identifier column, one line per cell, preceded by a
-`#`-commented block recording the filters that produced it. A per-plant, per-exchange
-or per-forecast-type series carries its entity inside `label` — `Declared Capacity —
-by plant (PPCLGPP)` — rather than in a column of its own: most datasets are scalar,
-and a column that is empty on most rows was the first thing users asked to remove. An export
-always re-runs from the stored filters, so that block is the only record of what the
-user actually picked — it is printed for the person who opens the file a week later
-and has to know whether they are looking at DAM or RTM.
+Layout is the one table `analytics_layout` builds, the same one the workbook holds:
+one row per (day, block), the identity columns the chosen Group Date By calls for,
+then one column per series. It replaced the flat
+`dataset,label,unit,date,block,value` form on 2026-09-20 — that shape repeated the
+dataset name on every line and put two datasets a user wanted to compare a hundred
+thousand rows apart.
+
+A `#`-commented block of the filters precedes it. An export always re-runs from the
+stored filters, so that block is the only record of what the user actually picked —
+it is printed for the person who opens the file a week later and has to know whether
+they are looking at DAM or RTM.
 
 **A missing value is an empty cell.** Never `0`, never the string `"None"`. The pivot
 keeps "nothing was scheduled" and "zero was scheduled" apart all the way down the
@@ -29,16 +31,17 @@ import re
 from datetime import date, datetime
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
-#: The flat column contract. The entity (plant, exchange, forecast type) is folded
-#: into `label` by `series_label`; `dataset` stays the stable machine key.
-COLUMNS = ("dataset", "label", "unit", "date", "block", "value")
+from . import analytics_layout
+
+#: Columns are no longer fixed — they are the identity columns for the chosen
+#: grouping plus one per series, and `analytics_layout.column_titles` builds them.
+#: The name is kept because the route and the tests import it as the CSV contract.
+COLUMNS = analytics_layout.column_titles
 
 
 def series_label(series: Dict[str, Any]) -> str:
-    """`label (entity)` when the series has an entity, else just the label."""
-    label = _text(series.get("label"))
-    entity = series.get("entity_label") or series.get("entity")
-    return f"{label} ({entity})" if entity not in (None, "") else label
+    """`label · entity (unit)` — the heading this series gets in the table."""
+    return analytics_layout.column_label(series)
 
 #: Formats `filename_for` will name. Mirrors `models.EXPORT_FORMATS`.
 SUPPORTED_FORMATS = ("csv", "xlsx")
@@ -91,6 +94,11 @@ def filter_pairs(filters: Optional[Dict[str, Any]],
 
     One source of truth on purpose: the two files must not disagree about what was
     asked for.
+
+    `Date grouping` is read from the response, not from the request. It used to be
+    read from the request, and a ticked weekly dataset silently rewrote the grouping
+    for the whole query — so a workbook whose columns were ISO weeks carried the line
+    `Date grouping: BLOCK_WISE`, and nobody reconciling it could tell.
     """
     filters = filters or {}
     meta = (response or {}).get("meta") or {}
@@ -99,7 +107,7 @@ def filter_pairs(filters: Optional[Dict[str, Any]],
         ("Generated", _text(meta.get("generated_at"))),
         ("Date range", f"{_text(filters.get('from_date'))} to {_text(filters.get('to_date'))}"),
         ("Block range", f"{_text(filters.get('from_block'))} to {_text(filters.get('to_block'))}"),
-        ("Date grouping", _text(filters.get("date_grouping"))),
+        ("Date grouping", analytics_layout.grouping_of(response, filters)),
         ("Block grouping", _block_grouping(filters)),
     ]
 
@@ -117,15 +125,6 @@ def filter_pairs(filters: Optional[Dict[str, Any]],
     fmt = _text(filters.get("format"))
     if fmt:
         pairs.append(("Format", fmt))
-
-    # A weekly/monthly bucket that the range only partly covers is labelled with the
-    # whole period; say so, or a "W35" of three days reads as a full week.
-    cov = meta.get("period_coverage") or {}
-    partial = [k for k, v in cov.items() if isinstance(v, dict) and v.get("partial")]
-    if partial:
-        detail = "; ".join(
-            f"{k} ({cov[k]['days_covered']} of {cov[k]['days_in_period']} days)" for k in partial)
-        pairs.append(("Partial periods", detail))
 
     truncated = meta.get("truncated")
     if truncated:
@@ -162,42 +161,42 @@ def _row_writer():
 
 
 def _cell(value: Any) -> Any:
-    """A gap is an empty field. Never `0`, never `"None"` — a real `0` survives."""
-    return "" if value is None else value
+    """A gap is an empty field. Never `0`, never `"None"` — a real `0` survives.
+
+    A `date` is rendered ISO, which sorts correctly as text and is what a
+    spreadsheet reimports as a date.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return value
 
 
 def csv_rows(response: Dict[str, Any],
-             filters: Optional[Dict[str, Any]] = None) -> Iterator[str]:
+             filters: Optional[Dict[str, Any]] = None,
+             on_row=None) -> Iterator[str]:
     """Yield the export one newline-terminated line at a time.
 
-    Order is header block, column header, then one line per (series, block, date)
-    cell — including the empty ones, so the grid the user saw is reconstructible
-    from the file rather than silently losing its gaps.
+    Order is the header block, the column headings, then one line per (day, block) —
+    including the rows that are entirely empty, so the grid the user asked for is
+    reconstructible from the file rather than silently losing its gaps.
+
+    This must stay a generator: the streaming tier exists so a large export never
+    sits in memory as one string.
     """
     response = response or {}
-    axes = response.get("axes") or {}
-    dates = [_text(d) for d in (axes.get("dates") or ())]
-    blocks = list(axes.get("blocks") or ())
 
     for line in header_lines(filters, response):
         yield line
 
     emit = _row_writer()
-    yield emit(COLUMNS)
+    yield emit(analytics_layout.column_titles(response, filters))
 
-    # `series` is walked lazily and exactly once: it may be a cursor-backed iterator
-    # in the worker, and it is never counted, sorted or copied here.
-    for series in (response.get("series") or ()):
-        dataset = _text(series.get("dataset"))
-        label = series_label(series)
-        unit = _text(series.get("unit"))
-        matrix = series.get("values") or ()
-
-        for bi, block in enumerate(blocks):
-            row = matrix[bi] if bi < len(matrix) else ()
-            for di, day in enumerate(dates):
-                value = row[di] if di < len(row) else None
-                yield emit((dataset, label, unit, day, block, _cell(value)))
+    for row in analytics_layout.data_rows(response, filters, on_row=on_row):
+        yield emit([_cell(v) for v in row])
 
 
 def _slug(value: Any) -> str:

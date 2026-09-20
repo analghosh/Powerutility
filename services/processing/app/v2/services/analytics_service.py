@@ -61,8 +61,8 @@ from datetime import date, datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from ...core.config import settings as default_settings
-from ..analytics import (block_bands, budget, coverage, derived, executor, pivot,
-                         planner, registry)
+from ..analytics import (block_bands, budget, derived, executor, pivot, planner,
+                         registry)
 from ..analytics.adapters import base as adapters
 from ..analytics.models import AnalyticsQueryRequest
 
@@ -94,7 +94,12 @@ PLANT_CACHE_TTL_SECONDS = 900
 #       Values are unchanged, but `series[].label` is IN the cached payload and the
 #       writers print it, so a past-date query cached under v6 would keep emitting the
 #       old label into downloaded files for the full 24 h TTL (2026-09-18).
-CACHE_VERSION = "v7"
+#   v8: Group Date By stopped aggregating (2026-09-20). Every query now groups on the
+#       trading day, so a v7 entry cached under WEEK_WISE holds week buckets that the
+#       new writers would read as days.
+#   v9: the weekly/monthly roll-up datasets were removed the same day; a v8 entry
+#       still carries their series and their period_coverage meta.
+CACHE_VERSION = "v9"
 CACHE_PREFIX = "analytics:query"
 
 #: Bands that cannot be rendered inline. The route turns this into a 413 plus the
@@ -146,13 +151,10 @@ class BudgetExceeded(RuntimeError):
         self.band = estimate.band
         self.suggestions = list(estimate.suggestions)
         super().__init__(message or (
-            f"This selection would render {estimate.cells:,} cells, more than the "
-            f"inline limit. Narrow the range, group the blocks, or export it instead."
+            f"This selection would render {estimate.cells:,} cells, which is more "
+            f"than one file can be generated for. Narrow it using the suggestions "
+            f"below and generate again."
         ))
-
-
-class FixedGroupingConflict(ValueError):
-    """Two selected datasets demand different fixed date groupings."""
 
 
 class BandInactive(ValueError):
@@ -173,42 +175,12 @@ class BandInactive(ValueError):
 BAND_CACHE_TTL_SECONDS = 30.0
 
 
-def forced_grouping(codes) -> Tuple[Optional[str], List[str]]:
-    """The date grouping the selected datasets impose, if any, and who imposed it.
-
-    A weekly forecast viewed block-wise is meaningless, so a roll-up dataset carries a
-    `fixed_grouping` that overrides the user's choice for the whole request. Mixing a
-    weekly and a monthly roll-up in one request has no sensible answer and is refused.
-    """
-    forced: Dict[str, List[str]] = {}
-    for code in codes:
-        fg = registry.get(code).fixed_grouping
-        if fg:
-            forced.setdefault(fg, []).append(code)
-    if not forced:
-        return None, []
-    if len(forced) > 1:
-        pretty = {"WEEK_WISE": "weekly", "MONTH_WISE": "monthly"}
-        parts = []
-        for g, codes_ in sorted(forced.items()):
-            labels = ", ".join(registry.get(c).label for c in codes_)
-            parts.append(f"{pretty.get(g, g)} ({labels})")
-        exc = FixedGroupingConflict(
-            "Weekly and monthly roll-ups cannot be shown on one table because they "
-            "need different date axes. Please pick one or the other: "
-            + " vs ".join(parts) + ".")
-        exc.groups = {g: list(c) for g, c in forced.items()}
-        raise exc
-    (grouping, by), = forced.items()
-    return grouping, by
-
-
 def _as_request(request: Any) -> AnalyticsQueryRequest:
     """Accept a validated model or the raw filter dict a stored export job holds.
 
-    Also the single choke point where a dataset's `fixed_grouping` overrides the
-    user's `date_grouping`, so the budget, the cache key and the planner all see the
-    same, already-forced value.
+    A dataset's `fixed_grouping` used to be applied here, rewriting the user's
+    `date_grouping` for the whole request. It no longer is: roll-ups carry their own
+    pipeline instead, and the pill only decides the file's identity columns.
     """
     if isinstance(request, AnalyticsQueryRequest):
         req = request
@@ -217,9 +189,6 @@ def _as_request(request: Any) -> AnalyticsQueryRequest:
     else:
         raise TypeError(
             f"Expected an AnalyticsQueryRequest or a filter dict, got {type(request).__name__}")
-    grouping, _ = forced_grouping(req.datasets)
-    if grouping and grouping != req.date_grouping:
-        req = req.model_copy(update={"date_grouping": grouping})
     return req
 
 
@@ -618,7 +587,8 @@ class AnalyticsService:
 
     # ---------------------------------------------------------------- query
 
-    async def query(self, request: Any, user_context: Optional[dict] = None) -> dict:
+    async def query(self, request: Any, user_context: Optional[dict] = None,
+                    *, enforce_budget: bool = True) -> dict:
         """Answer one dashboard query. The only orchestration path.
 
         Order is the contract: permissions, then budget, then cache, then MongoDB.
@@ -642,7 +612,15 @@ class AnalyticsService:
         ctx = self.context_for(effective)
         estimate = self.estimate_only(effective, ctx)
 
-        if estimate.band in OVER_BUDGET_BANDS:
+        # `enforce_budget=False` is the background export path, and ONLY that path.
+        # These bands mean "too big to render inside a request" — which a background
+        # build has already accepted and is reporting progress against. Leaving the
+        # check on failed every background job the instant it started, with the
+        # user watching a bar that never moved (found in the browser, 2026-09-20).
+        # The memory cap is NOT skipped: it is enforced in the export service
+        # before the job row is written, because no amount of waiting makes a
+        # 2GB matrix affordable.
+        if enforce_budget and estimate.band in OVER_BUDGET_BANDS:
             logger.info(
                 "Analytics refused inline render: %d cells, band=%s (user=%s)",
                 estimate.cells, estimate.band,
@@ -666,19 +644,11 @@ class AnalyticsService:
         )
 
         rows = derived.resolve(result.rows, allowed)
-        _, forced_by = forced_grouping(allowed)
-        # A 3-day range rolled up weekly returns a bucket labelled with the WHOLE week.
-        # The average is honest; the label is not unless the response says which
-        # periods are only partly covered. Pure date arithmetic, no DB call.
-        period_cov = coverage.period_coverage(req.from_date, req.to_date, req.date_grouping)
         response = pivot.build_response(rows, requested=allowed, meta={
             "failed_datasets": result.failed_datasets,
             "partial": result.partial,
             # Part of the question, not the caller, so it belongs in the cached payload.
             "date_grouping": req.date_grouping,
-            "grouping_forced_by": forced_by,
-            "period_coverage": period_cov,
-            "partial_periods": coverage.partial_keys(period_cov),
         })
 
         if result.partial:

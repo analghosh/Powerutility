@@ -201,9 +201,13 @@ class Settings(BaseSettings):
     MONGODB_ANALYTICS_JOBS_COLLECTION: str = "analytics_export_jobs"
     MONGODB_ANALYTICS_PREFS_COLLECTION: str = "analytics_user_preferences"
     ANALYTICS_TIMEZONE: str = "Asia/Kolkata"
-    ANALYTICS_CELLS_INLINE: int = 150_000
-    ANALYTICS_CELLS_INLINE_CAPPED: int = 500_000
-    ANALYTICS_CELLS_MAX: int = 10_000_000
+    # Re-scaled 2026-09-20: see the docstring on analytics/budget.py for the
+    # measurements. INLINE is "short enough to hold the request open"; above it the
+    # file is built in the background with progress, not refused. MAX is a memory
+    # limit, not a rendering one.
+    ANALYTICS_CELLS_INLINE: int = 1_500_000
+    ANALYTICS_CELLS_INLINE_CAPPED: int = 3_000_000
+    ANALYTICS_CELLS_MAX: int = 20_000_000
     ANALYTICS_MAX_CONCURRENT: int = 8
     ANALYTICS_GROUP_CONCURRENCY: int = 4
     ANALYTICS_QUERY_MAX_TIME_MS: int = 20_000

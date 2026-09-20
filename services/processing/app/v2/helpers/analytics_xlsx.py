@@ -8,19 +8,20 @@ peak cost is one row.
 
     wb = Workbook(write_only=True)          # streams rows to a temp file
 
-The layout is the spec's: one sheet per dataset plus a `Filters` sheet. Inside a
-dataset sheet the grid is `Block | <date> ...`, one row per block; a per-plant,
-per-exchange or per-forecast-type dataset gets a leading `Plant` / `Exchange` /
-`Forecast` column and one row per (entity, block). A scalar sheet carries no identity
-column at all — a blank "Entity" column on 40 of 46 sheets was the first thing users
-asked to remove. A spreadsheet is opened to be read, not parsed.
-The flat long form lives in `analytics_csv`, which is the machine-readable half.
+The layout is one **Data** sheet plus a `Filters` sheet (PTC, 2026-09-20). Every
+series is a column on that one sheet, so two datasets a user wants to compare sit
+side by side on the same row; before this they were on separate sheets, where
+comparing them meant copying one across. `analytics_layout` builds the table and the
+CSV writer emits the same one.
 
-Two rules this module exists to keep:
+Three rules this module exists to keep:
 
 - **A missing value is an empty cell.** `None` is appended as `None`, which openpyxl
   writes as a genuinely blank cell — not `0`, not the string `"None"`. A real `0`
   survives as `0`. In a settlement spreadsheet those are different numbers.
+- **The Date column holds real dates.** A date written as text cannot be sorted,
+  filtered or subtracted in Excel, and these files are opened to be worked in. Write-only
+  mode has no styles, so the cells carry their own number format.
 - **The directory is created before the first write.** `ANALYTICS_EXPORT_DIR` defaults
   to `/var/lib/epms/exports`, which does not exist on a dev machine and is not
   writable by the service user on the PROD box either. Failing at `makedirs` with the
@@ -29,95 +30,32 @@ Two rules this module exists to keep:
 
 import logging
 import os
+from datetime import date, datetime
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
 from openpyxl import Workbook
+from openpyxl.cell import WriteOnlyCell
 
+from . import analytics_layout
 from .analytics_csv import COLUMNS, SUPPORTED_FORMATS, filename_for, filter_pairs
 
 logger = logging.getLogger(__name__)
 
-__all__ = ["ExportWriteError", "FILTERS_SHEET", "SHEET_TITLE_LIMIT",
-           "sheet_titles_for", "write_xlsx", "filename_for", "COLUMNS",
-           "SUPPORTED_FORMATS"]
+__all__ = ["ExportWriteError", "DATA_SHEET", "FILTERS_SHEET", "write_xlsx",
+           "filename_for", "COLUMNS", "SUPPORTED_FORMATS"]
 
 #: The filters sheet is named in the spec; the frontend links to it by name.
 FILTERS_SHEET = "Filters"
 
-#: Excel's hard limit. openpyxl raises past it, and its own de-duplication suffix can
-#: itself overflow, so titles are truncated and de-duplicated here first.
-SHEET_TITLE_LIMIT = 31
+#: The single data sheet. One sheet per dataset was replaced on 2026-09-20.
+DATA_SHEET = "Data"
 
-#: Characters Excel refuses in a sheet title.
-_INVALID_TITLE_CHARS = set(r"[]:*?/\"'")
-
-#: The identity column a sheet gets when its series carry an entity, by series kind.
-ENTITY_COLUMN_TITLES = {
-    "per_plant": "Plant",
-    "per_exchange": "Exchange",
-    "per_forecast_type": "Forecast",
-}
-DEFAULT_ENTITY_COLUMN = "Entity"
-BLOCK_COLUMN = "Block"
-
-
-def _has_entity(entry: Dict[str, Any]) -> bool:
-    return entry.get("entity") not in (None, "")
-
-
-def identity_columns(entry: Dict[str, Any]) -> List[str]:
-    """`["Plant", "Block"]` for a per-plant series, `["Block"]` for a scalar one."""
-    if not _has_entity(entry):
-        return [BLOCK_COLUMN]
-    kind = entry.get("series_kind")
-    return [ENTITY_COLUMN_TITLES.get(kind, DEFAULT_ENTITY_COLUMN), BLOCK_COLUMN]
-
+#: How the Date column renders. `dd mmm yyyy` is unambiguous to a reader in India
+#: and to one in the US, which `dd/mm/yyyy` is not.
+DATE_NUMBER_FORMAT = "dd mmm yyyy"
 
 class ExportWriteError(OSError):
     """The export file could not be written — directory, permissions or disk."""
-
-
-def _safe_title(label: Any, fallback: str) -> str:
-    text = "" if label is None else str(label)
-    cleaned = "".join(" " if ch in _INVALID_TITLE_CHARS else ch for ch in text).strip()
-    cleaned = cleaned.strip("'")
-    return (cleaned or str(fallback) or "Sheet")[:SHEET_TITLE_LIMIT].strip() or "Sheet"
-
-
-def _dedupe_title(title: str, taken: Dict[str, None]) -> str:
-    """Keep the title unique *and* inside Excel's 31 characters.
-
-    The suffix eats into the name rather than extending past the limit, which is
-    precisely what openpyxl's own `avoid_duplicate_name` does not do.
-    """
-    if title not in taken:
-        taken[title] = None
-        return title
-    for n in range(2, 1000):
-        suffix = f"~{n}"
-        candidate = (title[:SHEET_TITLE_LIMIT - len(suffix)].strip() + suffix)
-        if candidate not in taken:
-            taken[candidate] = None
-            return candidate
-    raise ExportWriteError(  # pragma: no cover - 998 identically named datasets
-        f"Cannot make sheet title {title!r} unique within "
-        f"{SHEET_TITLE_LIMIT} characters")
-
-
-def sheet_titles_for(series: Sequence[Dict[str, Any]]) -> Dict[str, str]:
-    """Dataset code -> sheet title, truncated to 31 chars and de-duplicated.
-
-    Exposed so the routes can name a sheet in an error message without rebuilding
-    the workbook.
-    """
-    taken: Dict[str, None] = {FILTERS_SHEET: None}
-    titles: Dict[str, str] = {}
-    for entry in series or ():
-        code = str(entry.get("dataset") or "")
-        if code in titles:
-            continue
-        titles[code] = _dedupe_title(_safe_title(entry.get("label"), code), taken)
-    return titles
 
 
 def _ensure_directory(path: str) -> None:
@@ -139,61 +77,45 @@ def _ensure_directory(path: str) -> None:
             f"{os.getuid()}. Check ANALYTICS_EXPORT_DIR and its ownership.")
 
 
-def _cell(value: Any) -> Any:
+def _date_cell(sheet, value: date) -> Any:
+    """A real date cell, formatted. Write-only mode has no styles to inherit."""
+    cell = WriteOnlyCell(sheet, value=value)
+    cell.number_format = DATE_NUMBER_FORMAT
+    return cell
+
+
+def _cell(sheet, value: Any) -> Any:
     """`None` stays `None` so openpyxl writes a blank cell. `0` stays `0`."""
+    if isinstance(value, datetime):
+        value = value.date()
+    if isinstance(value, date):
+        return _date_cell(sheet, value)
     return value
 
 
-def _date_header(dates: Iterable[Any]) -> List[str]:
-    return [str(d) for d in dates]
-
-
 def write_xlsx(response: Dict[str, Any], filters: Optional[Dict[str, Any]],
-               path: str) -> Dict[str, Any]:
-    """Write one sheet per dataset plus `Filters`; return `{path, bytes, row_count}`.
+               path: str, on_row=None) -> Dict[str, Any]:
+    """Write the `Data` sheet plus `Filters`; return `{path, bytes, row_count}`.
 
-    `row_count` counts data rows only — the header rows and the `Filters` sheet are
-    not part of what the user asked for, and the job row reports this number back to
-    them as "rows exported".
+    `row_count` counts data rows only — the heading row and the `Filters` sheet are
+    not part of what the user asked for, and the history row reports this number back
+    to them as "rows exported".
     """
     response = response or {}
-    axes = response.get("axes") or {}
-    dates = _date_header(axes.get("dates") or ())
-    blocks = list(axes.get("blocks") or ())
-
-    # Unlike the CSV, the workbook needs the series grouped by dataset, so this one
-    # is materialised. It is the cell matrices that are large, not the series list
-    # (a few hundred at most), and each matrix is still walked once.
-    series = list(response.get("series") or ())
-    titles = sheet_titles_for(series)
 
     _ensure_directory(path)
 
     workbook = Workbook(write_only=True)
     row_count = 0
     try:
-        sheets: Dict[str, Any] = {}
-        with_entity: Dict[str, bool] = {}
-        for entry in series:
-            code = str(entry.get("dataset") or "")
-            sheet = sheets.get(code)
-            if sheet is None:
-                # Every series of one dataset shares its kind, so the first one
-                # decides the sheet's shape.
-                sheet = workbook.create_sheet(title=titles[code])
-                sheet.append(identity_columns(entry) + dates)
-                sheets[code] = sheet
-                with_entity[code] = _has_entity(entry)
-
-            entity = entry.get("entity_label") or entry.get("entity")
-            identity = [_cell(entity)] if with_entity[code] else []
-            matrix = entry.get("values") or ()
-            for bi, block in enumerate(blocks):
-                values = matrix[bi] if bi < len(matrix) else ()
-                cells = [values[di] if di < len(values) else None
-                         for di in range(len(dates))]
-                sheet.append(identity + [_cell(block)] + [_cell(v) for v in cells])
-                row_count += 1
+        sheet = workbook.create_sheet(title=DATA_SHEET)
+        sheet.append(analytics_layout.column_titles(response, filters))
+        # `data_rows` is a generator and is kept one: a year of individual blocks is
+        # 35,040 rows wide enough to matter, and write-only mode streams each away.
+        # `on_row` is how a background export reports its progress.
+        for row in analytics_layout.data_rows(response, filters, on_row=on_row):
+            sheet.append([_cell(sheet, value) for value in row])
+            row_count += 1
 
         filters_sheet = workbook.create_sheet(title=FILTERS_SHEET)
         filters_sheet.append(["Filter", "Value"])
@@ -212,6 +134,7 @@ def write_xlsx(response: Dict[str, Any], filters: Optional[Dict[str, Any]],
         workbook.close()
 
     size = os.path.getsize(path)
-    logger.info("Analytics XLSX export written: path=%s bytes=%s rows=%s sheets=%s",
-                path, size, row_count, len(titles) + 1)
+    logger.info("Analytics XLSX export written: path=%s bytes=%s rows=%s columns=%s",
+                path, size, row_count,
+                len(analytics_layout.column_titles(response, filters)))
     return {"path": path, "bytes": size, "row_count": row_count}

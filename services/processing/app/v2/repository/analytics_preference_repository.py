@@ -36,7 +36,9 @@ logger = logging.getLogger(__name__)
 ALLOWED_KEYS = ("datasets", "plants", "format")
 
 #: Export formats a preference may name — the same two the export model accepts.
-FORMATS = ("csv", "xlsx")
+#: Order is load-bearing: `FORMATS[0]` is what a user who has never saved a
+#: preference opens the screen on, and that is XLSX.
+FORMATS = ("xlsx", "csv")
 
 #: Ceilings, so one caller cannot turn a convenience row into a large document.
 MAX_DATASETS = 60
