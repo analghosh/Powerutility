@@ -587,7 +587,8 @@ class AnalyticsService:
 
     # ---------------------------------------------------------------- query
 
-    async def query(self, request: Any, user_context: Optional[dict] = None) -> dict:
+    async def query(self, request: Any, user_context: Optional[dict] = None,
+                    *, enforce_budget: bool = True) -> dict:
         """Answer one dashboard query. The only orchestration path.
 
         Order is the contract: permissions, then budget, then cache, then MongoDB.
@@ -611,7 +612,15 @@ class AnalyticsService:
         ctx = self.context_for(effective)
         estimate = self.estimate_only(effective, ctx)
 
-        if estimate.band in OVER_BUDGET_BANDS:
+        # `enforce_budget=False` is the background export path, and ONLY that path.
+        # These bands mean "too big to render inside a request" — which a background
+        # build has already accepted and is reporting progress against. Leaving the
+        # check on failed every background job the instant it started, with the
+        # user watching a bar that never moved (found in the browser, 2026-09-20).
+        # The memory cap is NOT skipped: it is enforced in the export service
+        # before the job row is written, because no amount of waiting makes a
+        # 2GB matrix affordable.
+        if enforce_budget and estimate.band in OVER_BUDGET_BANDS:
             logger.info(
                 "Analytics refused inline render: %d cells, band=%s (user=%s)",
                 estimate.cells, estimate.band,

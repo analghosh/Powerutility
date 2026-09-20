@@ -99,8 +99,10 @@ class FakeJobs:
 
     def __init__(self, active=None):
         self.active = active
-        self.created = []      # rows written by the (now unreachable) queue path
+        self.created = []      # rows written by the queue path AND by a background build
         self.recorded = []     # history rows written after an immediate download
+        self.marks = []        # (job_id, status, fields) from `mark`
+        self.progress = []     # (job_id, rows_done, rows_total) from `set_progress`
         self.hash_lookups = []
 
     async def find_active_by_hash(self, user_id, request_hash):
@@ -121,6 +123,14 @@ class FakeJobs:
         doc["result"] = job.get("result")
         self.recorded.append(doc)
         return doc["job_id"]
+
+    async def mark(self, job_id, status, **fields):
+        self.marks.append((job_id, status, fields))
+        return True
+
+    async def set_progress(self, job_id, rows_done, rows_total=None):
+        self.progress.append((job_id, rows_done, rows_total))
+        return True
 
 
 class FakePublisher:
@@ -223,16 +233,17 @@ async def test_a_csv_under_the_stream_ceiling_is_streamed():
 
 
 @pytest.mark.asyncio
-async def test_a_csv_over_the_stream_ceiling_is_refused_not_queued():
+async def test_a_csv_over_the_stream_ceiling_is_built_in_the_background():
     service = _service()
-    request = _request(days=65, plants=96, fmt="csv")       # 599,040 cells
-    assert _cells(request, service) > 500_000
+    request = _request(days=365, plants=200, fmt="csv")     # ~7M cells
+    assert _cells(request, service) > service.threshold_for("csv")
 
-    with pytest.raises(query_svc.BudgetExceeded) as exc:
-        await service.export(request, _context())
+    outcome = await service.export(request, _context())
 
-    assert service.jobs.created == [], "an over-budget request was queued"
-    assert exc.value.suggestions, "a refusal must say how to get under the line"
+    assert outcome["mode"] == svc.MODE_JOB
+    assert outcome["job_id"]
+    assert outcome["status"] == "running", "the build starts now, not on a sweep"
+    assert outcome["rows_total"] > 0, "the bar needs something to count against"
 
 
 @pytest.mark.asyncio
@@ -254,27 +265,30 @@ async def test_an_xlsx_under_the_inline_ceiling_is_written_in_request():
 
 
 @pytest.mark.asyncio
-async def test_an_xlsx_over_the_inline_ceiling_is_refused_not_queued():
+async def test_an_xlsx_over_the_inline_ceiling_is_built_in_the_background():
     service = _service()
-    request = _request(days=52, plants=40, fmt="xlsx")      # 199,680 cells
-    assert 150_000 < _cells(request, service) <= 500_000
+    request = _request(days=365, plants=60, fmt="xlsx")     # ~2.1M cells
+    assert service.threshold_for("xlsx") < _cells(request, service)
 
-    with pytest.raises(query_svc.BudgetExceeded):
-        await service.export(request, _context())
+    outcome = await service.export(request, _context())
 
-    assert service.jobs.created == []
+    assert outcome["mode"] == svc.MODE_JOB
+    assert outcome["status"] == "running"
 
 
 @pytest.mark.asyncio
-async def test_the_same_question_streams_as_csv_and_is_refused_as_xlsx():
+async def test_the_same_question_streams_as_csv_and_backgrounds_as_xlsx():
     """The two formats must not share one threshold — §8's whole reason for the
-    table. 200k cells is a fine CSV stream and a worker-blocking XLSX."""
+    table. CSV yields rows as it goes; XLSX emits nothing until the zip is closed."""
     service = _service()
-    as_csv = await service.export(_request(days=52, plants=40, fmt="csv"), _context())
-    assert as_csv["mode"] == svc.MODE_STREAM
+    cells = _cells(_request(days=365, plants=60, fmt="csv"), service)
+    assert service.threshold_for("xlsx") < cells <= service.threshold_for("csv")
 
-    with pytest.raises(query_svc.BudgetExceeded):
-        await service.export(_request(days=52, plants=40, fmt="xlsx"), _context())
+    as_csv = await service.export(_request(days=365, plants=60, fmt="csv"), _context())
+    as_xlsx = await service.export(_request(days=365, plants=60, fmt="xlsx"), _context())
+
+    assert as_csv["mode"] == svc.MODE_STREAM
+    assert as_xlsx["mode"] == svc.MODE_JOB
 
 
 def test_mode_thresholds_are_the_configured_cell_bands():
@@ -329,12 +343,17 @@ async def test_a_streamed_export_records_its_configuration_too():
 
 @pytest.mark.asyncio
 async def test_a_refused_export_records_nothing():
-    """The user got no file, so there is no configuration worth offering back."""
+    """The user got no file, so there is no configuration worth offering back.
+
+    Only the memory cap refuses now, so this has to be genuinely enormous.
+    """
     jobs = FakeJobs()
     service = _service(jobs=jobs)
+    request = _request(days=3650, plants=800, fmt="csv")
+    assert _cells(request, service) > service.service.thresholds["max"]
 
     with pytest.raises(query_svc.BudgetExceeded):
-        await service.export(_request(days=65, plants=96, fmt="csv"), _context())
+        await service.export(request, _context())
 
     assert jobs.recorded == [] and jobs.created == []
 
@@ -377,13 +396,18 @@ async def test_a_history_row_needs_an_owner():
 
 
 @pytest.mark.asyncio
-async def test_the_dashboard_path_never_enqueues():
-    """The one assertion that pins the 2026-09-20 decision in this module."""
+async def test_the_dashboard_never_reaches_the_scheduler_queue():
+    """Large exports are built here, in this service, not handed to the sweep.
+
+    `create` is used by both paths, so the tell is the publisher: a background
+    build never rings the broker, because there is no worker to wake.
+    """
     jobs = FakeJobs()
-    service = _service(jobs=jobs)
-    for days, plants, fmt in ((1, 1, "csv"), (52, 20, "xlsx"), (52, 80, "csv")):
+    publisher = FakePublisher()
+    service = _service(jobs=jobs, publisher=publisher)
+    for days, plants, fmt in ((1, 1, "csv"), (52, 20, "xlsx"), (365, 60, "xlsx")):
         await service.export(_request(days=days, plants=plants, fmt=fmt), _context())
-    assert jobs.created == []
+    assert publisher.calls == [], "the dashboard rang the scheduler's doorbell"
 
 
 @pytest.mark.asyncio
@@ -647,12 +671,17 @@ async def test_the_estimate_prices_only_the_permitted_datasets():
 
 
 @pytest.mark.asyncio
-async def test_an_absurd_request_is_refused_rather_than_queued():
-    """Above ANALYTICS_CELLS_MAX the answer is no — queueing a 10M-cell export on
-    a single box with a 5GB budget only moves the failure to the worker."""
+async def test_an_absurd_request_is_refused_rather_than_built():
+    """Above ANALYTICS_CELLS_MAX the answer is no, and the reason is MEMORY.
+
+    The pivot holds the whole value matrix in Python lists — about 24 bytes a float
+    before list overhead — so 20M cells is already ~460MB resident on a box that is
+    also serving the bidding screens. Building it in the background would not make
+    that affordable, only harder to attribute.
+    """
     jobs = FakeJobs()
     service = _service(jobs=jobs)
-    request = _request(days=365, plants=300, fmt="csv")     # 10,512,000 cells
+    request = _request(days=1095, plants=300, fmt="csv")    # ~31.5M cells
     assert _cells(request, service) > real_settings.ANALYTICS_CELLS_MAX
 
     with pytest.raises(query_svc.BudgetExceeded) as exc:

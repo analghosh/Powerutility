@@ -147,6 +147,11 @@ def build_job_document(job: Dict[str, Any], *, now: Optional[datetime] = None) -
         "cells_estimate": int(job.get("cells_estimate") or 0),
         "chunks_total": int(job.get("chunks_total") or 0),
         "chunks_done": 0,
+        # Rows are what an in-process background export counts (2026-09-20). The
+        # chunk counters above belong to the scheduler worker, which still owns the
+        # queued rows; both are read by the status route, rows first.
+        "rows_total": int(job.get("rows_total") or 0),
+        "rows_done": 0,
         "parts": [],
         "result": None,
         "download_token": None,
@@ -253,6 +258,21 @@ class AnalyticsJobRepository(GenericRepository):
             },
             _NO_ID,
         )
+
+    async def set_progress(self, job_id: str, rows_done: int,
+                           rows_total: Optional[int] = None) -> bool:
+        """Record how far a running export has got. Status is not touched.
+
+        Deliberately a plain `$set` with no status guard: it races with nothing —
+        a stale write after the job finished would only move a counter the status
+        route stops reading once `status == ready`.
+        """
+        fields: Dict[str, Any] = {"rows_done": int(rows_done),
+                                  "heartbeat_at": _utcnow()}
+        if rows_total is not None:
+            fields["rows_total"] = int(rows_total)
+        result = await self.collection.update_one({"job_id": job_id}, {"$set": fields})
+        return bool(getattr(result, "matched_count", 0))
 
     # ------------------------------------------------------------ worker ---
 

@@ -6,9 +6,13 @@ of Plant-wise DC across 34 plants is 489,600 cells.
 
 Since 2026-09-20 there is exactly one date bucket per trading day, whatever Group
 Date By says — the pill adds a column to the file instead of collapsing the date
-axis — so the only levers left on the date side are the range itself. The week and
-month arithmetic these tests used to pin now lives in `coverage`, where it labels
-partial roll-up periods, and is exercised in `test_analytics_coverage.py`.
+axis — so the only levers left on the date side are the range itself.
+
+The thresholds were re-scaled the same day. They had been set for a browser grid and
+a sheet-per-dataset workbook; the single-table file buys far more per cell, and the
+old ceiling refused a request that builds in 3.5 seconds. The bands now mean:
+**inline** = short enough to hold the request open, **async_only** = built in the
+background with progress (not a refusal), **refused** = the memory cap only.
 """
 import sys
 from datetime import date
@@ -18,7 +22,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from services.processing.app.v2.analytics import budget  # noqa: E402
+from services.processing.app.v2.analytics import budget, registry  # noqa: E402
 
 CTX = {"plant_count": 34, "exchange_count": 3}
 
@@ -30,7 +34,7 @@ def test_one_dataset_one_month_is_inline():
     assert e.band == budget.BAND_INLINE
 
 
-def test_ten_state_datasets_five_months_is_inline_capped():
+def test_ten_state_datasets_five_months_is_inline():
     codes = ["ACTUAL_DEMAND", "ROSTERING", "DEMAND_UDM", "ROSTERING", "FREQUENCY",
              "FORECAST_DAF", "FORECAST_IDF", "MAPE_DAF", "MAPE_IDF",
              "FINAL_SCHEDULE_STATE"]
@@ -39,24 +43,51 @@ def test_ten_state_datasets_five_months_is_inline_capped():
     assert e.band == budget.BAND_INLINE
 
 
-def test_plant_wise_five_months_exceeds_the_inline_cap():
-    """153 days x 96 blocks x 34 plants = 499,392 — the case that must not render inline."""
+def test_plant_wise_five_months_is_served_inline():
+    """153 days x 96 blocks x 34 plants = 499,392.
+
+    This used to be `inline_capped` — too big for the request — under thresholds
+    calibrated for a browser grid. Measured against the single-table file it is
+    about three seconds, so it is simply served.
+    """
     e = budget.estimate(date_buckets=153, block_buckets=96,
                         datasets=["DC_PLANT"], ctx=CTX)
     assert e.cells == 499_392
-    assert e.band == budget.BAND_INLINE_CAPPED
+    assert e.band == budget.BAND_INLINE
 
 
-def test_plant_wise_plus_a_second_dataset_goes_async_only():
-    e = budget.estimate(date_buckets=153, block_buckets=96,
-                        datasets=["DC_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
-    assert e.band == budget.BAND_ASYNC_ONLY
+def test_the_request_ptc_hit_is_now_an_ordinary_download():
+    """411,264 cells — refused on 2026-09-20, and it builds in 3.5 seconds."""
+    e = budget.estimate(date_buckets=51, block_buckets=96,
+                        datasets=["DC_PLANT", "SG_PLANT"], ctx={"plant_count": 42})
+    assert e.band == budget.BAND_INLINE
 
 
-def test_absurd_request_is_refused_outright():
-    e = budget.estimate(date_buckets=3650, block_buckets=96,
-                        datasets=["DC_PLANT", "SG_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
+def test_a_year_of_everything_is_built_in_the_background_not_refused():
+    """~4.9M cells, about 26 seconds. Too long to hold a connection, not too big
+    to produce — so it goes to the background path WITH progress."""
+    live = [c for c, d in registry.DATASETS.items() if d.availability == "live"]
+    e = budget.estimate(date_buckets=365, block_buckets=96, datasets=live, ctx=CTX)
+    assert e.band == budget.BAND_ASYNC_ONLY, f"{e.cells:,} cells landed in {e.band}"
+
+
+def test_only_the_memory_cap_refuses():
+    """`MAX` is not a rendering limit: the pivot holds the whole value matrix in
+    RAM, on a box that is also serving the bidding screens."""
+    # Ten years at individual blocks across a wide selection: ~27M cells, which at
+    # ~24 bytes a float is over half a gigabyte of matrix before list overhead.
+    codes = ["DC_PLANT", "SG_PLANT", "ACP_DAM", "ACV_DAM", "ACTUAL_DEMAND",
+             "DRAWAL", "FREQUENCY", "DSM_RATE"]
+    e = budget.estimate(date_buckets=3650, block_buckets=96, datasets=codes, ctx=CTX)
+    assert e.cells > budget.THRESHOLDS["max"], f"{e.cells:,} is under the cap"
     assert e.band == budget.BAND_REFUSED
+
+
+def test_three_years_of_everything_still_fits():
+    """The cap protects memory; it must not refuse a file PTC could plausibly want."""
+    live = [c for c, d in registry.DATASETS.items() if d.availability == "live"]
+    e = budget.estimate(date_buckets=1095, block_buckets=96, datasets=live, ctx=CTX)
+    assert e.band == budget.BAND_ASYNC_ONLY, f"{e.cells:,} cells was refused"
 
 
 def test_exchange_datasets_count_three_series_each():
@@ -64,6 +95,13 @@ def test_exchange_datasets_count_three_series_each():
                         datasets=["ACP_DAM"], ctx=CTX)
     assert e.series == 3
     assert e.cells == 288
+
+
+def test_the_thresholds_are_ordered_and_generous():
+    """A regression here is a silent return to refusing three-second exports."""
+    th = budget.THRESHOLDS
+    assert th["inline"] < th["inline_capped"] < th["max"]
+    assert th["inline"] >= 1_000_000, "the inline ceiling is back to grid-era values"
 
 
 def test_collapsing_the_blocks_collapses_the_problem():
@@ -78,9 +116,12 @@ def test_collapsing_the_blocks_collapses_the_problem():
     assert e.band == budget.BAND_INLINE
 
 
-def test_over_budget_estimate_carries_actionable_suggestions():
-    e = budget.estimate(date_buckets=153, block_buckets=96,
-                        datasets=["DC_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
+def test_a_refusal_carries_actionable_suggestions():
+    """Only the memory cap refuses now, but it has to be useful when it does."""
+    codes = ["DC_PLANT", "SG_PLANT", "ACP_DAM", "ACV_DAM", "ACTUAL_DEMAND",
+             "DRAWAL", "FREQUENCY", "DSM_RATE"]
+    e = budget.estimate(date_buckets=3650, block_buckets=96, datasets=codes, ctx=CTX)
+    assert e.band == budget.BAND_REFUSED
     kinds = {s["kind"] for s in e.suggestions}
     assert "coarser_blocks" in kinds
     assert "shorter_range" in kinds
@@ -91,6 +132,7 @@ def test_over_budget_estimate_carries_actionable_suggestions():
 
 
 def test_no_suggestion_offers_a_coarser_date_grouping():
+    """(at the memory cap, where suggestions are still produced)"""
     """It would be advice that changes nothing.
 
     Group Date By stopped collapsing the date axis on 2026-09-20, so "switch to
@@ -98,15 +140,28 @@ def test_no_suggestion_offers_a_coarser_date_grouping():
     it was. A suggestion that does not shrink the request is worse than none: the
     user follows it and hits the same 413.
     """
-    e = budget.estimate(date_buckets=153, block_buckets=96,
-                        datasets=["DC_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
+    codes = ["DC_PLANT", "SG_PLANT", "ACP_DAM", "ACV_DAM", "ACTUAL_DEMAND",
+             "DRAWAL", "FREQUENCY", "DSM_RATE"]
+    e = budget.estimate(date_buckets=3650, block_buckets=96, datasets=codes, ctx=CTX)
+    assert e.band == budget.BAND_REFUSED
     assert "coarser_dates" not in {s["kind"] for s in e.suggestions}
 
 
-def test_inline_request_needs_no_suggestions():
+def test_a_comfortably_inline_request_needs_no_suggestions():
+    """Advice on a request that is already instant is noise."""
     e = budget.estimate(date_buckets=1, block_buckets=96,
                         datasets=["ACTUAL_DEMAND"], ctx=CTX)
+    assert e.band == budget.BAND_INLINE
     assert e.suggestions == []
+
+
+def test_a_heavy_but_served_request_still_gets_advice():
+    """`inline_capped` is served; the banner offers to narrow it anyway, and an
+    `async_only` export is produced but slow enough to be worth shortening."""
+    live = [c for c, d in registry.DATASETS.items() if d.availability == "live"]
+    e = budget.estimate(date_buckets=365, block_buckets=96, datasets=live, ctx=CTX)
+    assert e.band == budget.BAND_ASYNC_ONLY
+    assert e.suggestions, "a 26-second export was offered no way to be quicker"
 
 
 # 1 Apr -> 1 May is 31 days. Every grouping now counts the same buckets: the pill
