@@ -283,18 +283,17 @@ def test_a_fully_past_range_earns_the_long_ttl_and_today_does_not():
 async def test_an_over_budget_request_is_refused_before_mongo_is_touched():
     repo = RecordingRepo()
     service = svc.AnalyticsService(repository=repo)
-    plants = [f"PLANT_{i:02d}" for i in range(40)]
+    plants = [f"PLANT_{i:03d}" for i in range(300)]
 
     with pytest.raises(svc.BudgetExceeded) as exc:
         await service.query(
-            _request(from_date=date(2026, 1, 1), to_date=date(2026, 5, 31),
+            _request(from_date=date(2024, 1, 1), to_date=date(2026, 5, 31),
                      datasets=["DC_PLANT"], plants=plants),
             SUPER_ADMIN,
         )
 
     assert repo.calls == [], "a refused query still ran an aggregation"
-    assert exc.value.estimate.band == budget.BAND_ASYNC_ONLY
-    assert exc.value.cells == 151 * 96 * 40
+    assert exc.value.estimate.band == budget.BAND_REFUSED
     assert exc.value.suggestions, "413 must carry something the user can act on"
     kinds = {s["kind"] for s in exc.value.suggestions}
     assert {"coarser_blocks", "shorter_range", "fewer_datasets"} <= kinds
@@ -304,19 +303,22 @@ async def test_an_over_budget_request_is_refused_before_mongo_is_touched():
 
 @pytest.mark.asyncio
 async def test_an_inline_capped_request_is_served_and_says_so():
-    # 96 blocks x 60 days x 30 plants = 172,800 cells: over inline, under capped.
+    # Over the inline ceiling, under the capped one. The thresholds were re-scaled
+    # on 2026-09-20 (see analytics/budget.py), so this needs a much larger range
+    # than it used to.
     repo = RecordingRepo()
     service = svc.AnalyticsService(repository=repo)
-    plants = [f"PLANT_{i:02d}" for i in range(30)]
+    plants = [f"PLANT_{i:03d}" for i in range(60)]
 
     response = await service.query(
-        _request(from_date=date(2026, 6, 1), to_date=date(2026, 7, 30),
+        _request(from_date=date(2025, 8, 1), to_date=date(2026, 7, 30),
                  datasets=["DC_PLANT"], plants=plants),
         SUPER_ADMIN,
     )
 
     assert response["meta"]["band"] == budget.BAND_INLINE_CAPPED
-    assert response["meta"]["estimated_cells"] == 60 * 96 * 30
+    # 1 Aug 2025 -> 30 Jul 2026 inclusive, 96 blocks, 60 plants.
+    assert response["meta"]["estimated_cells"] == 364 * 96 * 60
     assert repo.collections == ["supply_serve"]
 
 

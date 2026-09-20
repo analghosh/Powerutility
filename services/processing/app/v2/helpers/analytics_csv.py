@@ -176,7 +176,8 @@ def _cell(value: Any) -> Any:
 
 
 def csv_rows(response: Dict[str, Any],
-             filters: Optional[Dict[str, Any]] = None) -> Iterator[str]:
+             filters: Optional[Dict[str, Any]] = None,
+             on_row=None) -> Iterator[str]:
     """Yield the export one newline-terminated line at a time.
 
     Order is the header block, the column headings, then one line per (day, block) —
@@ -194,7 +195,7 @@ def csv_rows(response: Dict[str, Any],
     emit = _row_writer()
     yield emit(analytics_layout.column_titles(response, filters))
 
-    for row in analytics_layout.data_rows(response, filters):
+    for row in analytics_layout.data_rows(response, filters, on_row=on_row):
         yield emit([_cell(v) for v in row])
 
 

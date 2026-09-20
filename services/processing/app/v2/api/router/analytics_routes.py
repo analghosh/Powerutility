@@ -266,6 +266,7 @@ JOB_VIEW_FIELDS = (
     "job_id", "status", "label", "cells_estimate", "chunks_done", "chunks_total",
     "attempts", "max_attempts", "created_at", "started_at", "finished_at",
     "expires_at", "error", "download_token", "token_expires_at", "filters",
+    "rows_total", "rows_done",
 )
 JOB_DATE_FIELDS = ("created_at", "started_at", "finished_at", "expires_at",
                    "token_expires_at")
@@ -347,13 +348,20 @@ def _disposition(filename: str) -> str:
 
 
 def _progress(job: Dict[str, Any]) -> float:
-    total = int(job.get("chunks_total") or 0)
-    done = int(job.get("chunks_done") or 0)
+    """How far along, 0.0 - 1.0.
+
+    Rows first: an in-process background export counts the rows it has written,
+    which is the honest measure and the one the progress bar shows. Chunks are the
+    scheduler worker's unit and remain the fallback for the queued rows it owns.
+    """
     if job.get("status") == STATUS_READY:
         return 1.0
-    if total <= 0:
-        return 0.0
-    return round(min(done / total, 1.0), 4)
+    for total_key, done_key in (("rows_total", "rows_done"),
+                                ("chunks_total", "chunks_done")):
+        total = int(job.get(total_key) or 0)
+        if total > 0:
+            return round(min(int(job.get(done_key) or 0) / total, 1.0), 4)
+    return 0.0
 
 
 def _job_view(job: Dict[str, Any]) -> Dict[str, Any]:

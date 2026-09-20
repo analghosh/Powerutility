@@ -68,7 +68,9 @@ from typing import Any, Dict, Optional, Sequence
 from ...core.config import settings as default_settings
 from ..analytics import budget, registry
 from ..analytics.models import AnalyticsQueryRequest, ExportRequest
-from ..helpers import analytics_csv, analytics_xlsx
+from ..helpers import analytics_csv, analytics_layout, analytics_xlsx
+from ..repository.analytics_job_repository import (STATUS_CANCELLED, STATUS_FAILED,
+                                                   STATUS_READY, STATUS_RUNNING)
 from .analytics_service import AnalyticsService, BudgetExceeded
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,11 @@ SOURCE_SERVICE = "processing"
 #: real split (`chunks_for`); this only sizes `chunks_total` so the progress bar has
 #: a denominator from the moment the row is created.
 CHUNK_CELLS = 50_000
+
+#: How often a background export writes its progress. Every row would cost a Mongo
+#: round trip per row — more than the export itself; every 500 keeps a 35,000-row
+#: file to 70 writes and the bar moving smoothly enough to read.
+PROGRESS_EVERY_ROWS = 500
 
 #: Temp directory prefix for an inline XLSX, so a stray one is identifiable.
 TEMP_PREFIX = "epms-analytics-"
@@ -190,6 +197,9 @@ class AnalyticsExportService:
         self._jobs = jobs
         self._publisher = publisher
         self.settings = settings or default_settings
+        #: Background build tasks, held by job id. `asyncio.create_task` keeps only
+        #: a weak reference, so a task nobody holds can be collected mid-write.
+        self._running: Dict[str, "asyncio.Task"] = {}
 
     # ------------------------------------------------------------- plumbing
 
@@ -406,20 +416,171 @@ class AnalyticsExportService:
             raise BudgetExceeded(estimate)
 
         if estimate.cells > self.threshold_for(fmt):
-            # The dashboard stopped queueing on 2026-09-20 (PTC): a file the user is
-            # waiting for is either generated in the request or refused with concrete
-            # narrowings, never promised for later. The route turns this into a 413
-            # carrying `estimate.suggestions`.
+            # Too long to hold an HTTP connection open for, but nothing is refused
+            # for being merely large (PTC, 2026-09-20): it is built here, in this
+            # service, reporting rows-written progress the caller can show, and the
+            # client downloads it the moment it is ready. No scheduler sweep, so it
+            # starts now rather than within the minute.
             logger.info(
-                "Analytics export over the %s ceiling: %s cells > %s (user=%s)",
-                fmt, estimate.cells, self.threshold_for(fmt),
+                "Analytics export built in the background: %s cells > %s (%s, user=%s)",
+                estimate.cells, self.threshold_for(fmt), fmt,
                 (user_context or {}).get("user_id", "unknown"))
-            raise BudgetExceeded(estimate)
+            return await self._serve_in_background(
+                req, effective, fmt, estimate, denied, user_context)
 
         outcome = await self._serve_now(req, effective, fmt, estimate,
                                         denied, user_context)
         await self._record_history(effective, fmt, estimate, outcome, user_context)
         return outcome
+
+    # --------------------------------------------------------- background
+
+    async def _serve_in_background(self, request: ExportRequest,
+                                   effective: ExportRequest, fmt: str,
+                                   estimate: budget.Estimate,
+                                   denied: Sequence[str],
+                                   user_context: Optional[dict]) -> Dict[str, Any]:
+        """Write the job row, start building, and answer immediately with its id.
+
+        The row exists before the task starts, for the same reason the queue writes
+        it before ringing the broker: the client polls by id, and an id that is not
+        in Mongo yet reads as a failure.
+
+        The task is deliberately held in `self._running`. `asyncio.create_task` keeps
+        only a weak reference, so a task nobody holds can be garbage-collected
+        mid-write — which would look exactly like an export that silently stopped.
+        """
+        user_id = self.user_id_for(user_context)
+        self.check_disk_budget()
+
+        job_id = await self.jobs.create({
+            "user_id": user_id,
+            "request_hash": self.request_hash(effective, fmt),
+            "filters": self.filters_for(effective, fmt),
+            "label": self.label_for(effective, fmt),
+            "cells_estimate": estimate.cells,
+            # Rows are only known once the query returns — the date axis carries the
+            # days that HAVE data, not the days that were asked for. Seeded from the
+            # estimate so the bar has something honest to show before then.
+            "rows_total": estimate.date_buckets * estimate.block_buckets,
+        })
+        await self.jobs.mark(job_id, STATUS_RUNNING)
+
+        task = asyncio.create_task(
+            self._build(job_id, request, fmt, user_context),
+            name=f"analytics-export-{job_id}")
+        self._running[job_id] = task
+        task.add_done_callback(lambda _t, jid=job_id: self._running.pop(jid, None))
+
+        return {
+            "mode": MODE_JOB,
+            "job_id": job_id,
+            "status": STATUS_RUNNING,
+            "deduped": False,
+            "published": False,
+            "denied_datasets": list(denied),
+            "estimated_cells": estimate.cells,
+            "band": estimate.band,
+            "rows_total": estimate.date_buckets * estimate.block_buckets,
+        }
+
+    async def _build(self, job_id: str, request: ExportRequest, fmt: str,
+                     user_context: Optional[dict]) -> None:
+        """Run the query, write the file, and mark the job ready. Never raises.
+
+        This runs detached from any request, so an exception here has nobody to
+        return it to: it is recorded on the job row, which is what the client is
+        polling, and a failed export therefore says why rather than hanging at 99%.
+        """
+        try:
+            # The inline-render ceiling does not apply here: this build has already
+            # been admitted, and re-checking it would fail every background job at
+            # the moment it starts. The memory cap was enforced before the job row
+            # was written.
+            response = await self.service.query(request, user_context,
+                                                enforce_budget=False)
+            filters = self.filters_for(request, fmt)
+            filename = analytics_csv.filename_for(filters, fmt)
+            directory = self.export_dir()
+            os.makedirs(directory, exist_ok=True)
+            # Prefixed with the job id: two users can name their file the same
+            # thing, and the download route serves by id, not by name.
+            path = os.path.join(directory, f"{job_id}_{filename}")
+
+            total = analytics_layout.row_count(response)
+            await self.jobs.set_progress(job_id, 0, rows_total=total)
+
+            # The loop is captured HERE, on the event loop, and handed to the
+            # worker thread. Reading it inside the thread returns None —
+            # `get_running_loop()` is per-thread — which silently dropped every
+            # progress update and left the bar at 0% until the file was finished.
+            written = await asyncio.to_thread(
+                self._write_file, response, filters, path, fmt, job_id, total,
+                asyncio.get_running_loop())
+
+            await self.jobs.mark(
+                job_id, STATUS_READY,
+                rows_done=total,
+                result={"filename": filename, "path": written["path"],
+                        "bytes": written["bytes"], "row_count": written["row_count"]},
+            )
+            logger.info("Analytics export %s ready: %s rows, %s bytes",
+                        job_id, written["row_count"], written["bytes"])
+        except asyncio.CancelledError:
+            await self.jobs.mark(job_id, STATUS_CANCELLED,
+                                 error={"code": "CANCELLED",
+                                        "message": "The export was cancelled."})
+            raise
+        except Exception as exc:
+            logger.exception("Analytics export %s failed", job_id)
+            await self.jobs.mark(
+                job_id, STATUS_FAILED,
+                error={"code": type(exc).__name__, "message": str(exc)[:500]})
+
+    @staticmethod
+    def _csv_preamble_lines(filters: Dict[str, Any],
+                            response: Dict[str, Any]) -> int:
+        """Lines the CSV carries before its first data row: the `#` filter block
+        plus the column headings. Subtracted so `row_count` means data rows, the
+        same thing it means for the workbook."""
+        return sum(1 for _ in analytics_csv.header_lines(filters, response)) + 1
+
+    def _write_file(self, response: Dict[str, Any], filters: Dict[str, Any],
+                    path: str, fmt: str, job_id: str, total: int,
+                    loop=None) -> Dict[str, Any]:
+        """Write the file on a worker thread, reporting progress as rows land.
+
+        `loop` is the caller's event loop, passed in rather than looked up: this
+        runs on a worker thread, and `asyncio.get_running_loop()` there raises.
+
+        Progress is written back through `run_coroutine_threadsafe`, every
+        `PROGRESS_EVERY_ROWS` rather than every row — a Mongo round trip per row
+        would cost more than the export itself.
+        """
+        state = {"last": 0}
+
+        def on_row(done: int) -> None:
+            if done - state["last"] < PROGRESS_EVERY_ROWS and done != total:
+                return
+            state["last"] = done
+            if loop is not None and not loop.is_closed():
+                # Fire and forget: a dropped progress update must never stop the
+                # write, and the next one supersedes it anyway.
+                asyncio.run_coroutine_threadsafe(
+                    self.jobs.set_progress(job_id, done), loop)
+
+        if fmt == "csv":
+            rows = 0
+            with open(path, "w", encoding="utf-8", newline="") as handle:
+                for line in analytics_csv.csv_rows(response, filters, on_row=on_row):
+                    handle.write(line)
+                    rows += 1
+            size = os.path.getsize(path)
+            # The header block and the column headings are not data rows.
+            return {"path": path, "bytes": size,
+                    "row_count": max(0, rows - self._csv_preamble_lines(filters, response))}
+
+        return analytics_xlsx.write_xlsx(response, filters, path, on_row=on_row)
 
     async def _record_history(self, effective: ExportRequest, fmt: str,
                               estimate: budget.Estimate, outcome: Dict[str, Any],

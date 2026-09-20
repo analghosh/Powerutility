@@ -107,12 +107,13 @@ GET  /api/v2/analytics/datasets                  registry + availability
 GET  /api/v2/analytics/plants?dataset=CODE       dataset-aware plant list
 GET  /api/v2/analytics/block-bands               configured bands
 POST /api/v2/analytics/query                     200 {data} | 413 {estimate+suggestions}
-POST /api/v2/analytics/export                    200 stream | 200 file | 413 {estimate+suggestions}
+POST /api/v2/analytics/export                    200 stream | 200 file | 202 {job_id} | 413 (memory cap)
 GET  /api/v2/analytics/exports                   this user's export history
+GET  /api/v2/analytics/export/{id}               status + progress + download_token
+#   ^ polled every 1s while a background build runs (§6h)
+GET  /api/v2/analytics/export/{id}/download?token=…   fetched automatically when ready
 # Below: still served, no longer reachable from the dashboard (§6g). They exist for
 # the queued rows already in Mongo; the screen never creates new ones.
-GET  /api/v2/analytics/export/{id}               status + progress + download_token
-GET  /api/v2/analytics/export/{id}/download?token=…
 POST /api/v2/analytics/export/{id}/cancel
 POST /api/v2/analytics/export/{id}/retry     re-queue a failed/cancelled job IN PLACE
 ```
@@ -123,17 +124,20 @@ nested under `data` (the client reads `response.data.data`).
 `series[].values` is a numeric matrix indexed `[block][date]`. **`null` means missing and must
 never render as `0`** — a stated PTC requirement.
 
-**Cell budget bands** (`cells = date_buckets × block_buckets × Σ series_cardinality`):
-≤150k inline · ≤500k inline-capped · >500k async-only (**413**) · >10M refused.
-All configurable via `ANALYTICS_CELLS_*`. `date_buckets` is **one per trading day**
-whatever the Group Date By — the pill names a column, not a bucket (§6g).
+**Cell budget bands** (`cells = date_buckets × block_buckets × Σ series_cardinality`
+= the file's `rows × columns`): ≤1.5M inline · ≤3M inline-capped · >3M built in the
+background with progress · >20M refused on **memory** grounds. All configurable via
+`ANALYTICS_CELLS_*`; re-scaled 2026-09-20, see §6h. `date_buckets` is **one per
+trading day** whatever the Group Date By — the pill names a column, not a bucket (§6g).
 
-**Export modes (2026-09-20):** CSV ≤500k streams; XLSX ≤150k builds inline; anything
-larger is **refused with 413** carrying priced narrowings. Nothing queues from the
-dashboard. The queue below it (`_enqueue`, the scheduler worker, the retry route)
-still owns the rows already in Mongo: **MongoDB is the queue; RabbitMQ is only a
-doorbell** — `USE_RABBITMQ_JOBS=false` locally, so the every-minute Mongo sweep is
-the primary path, not a fallback.
+**Export modes (2026-09-20):** under the ceiling a file is built inside the request —
+CSV streams, XLSX is written and sent. Over it, the **processing service** builds it
+as a background task reporting `rows_done`/`rows_total`, the client polls and
+downloads it automatically (§6h). Nothing is refused for being merely large. The old
+scheduler queue (`_enqueue`, the worker, the retry route) still owns the rows already
+in Mongo: **MongoDB is the queue; RabbitMQ is only a doorbell** —
+`USE_RABBITMQ_JOBS=false` locally, so the every-minute Mongo sweep is the primary
+path, not a fallback.
 
 ## 5. Verified working (live, 2026-09-17)
 
@@ -683,6 +687,102 @@ Executes. While the roll-ups still existed they were recomputed straight from
 `demand_serve` ∪ `demand_serve_historical` (deduped as the pipeline does) and
 compared with the API cell by cell: **800 cells, 0 mismatches** — which is the
 evidence that the daily columns they were removed in favour of carry the same data.
+
+## 6h. Large exports build with progress instead of being refused (2026-09-20)
+
+PTC hit `Large export — this request is larger than the analytics screen will render
+in the browser` on a selection that **builds in 3.5 seconds**. Two things were wrong,
+and the second was hiding the first.
+
+### The budget was measuring the wrong thing
+
+`cells = date_buckets x block_buckets x series` was calibrated when this screen
+rendered an on-screen grid and the workbook was a sheet per dataset, so a "cell" was
+something the browser had to lay out. Under the single-table layout (§6g) the same
+number buys far more: the refused request was **3,936 rows x 84 columns**. Measured
+XLSX write time on this data set, which is the dominant cost (Mongo and the pivot are
+~1s even for a year):
+
+| rows x cols | cells | xlsx | size |
+|---|---|---|---|
+| 2,880 x 20 | 57,600 | 0.4s | 0.2 MB |
+| 35,040 x 20 | 700,800 | 4.8s | 2.0 MB |
+| 35,040 x 140 | 4,905,600 | 25.8s | 11.3 MB |
+| 105,120 x 140 | 14,716,800 | 77.4s | 33.7 MB |
+
+≈190k cells/s. The thresholds were re-scaled to match, and their meaning changed:
+
+| band | was | is | meaning now |
+|---|---|---|---|
+| `inline` | 150k | **1.5M** | served inside the request (≈8s) |
+| `inline_capped` | 500k | **3.0M** | also inside the request; CSV only, which streams |
+| `max` | 10M | **20M** | the only refusal, and it is a **memory** limit |
+
+`max` is no longer "too big to render". The pivot holds the whole value matrix in
+Python lists — ~24 bytes a float before list overhead — so 20M cells is already
+~460MB resident on a box that also serves the bidding screens. Three years of every
+live dataset (14.7M) fits under it; four does not, and that is the intended line.
+
+### Above `inline`, it is built rather than refused
+
+The file is produced **in the processing service** as an asyncio background task,
+which is the part that makes this usable: the scheduler's queue would not have
+started for up to a minute, and the whole point is that the user is waiting.
+
+```
+POST /analytics/export   -> 202 {job_id, status: "running", rows_total}
+GET  /analytics/export/{id}   -> {status, progress, rows_done, rows_total}   (polled 1s)
+GET  /analytics/export/{id}/download?token=…   -> the file, fetched automatically
+```
+
+The client polls, shows `Building… 47%` on the button with a bar and
+`16,000 of 35,040 rows` beneath it, and downloads the file by itself the moment it is
+ready. From the user's side the only difference from a short range is the wait.
+
+Progress is real, not a spinner: `analytics_layout.data_rows` takes an `on_row`
+callback, and the writer reports every `PROGRESS_EVERY_ROWS` (500) — a Mongo write
+per row would cost more than the export. `rows_total` is seeded from the estimate and
+**corrected once the query returns**, because the date axis carries the days that have
+data, not the days that were asked for; on this machine a request for 35,136 rows
+settles at 4,128.
+
+New fields on the job row: `rows_total` / `rows_done`. `_progress` in the routes reads
+those first and falls back to `chunks_*`, which is the scheduler worker's unit and
+still owns the queued rows already in Mongo.
+
+### Two defects found in the browser, not by tests
+
+Both would have shipped: the unit tests use a fake job store and a fake query
+service, and neither reproduces these.
+
+1. **Every background build failed the instant it started.** `_build` called
+   `service.query()`, which applies its *own* inline-render ceiling — so a request
+   admitted for background building was immediately refused by the next layer down.
+   The user saw a bar that never moved and then "Export failed". `query()` now takes
+   `enforce_budget=False`, used by that path and no other; the memory cap is still
+   enforced, before the job row is written.
+2. **Progress never left 0%.** `_write_file` runs on a worker thread via
+   `asyncio.to_thread` and read the event loop with `asyncio.get_running_loop()`
+   *inside* that thread, where there is none — so every update was silently dropped.
+   The loop is captured on the event loop and passed in.
+   `libs/tests/test_analytics_export_progress.py` now pins this: it drives a year of
+   dense rows through the writer and asserts the updates are plural, monotonic,
+   throttled, and land exactly on the row count.
+
+### Also fixed: the dialog said "Size unknown"
+
+The server sent `cells: 411264` and three priced suggestions; the dialog rendered
+*"Size unknown"* and *"the server offered no narrowing"*. `useAnalyticsExports` read
+`data.data ?? data` for the 413 body, but FastAPI's `HTTPException` puts it under
+`detail` — and `utils/readEstimate.js`, which exists precisely to handle that and is
+unit-tested, was not being called at that site. It is now. Only reachable at the
+memory cap, but it has to tell the truth when it is.
+
+**Tests:** backend `libs/tests` **869 pass / 10 fail** — the same 10 pre-existing
+vendor-rot failures. Client **115 pass**. Browser journey
+`tools/e2e/analytics_layout_journey.mjs` **22/22**, including a step that drives a
+large range through the real UI and asserts the button shows `Building… N%` and the
+workbook downloads itself.
 
 ## 7. REMAINING WORK — the actual to-do list
 

@@ -284,33 +284,35 @@ def test_a_query_nests_its_envelope_under_data():
 
 
 def test_an_over_budget_query_is_413_with_the_arithmetic_and_a_way_out():
+    """The query path still refuses above the inline ceiling — it has nowhere to
+    put a partial answer. (The EXPORT path builds in the background instead; the
+    thresholds were re-scaled on 2026-09-20, so this needs a long range now.)"""
     repo = StubRepo()
     body = _query_body(
         datasets=["DC_PLANT"],
         plants=SUPPLY_PLANTS,
-        from_date="2026-01-01",
-        to_date=(date(2026, 1, 1) + timedelta(days=199)).isoformat(),
+        from_date="2023-01-01",
+        to_date=(date(2023, 1, 1) + timedelta(days=1199)).isoformat(),
     )
     response = _client(repo=repo).post("/api/v2/analytics/query", json=body)
 
     assert response.status_code == 413
     detail = response.json()["detail"]
-    assert detail["estimate"]["cells"] == 200 * 96 * 34
-    assert detail["estimate"]["band"] == "async_only"
+    assert detail["estimate"]["cells"] == 1200 * 96 * 34
     assert detail["suggestions"], "a refusal with no alternative is a dead end"
-    # Refused by arithmetic, before a five-month scan was paid for.
+    # Refused by arithmetic, before the scan was paid for.
     assert repo.calls == []
 
 
 def test_an_inline_capped_query_is_served_and_says_so():
     repo = StubRepo(docs={"supply_serve": []})
-    # 92 days x 96 blocks x 34 plants = 300,288 cells: past `inline`, inside
+    # 550 days x 96 blocks x 34 plants = 1,795,200 cells: past `inline`, inside
     # `inline_capped`. It is served in full and the banner gets the real count.
     body = _query_body(
         datasets=["DC_PLANT"],
         plants=SUPPLY_PLANTS,
-        from_date="2026-01-01",
-        to_date=(date(2026, 1, 1) + timedelta(days=91)).isoformat(),
+        from_date="2025-01-01",
+        to_date=(date(2025, 1, 1) + timedelta(days=549)).isoformat(),
     )
     response = _client(repo=repo).post("/api/v2/analytics/query", json=body)
 
