@@ -198,6 +198,7 @@ from .v2.api.router.iex_api_detail_routes import router as iex_api_detail_router
 from .v2.api.router.api_key_management_routes import router as api_key_management_router 
 from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
 from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
+from .v2.api.router.exchange_report_routes import router as exchange_report_router
 from .v2.api.router.exchange_config_routes import router as exchange_config_router
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
@@ -388,6 +389,7 @@ v2_app.include_router(iex_api_detail_router)
 v2_app.include_router(api_key_management_router)
 v2_app.include_router(exchange_trade_router)
 v2_app.include_router(exchange_dsm_router)
+v2_app.include_router(exchange_report_router)
 v2_app.include_router(exchange_config_router)
 v2_app.include_router(realtimemarket_router)
 v2_app.include_router(cron_orchestrator_router)
