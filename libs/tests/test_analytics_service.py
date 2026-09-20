@@ -435,28 +435,20 @@ def test_the_exchange_series_count_defaults_to_every_exchange():
     assert narrowed["exchange_count"] == 1
 
 
-# ------------------------------------------- roll-up datasets keep to themselves
+# ------------------------------------------------------- the grouping is a label
 #
-# Until 2026-09-20 a ticked roll-up rewrote `date_grouping` for the WHOLE request:
-# a user asking for block-wise Declared Capacity alongside Weekly Forecast got a
-# file of ISO-week columns, with the Block-wise pill still lit and the Filters sheet
-# still printing BLOCK_WISE. Roll-ups now run their own pipeline and are written
-# against each day of their period, so they cannot move anything else's axis.
+# Until 2026-09-20 a ticked weekly/monthly dataset rewrote `date_grouping` for the
+# WHOLE request: a user asking for block-wise Declared Capacity alongside Weekly
+# Forecast got a file of ISO-week columns, with the Block-wise pill still lit and
+# the Filters sheet still printing BLOCK_WISE. Those four datasets have since been
+# removed — they read the same stored fields as the daily ones — so nothing can
+# impose a grouping any more.
 
-def test_a_weekly_rollup_no_longer_moves_the_users_grouping():
-    req = svc._as_request(_request(datasets=["WEEKLY_FORECAST"],
-                                   date_grouping="BLOCK_DATE_WISE"))
-    assert req.date_grouping == "BLOCK_DATE_WISE"
-
-
-def test_a_monthly_rollup_no_longer_moves_the_users_grouping():
-    req = svc._as_request(_request(datasets=["MONTHLY_MAPE"], date_grouping="WEEK_WISE"))
-    assert req.date_grouping == "WEEK_WISE"
-
-
-def test_an_ordinary_request_keeps_the_users_grouping():
-    req = svc._as_request(_request(datasets=["ACTUAL_DEMAND"], date_grouping="YEAR_WISE"))
-    assert req.date_grouping == "YEAR_WISE"
+@pytest.mark.parametrize("grouping", ["BLOCK_DATE_WISE", "HOURLY_WISE", "WEEK_WISE",
+                                      "MONTH_WISE", "YEAR_WISE"])
+def test_the_users_grouping_survives_the_request(grouping):
+    req = svc._as_request(_request(datasets=["ACTUAL_DEMAND"], date_grouping=grouping))
+    assert req.date_grouping == grouping
 
 
 def test_the_retired_groupings_are_canonicalised_on_the_way_in():
@@ -466,51 +458,30 @@ def test_the_retired_groupings_are_canonicalised_on_the_way_in():
         assert req.date_grouping == "BLOCK_DATE_WISE"
 
 
-def test_the_rollup_families_are_reported_not_imposed():
-    assert svc.rollup_families(["ACTUAL_DEMAND"]) == []
-    assert svc.rollup_families(["ACTUAL_DEMAND", "WEEKLY_FORECAST"]) == ["WEEK_WISE"]
+def test_the_rollup_datasets_cannot_be_requested_at_all():
+    for code in ("WEEKLY_FORECAST", "WEEKLY_MAPE", "MONTHLY_FORECAST", "MONTHLY_MAPE"):
+        with pytest.raises(ValueError):
+            _request(datasets=[code])
 
 
-def test_mixing_weekly_and_monthly_rollups_is_now_legal():
-    """It used to be refused: one date axis could not serve both.
-
-    Each family has its own pipeline now, and both land on the trading-day axis, so
-    there is nothing left to conflict.
-    """
-    req = svc._as_request(_request(datasets=["WEEKLY_FORECAST", "MONTHLY_FORECAST"],
-                                   date_grouping="BLOCK_DATE_WISE"))
-    assert req.date_grouping == "BLOCK_DATE_WISE"
-    assert svc.rollup_families(req.datasets) == ["MONTH_WISE", "WEEK_WISE"]
-
-
-def test_the_users_grouping_still_reaches_the_cache_key():
-    """It names the file's columns, so two groupings are two different answers.
-
-    While the grouping was being forced, a roll-up asked block-wise and date-wise
-    was one cache entry. Now the pill survives into the response and the writers
-    print it, so it has to key the cache.
-    """
+def test_the_users_grouping_reaches_the_cache_key():
+    """It names the file's columns, so two groupings are two different answers."""
     s = svc.AnalyticsService(repository=object(), cache=None)
-    a = s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_DATE_WISE"))
-    b = s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="WEEK_WISE"))
+    a = s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="BLOCK_DATE_WISE"))
+    b = s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="WEEK_WISE"))
     assert a != b
     # ...and the two retired spellings are the same question as the pill they became.
-    assert (s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE"))
-            == s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="DATE_WISE")))
+    assert (s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="BLOCK_WISE"))
+            == s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="DATE_WISE")))
 
 
-def test_a_rollup_is_priced_on_the_days_it_will_occupy():
-    """31 days block-wise is 2,976 cells, and a weekly roll-up costs the same.
-
-    It used to be priced at the six ISO weeks the range touches, because that was
-    how many buckets came back. The period value is now repeated across each of its
-    days, so it fills the same grid as every other column.
-    """
+def test_every_grouping_is_priced_the_same():
+    """31 days is 31 date buckets whatever the pill: it groups nothing."""
     s = svc.AnalyticsService(repository=object(), cache=None)
-    est = s.estimate_only(_request(datasets=["WEEKLY_FORECAST"],
-                                   date_grouping="BLOCK_DATE_WISE",
-                                   from_date=date(2026, 8, 1), to_date=date(2026, 8, 31)))
-    assert est.date_buckets == 31
+    for grouping in ("BLOCK_DATE_WISE", "WEEK_WISE", "MONTH_WISE", "YEAR_WISE"):
+        est = s.estimate_only(_request(datasets=["ACTUAL_DEMAND"], date_grouping=grouping,
+                                       from_date=date(2026, 8, 1), to_date=date(2026, 8, 31)))
+        assert est.date_buckets == 31, grouping
 
 
 def test_the_page_grant_the_menu_rbac_mints_unlocks_every_dataset():

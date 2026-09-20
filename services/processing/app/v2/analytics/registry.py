@@ -31,9 +31,6 @@ class Dataset:
     match: Optional[Dict[str, Any]] = None
     depends: Tuple[str, ...] = ()
     expr: Optional[str] = None
-    # A roll-up dataset (weekly/monthly forecast or MAPE) is meaningless at any other
-    # granularity, so the service forces this date grouping when the dataset is selected.
-    fixed_grouping: Optional[str] = None
     # A per-entity breakdown of a dataset that also exists as a state-level total.
     # Listed after the totals and badged in the UI; never the default pick.
     drilldown: bool = False
@@ -168,25 +165,12 @@ _ALL: List[Dataset] = [
        unit="MW", agg="sum", availability="absent", permission="analytics:market"),
 ]
 
-# ---- weekly / monthly roll-ups ---------------------------------------------
-# PTC's mapping is "DAF | IDF". DAF and IDF share the same (date, block) key in
-# demand_serve, so they are two COLUMNS of one table, not two tables — one tick per
-# roll-up, and the file carries a "Day Ahead" and an "Intra Day" column, the way the
-# exchange datasets carry one column per exchange. Both `forecast` and `mape` are
-# stored per block, so this is ordinary aggregation. Weekly/monthly MAPE is the MEAN
-# of the per-block MAPE — the same definition daily MAPE already uses in
-# libs/helpers/demand_calculations.py — not a recomputation from summed totals,
-# which gives a figure nobody could reconcile with the daily one.
-for _period, _grouping in (("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")):
-    _label = _period.title()
-    _ALL += [
-        _d(code=f"{_period}_FORECAST", label=f"{_label} Forecast", group="demand",
-           value="$forecast", unit="MW", agg="avg", series="per_forecast_type",
-           fixed_grouping=_grouping, permission="analytics:forecast"),
-        _d(code=f"{_period}_MAPE", label=f"{_label} MAPE", group="demand",
-           value="$mape", unit="%", agg="avg", series="per_forecast_type",
-           fixed_grouping=_grouping, permission="analytics:forecast"),
-    ]
+# Weekly / monthly Forecast and MAPE were removed on 2026-09-20 (PTC). They read the
+# same `forecast` and `mape` fields as FORECAST_DAF/IDF and MAPE_DAF/IDF and differed
+# only in aggregation period, so anyone wanting the weekly picture averages the daily
+# columns — nothing was derivable from them that is not derivable now. Their removal
+# also took `fixed_grouping` with it, which is why no dataset can move the file's date
+# axis any more.
 
 # ---- exchange group, generated per market -----------------------------
 for _m in MARKETS:

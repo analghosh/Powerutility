@@ -75,12 +75,7 @@ async def execute(plans: Sequence[dict], repo, *,
             docs = await repo.run_pipeline(
                 p["adapter"].serve_collection, p["pipeline"], max_time_ms=max_time_ms
             )
-            rows = p["adapter"].rows_from(docs, p["datasets"])
-            # A roll-up plan returns one value per (period, block); `post` spreads it
-            # back across that period's days so it lands on the same date axis as
-            # every other dataset in the file. Absent for every ordinary plan.
-            post = p.get("post")
-            return p, (post(rows) if post else rows)
+            return p, p["adapter"].rows_from(docs, p["datasets"])
 
     settled = await asyncio.gather(*(_run(p) for p in plans), return_exceptions=True)
 

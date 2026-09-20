@@ -47,7 +47,7 @@ Both pushed. `git log --oneline origin/dev..HEAD` in each repo lists everything.
 
 ## 3. Architecture in one page
 
-A **dataset registry** maps 52 dataset codes onto 5 MongoDB source groups, so ticking 12
+A **dataset registry** maps 48 dataset codes onto 5 MongoDB source groups, so ticking 12
 datasets issues ~4 aggregations rather than 12. A **cell budget**, computed from the filters
 alone before any database call, decides whether a request renders inline, streams, or is
 refused with a 413 carrying priced narrowings (it used to queue — see §6g).
@@ -70,7 +70,7 @@ filters + ticked datasets
 
 | file | responsibility |
 |---|---|
-| `analytics/registry.py` | 52 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
+| `analytics/registry.py` | 48 datasets: collection, field, unit, agg rule, series cardinality, availability, permission |
 | `analytics/block_bands.py` | block grouping; PTC's 5 named bands seeded **inactive** |
 | `analytics/budget.py` | cell arithmetic and band classification — pure, no I/O |
 | `analytics/grouping.py` | the trading-day key, block bucket `$switch`, accumulators, and the identity **columns** each Group Date By puts in the file (§6g) |
@@ -197,6 +197,13 @@ stale 554.68). Bump it whenever a dataset's meaning changes.
 Absent datasets are now **2** (TAM only), down from 6.
 
 ## 6b. Partial weeks, indexes, sentinel zeros (2026-09-17 evening)
+
+> Superseded by §6g (2026-09-20): the roll-up datasets were removed, so
+> `analytics/coverage.py`, `meta.period_coverage`, `meta.partial_periods` and the
+> `# Partial periods` header line are all gone. The ISO-week counting fix below is
+> also moot — every grouping counts one bucket per trading day now. Kept as the
+> record of why they existed. The "Open for PTC" question at the end was answered
+> by removing the feature.
 
 **Partial roll-up periods.** A 3-day range rolled up weekly returns a bucket labelled with
 the WHOLE week. The engine's average was honest; the label was not. Now: `meta.period_coverage`
@@ -586,25 +593,55 @@ Other changes in the same batch:
   request. That is the line that used to lie.
 * **Dates are real Excel dates** (`dd mmm yyyy`), not text — they were unsortable.
 
-### The roll-ups (Weekly/Monthly Forecast and MAPE)
+### The roll-ups were removed (Weekly/Monthly Forecast and MAPE)
 
-They are averages by definition, so they keep their own aggregation — but as their
-own **pipeline**, not by hijacking the request. `planner._split_by_rollup` gives each
-family a plan over the same collection, and `_rollup_expander` writes each period's
-value against every day of that period, so the column lands on the trading-day axis
-like everything else and repeats down the week (or month) it describes.
+They first got their own pipeline, so they could stop hijacking the request. Then
+PTC looked at what they actually were and removed them outright the same day.
 
-Consequences worth knowing:
+They read the **same stored fields** as the datasets beside them and differed only
+in aggregation period:
 
-* **Weekly + monthly in one file is now legal.** `FixedGroupingConflict` is deleted.
-  The client's matching lock — a banner reading *"Weekly data sets selected — monthly
-  ones are locked"* — was still enforcing the old rule after the backend stopped, and
-  was found by the browser journey, not by a test. Removed.
-* **A roll-up widens the date spine.** It has a value for every day of its period,
-  including days on which nothing else was recorded, so ticking one can add rows. The
-  file explains itself in the Filters sheet: `Rolled-up columns: weekly and monthly
-  averages, each repeated across every day of its period`.
-* Cost: at most two extra aggregations, and only when a roll-up is ticked.
+```python
+FORECAST_DAF     value="$forecast"  agg="avg"  match={"type":"DAF"}          # per day
+WEEKLY_FORECAST  value="$forecast"  agg="avg"  fixed_grouping="WEEK_WISE"    # per week
+```
+
+Nothing is stored as an average anywhere — the average was computed at read time —
+so a user who wants the weekly picture averages the daily columns, which are still
+on the picker as **Day Ahead / Intra Day Forecast** and **Day Ahead / Intra Day
+MAPE**. The catalogue went 52 → 48 datasets.
+
+What went with them:
+
+| Removed | Why it existed |
+|---|---|
+| `Dataset.fixed_grouping` | only the four roll-ups set it — it *was* the hijack mechanism |
+| `grouping.date_key_expr`, `DATE_FORMATS` | bucketing by a period other than the day |
+| `grouping.period_key` / `period_day_map` / `days_in_range` | mapping a period back onto its days |
+| `planner._split_by_rollup` / `_rollup_expander`, `GroupPlan["post"]` | the separate pipeline and the broadcast |
+| `adapters.base.ROLLUP_GROUPING_KEY` | the filter key that selected a period |
+| `analytics/coverage.py` + its tests | labelling partially-covered periods |
+| `analytics_service.rollup_families`, `_rollup_coverage` | reporting which families were ticked |
+| `meta.rollup_families` / `period_coverage` / `partial_periods` | the response fields |
+| `Rolled-up columns` / `Partial periods` in the Filters sheet | explaining the repeated columns |
+| the client's `Weekly`/`Monthly` badge in the picker | naming the roll-up family |
+
+That also closes the partial-period caveat by deleting it: there is no longer a
+period that can be partially covered.
+
+**One deliberate piece of dead code left in place.** `per_forecast_type` had exactly
+these four users, so `DemandAdapter.entity = "type"`, `_wants_entity`, the
+`series_cardinality` branch and `pivot.ENTITY_LABELS` are now inert. They are kept
+because `dedupe_key` includes `type` and because removing them touches the grouping
+behaviour of **every** demand dataset for no functional gain. `test_analytics_
+adapters_simple.py` pins that no demand dataset is `per_forecast_type` today, so a
+future one has to clear the trap deliberately.
+
+**Compatibility.** Saved preferences were already safe — `analytics_preference_
+repository.sanitize` drops codes the registry no longer knows. Stored export rows
+were not: 13 rows in local Mongo name `WEEKLY_FORECAST` or `MONTHLY_MAPE`, and
+replaying one would 422. The client's Execute therefore filters the stored dataset
+list against the live catalogue and tells the user what it left out.
 
 ### Budget arithmetic changed with it
 
@@ -636,15 +673,16 @@ need them. Delete them once those rows have aged out — not before.
 **New file:** `services/processing/app/v2/helpers/analytics_layout.py` — the one table,
 shared by both writers. **Deleted:** `client/src/features/analytics/components/DisplayOptions.jsx`.
 
-**Tests:** backend analytics **775 pass**, full `libs/tests` **886 pass / 10 fail** —
+**Tests:** backend analytics **748 pass**, full `libs/tests` **859 pass / 10 fail** —
 the same 10 pre-existing vendor-rot failures (`test_supply_csv_parser.py`,
 `test_grid_india_parser.py`, `test_demand_supply_entities.py`). Client `node --test`
 **114 pass**. New browser journey `tools/e2e/analytics_layout_journey.mjs`
-**17/17 steps**, which drives the real UI and reads the real downloaded workbook.
-Separately, the four roll-ups were recomputed straight from `demand_serve` ∪
-`demand_serve_historical` (deduped as the pipeline does) and compared with the API
-cell by cell: **800 cells, 0 mismatches**, value constant per (block, period) and
-varying between blocks.
+**18/18 steps**, which drives the real UI and reads the real downloaded workbook —
+including a step proving an older history row that names a removed dataset still
+Executes. While the roll-ups still existed they were recomputed straight from
+`demand_serve` ∪ `demand_serve_historical` (deduped as the pipeline does) and
+compared with the API cell by cell: **800 cells, 0 mismatches** — which is the
+evidence that the daily columns they were removed in favour of carry the same data.
 
 ## 7. REMAINING WORK — the actual to-do list
 

@@ -46,47 +46,23 @@ def test_the_day_key_is_what_every_dashboard_query_groups_on():
         "format": "%Y-%m-%d", "date": "$scheduled_at", "timezone": g.TIMEZONE}}
 
 
-@pytest.mark.parametrize("grouping,fmt", [
-    ("BLOCK_WISE", "%Y-%m-%d"),
-    ("DATE_WISE", "%Y-%m-%d"),
-    
-    ("WEEK_WISE", "%G-W%V"),
-    ("MONTH_WISE", "%Y-%m"),
-    ("YEAR_WISE", "%Y"),
-])
-def test_each_grouping_produces_its_documented_format(grouping, fmt):
-    expr = g.date_key_expr(grouping)
-    assert expr == {"$dateToString": {"format": fmt,
-                                      "date": "$scheduled_at",
-                                      "timezone": g.TIMEZONE}}
+def test_the_day_key_is_the_only_key_a_pipeline_groups_on():
+    """`date_key_expr` is gone with the roll-ups (2026-09-20).
 
-
-def test_the_date_field_is_overridable():
-    expr = g.date_key_expr("DATE_WISE", "$delivery_date")
-    assert expr["$dateToString"]["date"] == "$delivery_date"
-
-
-def test_unknown_grouping_raises():
-    with pytest.raises(ValueError) as exc:
-        g.date_key_expr("FORTNIGHTLY")
-    assert "FORTNIGHTLY" in str(exc.value)
-
-
-def test_week_wise_uses_iso_week_so_a_year_boundary_does_not_collide():
-    """%Y-W%V collapses the last week of a year onto week 1 of the same year.
-
-    29 Dec 2025 is ISO week 2026-W01. Formatted with the calendar year it reads
-    "2025-W01" — the same key as 2 Jan 2025, silently averaging two weeks a year
-    apart into one bucket. %G (ISO year) is what keeps them apart.
+    It existed so a weekly or monthly dataset could bucket by its own period. Those
+    four datasets were removed — they read the same stored fields as the daily
+    Forecast and MAPE and differed only in period — so nothing aggregates over a
+    period any more and one date key remains.
     """
-    fmt = g.DATE_FORMATS["WEEK_WISE"]
-    assert fmt == "%G-W%V"
+    assert not hasattr(g, "date_key_expr")
+    assert not hasattr(g, "DATE_FORMATS")
+    assert g.day_key_expr()["$dateToString"]["format"] == g.DAY_FORMAT == "%Y-%m-%d"
 
-    early = date(2025, 1, 2)
-    late = date(2025, 12, 29)
-    assert early.strftime("%Y-W%V") == late.strftime("%Y-W%V")   # the bug
-    assert early.strftime(fmt) != late.strftime(fmt)             # the fix
-    assert late.strftime(fmt) == "2026-W01"
+
+def test_the_day_field_is_overridable():
+    """The supply group dates on a different field."""
+    expr = g.day_key_expr("$delivery_date")
+    assert expr["$dateToString"]["date"] == "$delivery_date"
 
 
 # ---------------------------------------------------------------- timezone
@@ -95,15 +71,8 @@ def test_timezone_defaults_to_ist():
     assert g.TIMEZONE == "Asia/Kolkata"
 
 
-@pytest.mark.parametrize("grouping", ["BLOCK_WISE", "DATE_WISE", "HOURLY_WISE",
-                                     "WEEK_WISE", "MONTH_WISE", "YEAR_WISE"])
-def test_every_date_key_carries_the_timezone(grouping):
-    expr = g.date_key_expr(grouping)
-    # HOURLY_WISE wraps the date part in a $concat with the hour derived from
-    # time_block, so the $dateToString sits one level down.
-    if "$concat" in expr:
-        expr = expr["$concat"][0]
-    assert expr["$dateToString"]["timezone"] == g.TIMEZONE
+def test_the_day_key_carries_the_timezone():
+    assert g.day_key_expr()["$dateToString"]["timezone"] == g.TIMEZONE
 
 
 def test_a_block_at_2345_ist_belongs_to_the_ist_date_not_the_utc_one():
@@ -214,31 +183,12 @@ def test_every_aggregation_rule_in_the_registry_is_supported():
         assert g.accumulator(dataset.agg, "$v") == {f"${dataset.agg}": "$v"}
 
 
-# --------------------------------------------------------------- hourly defect
+# ----------------------------------------------------------------- the hour
 # `scheduled_at` is a trading date stamped at midnight; the time of day lives in
 # `time_block` (4 blocks per hour). Formatting the date field with %H therefore
-# collapsed a whole day into a single bucket instead of the 24 that
-# budget.date_bucket_count promises. The hour must be derived from the block.
-
-def _mentions(expr, needle):
-    return needle in json.dumps(expr)
-
-
-def test_hourly_key_is_derived_from_the_block_not_the_date_field():
-    expr = g.date_key_expr("HOURLY_WISE")
-    assert _mentions(expr, "$time_block"), expr
-
-
-def test_hourly_key_does_not_format_the_date_field_by_hour():
-    """%H on scheduled_at is always midnight, so it yields one bucket per day."""
-    expr = g.date_key_expr("HOURLY_WISE")
-    assert "%H" not in json.dumps(expr)
-
-
-def test_non_hourly_groupings_still_key_off_the_date_field_only():
-    for name in ("BLOCK_WISE", "DATE_WISE", "WEEK_WISE", "MONTH_WISE", "YEAR_WISE"):
-        assert not _mentions(g.date_key_expr(name), "$time_block"), name
-
+# labels every row of a day with the same hour. The hour is a COLUMN now
+# (2026-09-20), derived from the block, so the equivalence these tests pin is
+# between the block number and the hour a reader sees beside it.
 
 @pytest.mark.parametrize("block,hour", [
     (1, 0), (4, 0), (5, 1), (8, 1), (41, 10), (89, 22), (93, 23), (96, 23),
@@ -247,8 +197,13 @@ def test_block_to_hour_mapping(block, hour):
     assert g.hour_of_block(block) == hour
 
 
-def test_hour_is_zero_padded_so_keys_sort_lexically():
-    keys = [f"2026-01-05 {g.hour_of_block(b):02d}" for b in (1, 21, 96)]
-    assert keys == sorted(keys)
-    assert keys[0].endswith(" 00")
-    assert keys[-1].endswith(" 23")
+def test_the_hour_column_is_one_based_beside_the_blocks():
+    """`hour_of_block` is 0-23 (the clock); the column reads 1-24 (beside block 1-96).
+
+    A spreadsheet that starts blocks at 1 and hours at 0 invites an off-by-one in
+    every formula written against it.
+    """
+    for block in (1, 21, 96):
+        assert g.hour_label(block) == f"Hour {g.hour_of_block(block) + 1}"
+    assert g.hour_label(1) == "Hour 1"
+    assert g.hour_label(96) == "Hour 24"
