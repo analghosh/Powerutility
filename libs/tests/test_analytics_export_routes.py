@@ -101,6 +101,7 @@ class FakeJobs:
         self.active = active
         self.mark_result = mark_result
         self.created = []
+        self.recorded = []
         self.marks = []
         self.listed = []
 
@@ -121,6 +122,13 @@ class FakeJobs:
     async def create(self, job):
         doc = build_job_document(job)
         self.created.append(doc)
+        self.jobs[doc["job_id"]] = doc
+        return doc["job_id"]
+
+    async def record_completed(self, job):
+        doc = build_job_document(job)
+        doc.update({"status": "completed", "result": job.get("result")})
+        self.recorded.append(doc)
         self.jobs[doc["job_id"]] = doc
         return doc["job_id"]
 
@@ -321,39 +329,43 @@ def test_a_small_csv_export_streams_with_a_download_filename():
     assert service.jobs.created == [], "a 96-cell export must not reach the queue"
 
 
-def test_a_large_export_is_queued_and_answers_202_with_a_job_id():
+def test_a_large_export_is_refused_with_413_and_priced_narrowings():
+    """The dashboard stopped queueing on 2026-09-20.
+
+    A request too large to build in one go is answered now, not promised for
+    later: 413 with the estimate and the narrowings that would fit. The frontend
+    opens its budget dialog on this status.
+    """
     jobs = FakeJobs()
     service = _service(jobs=jobs)
     response = _client(service).post("/api/v2/analytics/export",
                                      json=_big_body())
 
-    # 202, not 200: the frontend opens the My Exports panel on this status.
-    assert response.status_code == 202
-    payload = response.json()["data"]
-    assert payload["mode"] == "job"
-    assert payload["job_id"] == jobs.created[0]["job_id"]
-    assert payload["status"] == "queued"
-    assert payload["deduped"] is False
-    assert payload["chunks_total"] >= 1
-    assert payload["estimated_cells"] == 52 * 96 * 200
-    # The row is the ownership record every later download is checked against.
-    assert jobs.created[0]["user_id"] == OWNER
+    assert response.status_code == 413
+    detail = response.json()["detail"]
+    assert detail["code"] == "ANALYTICS_BUDGET_EXCEEDED"
+    assert detail["estimate"]["cells"] == 52 * 96 * 200
+    assert detail["suggestions"], "a refusal must say how to get under the line"
+    assert jobs.created == [], "an over-budget export reached the queue"
+    assert jobs.recorded == [], "a refused export left a history row"
 
 
-def test_an_identical_queued_export_attaches_to_the_job_already_running():
-    service = _service()
-    client = _client(service)
-    first = client.post("/api/v2/analytics/export", json=_big_body())
-    existing = service.jobs.created[0]
-    service.jobs.active = existing
+def test_a_served_export_leaves_a_history_row_for_my_exports():
+    """What survives a generate is the configuration, not a file."""
+    repo = StubRepo(docs={"demand_serve": _demand_docs(100.0)})
+    jobs = FakeJobs()
+    service = _service(jobs=jobs, repo=repo)
 
-    second = client.post("/api/v2/analytics/export", json=_big_body())
+    response = _client(service).post("/api/v2/analytics/export",
+                                     json=_export_body(format="xlsx"))
 
-    assert second.status_code == 202
-    payload = second.json()["data"]
-    assert payload["job_id"] == first.json()["data"]["job_id"]
-    assert payload["deduped"] is True
-    assert len(service.jobs.created) == 1, "a repeat click must not queue a second run"
+    assert response.status_code == 200
+    assert len(jobs.recorded) == 1
+    row = jobs.recorded[0]
+    assert row["status"] == "completed"
+    # The row is the ownership record every later read of My Exports is scoped by.
+    assert row["user_id"] == OWNER
+    assert row["filters"]["datasets"]
 
 
 def test_an_inline_xlsx_export_returns_the_file_and_cleans_up_after_itself():

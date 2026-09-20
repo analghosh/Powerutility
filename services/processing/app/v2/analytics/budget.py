@@ -31,29 +31,19 @@ class Estimate:
     suggestions: List[Dict] = field(default_factory=list)
 
 
-def date_bucket_count(from_date: date, to_date: date, grouping: str) -> int:
+def date_bucket_count(from_date: date, to_date: date,
+                      grouping: Optional[str] = None) -> int:
+    """Date buckets in the range: one per trading day, whatever the grouping.
+
+    `grouping` is accepted and ignored. Since 2026-09-20 Group Date By adds a column
+    to the file rather than collapsing the date axis, so a week-wise request costs
+    exactly what a block-wise one does — the parameter stays only so the existing
+    call sites and stored jobs keep working. The roll-up datasets aggregate over
+    their own period but are then written against each day of it, so they occupy the
+    same cells as everything else.
+    """
     days = (to_date - from_date).days + 1
-    if days < 1:
-        return 0
-    if grouping == "HOURLY_WISE":
-        return days * 24
-    if grouping in ("BLOCK_WISE", "DATE_WISE"):
-        return days
-    if grouping == "WEEK_WISE":
-        # Distinct ISO weeks touched, not ceil(days/7): Sat 29 → Mon 31 Aug is 3 days
-        # but TWO weeks, and the engine keys on the ISO week, so the estimate must too.
-        # Underestimating lets a request through that is bigger than promised.
-        first = from_date.isocalendar()
-        last = to_date.isocalendar()
-        # ISO weeks are contiguous across the year boundary; count via ordinal Mondays.
-        first_monday = from_date.toordinal() - (first[2] - 1)
-        last_monday = to_date.toordinal() - (last[2] - 1)
-        return max(1, (last_monday - first_monday) // 7 + 1)
-    if grouping == "MONTH_WISE":
-        return max(1, (to_date.year - from_date.year) * 12 + (to_date.month - from_date.month) + 1)
-    if grouping == "YEAR_WISE":
-        return max(1, to_date.year - from_date.year + 1)
-    return days
+    return days if days > 0 else 0
 
 
 def _classify(cells: int, thresholds: Dict[str, int]) -> str:
@@ -67,6 +57,13 @@ def _classify(cells: int, thresholds: Dict[str, int]) -> str:
 
 
 def _suggestions(date_buckets, block_buckets, datasets, ctx, cells) -> List[Dict]:
+    """Concrete ways to get under the ceiling, each priced.
+
+    Every suggestion must actually shrink the result, so each is filtered against
+    the current estimate before it is offered. "Switch Group Date By to Week-wise"
+    used to be on this list and was removed on 2026-09-20: the pill no longer
+    collapses dates, so following that advice changed the cell count by nothing.
+    """
     out: List[Dict] = []
     series = sum(registry.series_cardinality(registry.get(c), ctx) for c in datasets)
 
@@ -76,23 +73,26 @@ def _suggestions(date_buckets, block_buckets, datasets, ctx, cells) -> List[Dict
             "cells": date_buckets * 1 * series,
             "message": "Group blocks into a band instead of individual blocks",
         })
-    if date_buckets > 7:
-        weekly = max(1, (date_buckets + 6) // 7)
+    if date_buckets > 1:
+        halved = max(1, date_buckets // 2)
         out.append({
-            "kind": "coarser_dates",
-            "cells": weekly * block_buckets * series,
-            "message": "Switch Group Date By to Week-wise",
+            "kind": "shorter_range",
+            "cells": halved * block_buckets * series,
+            "message": f"Halve the date range to about {halved} day(s)",
         })
     if any(registry.get(c).series == "per_plant" for c in datasets):
-        reduced = sum(
-            5 if registry.get(c).series == "per_plant"
-            else registry.series_cardinality(registry.get(c), ctx)
-            for c in datasets
+        # Plant-wise datasets carry one series per plant — 34 locally — so they are
+        # almost always what pushed a selection over. There is no plant picker
+        # (2026-09-18 decision: every plant is always returned), so the only lever
+        # the user has is the tick itself.
+        without = sum(
+            registry.series_cardinality(registry.get(c), ctx)
+            for c in datasets if registry.get(c).series != "per_plant"
         )
         out.append({
-            "kind": "fewer_plants",
-            "cells": date_buckets * block_buckets * reduced,
-            "message": "Select 5 plants instead of all",
+            "kind": "fewer_datasets",
+            "cells": date_buckets * block_buckets * without,
+            "message": "Untick the plant-wise data sets, which carry one column per plant",
         })
     return [s for s in out if s["cells"] < cells]
 

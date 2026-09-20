@@ -63,6 +63,7 @@ from typing import Any, Dict, Iterable, List, Optional, Sequence, Set, Tuple
 from ...core.config import settings as default_settings
 from ..analytics import (block_bands, budget, coverage, derived, executor, pivot,
                          planner, registry)
+from ..analytics import grouping as grouping_mod
 from ..analytics.adapters import base as adapters
 from ..analytics.models import AnalyticsQueryRequest
 
@@ -94,7 +95,10 @@ PLANT_CACHE_TTL_SECONDS = 900
 #       Values are unchanged, but `series[].label` is IN the cached payload and the
 #       writers print it, so a past-date query cached under v6 would keep emitting the
 #       old label into downloaded files for the full 24 h TTL (2026-09-18).
-CACHE_VERSION = "v7"
+#   v8: Group Date By stopped aggregating (2026-09-20). Every query now groups on the
+#       trading day, so a v7 entry cached under WEEK_WISE holds week buckets that the
+#       new writers would read as days.
+CACHE_VERSION = "v8"
 CACHE_PREFIX = "analytics:query"
 
 #: Bands that cannot be rendered inline. The route turns this into a 413 plus the
@@ -146,13 +150,10 @@ class BudgetExceeded(RuntimeError):
         self.band = estimate.band
         self.suggestions = list(estimate.suggestions)
         super().__init__(message or (
-            f"This selection would render {estimate.cells:,} cells, more than the "
-            f"inline limit. Narrow the range, group the blocks, or export it instead."
+            f"This selection would render {estimate.cells:,} cells, which is more "
+            f"than one file can be generated for. Narrow it using the suggestions "
+            f"below and generate again."
         ))
-
-
-class FixedGroupingConflict(ValueError):
-    """Two selected datasets demand different fixed date groupings."""
 
 
 class BandInactive(ValueError):
@@ -173,42 +174,50 @@ class BandInactive(ValueError):
 BAND_CACHE_TTL_SECONDS = 30.0
 
 
-def forced_grouping(codes) -> Tuple[Optional[str], List[str]]:
-    """The date grouping the selected datasets impose, if any, and who imposed it.
+def rollup_families(codes) -> List[str]:
+    """The roll-up periods among the selected datasets, sorted.
 
-    A weekly forecast viewed block-wise is meaningless, so a roll-up dataset carries a
-    `fixed_grouping` that overrides the user's choice for the whole request. Mixing a
-    weekly and a monthly roll-up in one request has no sensible answer and is refused.
+    Weekly and monthly datasets are averages over their own period and keep their
+    own aggregation pass (see `planner._split_by_rollup`). They no longer impose
+    that period on anything else, so mixing a weekly and a monthly roll-up is now
+    legal — each gets its own pipeline and its own column, and the file stays on
+    the trading-day axis.
+
+    Until 2026-09-20 this function was `forced_grouping`, and one ticked roll-up
+    rewrote `date_grouping` for the whole request: a user asking for block-wise
+    Declared Capacity got week columns, with the Block-wise pill still lit and the
+    Filters sheet still claiming BLOCK_WISE.
     """
-    forced: Dict[str, List[str]] = {}
+    out = set()
     for code in codes:
         fg = registry.get(code).fixed_grouping
         if fg:
-            forced.setdefault(fg, []).append(code)
-    if not forced:
-        return None, []
-    if len(forced) > 1:
-        pretty = {"WEEK_WISE": "weekly", "MONTH_WISE": "monthly"}
-        parts = []
-        for g, codes_ in sorted(forced.items()):
-            labels = ", ".join(registry.get(c).label for c in codes_)
-            parts.append(f"{pretty.get(g, g)} ({labels})")
-        exc = FixedGroupingConflict(
-            "Weekly and monthly roll-ups cannot be shown on one table because they "
-            "need different date axes. Please pick one or the other: "
-            + " vs ".join(parts) + ".")
-        exc.groups = {g: list(c) for g, c in forced.items()}
-        raise exc
-    (grouping, by), = forced.items()
-    return grouping, by
+            out.add(grouping_mod.canonical(fg))
+    return sorted(out)
+
+
+def _rollup_coverage(codes, from_date: date, to_date: date) -> Optional[Dict[str, dict]]:
+    """Partial-period notes for every roll-up family the selection actually ticked.
+
+    Merged into one map because the keys cannot collide: a week reads "2026-W38",
+    a month "2026-09". Returns None when no roll-up is selected — an ordinary
+    block-wise file has no periods to be partial about.
+    """
+    families = rollup_families(codes)
+    if not families:
+        return None
+    merged: Dict[str, dict] = {}
+    for family in families:
+        merged.update(coverage.period_coverage(from_date, to_date, family) or {})
+    return merged or None
 
 
 def _as_request(request: Any) -> AnalyticsQueryRequest:
     """Accept a validated model or the raw filter dict a stored export job holds.
 
-    Also the single choke point where a dataset's `fixed_grouping` overrides the
-    user's `date_grouping`, so the budget, the cache key and the planner all see the
-    same, already-forced value.
+    A dataset's `fixed_grouping` used to be applied here, rewriting the user's
+    `date_grouping` for the whole request. It no longer is: roll-ups carry their own
+    pipeline instead, and the pill only decides the file's identity columns.
     """
     if isinstance(request, AnalyticsQueryRequest):
         req = request
@@ -217,9 +226,6 @@ def _as_request(request: Any) -> AnalyticsQueryRequest:
     else:
         raise TypeError(
             f"Expected an AnalyticsQueryRequest or a filter dict, got {type(request).__name__}")
-    grouping, _ = forced_grouping(req.datasets)
-    if grouping and grouping != req.date_grouping:
-        req = req.model_copy(update={"date_grouping": grouping})
     return req
 
 
@@ -666,17 +672,18 @@ class AnalyticsService:
         )
 
         rows = derived.resolve(result.rows, allowed)
-        _, forced_by = forced_grouping(allowed)
         # A 3-day range rolled up weekly returns a bucket labelled with the WHOLE week.
         # The average is honest; the label is not unless the response says which
-        # periods are only partly covered. Pure date arithmetic, no DB call.
-        period_cov = coverage.period_coverage(req.from_date, req.to_date, req.date_grouping)
+        # periods are only partly covered. Driven by the roll-up datasets actually
+        # ticked, not by the pill — the pill stopped aggregating on 2026-09-20.
+        # Pure date arithmetic, no DB call.
+        period_cov = _rollup_coverage(allowed, req.from_date, req.to_date)
         response = pivot.build_response(rows, requested=allowed, meta={
             "failed_datasets": result.failed_datasets,
             "partial": result.partial,
             # Part of the question, not the caller, so it belongs in the cached payload.
             "date_grouping": req.date_grouping,
-            "grouping_forced_by": forced_by,
+            "rollup_families": rollup_families(allowed),
             "period_coverage": period_cov,
             "partial_periods": coverage.partial_keys(period_cov),
         })

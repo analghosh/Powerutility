@@ -343,7 +343,7 @@ def _req(**kw):
 def test_a_valid_request_defaults_to_the_whole_day_block_wise():
     r = _req()
     assert (r.from_block, r.to_block) == (1, 96)
-    assert r.date_grouping == "BLOCK_WISE"
+    assert r.date_grouping == "BLOCK_DATE_WISE"
     assert r.block_band == "INDIVIDUAL"
     assert r.plants == [] and r.exchanges == []
 
