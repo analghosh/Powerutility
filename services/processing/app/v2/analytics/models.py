@@ -16,10 +16,10 @@ from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from . import block_bands, registry
+from . import block_bands, grouping, registry
 from .grouping import DATE_GROUPINGS
 
-DEFAULT_DATE_GROUPING = "BLOCK_WISE"
+DEFAULT_DATE_GROUPING = grouping.BLOCK_DATE_WISE
 EXPORT_FORMATS = ("csv", "xlsx")
 
 #: Sanity cap on a caller-supplied file name, before sanitising. Generous:
@@ -88,10 +88,20 @@ class AnalyticsQueryRequest(BaseModel):
     @field_validator("date_grouping")
     @classmethod
     def _known_date_grouping(cls, v: str) -> str:
-        if v not in DATE_GROUPINGS:
+        """Canonicalise, so the retired codes keep working.
+
+        `BLOCK_WISE` and `DATE_WISE` were merged into `BLOCK_DATE_WISE` on
+        2026-09-20 — they produced identical files. Stored export jobs and saved
+        user preferences still hold the old spellings and are replayed straight back
+        into this model, so they are mapped forward here rather than migrated on
+        disk. An unknown code is still a 422.
+        """
+        try:
+            return grouping.canonical(v)
+        except ValueError:
             raise ValueError(
-                f"Unknown date_grouping {v!r}; expected one of {', '.join(DATE_GROUPINGS)}")
-        return v
+                f"Unknown date_grouping {v!r}; expected one of "
+                f"{', '.join(DATE_GROUPINGS)}") from None
 
     @field_validator("block_band")
     @classmethod

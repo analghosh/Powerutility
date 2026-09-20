@@ -37,6 +37,11 @@ STATUS_READY = "ready"
 STATUS_FAILED = "failed"
 STATUS_EXPIRED = "expired"
 STATUS_CANCELLED = "cancelled"
+#: Generated in the request and sent straight to the browser — no server-side file.
+#: Since 2026-09-20 the dashboard never queues, so this is the status every row
+#: written by the filter panel carries; the queue statuses above stay for the rows
+#: already in Mongo and for the worker that still knows how to run them.
+STATUS_COMPLETED = "completed"
 
 #: Statuses that still hold a place in the queue. Dedupe attaches a repeat request
 #: to one of these; a finished job must never block a fresh one.
@@ -44,6 +49,7 @@ ACTIVE_STATUSES = (STATUS_QUEUED, STATUS_RUNNING, STATUS_ASSEMBLING)
 
 STATUSES = ACTIVE_STATUSES + (
     STATUS_READY, STATUS_FAILED, STATUS_EXPIRED, STATUS_CANCELLED,
+    STATUS_COMPLETED,
 )
 
 #: Without every one of these the job cannot be re-run from the row alone.
@@ -194,6 +200,29 @@ class AnalyticsJobRepository(GenericRepository):
             "Queued analytics export %s for user %s (%s cells, %s chunks)",
             doc["job_id"], doc["user_id"], doc["cells_estimate"], doc["chunks_total"],
         )
+        return doc["job_id"]
+
+    async def record_completed(self, job: Dict[str, Any]) -> str:
+        """Insert a history row for an export that was generated in the request.
+
+        The dashboard downloads immediately now, so there is no queue to join and
+        no file left behind — what survives is the configuration. The row is what
+        My Exports lists, and its `filters` echo is what the Execute button loads
+        back into the filter panel, which is why `validate_filters` still insists
+        on a complete set.
+        """
+        doc = build_job_document(job, now=_utcnow())
+        now = doc["created_at"]
+        doc.update({
+            "status": STATUS_COMPLETED,
+            "started_at": now,
+            "finished_at": now,
+            "chunks_total": 0,
+            "result": _jsonable(job.get("result") or {}) or None,
+        })
+        await self.collection.insert_one(doc)
+        logger.info("Recorded analytics export %s for user %s (%s cells)",
+                    doc["job_id"], doc["user_id"], doc["cells_estimate"])
         return doc["job_id"]
 
     # ------------------------------------------------------------- reads ---

@@ -1,26 +1,30 @@
 """The two export writers: streaming CSV and write-only XLSX.
 
-Both of these exist because an export can be far larger than the dashboard in view.
-Three properties are therefore asserted here rather than assumed:
+Both write the same table (PTC, 2026-09-20): one row per (day, block), the identity
+columns the chosen Group Date By calls for, then one column per series. The workbook
+holds it on a single `Data` sheet; the CSV streams it.
 
-1. **`csv_rows` is a generator.** The streaming response and the chunked export
-   worker share it, and neither may hold the whole file in memory. The test proves
-   this by handing it a `series` source that *raises* if it is fully consumed, then
-   pulling the first lines out anyway.
+Three properties are asserted here rather than assumed:
+
+1. **The row stream stays lazy.** A long range is hundreds of thousands of rows and
+   neither writer may hold them all. The single table does need every series before
+   it can emit a row — they are its columns — so what is proved here is that the
+   *rows* are produced one at a time, not that the series list is untouched.
 
 2. **A missing value is an empty cell.** Never `0`, never the string `"None"`. The
    docx is explicit and so is the pivot: "nothing was scheduled for this block" and
    "zero was scheduled" are different facts, and a spreadsheet that renders the
    first as the second is a wrong number in front of a trader.
 
-3. **Excel's limits are respected before openpyxl enforces them.** Sheet titles are
-   capped at 31 characters and de-duplicated by us, deterministically, rather than
-   letting openpyxl append its own suffix (which can itself exceed 31).
+3. **The file says what it actually did.** The Filters block reports the grouping
+   that ran, read from the response. It used to read the request, which is how a
+   workbook of ISO-week columns came to carry the line `Date grouping: BLOCK_WISE`.
 """
 import csv as csv_module
 import inspect
 import io
 import sys
+from datetime import date, datetime
 from pathlib import Path
 
 import openpyxl
@@ -73,15 +77,16 @@ def _table(lines):
     return list(csv_module.reader(io.StringIO("\n".join(body))))
 
 
-class _ExplodingSeries:
-    """Iterable that yields one series, then refuses to be fully consumed."""
+class _CountingMatrix(list):
+    """A `values` matrix that records which block rows were actually read."""
 
-    def __init__(self, first):
-        self.first = first
+    def __init__(self, rows):
+        super().__init__(rows)
+        self.touched = []
 
-    def __iter__(self):
-        yield self.first
-        raise RuntimeError("csv_rows materialised the whole response")
+    def __getitem__(self, index):
+        self.touched.append(index)
+        return super().__getitem__(index)
 
 
 # ------------------------------------------------------------------ streaming
@@ -93,28 +98,30 @@ def test_csv_rows_is_a_generator():
     assert inspect.isgenerator(rows)
 
 
-def test_csv_rows_yields_its_first_lines_without_consuming_the_whole_response():
-    one = _series("ACTUAL_DEMAND", "Actual Demand", [[1.0, 2.0], [3.0, 4.0]])
-    response = _response([])
-    response["series"] = _ExplodingSeries(one)
+def test_csv_rows_builds_one_row_at_a_time():
+    """Rows are produced on demand, not materialised up front.
+
+    The single-table layout needs every series to build a row — they are its
+    columns — so the series list is read eagerly. The rows are not: pulling the
+    header block and the first data line must touch only the first block of the
+    first day, whatever the range holds.
+    """
+    matrix = _CountingMatrix([[1.0, 2.0], [3.0, 4.0]])
+    response = _response([_series("ACTUAL_DEMAND", "Actual Demand", matrix)])
 
     rows = analytics_csv.csv_rows(response, FILTERS)
+    assert inspect.isgenerator(rows)
 
-    first = next(rows)
-    assert first.startswith("#"), first
-
-    # Header block, column header and the first series' own cells all arrive before
-    # the source blows up: nothing is buffered ahead of what was asked for.
-    pulled = [first]
+    pulled = []
     for _ in range(50):
         pulled.append(next(rows))
-        if pulled[-1].startswith("ACTUAL_DEMAND,"):
+        if not pulled[-1].startswith("#") and len(pulled) > 1 and pulled[-1][0].isdigit():
             break
-    else:
+    else:  # pragma: no cover - the loop finds a data row in well under 50 lines
         raise AssertionError(f"no data row was yielded lazily: {pulled}")
 
-    with pytest.raises(RuntimeError):
-        list(rows)
+    assert set(matrix.touched) == {0}, (
+        f"only block 1 should have been read for the first row, got {matrix.touched}")
 
 
 def test_every_line_is_newline_terminated_so_it_can_be_streamed_as_is():
@@ -147,13 +154,42 @@ def test_header_block_records_custom_block_ranges_when_they_apply():
 
 
 def test_column_header_follows_the_filter_block():
-    lines = _lines(_response([_series("ACTUAL_DEMAND", "Actual Demand",
-                                      [[1.0, 2.0], [3.0, 4.0]])]))
-    table = _table(lines)
-    assert table[0] == list(analytics_csv.COLUMNS)
-    assert "dataset" in table[0]
-    # No entity column: it was blank on every scalar dataset, i.e. most of them.
-    assert "entity" not in table[0]
+    response = _response([_series("ACTUAL_DEMAND", "Actual Demand",
+                                  [[1.0, 2.0], [3.0, 4.0]])])
+    table = _table(_lines(response))
+    assert table[0] == ["Date", "Time block", "Actual Demand (MW)"]
+    assert table[0] == analytics_csv.COLUMNS(response, FILTERS)
+
+
+def test_the_grouping_chooses_the_identity_columns():
+    """Each pill adds its own column and leaves the rows at one per (day, block)."""
+    values = [[1.0, 2.0], [3.0, 4.0]]
+    expected = {
+        "BLOCK_DATE_WISE": ["Date", "Time block"],
+        "HOURLY_WISE": ["Date", "Hourly", "Time block"],
+        "WEEK_WISE": ["Week", "Date", "Time block"],
+        "MONTH_WISE": ["Month", "Date", "Time block"],
+        "YEAR_WISE": ["Year", "Date", "Time block"],
+        # The two retired codes still arrive from stored rows.
+        "BLOCK_WISE": ["Date", "Time block"],
+        "DATE_WISE": ["Date", "Time block"],
+    }
+    for grouping, identity in expected.items():
+        filters = dict(FILTERS, date_grouping=grouping)
+        table = _table(_lines(_response([_series("ACTUAL_DEMAND", "Actual Demand", values)]),
+                              filters))
+        assert table[0][: len(identity)] == identity, grouping
+        # Same number of rows whatever the pill: it groups nothing.
+        assert len(table) == 1 + 4, grouping
+
+
+def test_one_row_per_day_and_block_in_reading_order():
+    values = [[1.0, 2.0], [3.0, 4.0]]
+    table = _table(_lines(_response([_series("ACTUAL_DEMAND", "Actual Demand", values)])))
+    assert [(r[0], r[1]) for r in table[1:]] == [
+        ("2026-04-01", "1"), ("2026-04-01", "2"),
+        ("2026-04-02", "1"), ("2026-04-02", "2"),
+    ]
 
 
 # ------------------------------------------------------------------ the cells
@@ -164,17 +200,22 @@ def test_a_missing_value_is_an_empty_cell_never_zero_and_never_the_string_none()
     lines = _lines(_response([_series("ACTUAL_DEMAND", "Actual Demand", values)]))
     table = _table(lines)
     head, body = table[0], table[1:]
-    vi, bi, di = head.index("value"), head.index("block"), head.index("date")
+    vi = head.index("Actual Demand (MW)")
 
-    cells = {(r[bi], r[di]): r[vi] for r in body}
-    assert cells[("1", "2026-04-01")] == ""            # missing
-    assert cells[("2", "2026-04-02")] == ""            # missing
+    cells = {(r[0], r[1]): r[vi] for r in body}
+    assert cells[("2026-04-01", "1")] == ""            # missing
+    assert cells[("2026-04-02", "2")] == ""            # missing
     assert "None" not in [r[vi] for r in body]
-    assert float(cells[("1", "2026-04-02")]) == 0.0    # a real zero survives
-    assert float(cells[("2", "2026-04-01")]) == 2850.0
+    assert float(cells[("2026-04-02", "1")]) == 0.0    # a real zero survives
+    assert float(cells[("2026-04-01", "2")]) == 2850.0
 
 
-def test_the_entity_is_folded_into_the_label_for_per_plant_and_per_exchange_series():
+def test_each_entity_gets_its_own_column():
+    """Two plants of one dataset must never share a heading.
+
+    Side by side on the same row is the point of the single table, and that only
+    works if the entity is part of the column's identity.
+    """
     values = [[1.0, 2.0], [3.0, 4.0]]
     response = _response([
         _series("DC_PLANT", "Plant wise DC", values, entity="PLANT_A"),
@@ -182,30 +223,37 @@ def test_the_entity_is_folded_into_the_label_for_per_plant_and_per_exchange_seri
         _series("ACP_DAM", "DAM ACP", values, entity="IEX", unit="Rs/MWh"),
         _series("ACTUAL_DEMAND", "Actual Demand", values),
     ])
-    table = _table(_lines(response))
-    head, body = table[0], table[1:]
-    li, dsi = head.index("label"), head.index("dataset")
-
-    assert {r[li] for r in body if r[dsi] == "DC_PLANT"} == {
-        "Plant wise DC (PLANT_A)", "Plant wise DC (PLANT_B)"}
-    assert {r[li] for r in body if r[dsi] == "ACP_DAM"} == {"DAM ACP (IEX)"}
-    # a portfolio-wide series is just its label — no "(None)", no trailing " ()"
-    assert {r[li] for r in body if r[dsi] == "ACTUAL_DEMAND"} == {"Actual Demand"}
+    head = _table(_lines(response))[0]
+    assert head == [
+        "Date", "Time block",
+        "Plant wise DC · PLANT_A (MW)",
+        "Plant wise DC · PLANT_B (MW)",
+        "DAM ACP · IEX (Rs/MWh)",
+        # a portfolio-wide series is just its label and unit — no "· None", no " ()"
+        "Actual Demand (MW)",
+    ]
 
 
 def test_the_readable_entity_label_wins_over_the_machine_key():
-    series = _series("WEEKLY_MAPE", "Weekly MAPE", [[1.0]], entity="DAF")
+    series = _series("WEEKLY_MAPE", "Weekly MAPE", [[1.0]], entity="DAF", unit="%")
     series["entity_label"] = "Day Ahead"
-    assert analytics_csv.series_label(series) == "Weekly MAPE (Day Ahead)"
+    assert analytics_csv.series_label(series) == "Weekly MAPE · Day Ahead (%)"
 
 
-def test_a_label_containing_a_comma_is_quoted_not_split():
+def test_a_heading_containing_a_comma_is_quoted_not_split():
     response = _response([_series("ACP_DAM", "DAM ACP, weighted", [[1.0, 2.0], [3.0, 4.0]],
                                   unit="Rs/MWh")])
     table = _table(_lines(response))
-    li = table[0].index("label")
-    assert table[1][li] == "DAM ACP, weighted"
+    assert table[0][2] == "DAM ACP, weighted (Rs/MWh)"
     assert all(len(r) == len(table[0]) for r in table)
+
+
+def test_a_named_block_band_names_itself_in_the_time_block_column():
+    """The user picked "Peak", so the column says Peak — not a code, not a range."""
+    response = _response([_series("ACTUAL_DEMAND", "Actual Demand", [[1.0, 2.0]])],
+                         blocks=("PEAK",))
+    table = _table(_lines(response, dict(FILTERS, block_grouping="PEAK")))
+    assert [r[1] for r in table[1:]] == ["Peak", "Peak"]
 
 
 # ----------------------------------------------------------------------- xlsx
@@ -231,7 +279,13 @@ def _rows_of(path, sheet):
         wb.close()
 
 
-def test_xlsx_has_one_sheet_per_dataset_plus_a_filters_sheet(tmp_path):
+def test_xlsx_has_one_data_sheet_plus_a_filters_sheet(tmp_path):
+    """One table, not one sheet per dataset.
+
+    The workbook used to put every dataset on its own sheet, which meant comparing
+    two of them was a copy-paste job. They are columns on one sheet now, and the
+    two plant entities are two of those columns rather than two rows.
+    """
     values = [[1.0, 2.0], [3.0, 4.0]]
     response = _response([
         _series("ACTUAL_DEMAND", "Actual Demand", values),
@@ -241,42 +295,68 @@ def test_xlsx_has_one_sheet_per_dataset_plus_a_filters_sheet(tmp_path):
     out = tmp_path / "export.xlsx"
     result = analytics_xlsx.write_xlsx(response, FILTERS, str(out))
 
-    names = _sheets(str(out))
-    assert analytics_xlsx.FILTERS_SHEET in names
-    # two datasets -> two data sheets; the two plant entities share DC_PLANT's sheet
-    assert len(names) == 3
+    assert _sheets(str(out)) == [analytics_xlsx.DATA_SHEET, analytics_xlsx.FILTERS_SHEET]
     assert result["path"] == str(out)
     assert result["bytes"] == out.stat().st_size > 0
-    assert result["row_count"] == 6      # 2 blocks x (1 + 2 entity series)
+    assert result["row_count"] == 4      # 2 days x 2 blocks, whatever is ticked
 
-    # A scalar sheet has no identity column but Block; a per-plant sheet names
-    # its entity column for what it holds, and one row per (plant, block).
-    by_name = {n: _rows_of(str(out), n) for n in names if n != analytics_xlsx.FILTERS_SHEET}
-    scalar = next(rows for rows in by_name.values() if rows[0][0] == "Block")
-    plants = next(rows for rows in by_name.values() if rows[0][0] == "Entity")
-    assert scalar[0][:1] == ["Block"] and len(scalar) == 3
-    assert plants[0][:2] == ["Entity", "Block"]       # kind unknown here → generic
-    assert [r[0] for r in plants[1:]] == ["PLANT_A", "PLANT_A", "PLANT_B", "PLANT_B"]
+    rows = _rows_of(str(out), analytics_xlsx.DATA_SHEET)
+    assert rows[0] == ["Date", "Time block",
+                       "Actual Demand (MW)",
+                       "Plant wise DC · PLANT_A (MW)",
+                       "Plant wise DC · PLANT_B (MW)"]
+    assert [r[1] for r in rows[1:]] == [1, 2, 1, 2]
 
 
-def test_xlsx_names_the_identity_column_after_the_series_kind(tmp_path):
-    values = [[1.0, 2.0], [3.0, 4.0]]
-    plant = _series("DC_PLANT", "Plant wise DC", values, entity="PLANT_A")
-    plant["series_kind"] = "per_plant"
-    exchange = _series("ACP_DAM", "DAM ACP", values, entity="IEX", unit="Rs/MWh")
-    exchange["series_kind"] = "per_exchange"
-    weekly = _series("WEEKLY_MAPE", "Weekly MAPE", values, entity="DAF", unit="%")
-    weekly["series_kind"] = "per_forecast_type"
-    weekly["entity_label"] = "Day Ahead"
+def test_the_date_column_holds_real_dates_not_text(tmp_path):
+    """Text dates cannot be sorted, filtered or subtracted in Excel.
+
+    Write-only mode has no styles to inherit, so the cells carry their own number
+    format; without it the column renders as a serial number.
+    """
     out = tmp_path / "export.xlsx"
-    analytics_xlsx.write_xlsx(_response([plant, exchange, weekly]), FILTERS, str(out))
+    analytics_xlsx.write_xlsx(
+        _response([_series("ACTUAL_DEMAND", "Actual Demand", [[1.0, 2.0], [3.0, 4.0]])]),
+        FILTERS, str(out))
 
-    heads = {n: _rows_of(str(out), n)[0][0] for n in _sheets(str(out))
-             if n != analytics_xlsx.FILTERS_SHEET}
-    assert sorted(heads.values()) == ["Exchange", "Forecast", "Plant"]
-    weekly_rows = next(r for n, r in ((n, _rows_of(str(out), n)) for n in heads)
-                       if r[0][0] == "Forecast")
-    assert weekly_rows[1][0] == "Day Ahead"
+    wb = openpyxl.load_workbook(str(out))
+    try:
+        sheet = wb[analytics_xlsx.DATA_SHEET]
+        cell = sheet.cell(row=2, column=1)
+        assert isinstance(cell.value, datetime)
+        assert cell.value.date() == date(2026, 4, 1)
+        assert cell.number_format == analytics_xlsx.DATE_NUMBER_FORMAT
+    finally:
+        wb.close()
+
+
+def test_the_grouping_column_is_written_into_the_sheet(tmp_path):
+    out = tmp_path / "export.xlsx"
+    analytics_xlsx.write_xlsx(
+        _response([_series("ACTUAL_DEMAND", "Actual Demand", [[1.0, 2.0], [3.0, 4.0]])]),
+        dict(FILTERS, date_grouping="WEEK_WISE"), str(out))
+
+    rows = _rows_of(str(out), analytics_xlsx.DATA_SHEET)
+    assert rows[0][:3] == ["Week", "Date", "Time block"]
+    # 1 and 2 Apr 2026 are both ISO week 14.
+    assert {r[0] for r in rows[1:]} == {"W14 2026"}
+
+
+def test_two_datasets_with_the_same_long_label_still_get_distinct_columns(tmp_path):
+    """Sheet-title truncation used to be the risk here; column headings are not
+    capped at 31 characters, and the entity keeps two series of one dataset apart."""
+    long_a = "Intra Day Forecast MAPE Northern Region A"
+    long_b = "Intra Day Forecast MAPE Northern Region B"
+    assert long_a[:31] == long_b[:31]
+    values = [[1.0, 2.0], [3.0, 4.0]]
+    out = tmp_path / "export.xlsx"
+    analytics_xlsx.write_xlsx(
+        _response([_series("MAPE_IDF_A", long_a, values),
+                   _series("MAPE_IDF_B", long_b, values)]), FILTERS, str(out))
+
+    head = _rows_of(str(out), analytics_xlsx.DATA_SHEET)[0]
+    assert head[2:] == [f"{long_a} (MW)", f"{long_b} (MW)"]
+    assert len(set(head)) == len(head)
 
 
 def test_filters_sheet_records_the_applied_filters(tmp_path):
@@ -288,46 +368,29 @@ def test_filters_sheet_records_the_applied_filters(tmp_path):
     text = "\n".join(
         " ".join("" if c is None else str(c) for c in row)
         for row in _rows_of(str(out), analytics_xlsx.FILTERS_SHEET))
-    for expected in ("2026-04-01", "2026-08-31", "96", "DATE_WISE", "INDIVIDUAL",
+    for expected in ("2026-04-01", "2026-08-31", "96", "BLOCK_DATE_WISE", "INDIVIDUAL",
                      "ACTUAL_DEMAND", "2026-09-17T06:00:00+00:00"):
         assert expected in text, f"{expected!r} missing from Filters sheet:\n{text}"
 
 
-def test_sheet_names_are_truncated_to_31_characters_and_deduplicated(tmp_path):
-    long_a = "Intra Day Forecast MAPE Northern Region A"
-    long_b = "Intra Day Forecast MAPE Northern Region B"
-    assert long_a[:31] == long_b[:31]
-    values = [[1.0, 2.0], [3.0, 4.0]]
-    response = _response([
-        _series("MAPE_IDF_A", long_a, values),
-        _series("MAPE_IDF_B", long_b, values),
-    ])
-    out = tmp_path / "export.xlsx"
-    analytics_xlsx.write_xlsx(response, FILTERS, str(out))
-
-    data_sheets = [n for n in _sheets(str(out)) if n != analytics_xlsx.FILTERS_SHEET]
-    assert len(data_sheets) == 2
-    assert len(set(data_sheets)) == 2, data_sheets
-    assert all(len(n) <= 31 for n in data_sheets), data_sheets
-
-
 def test_xlsx_missing_value_is_an_empty_cell_never_zero(tmp_path):
+    #         block 1: [1 Apr missing, 2 Apr a real zero]
     values = [[None, 0.0], [2850.0, None]]
     out = tmp_path / "export.xlsx"
     analytics_xlsx.write_xlsx(
         _response([_series("ACTUAL_DEMAND", "Actual Demand", values)]), FILTERS, str(out))
 
-    sheet = [n for n in _sheets(str(out)) if n != analytics_xlsx.FILTERS_SHEET][0]
-    rows = _rows_of(str(out), sheet)
+    rows = _rows_of(str(out), analytics_xlsx.DATA_SHEET)
     head, body = rows[0], rows[1:]
-    d1, d2 = head.index("2026-04-01"), head.index("2026-04-02")
+    vi = head.index("Actual Demand (MW)")
+    cells = {(r[0].date(), r[1]): _at(r, vi) for r in body}
 
-    assert _at(body[0], d1) is None     # missing, not 0 and not "None"
-    assert _at(body[0], d2) == 0.0      # a real zero survives
-    assert _at(body[1], d1) == 2850.0
+    assert cells[(date(2026, 4, 1), 1)] is None      # missing, not 0 and not "None"
+    assert cells[(date(2026, 4, 2), 1)] == 0.0       # a real zero survives
+    assert cells[(date(2026, 4, 1), 2)] == 2850.0
     # A trailing blank is not stored in the sheet at all, which is the strongest
     # possible form of "empty": Excel shows no value, and no 0 was ever written.
-    assert _at(body[1], d2) is None
+    assert cells[(date(2026, 4, 2), 2)] is None
     assert all(c != "None" for row in body for c in row)
 
 

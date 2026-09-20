@@ -21,9 +21,29 @@ from services.processing.app.v2.analytics import registry  # noqa: E402
 
 # ---------------------------------------------------------------- date keys
 
-def test_date_groupings_are_the_six_the_ui_offers():
-    assert g.DATE_GROUPINGS == ("BLOCK_WISE", "DATE_WISE", "HOURLY_WISE",
+def test_date_groupings_are_the_five_the_ui_offers():
+    assert g.DATE_GROUPINGS == ("BLOCK_DATE_WISE", "HOURLY_WISE",
                                 "WEEK_WISE", "MONTH_WISE", "YEAR_WISE")
+
+
+@pytest.mark.parametrize("retired", ["BLOCK_WISE", "DATE_WISE", "block_wise"])
+def test_the_retired_codes_map_forward(retired):
+    """They produced identical files, so they became one pill.
+
+    Stored export rows and saved preferences still hold them and are replayed
+    straight back into the request model, so they have to keep working.
+    """
+    assert g.canonical(retired) == g.BLOCK_DATE_WISE
+
+
+def test_an_unknown_grouping_is_refused():
+    with pytest.raises(ValueError):
+        g.canonical("SOMETHING_ELSE")
+
+
+def test_the_day_key_is_what_every_dashboard_query_groups_on():
+    assert g.day_key_expr() == {"$dateToString": {
+        "format": "%Y-%m-%d", "date": "$scheduled_at", "timezone": g.TIMEZONE}}
 
 
 @pytest.mark.parametrize("grouping,fmt", [

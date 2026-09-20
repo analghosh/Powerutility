@@ -1,9 +1,17 @@
 """Export mode selection and job enqueue for the analytics dashboard.
 
 `AnalyticsService` answers the question; this module decides what shape the answer
-leaves the building in. There is exactly one decision — **serve it now, or queue
-it** — and four things about it are worth stating because none of them is obvious
-from the code alone.
+leaves the building in.
+
+**The dashboard no longer queues** (PTC, 2026-09-20). A file is generated inside the
+request and downloaded, or it is refused with concrete narrowings — never promised
+for later. `export()` therefore has one outcome: serve, or 413. The queue below it
+(`_enqueue`, the worker, the retry route) is intact and still owns the rows already
+in Mongo, but nothing in the filter panel reaches it.
+
+That leaves the threshold doing a different job: it is now the line above which a
+request is refused rather than deferred. Four things about it are worth stating
+because none of them is obvious from the code alone.
 
 **1. The threshold is per format, and the gap between the two numbers is the
 point.** CSV yields rows as it goes: a 500k-cell stream costs constant memory,
@@ -397,10 +405,47 @@ class AnalyticsExportService:
                 estimate.cells, (user_context or {}).get("user_id", "unknown"))
             raise BudgetExceeded(estimate)
 
-        if estimate.cells <= self.threshold_for(fmt):
-            return await self._serve_now(req, effective, fmt, estimate,
-                                         denied, user_context)
-        return await self._enqueue(effective, fmt, estimate, denied, user_context)
+        if estimate.cells > self.threshold_for(fmt):
+            # The dashboard stopped queueing on 2026-09-20 (PTC): a file the user is
+            # waiting for is either generated in the request or refused with concrete
+            # narrowings, never promised for later. The route turns this into a 413
+            # carrying `estimate.suggestions`.
+            logger.info(
+                "Analytics export over the %s ceiling: %s cells > %s (user=%s)",
+                fmt, estimate.cells, self.threshold_for(fmt),
+                (user_context or {}).get("user_id", "unknown"))
+            raise BudgetExceeded(estimate)
+
+        outcome = await self._serve_now(req, effective, fmt, estimate,
+                                        denied, user_context)
+        await self._record_history(effective, fmt, estimate, outcome, user_context)
+        return outcome
+
+    async def _record_history(self, effective: ExportRequest, fmt: str,
+                              estimate: budget.Estimate, outcome: Dict[str, Any],
+                              user_context: Optional[dict]) -> None:
+        """Remember the configuration this file was built from.
+
+        My Exports lists these rows so a user can see what they generated and load
+        it back with Execute. It is deliberately best-effort: the file is already on
+        its way to the browser by the time this runs, and losing the history entry
+        must never turn a delivered export into an error.
+        """
+        try:
+            await self.jobs.record_completed({
+                "user_id": self.user_id_for(user_context),
+                "request_hash": self.request_hash(effective, fmt),
+                "filters": self.filters_for(effective, fmt),
+                "label": self.label_for(effective, fmt),
+                "cells_estimate": estimate.cells,
+                "result": {
+                    "filename": outcome.get("filename"),
+                    "row_count": outcome.get("row_count"),
+                    "bytes": outcome.get("bytes"),
+                },
+            })
+        except Exception as exc:
+            logger.warning("Analytics export history not recorded: %s", exc)
 
     # ------------------------------------------------------------ in-request
 

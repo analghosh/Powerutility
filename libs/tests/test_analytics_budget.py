@@ -2,8 +2,13 @@
 
 cells = date_buckets x block_buckets x sum(series cardinality). The pathological case
 is a long range at individual-block granularity with a per-plant dataset: five months
-of Plant-wise DC across 34 plants is 489,600 cells, which is why plant datasets need
-an explicit selector rather than defaulting to all.
+of Plant-wise DC across 34 plants is 489,600 cells.
+
+Since 2026-09-20 there is exactly one date bucket per trading day, whatever Group
+Date By says — the pill adds a column to the file instead of collapsing the date
+axis — so the only levers left on the date side are the range itself. The week and
+month arithmetic these tests used to pin now lives in `coverage`, where it labels
+partial roll-up periods, and is exercised in `test_analytics_coverage.py`.
 """
 import sys
 from datetime import date
@@ -61,8 +66,12 @@ def test_exchange_datasets_count_three_series_each():
     assert e.cells == 288
 
 
-def test_coarse_grouping_collapses_the_problem():
-    """Month-wise over five months is trivially small, whatever is ticked."""
+def test_collapsing_the_blocks_collapses_the_problem():
+    """One block bucket is trivially small, whatever is ticked.
+
+    This is now the only coarsening lever: a named block band aggregates 96 blocks
+    into one row. The date axis is always one bucket per day.
+    """
     e = budget.estimate(date_buckets=5, block_buckets=1,
                         datasets=["DC_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
     assert e.cells == 175
@@ -73,11 +82,25 @@ def test_over_budget_estimate_carries_actionable_suggestions():
     e = budget.estimate(date_buckets=153, block_buckets=96,
                         datasets=["DC_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
     kinds = {s["kind"] for s in e.suggestions}
-    assert "coarser_blocks" in kinds or "coarser_dates" in kinds
-    assert "fewer_plants" in kinds
+    assert "coarser_blocks" in kinds
+    assert "shorter_range" in kinds
+    assert "fewer_datasets" in kinds
     for s in e.suggestions:
         assert s["cells"] < e.cells
         assert s["message"]
+
+
+def test_no_suggestion_offers_a_coarser_date_grouping():
+    """It would be advice that changes nothing.
+
+    Group Date By stopped collapsing the date axis on 2026-09-20, so "switch to
+    Week-wise" — which this list used to carry — leaves the cell count exactly where
+    it was. A suggestion that does not shrink the request is worse than none: the
+    user follows it and hits the same 413.
+    """
+    e = budget.estimate(date_buckets=153, block_buckets=96,
+                        datasets=["DC_PLANT", "ACTUAL_DEMAND"], ctx=CTX)
+    assert "coarser_dates" not in {s["kind"] for s in e.suggestions}
 
 
 def test_inline_request_needs_no_suggestions():
@@ -86,18 +109,30 @@ def test_inline_request_needs_no_suggestions():
     assert e.suggestions == []
 
 
-# 1 Apr -> 1 May is 31 days. MONTH_WISE is calendar-month keyed (`%Y-%m` in the
-# Mongo grouping), so that range yields two buckets, "2026-04" and "2026-05".
-@pytest.mark.parametrize("grouping,expected", [
-    ("BLOCK_WISE", 31), ("DATE_WISE", 31), ("WEEK_WISE", 5),
-    ("MONTH_WISE", 2), ("YEAR_WISE", 1),
+# 1 Apr -> 1 May is 31 days. Every grouping now counts the same buckets: the pill
+# names a column in the file, not a bucket in Mongo.
+@pytest.mark.parametrize("grouping", [
+    "BLOCK_DATE_WISE", "HOURLY_WISE", "WEEK_WISE", "MONTH_WISE", "YEAR_WISE",
+    # The two retired spellings still arrive from stored jobs and saved preferences.
+    "BLOCK_WISE", "DATE_WISE",
 ])
-def test_date_bucket_count_per_grouping(grouping, expected):
-    assert budget.date_bucket_count(date(2026, 4, 1), date(2026, 5, 1), grouping) == expected
+def test_every_grouping_counts_one_bucket_per_day(grouping):
+    assert budget.date_bucket_count(date(2026, 4, 1), date(2026, 5, 1), grouping) == 31
 
 
-def test_hourly_grouping_multiplies_by_24():
-    assert budget.date_bucket_count(date(2026, 4, 1), date(2026, 4, 1), "HOURLY_WISE") == 24
+def test_the_grouping_argument_is_optional():
+    """Callers that no longer have a grouping to pass must still be able to price."""
+    assert budget.date_bucket_count(date(2026, 4, 1), date(2026, 4, 30)) == 30
+
+
+def test_hourly_no_longer_multiplies_by_24():
+    """It used to, and the multiplication was the defect.
+
+    `HOURLY_WISE` keyed the group on the hour while the block axis still keyed on the
+    block, so 96 values were spread across 24 columns and 96 rows — the cells were
+    counted 24 times over and the file was 23/24 empty. The hour is a column now.
+    """
+    assert budget.date_bucket_count(date(2026, 4, 1), date(2026, 4, 1), "HOURLY_WISE") == 1
 
 
 def test_empty_dataset_selection_is_zero_cells():
@@ -105,32 +140,5 @@ def test_empty_dataset_selection_is_zero_cells():
     assert e.cells == 0
 
 
-# ------------------------------------------------ partial weeks (user question)
-
-def test_three_days_inside_one_iso_week_is_one_bucket():
-    """Wed 26 → Fri 28 Aug 2026 — all W35."""
-    assert budget.date_bucket_count(date(2026, 8, 26), date(2026, 8, 28), "WEEK_WISE") == 1
-
-
-def test_three_days_straddling_a_week_boundary_is_two_buckets():
-    """Sat 29 → Mon 31 Aug 2026 spans W35 and W36. ceil(3/7) said 1 — an UNDERestimate,
-    which is the wrong direction for admission control."""
-    assert budget.date_bucket_count(date(2026, 8, 29), date(2026, 8, 31), "WEEK_WISE") == 2
-
-
-def test_nine_days_across_two_partial_weeks_is_two_buckets():
-    """Wed 26 Aug → Thu 3 Sep: W35 (5 days) + W36 (4 days)."""
-    assert budget.date_bucket_count(date(2026, 8, 26), date(2026, 9, 3), "WEEK_WISE") == 2
-
-
-def test_a_full_iso_week_monday_to_sunday_is_one_bucket():
-    assert budget.date_bucket_count(date(2026, 8, 24), date(2026, 8, 30), "WEEK_WISE") == 1
-
-
-def test_eight_days_monday_to_monday_is_two_buckets():
-    assert budget.date_bucket_count(date(2026, 8, 24), date(2026, 8, 31), "WEEK_WISE") == 2
-
-
-def test_week_count_survives_the_iso_year_boundary():
-    """29 Dec 2025 is 2026-W01; 22 Dec 2025 is 2025-W52. Two weeks, one year rollover."""
-    assert budget.date_bucket_count(date(2025, 12, 22), date(2025, 12, 29), "WEEK_WISE") == 2
+def test_an_inverted_range_is_zero_not_negative():
+    assert budget.date_bucket_count(date(2026, 5, 1), date(2026, 4, 1)) == 0
