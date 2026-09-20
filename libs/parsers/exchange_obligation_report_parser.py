@@ -568,6 +568,12 @@ class ExchangeObligationReportParser(BaseParser):
         Every check compares extracted rows to a figure printed elsewhere in
         the same document, so a silent extraction slip shows up as a failed
         check rather than as plausible-looking data.
+
+        Nothing here checks the market. The page names no market except
+        G-DAM, and the file name is a convention the exchange owns and can
+        change; neither is evidence enough to refuse an upload over. The
+        market is the caller's to state - `detected_market_type` is reported
+        alongside it for reference, not as a gate.
         """
         checks: List[Dict[str, Any]] = []
 
@@ -679,14 +685,6 @@ class ExchangeObligationReportParser(BaseParser):
                     abs(computed - printed) <= 0.01,
                     f"rows={computed} printed={printed}",
                 )
-
-        declared = document.get("market_type")
-        detected = document.get("detected_market_type")
-        check(
-            "market_type_consistent",
-            declared == detected,
-            f"filename={declared} content={detected}",
-        )
 
         return {
             "passed": all(entry["passed"] for entry in checks),

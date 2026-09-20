@@ -384,15 +384,20 @@ def test_gdam_is_recognised_by_its_annexure_headings(parser, gdam_pages):
     assert doc["detected_market_type"] == "GDAM"
 
 
-def test_a_filename_naming_the_wrong_market_fails_validation(parser, dam_pages):
-    """A DAM report uploaded under a G-DAM name must not be stored as G-DAM."""
+def test_a_filename_naming_a_different_market_does_not_fail_validation(parser, dam_pages):
+    """
+    The file name is a convention the exchange owns, not evidence.
+
+    Both readings are reported, and neither is treated as a fault: the market
+    is the caller's to state, and it comes from a dropdown on the screen.
+    """
     doc = parser.parse_pages(dam_pages, filename="GDAM_IEX180926DOR_PTC0136_PY0_Test.pdf")
 
     assert doc["market_type"] == "GDAM"
     assert doc["detected_market_type"] == "DAM"
-    assert doc["validation"]["passed"] is False
-    failed = [c["check"] for c in doc["validation"]["checks"] if not c["passed"]]
-    assert failed == ["market_type_consistent"]
+    assert doc["validation"]["passed"] is True
+    checks = {c["check"] for c in doc["validation"]["checks"]}
+    assert "market_type_consistent" not in checks
 
 
 # --------------------------------------------------------------------------
@@ -416,6 +421,7 @@ def test_a_clean_report_passes_every_check(parser, dam_pages):
         "nldc_charge_matches_buy_mwh",
         "nldc_charge_matches_sell_mwh",
     } <= names
+    assert "market_type_consistent" not in names
 
 
 def test_nldc_charge_ties_the_buy_leg_back_to_the_billed_rate(parser, dam_pages):

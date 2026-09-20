@@ -12,10 +12,10 @@ elsewhere in the same document, and unless every one of those agrees the
 upload is refused with the failing check named. A report that is silently one
 time block short would otherwise be indistinguishable from a good one.
 
-The operator's own choices are checked against the file too. Picking G-DAM and
-uploading a DAM report is an easy slip, and it is not one the data can survive:
-the report carries no explicit market of its own, so a mis-filed report is a
-wrong number in the reports section with nothing to trace it back to.
+Of the operator's four choices only the delivery date is checked against the
+file. Market and exchange come from dropdowns and are taken at their word -
+see `_require_delivery_date_matches` for why the available evidence is not
+good enough to overrule them.
 """
 
 import hashlib
@@ -36,8 +36,6 @@ logger = logging.getLogger(__name__)
 #: How the form's fields are named to the operator. The message they read
 #: should use the labels on the screen, not the names of the stored fields.
 FIELD_LABELS = {
-    "market_type": "Market",
-    "exchange": "Exchange",
     "delivery_date": "Delivery Date",
 }
 
@@ -96,12 +94,7 @@ class ExchangeReportService:
 
         parsed = self._parse(category, data, filename)
 
-        self._require_file_agrees_with_choices(
-            parsed,
-            exchange=exchange,
-            market_type=market_type,
-            delivery_date=delivery_date,
-        )
+        self._require_delivery_date_matches(parsed, delivery_date=delivery_date)
         self._require_every_check_passed(parsed)
 
         document = self._to_document(
@@ -217,66 +210,47 @@ class ExchangeReportService:
             ) from exc
 
     @staticmethod
-    def _require_file_agrees_with_choices(
+    def _require_delivery_date_matches(
         parsed: Dict[str, Any],
         *,
-        exchange: str,
-        market_type: str,
         delivery_date: str,
     ) -> None:
         """
-        Refuse a file that contradicts what the operator selected.
+        Refuse a file delivered on a different day than the one picked.
 
-        The market is read from the report's own pages, not from its filename,
-        so renaming a file cannot get it past this.
+        This is the one field worth cross-checking. The exchange prints the
+        delivery date on the page, and it is an easy one to get wrong: the
+        file name carries the TRADING date, so a day-ahead report downloaded
+        on the 18th is delivered on the 19th. Filed under the wrong day, a
+        day's obligation lands on top of another day's in the reports section.
+
+        Market and exchange are deliberately not cross-checked. They are
+        chosen from dropdowns, which is what makes them authoritative, and the
+        evidence available to contradict them is not good enough to overrule
+        the operator: the file name is only a naming convention the exchange
+        can change, and the page itself names no market at all except G-DAM -
+        HPDAM in particular is indistinguishable from DAM in the text, so
+        checking against it would have refused every HPDAM report ever
+        uploaded.
         """
-        mismatches: List[Dict[str, Any]] = []
-
-        detected_market = parsed.get("detected_market_type")
-        if detected_market and detected_market != market_type:
-            mismatches.append(
-                {
-                    "field": "market_type",
-                    "label": FIELD_LABELS["market_type"],
-                    "selected": market_type,
-                    "found_in_file": detected_market,
-                }
-            )
-
-        file_exchange = (parsed.get("filename_metadata") or {}).get("exchange")
-        if file_exchange and file_exchange != exchange:
-            mismatches.append(
-                {
-                    "field": "exchange",
-                    "label": FIELD_LABELS["exchange"],
-                    "selected": exchange,
-                    "found_in_file": file_exchange,
-                }
-            )
-
         file_delivery_date = parsed.get("delivery_date_iso")
-        if file_delivery_date and file_delivery_date != delivery_date:
-            mismatches.append(
-                {
-                    "field": "delivery_date",
-                    "label": FIELD_LABELS["delivery_date"],
-                    "selected": delivery_date,
-                    "found_in_file": file_delivery_date,
-                }
-            )
-
-        if not mismatches:
+        if not file_delivery_date or file_delivery_date == delivery_date:
             return
 
-        described = "; ".join(
-            f"{m['label']}: you selected "
-            f"{m['selected']}, the file says {m['found_in_file']}"
-            for m in mismatches
-        )
         raise UploadRejected(
             "file_does_not_match_selection",
-            f"The file does not match what was selected - {described}.",
-            {"mismatches": mismatches},
+            f"Delivery Date: you selected {delivery_date}, the report is for "
+            f"{file_delivery_date}.",
+            {
+                "mismatches": [
+                    {
+                        "field": "delivery_date",
+                        "label": FIELD_LABELS["delivery_date"],
+                        "selected": delivery_date,
+                        "found_in_file": file_delivery_date,
+                    }
+                ]
+            },
         )
 
     @staticmethod

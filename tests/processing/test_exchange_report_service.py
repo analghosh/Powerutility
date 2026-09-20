@@ -248,63 +248,74 @@ async def test_an_unreadable_file_is_refused_with_the_parser_s_reason(service):
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_a_dam_report_filed_as_gdam_is_refused(service):
+async def test_the_market_dropdown_is_taken_at_its_word(service):
     """
-    The market is read from the report's own pages, so renaming the file
-    cannot get it past this check.
+    The operator picks the market; the file does not get a vote.
+
+    The page names no market except G-DAM, so the only thing that could
+    contradict the dropdown is the file name - a convention the exchange owns
+    and can change. Refusing an upload on that basis costs more than it saves.
     """
     uploader = service()
 
-    with pytest.raises(UploadRejected) as raised:
-        await _upload(uploader, market_type="GDAM")
+    result = await _upload(uploader, market_type="HPDAM")
 
-    assert raised.value.reason == "file_does_not_match_selection"
-    assert raised.value.details["mismatches"] == [
-        {
-            "field": "market_type",
-            "label": "Market",
-            "selected": "GDAM",
-            "found_in_file": "DAM",
-        }
-    ]
-    assert uploader.repository_stub.saved == []
+    assert result["summary"]["market_type"] == "HPDAM"
+    assert len(uploader.repository_stub.saved) == 1
 
 
 @pytest.mark.asyncio
-async def test_the_message_names_the_field_as_the_screen_labels_it(service):
-    """The operator reads "Market", not the stored field name `market_type`."""
-    uploader = service()
+async def test_an_hpdam_report_uploads_at_all(service):
+    """
+    HPDAM is indistinguishable from DAM in the text of the report.
 
-    with pytest.raises(UploadRejected) as raised:
-        await _upload(uploader, market_type="GDAM")
+    Cross-checking the market against the content would therefore have
+    refused every HPDAM report ever uploaded, which is the concrete reason
+    that check is gone rather than merely relaxed.
+    """
+    uploader = service(parsed=_parsed(detected_market_type="DAM"))
 
-    assert "Market: you selected GDAM, the file says DAM" in raised.value.message
-    assert "market_type:" not in raised.value.message
+    result = await _upload(uploader, market_type="HPDAM")
+
+    assert result["summary"]["market_type"] == "HPDAM"
 
 
 @pytest.mark.asyncio
-async def test_the_wrong_exchange_is_refused(service):
+async def test_what_the_content_suggested_is_still_recorded(service):
+    """Kept for reference, so a mis-filing can be found later - not a gate."""
     uploader = service()
 
-    with pytest.raises(UploadRejected) as raised:
-        await _upload(uploader, exchange="PXIL")
+    await _upload(uploader, market_type="HPDAM")
+    document, _ = uploader.repository_stub.saved[0]
 
-    fields = [m["field"] for m in raised.value.details["mismatches"]]
-    assert fields == ["exchange"]
+    assert document["market_type"] == "HPDAM"
+    assert document["detected_market_type"] == "DAM"
+
+
+@pytest.mark.asyncio
+async def test_the_exchange_dropdown_is_taken_at_its_word(service):
+    """The exchange was only ever read off the file name."""
+    uploader = service()
+
+    result = await _upload(uploader, exchange="PXIL")
+
+    assert result["summary"]["exchange"] == "PXIL"
+    assert len(uploader.repository_stub.saved) == 1
 
 
 @pytest.mark.asyncio
 async def test_the_wrong_delivery_date_is_refused(service):
     """
-    An easy slip: the filename carries the trading date, so picking 18 Sep for
-    a report delivered on 19 Sep would file the day's trading under the wrong
-    delivery day.
+    The one field still cross-checked. The file name carries the TRADING
+    date, so picking 18 Sep for a report delivered on the 19th would file a
+    day's obligation on top of another day's.
     """
     uploader = service()
 
     with pytest.raises(UploadRejected) as raised:
         await _upload(uploader, delivery_date="2026-09-18")
 
+    assert raised.value.reason == "file_does_not_match_selection"
     assert raised.value.details["mismatches"] == [
         {
             "field": "delivery_date",
@@ -313,18 +324,30 @@ async def test_the_wrong_delivery_date_is_refused(service):
             "found_in_file": "2026-09-19",
         }
     ]
+    assert uploader.repository_stub.saved == []
 
 
 @pytest.mark.asyncio
-async def test_every_mismatch_is_reported_at_once(service):
-    """One round trip should tell the operator everything they got wrong."""
+async def test_the_date_message_names_the_field_as_the_screen_labels_it(service):
+    """The operator reads "Delivery Date", not the stored field name."""
     uploader = service()
 
     with pytest.raises(UploadRejected) as raised:
-        await _upload(uploader, market_type="RTM", exchange="HPX", delivery_date="2026-01-01")
+        await _upload(uploader, delivery_date="2026-09-18")
 
-    fields = [m["field"] for m in raised.value.details["mismatches"]]
-    assert fields == ["market_type", "exchange", "delivery_date"]
+    assert "Delivery Date: you selected 2026-09-18" in raised.value.message
+    assert "delivery_date:" not in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_report_printing_no_delivery_date_is_not_refused_over_it(service):
+    """Nothing to compare against is not the same as a disagreement."""
+    uploader = service(parsed=_parsed(delivery_date=None, delivery_date_iso=None))
+
+    result = await _upload(uploader)
+
+    assert len(uploader.repository_stub.saved) == 1
+    assert result["summary"]["delivery_date"] is None
 
 
 @pytest.mark.asyncio
