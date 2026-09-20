@@ -260,9 +260,26 @@ async def test_a_dam_report_filed_as_gdam_is_refused(service):
 
     assert raised.value.reason == "file_does_not_match_selection"
     assert raised.value.details["mismatches"] == [
-        {"field": "market_type", "selected": "GDAM", "found_in_file": "DAM"}
+        {
+            "field": "market_type",
+            "label": "Market",
+            "selected": "GDAM",
+            "found_in_file": "DAM",
+        }
     ]
     assert uploader.repository_stub.saved == []
+
+
+@pytest.mark.asyncio
+async def test_the_message_names_the_field_as_the_screen_labels_it(service):
+    """The operator reads "Market", not the stored field name `market_type`."""
+    uploader = service()
+
+    with pytest.raises(UploadRejected) as raised:
+        await _upload(uploader, market_type="GDAM")
+
+    assert "Market: you selected GDAM, the file says DAM" in raised.value.message
+    assert "market_type:" not in raised.value.message
 
 
 @pytest.mark.asyncio
@@ -289,7 +306,12 @@ async def test_the_wrong_delivery_date_is_refused(service):
         await _upload(uploader, delivery_date="2026-09-18")
 
     assert raised.value.details["mismatches"] == [
-        {"field": "delivery_date", "selected": "2026-09-18", "found_in_file": "2026-09-19"}
+        {
+            "field": "delivery_date",
+            "label": "Delivery Date",
+            "selected": "2026-09-18",
+            "found_in_file": "2026-09-19",
+        }
     ]
 
 
