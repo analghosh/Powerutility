@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import io
 import re
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import pdfplumber
@@ -156,6 +157,22 @@ def _block_from_period(start: str, end: str) -> int:
             f"period '{start} - {end}' does not start on a block boundary"
         )
     return start_minutes // BLOCK_MINUTES + 1
+
+
+def _to_iso_date(value: Optional[str]) -> Optional[str]:
+    """
+    '19-Sep-26' -> '2026-09-19'.
+
+    The report prints a two-digit year, so the century is assumed to be 2000s;
+    these reports did not exist before 2008 and the format gives nothing else
+    to go on.
+    """
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value.strip(), "%d-%b-%y").date().isoformat()
+    except ValueError:
+        return None
 
 
 def _side_of(qty_mw: float) -> str:
@@ -302,9 +319,13 @@ class ExchangeObligationReportParser(BaseParser):
         return re.sub(r"\s+", " ", match.group("value")).strip()
 
     def _parse_header(self, text: str) -> Dict[str, Any]:
+        trading_date = self._field(text, "Trading Date")
+        delivery_date = self._field(text, "Delivery Date")
         return {
-            "trading_date": self._field(text, "Trading Date"),
-            "delivery_date": self._field(text, "Delivery Date"),
+            "trading_date": trading_date,
+            "trading_date_iso": _to_iso_date(trading_date),
+            "delivery_date": delivery_date,
+            "delivery_date_iso": _to_iso_date(delivery_date),
             "entity_id": self._field(text, "Entity ID"),
             "entity_name": self._field(text, "Entity Name"),
             "portfolio_code": self._field(text, "Portfolio Code"),
