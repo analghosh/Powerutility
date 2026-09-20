@@ -30,9 +30,9 @@ executor needs `adapter` + `pipeline`, the failure path needs `group` + `dataset
 and nothing downstream benefits from a richer type.
 """
 import logging
-from typing import Any, Dict, List, Optional, Sequence, Tuple, TypedDict, Union
+from typing import Any, Dict, List, Optional, Sequence, TypedDict, Union
 
-from . import derived, grouping, registry
+from . import derived, registry
 from .adapters import base  # importing the package is what registers the adapters
 
 logger = logging.getLogger(__name__)
@@ -51,48 +51,11 @@ class UnavailableDatasetError(ValueError):
 
 
 class GroupPlan(TypedDict):
-    """One source group's share of the request.
-
-    `post` is an optional callable applied to the adapter's canonical rows before
-    they join the rest. Only the roll-up plans use it, to spread one period's value
-    back across that period's days — see `_rollup_expander`.
-    """
+    """One source group's share of the request."""
     group: str
     adapter: base.SourceGroupAdapter
     datasets: List[registry.Dataset]
     pipeline: List[dict]
-    post: Optional[Any]
-
-
-def _rollup_expander(filters: dict, rollup: str):
-    """Repeat each (period, block) value down every day of that period.
-
-    The weekly and monthly datasets are averages by definition, so they keep their
-    own aggregation while every other dataset groups on the trading day. That leaves
-    them on a different date axis to everything else in the file, which is no use on
-    a block-wise sheet — so the period value is written against each of its days.
-    A week's average therefore reads the same down all seven days, which is what it
-    is: one number describing the week.
-
-    Before 2026-09-20 the opposite happened. One ticked roll-up forced its period
-    onto *every* dataset in the request (`analytics_service.forced_grouping`), so a
-    file of block-wise Declared Capacity silently came back with week columns and
-    nothing said so.
-    """
-    day_map = grouping.period_day_map(
-        base.as_day(filters.get("from_date"), "from_date").date(),
-        base.as_day(filters.get("to_date"), "to_date").date(),
-        rollup,
-    )
-
-    def expand(rows):
-        out = []
-        for row in rows:
-            for day_key in day_map.get(row["date_key"], ()):
-                out.append({**row, "date_key": day_key})
-        return out
-
-    return expand
 
 
 def _codes(datasets: Sequence[Union[str, registry.Dataset]]) -> List[str]:
@@ -121,31 +84,6 @@ def resolve_codes(datasets: Sequence[Union[str, registry.Dataset]]) -> List[str]
     return codes
 
 
-def _split_by_rollup(
-    datasets: Sequence[registry.Dataset],
-) -> List[Tuple[Optional[str], List[registry.Dataset]]]:
-    """Split one group's datasets into the ordinary ones and each roll-up family.
-
-    Weekly and monthly datasets cannot share a `$group` with the block-wise ones —
-    they are averages over a different period — so each family gets its own pipeline
-    over the same collection. Two extra scans at most, and only when a roll-up is
-    ticked. Ordinary datasets come first so the common case keeps its plan order.
-    """
-    plain: List[registry.Dataset] = []
-    families: Dict[str, List[registry.Dataset]] = {}
-    for d in datasets:
-        if d.fixed_grouping:
-            families.setdefault(grouping.canonical(d.fixed_grouping), []).append(d)
-        else:
-            plain.append(d)
-
-    out: List[Tuple[Optional[str], List[registry.Dataset]]] = []
-    if plain:
-        out.append((None, plain))
-    out.extend(sorted(families.items()))
-    return out
-
-
 def plan(datasets: Sequence[Union[str, registry.Dataset]], filters: dict,
          ctx: Optional[dict] = None) -> List[GroupPlan]:
     """Collapse the ticked datasets into one aggregation plan per source group.
@@ -164,17 +102,13 @@ def plan(datasets: Sequence[Union[str, registry.Dataset]], filters: dict,
     plans: List[GroupPlan] = []
     for group, group_datasets in grouped.items():
         adapter = base.get_adapter(group)
-        for rollup, bucket in _split_by_rollup(group_datasets):
-            plan_filters = filters if not rollup else {
-                **filters, base.ROLLUP_GROUPING_KEY: rollup}
-            plans.append(GroupPlan(
-                group=group if not rollup else f"{group}:{rollup}",
-                adapter=adapter,
-                datasets=bucket,
-                pipeline=adapter.build_pipeline(
-                    datasets=bucket, filters=plan_filters, ctx=ctx),
-                post=None if not rollup else _rollup_expander(filters, rollup),
-            ))
+        plans.append(GroupPlan(
+            group=group,
+            adapter=adapter,
+            datasets=group_datasets,
+            pipeline=adapter.build_pipeline(
+                datasets=group_datasets, filters=filters, ctx=ctx),
+        ))
 
     logger.info(
         "Analytics plan: %d dataset(s) -> %d aggregation(s) [%s]",
