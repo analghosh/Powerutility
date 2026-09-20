@@ -261,14 +261,6 @@ def test_the_users_grouping_never_reaches_the_group_id(grouping):
     assert _group_of(p)["_id"][base.ID_DATE]["$dateToString"]["format"] == "%Y-%m-%d"
 
 
-def test_a_rollup_plan_groups_on_its_own_period():
-    """The one thing that still aggregates over a period, and only for its own plan."""
-    f = dict(FILTERS, **{base.ROLLUP_GROUPING_KEY: "MONTH_WISE"})
-    p = _Demandish().build_pipeline(
-        datasets=[registry.get("ACTUAL_DEMAND")], filters=f, ctx=CTX)
-    assert _group_of(p)["_id"][base.ID_DATE]["$dateToString"]["format"] == "%Y-%m"
-
-
 def test_a_scalar_only_selection_leaves_the_entity_out_of_the_group_id():
     # DECLARED_CAPACITY_TOTAL sums plants into one series, so keying on plant_id
     # would silently turn one series into 34.

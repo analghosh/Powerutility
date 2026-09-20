@@ -17,17 +17,18 @@ columns, because a block *is* a quarter hour. As a column, the hour finally read
 The old codes still arrive from stored export jobs and saved preferences, so
 `canonical` maps them forward; nothing on disk needs rewriting.
 
-`date_key_expr` survives for the weekly and monthly roll-up datasets, which are
-averages by definition and still aggregate over their own period. It is no longer
-reachable from a user's pill.
+Nothing aggregates over a period any more. The weekly and monthly Forecast/MAPE
+datasets were removed on 2026-09-20 — they read the same stored fields as the daily
+ones and differed only in aggregation period, so the daily columns cover them — and
+`date_key_expr` went with them. One date key remains: the trading day.
 
 Two details are silently wrong if left to the defaults:
 
-* Week keys use the ISO year (%G), not the calendar year (%Y). 29 Dec 2025 is ISO
-  week 2026-W01; formatted with %Y it reads "2025-W01" and averages into the same
-  bucket as the first week of January 2025.
-* Every date key carries an explicit timezone. EPMS stores UTC instants, the day is
-  an IST trading day, and blocks 1-4 of every day fall on the previous UTC date.
+* Week labels use the ISO year (%G), not the calendar year (%Y). 29 Dec 2025 is ISO
+  week 2026-W01; formatted with %Y it reads "2025-W01" and collides with the first
+  week of January 2025.
+* The day key carries an explicit timezone. EPMS stores UTC instants, the day is an
+  IST trading day, and blocks 1-4 of every day fall on the previous UTC date.
 """
 from datetime import date, datetime
 from typing import Dict, List, Optional, Sequence, Tuple, Union
@@ -70,17 +71,8 @@ def canonical(grouping: Optional[str]) -> str:
     return value
 
 
-#: The trading day. Every dashboard query groups on this, whatever the pill says.
+#: The trading day, and the only key any pipeline groups on.
 DAY_FORMAT = "%Y-%m-%d"
-
-#: Only the two roll-up families still aggregate over a period of their own.
-DATE_FORMATS = {
-    BLOCK_DATE_WISE: DAY_FORMAT,
-    HOURLY_WISE: DAY_FORMAT,
-    WEEK_WISE: "%G-W%V",
-    MONTH_WISE: "%Y-%m",
-    YEAR_WISE: "%Y",
-}
 
 AGGREGATIONS = ("avg", "sum", "max", "min", "last")
 
@@ -97,91 +89,9 @@ def hour_of_block(block: int) -> int:
     return (int(block) - 1) // BLOCKS_PER_HOUR
 
 
-def _hour_from_block_expr() -> dict:
-    """Zero-padded hour string derived from time_block.
-
-    `scheduled_at` is a trading date stamped at midnight — the time of day is only
-    ever in `time_block`. Formatting the date field with %H therefore labels every
-    row of a day with the same hour. Padded so the key sorts lexically alongside the
-    date part. Unreachable from a pill since 2026-09-20; kept for `date_key_expr`'s
-    completeness.
-    """
-    hour = {"$toInt": {"$floor": {"$divide": [
-        {"$subtract": [BLOCK_FIELD, 1]}, BLOCKS_PER_HOUR,
-    ]}}}
-    return {
-        "$cond": [
-            {"$lt": [hour, 10]},
-            {"$concat": ["0", {"$toString": hour}]},
-            {"$toString": hour},
-        ]
-    }
-
-
 def day_key_expr(field: str = "$scheduled_at") -> dict:
     """The trading-day key every dashboard query groups on."""
     return {"$dateToString": {"format": DAY_FORMAT, "date": field, "timezone": TIMEZONE}}
-
-
-def date_key_expr(grouping: str, field: str = "$scheduled_at") -> dict:
-    """Mongo expression producing a sortable string date key for one grouping.
-
-    Reachable only through a roll-up dataset's `fixed_grouping`. A user's pill no
-    longer reaches the pipeline at all — see the module docstring.
-    """
-    fmt = DATE_FORMATS.get(canonical(grouping))
-    if fmt is None:
-        raise ValueError(f"Unknown date grouping: {grouping}")
-
-    date_part = {"$dateToString": {"format": fmt, "date": field, "timezone": TIMEZONE}}
-
-    if canonical(grouping) == HOURLY_WISE:
-        return {"$concat": [date_part, " ", _hour_from_block_expr()]}
-
-    return date_part
-
-
-# --------------------------------------------------------- roll-up periods
-
-#: Groupings a roll-up dataset may aggregate over. `HOURLY_WISE` is excluded on
-#: purpose: its key carries the hour, which comes from the block rather than the
-#: date, so it has no day-to-period mapping.
-ROLLUP_GROUPINGS = (WEEK_WISE, MONTH_WISE, YEAR_WISE)
-
-
-def days_in_range(start: date, end: date) -> List[date]:
-    """Every trading day from `start` to `end`, both inclusive."""
-    if end < start:
-        return []
-    return [date.fromordinal(o) for o in range(start.toordinal(), end.toordinal() + 1)]
-
-
-def period_key(day: date, grouping: str) -> str:
-    """The key Mongo's `$dateToString` produces for this day under `grouping`.
-
-    Python's `%G`/`%V` and Mongo's agree on ISO weeks, which is what lets a roll-up
-    computed in the database be matched back to days here.
-    """
-    code = canonical(grouping)
-    if code not in ROLLUP_GROUPINGS:
-        raise ValueError(
-            f"{code} has no day-to-period mapping; roll-ups may use "
-            f"{', '.join(ROLLUP_GROUPINGS)}")
-    return day.strftime(DATE_FORMATS[code])
-
-
-def period_day_map(start: date, end: date, grouping: str) -> Dict[str, List[str]]:
-    """`{period key: [day keys in range that fall in it]}`.
-
-    How a roll-up gets back onto a block-wise sheet: the database returns one value
-    per (period, block), and the file repeats it down every day of that period. The
-    map is bounded by the requested range, so a week that is half outside it repeats
-    only onto the days actually asked for.
-    """
-    out: Dict[str, List[str]] = {}
-    for day in days_in_range(start, end):
-        out.setdefault(period_key(day, grouping), []).append(day.strftime(DAY_FORMAT))
-    return out
 
 
 # ------------------------------------------------------- identity columns
