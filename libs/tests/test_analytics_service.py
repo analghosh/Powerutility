@@ -236,7 +236,8 @@ def test_cache_key_changes_when_any_filter_value_changes():
         "to_date": date(2026, 8, 2),
         "from_block": 2,
         "to_block": 95,
-        "date_grouping": "DATE_WISE",
+        # WEEK_WISE, not DATE_WISE: that one is now a spelling of the default.
+        "date_grouping": "WEEK_WISE",
         "datasets": ["ROSTERING"],
         "plants": ["PLANT_A"],
         "exchanges": ["IEX"],
@@ -282,38 +283,42 @@ def test_a_fully_past_range_earns_the_long_ttl_and_today_does_not():
 async def test_an_over_budget_request_is_refused_before_mongo_is_touched():
     repo = RecordingRepo()
     service = svc.AnalyticsService(repository=repo)
-    plants = [f"PLANT_{i:02d}" for i in range(40)]
+    plants = [f"PLANT_{i:03d}" for i in range(300)]
 
     with pytest.raises(svc.BudgetExceeded) as exc:
         await service.query(
-            _request(from_date=date(2026, 1, 1), to_date=date(2026, 5, 31),
+            _request(from_date=date(2024, 1, 1), to_date=date(2026, 5, 31),
                      datasets=["DC_PLANT"], plants=plants),
             SUPER_ADMIN,
         )
 
     assert repo.calls == [], "a refused query still ran an aggregation"
-    assert exc.value.estimate.band == budget.BAND_ASYNC_ONLY
-    assert exc.value.cells == 151 * 96 * 40
+    assert exc.value.estimate.band == budget.BAND_REFUSED
     assert exc.value.suggestions, "413 must carry something the user can act on"
     kinds = {s["kind"] for s in exc.value.suggestions}
-    assert {"coarser_blocks", "coarser_dates", "fewer_plants"} <= kinds
+    assert {"coarser_blocks", "shorter_range", "fewer_datasets"} <= kinds
+    # "Switch to Week-wise" is gone: it no longer changes the cell count.
+    assert "coarser_dates" not in kinds
 
 
 @pytest.mark.asyncio
 async def test_an_inline_capped_request_is_served_and_says_so():
-    # 96 blocks x 60 days x 30 plants = 172,800 cells: over inline, under capped.
+    # Over the inline ceiling, under the capped one. The thresholds were re-scaled
+    # on 2026-09-20 (see analytics/budget.py), so this needs a much larger range
+    # than it used to.
     repo = RecordingRepo()
     service = svc.AnalyticsService(repository=repo)
-    plants = [f"PLANT_{i:02d}" for i in range(30)]
+    plants = [f"PLANT_{i:03d}" for i in range(60)]
 
     response = await service.query(
-        _request(from_date=date(2026, 6, 1), to_date=date(2026, 7, 30),
+        _request(from_date=date(2025, 8, 1), to_date=date(2026, 7, 30),
                  datasets=["DC_PLANT"], plants=plants),
         SUPER_ADMIN,
     )
 
     assert response["meta"]["band"] == budget.BAND_INLINE_CAPPED
-    assert response["meta"]["estimated_cells"] == 60 * 96 * 30
+    # 1 Aug 2025 -> 30 Jul 2026 inclusive, 96 blocks, 60 plants.
+    assert response["meta"]["estimated_cells"] == 364 * 96 * 60
     assert repo.collections == ["supply_serve"]
 
 
@@ -432,63 +437,53 @@ def test_the_exchange_series_count_defaults_to_every_exchange():
     assert narrowed["exchange_count"] == 1
 
 
-# ------------------------------------------ fixed grouping for roll-up datasets
+# ------------------------------------------------------- the grouping is a label
+#
+# Until 2026-09-20 a ticked weekly/monthly dataset rewrote `date_grouping` for the
+# WHOLE request: a user asking for block-wise Declared Capacity alongside Weekly
+# Forecast got a file of ISO-week columns, with the Block-wise pill still lit and
+# the Filters sheet still printing BLOCK_WISE. Those four datasets have since been
+# removed — they read the same stored fields as the daily ones — so nothing can
+# impose a grouping any more.
 
-def test_a_weekly_rollup_forces_week_wise_regardless_of_the_users_choice():
-    """A weekly forecast viewed block-wise is meaningless."""
-    req = svc._as_request(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE"))
-    assert req.date_grouping == "WEEK_WISE"
-
-
-def test_a_monthly_rollup_forces_month_wise():
-    req = svc._as_request(_request(datasets=["MONTHLY_MAPE"], date_grouping="DATE_WISE"))
-    assert req.date_grouping == "MONTH_WISE"
-
-
-def test_an_ordinary_request_keeps_the_users_grouping():
-    req = svc._as_request(_request(datasets=["ACTUAL_DEMAND"], date_grouping="DATE_WISE"))
-    assert req.date_grouping == "DATE_WISE"
+@pytest.mark.parametrize("grouping", ["BLOCK_DATE_WISE", "HOURLY_WISE", "WEEK_WISE",
+                                      "MONTH_WISE", "YEAR_WISE"])
+def test_the_users_grouping_survives_the_request(grouping):
+    req = svc._as_request(_request(datasets=["ACTUAL_DEMAND"], date_grouping=grouping))
+    assert req.date_grouping == grouping
 
 
-def test_mixing_a_rollup_with_an_ordinary_dataset_rolls_the_whole_request_up():
-    req = svc._as_request(_request(datasets=["ACTUAL_DEMAND", "WEEKLY_FORECAST"],
-                                   date_grouping="BLOCK_WISE"))
-    assert req.date_grouping == "WEEK_WISE"
-    grouping, by = svc.forced_grouping(req.datasets)
-    assert grouping == "WEEK_WISE"
-    assert by == ["WEEKLY_FORECAST"]
+def test_the_retired_groupings_are_canonicalised_on_the_way_in():
+    """Stored export rows and saved preferences still hold them."""
+    for retired in ("BLOCK_WISE", "DATE_WISE"):
+        req = svc._as_request(_request(datasets=["ACTUAL_DEMAND"], date_grouping=retired))
+        assert req.date_grouping == "BLOCK_DATE_WISE"
 
 
-def test_mixing_weekly_and_monthly_rollups_is_refused():
-    with pytest.raises(svc.FixedGroupingConflict) as exc:
-        svc._as_request(_request(datasets=["WEEKLY_FORECAST", "MONTHLY_FORECAST"]))
-    msg = str(exc.value)
-    # Human words in the message — a user does not know what MONTHLY_MAPE_IDF is.
-    assert "weekly" in msg.lower() and "monthly" in msg.lower()
-    assert "Weekly Forecast" in msg
-    assert "Monthly Forecast" in msg
-    assert "WEEKLY_FORECAST" not in msg
-    # The codes travel in a structured field for the client's own logic.
-    assert exc.value.groups == {"WEEK_WISE": ["WEEKLY_FORECAST"],
-                                "MONTH_WISE": ["MONTHLY_FORECAST"]}
+def test_the_rollup_datasets_cannot_be_requested_at_all():
+    for code in ("WEEKLY_FORECAST", "WEEKLY_MAPE", "MONTHLY_FORECAST", "MONTHLY_MAPE"):
+        with pytest.raises(ValueError):
+            _request(datasets=[code])
 
 
-def test_forced_grouping_reaches_the_cache_key():
-    """The same roll-up asked with two different user groupings is ONE cache entry."""
+def test_the_users_grouping_reaches_the_cache_key():
+    """It names the file's columns, so two groupings are two different answers."""
     s = svc.AnalyticsService(repository=object(), cache=None)
-    a = s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE"))
-    b = s.cache_key(_request(datasets=["WEEKLY_FORECAST"], date_grouping="DATE_WISE"))
-    assert a == b
+    a = s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="BLOCK_DATE_WISE"))
+    b = s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="WEEK_WISE"))
+    assert a != b
+    # ...and the two retired spellings are the same question as the pill they became.
+    assert (s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="BLOCK_WISE"))
+            == s.cache_key(_request(datasets=["ACTUAL_DEMAND"], date_grouping="DATE_WISE")))
 
 
-def test_forced_grouping_reaches_the_budget():
-    """31 days block-wise would be 2,976 cells; forced weekly it is the ISO weeks the
-    range touches — Sat 1 Aug 2026 is W31 and Mon 31 Aug is W36, so SIX, not ceil(31/7)=5.
-    The engine keys on the ISO week, so the estimate must count the same way."""
+def test_every_grouping_is_priced_the_same():
+    """31 days is 31 date buckets whatever the pill: it groups nothing."""
     s = svc.AnalyticsService(repository=object(), cache=None)
-    est = s.estimate_only(_request(datasets=["WEEKLY_FORECAST"], date_grouping="BLOCK_WISE",
-                                   from_date=date(2026, 8, 1), to_date=date(2026, 8, 31)))
-    assert est.date_buckets == 6
+    for grouping in ("BLOCK_DATE_WISE", "WEEK_WISE", "MONTH_WISE", "YEAR_WISE"):
+        est = s.estimate_only(_request(datasets=["ACTUAL_DEMAND"], date_grouping=grouping,
+                                       from_date=date(2026, 8, 1), to_date=date(2026, 8, 31)))
+        assert est.date_buckets == 31, grouping
 
 
 def test_the_page_grant_the_menu_rbac_mints_unlocks_every_dataset():

@@ -246,11 +246,19 @@ def test_group_id_keys_on_the_date_and_block_expressions():
     assert _id[base.ID_BLOCK] == {"$toString": "$time_block"}
 
 
-def test_month_wise_grouping_reaches_the_group_id():
-    f = dict(FILTERS, date_grouping="MONTH_WISE")
+@pytest.mark.parametrize("grouping", ["BLOCK_DATE_WISE", "WEEK_WISE", "MONTH_WISE",
+                                      "YEAR_WISE", "HOURLY_WISE"])
+def test_the_users_grouping_never_reaches_the_group_id(grouping):
+    """Group Date By is a column in the file, not a bucket in Mongo (2026-09-20).
+
+    Every dashboard query groups on the trading day. Before this, Block-wise and
+    Date-wise both formatted `%Y-%m-%d` and so produced identical files, while a
+    ticked weekly dataset silently rewrote the grouping for the whole request.
+    """
+    f = dict(FILTERS, date_grouping=grouping)
     p = _Demandish().build_pipeline(
         datasets=[registry.get("ACTUAL_DEMAND")], filters=f, ctx=CTX)
-    assert _group_of(p)["_id"][base.ID_DATE]["$dateToString"]["format"] == "%Y-%m"
+    assert _group_of(p)["_id"][base.ID_DATE]["$dateToString"]["format"] == "%Y-%m-%d"
 
 
 def test_a_scalar_only_selection_leaves_the_entity_out_of_the_group_id():

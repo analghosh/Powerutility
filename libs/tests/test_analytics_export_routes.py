@@ -101,6 +101,7 @@ class FakeJobs:
         self.active = active
         self.mark_result = mark_result
         self.created = []
+        self.recorded = []
         self.marks = []
         self.listed = []
 
@@ -121,6 +122,13 @@ class FakeJobs:
     async def create(self, job):
         doc = build_job_document(job)
         self.created.append(doc)
+        self.jobs[doc["job_id"]] = doc
+        return doc["job_id"]
+
+    async def record_completed(self, job):
+        doc = build_job_document(job)
+        doc.update({"status": "completed", "result": job.get("result")})
+        self.recorded.append(doc)
         self.jobs[doc["job_id"]] = doc
         return doc["job_id"]
 
@@ -239,8 +247,12 @@ def _export_body(**over):
     return body
 
 
-def _big_body(days=52, plants=200, fmt="csv"):
-    """days x 96 blocks x plants cells, so the band is decided by arithmetic."""
+def _big_body(days=365, plants=200, fmt="csv"):
+    """days x 96 blocks x plants cells, so the band is decided by arithmetic.
+
+    Defaults sized to land in the BACKGROUND band since the 2026-09-20 re-scale —
+    over the inline ceiling, well under the memory cap.
+    """
     return _export_body(
         datasets=["DC_PLANT"], plants=_plants(plants), format=fmt,
         from_date="2026-01-01",
@@ -321,39 +333,44 @@ def test_a_small_csv_export_streams_with_a_download_filename():
     assert service.jobs.created == [], "a 96-cell export must not reach the queue"
 
 
-def test_a_large_export_is_queued_and_answers_202_with_a_job_id():
+def test_a_large_export_is_built_in_the_background_and_answers_202():
+    """Nothing is refused for being merely large (PTC, 2026-09-20).
+
+    Over the inline ceiling the file is built in this service with progress
+    reported on the job row, and the client polls and downloads it. 202 carries
+    the job id it polls.
+    """
     jobs = FakeJobs()
     service = _service(jobs=jobs)
     response = _client(service).post("/api/v2/analytics/export",
                                      json=_big_body())
 
-    # 202, not 200: the frontend opens the My Exports panel on this status.
     assert response.status_code == 202
     payload = response.json()["data"]
     assert payload["mode"] == "job"
-    assert payload["job_id"] == jobs.created[0]["job_id"]
-    assert payload["status"] == "queued"
-    assert payload["deduped"] is False
-    assert payload["chunks_total"] >= 1
-    assert payload["estimated_cells"] == 52 * 96 * 200
-    # The row is the ownership record every later download is checked against.
+    assert payload["job_id"]
+    assert payload["status"] == "running", "the build starts now, not on a sweep"
+    assert len(jobs.created) == 1
+    # The row is the ownership record every later poll and download is checked against.
     assert jobs.created[0]["user_id"] == OWNER
 
 
-def test_an_identical_queued_export_attaches_to_the_job_already_running():
-    service = _service()
-    client = _client(service)
-    first = client.post("/api/v2/analytics/export", json=_big_body())
-    existing = service.jobs.created[0]
-    service.jobs.active = existing
+def test_a_served_export_leaves_a_history_row_for_my_exports():
+    """What survives a generate is the configuration, not a file."""
+    repo = StubRepo(docs={"demand_serve": _demand_docs(100.0)})
+    jobs = FakeJobs()
+    service = _service(jobs=jobs, repo=repo)
 
-    second = client.post("/api/v2/analytics/export", json=_big_body())
+    response = _client(service).post("/api/v2/analytics/export",
+                                     json=_export_body(format="xlsx"))
 
-    assert second.status_code == 202
-    payload = second.json()["data"]
-    assert payload["job_id"] == first.json()["data"]["job_id"]
-    assert payload["deduped"] is True
-    assert len(service.jobs.created) == 1, "a repeat click must not queue a second run"
+    assert response.status_code == 200
+    assert len(jobs.recorded) == 1
+    row = jobs.recorded[0]
+    assert row["status"] == "completed"
+    # The row is the ownership record every later read of My Exports is scoped by.
+    assert row["user_id"] == OWNER
+    assert row["filters"]["datasets"]
 
 
 def test_an_inline_xlsx_export_returns_the_file_and_cleans_up_after_itself():
@@ -378,19 +395,19 @@ def test_an_inline_xlsx_export_returns_the_file_and_cleans_up_after_itself():
     assert leftovers == set(), f"inline export left temp directories behind: {leftovers}"
 
 
-def test_an_export_above_the_hard_ceiling_is_413_with_the_estimate_and_a_way_out():
+def test_an_export_above_the_memory_cap_is_413_with_the_estimate_and_a_way_out():
     service = _service()
-    body = _big_body(days=365, plants=300)          # 10,512,000 cells
+    body = _big_body(days=1095, plants=300)         # ~31.5M cells, over the memory cap
 
     response = _client(service).post("/api/v2/analytics/export", json=body)
 
     assert response.status_code == 413
     detail = response.json()["detail"]
     assert detail["code"] == "ANALYTICS_BUDGET_EXCEEDED"
-    assert detail["estimate"]["cells"] == 365 * 96 * 300
+    assert detail["estimate"]["cells"] == 1095 * 96 * 300
     assert detail["suggestions"], "a refusal with no alternative is a dead end"
-    # Queueing this would only move the failure to the worker and spend the disk
-    # budget getting there.
+    # Building this in the background would not make ~730MB of matrix affordable,
+    # only harder to attribute when the box runs out.
     assert service.jobs.created == []
 
 

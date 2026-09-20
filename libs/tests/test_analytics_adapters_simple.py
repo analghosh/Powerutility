@@ -99,10 +99,21 @@ def _analytics_group(pipeline):
 
 
 def test_demand_declares_type_as_its_entity_but_peak_has_none():
-    """`type` is the entity that turns a weekly roll-up into Day Ahead + Intra Day
-    columns. Peak has no per-series axis."""
+    """`type` was the entity that turned a weekly roll-up into Day Ahead + Intra Day
+    columns. Those four datasets were removed on 2026-09-20 and no demand dataset is
+    `per_forecast_type` any more, so the declaration is currently inert — kept
+    because the adapter's `dedupe_key` includes `type` and because a future
+    per-type dataset would need it. Peak has no per-series axis at all."""
     assert demand_mod.DemandAdapter().entity_field() == "type"
     assert peak_mod.PeakAdapter().entity_field() is None
+
+
+def test_no_demand_dataset_is_reported_per_forecast_type_any_more():
+    """If one is ever added, `test_an_ordinary_demand_query...` below is the trap
+    it has to clear: keying the shared group on `type` doubles every other column."""
+    demand = [d for d in registry.DATASETS.values() if d.group == "demand"]
+    assert demand, "the demand group is empty — the registry did not load"
+    assert [d.code for d in demand if d.series == "per_forecast_type"] == []
 
 
 def test_an_ordinary_demand_query_is_not_split_by_forecast_type():
@@ -115,22 +126,17 @@ def test_an_ordinary_demand_query_is_not_split_by_forecast_type():
     assert "e" not in group["_id"], group["_id"]
 
 
-def test_a_weekly_rollup_is_split_by_forecast_type():
-    ds = [registry.get("WEEKLY_FORECAST")]
-    pipeline = demand_mod.DemandAdapter().build_pipeline(datasets=ds, filters=FILTERS)
-    group = _analytics_group(pipeline)
-    assert group["_id"]["e"] == "$type"
+def test_the_demand_group_is_never_keyed_on_type_today():
+    """With no `per_forecast_type` dataset left, nothing asks for the entity key.
 
-
-def test_mixing_a_rollup_with_actual_demand_splits_both_by_type():
-    """Once one selected dataset wants the entity, the whole group is keyed on it —
-    Actual Demand then comes back per type too. That is the documented behaviour of
-    a shared $group, and the DAF/IDF drawal values are identical, so it is harmless;
-    this pins it so a future change is deliberate."""
-    ds = [registry.get("WEEKLY_FORECAST"), registry.get("ACTUAL_DEMAND")]
-    pipeline = demand_mod.DemandAdapter().build_pipeline(datasets=ds, filters=FILTERS)
-    group = _analytics_group(pipeline)
-    assert group["_id"]["e"] == "$type"
+    The two tests this replaces pinned the opposite for the weekly roll-ups: with
+    one ticked, the whole shared group keyed on `type` and Actual Demand came back
+    per type as well.
+    """
+    ds = [registry.get(c) for c in ("ACTUAL_DEMAND", "FORECAST_DAF", "MAPE_IDF")]
+    group = _analytics_group(
+        demand_mod.DemandAdapter().build_pipeline(datasets=ds, filters=FILTERS))
+    assert "e" not in group["_id"], group["_id"]
 
 
 # ------------------------------------------------- demand: one pipeline, two rules

@@ -179,54 +179,49 @@ def test_od_ud_quantum_depends_on_drawal_not_actual():
     assert registry.get("OD_UD_QUANTUM").depends == ("DRAWAL", "FINAL_SCHEDULE_STATE")
 
 
-@pytest.mark.parametrize("period,grouping", [("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")])
-def test_rollup_forecast_is_one_tick_reported_per_forecast_type(period, grouping):
-    """DAF and IDF share the same (date, block) key, so they are two COLUMNS of one
-    table — one dataset, one tick, "Day Ahead" + "Intra Day" columns in the file."""
-    d = registry.get(f"{period}_FORECAST")
-    assert d.availability == "live"
-    assert d.kind == "direct"
-    assert d.value == "$forecast"
-    assert d.match is None, "no type discriminator — both types come back as series"
-    assert d.series == "per_forecast_type"
-    assert d.agg == "avg"
-    assert d.fixed_grouping == grouping
+@pytest.mark.parametrize("period", ["WEEKLY", "MONTHLY"])
+@pytest.mark.parametrize("kind", ["FORECAST", "MAPE"])
+def test_the_rollup_datasets_are_gone(period, kind):
+    """Removed 2026-09-20 (PTC).
+
+    They read the same stored `forecast` / `mape` fields as the daily datasets and
+    differed only in aggregation period, so anyone wanting the weekly picture
+    averages the daily columns. Nothing was derivable from them that is not
+    derivable now.
+    """
+    with pytest.raises(registry.UnknownDatasetError):
+        registry.get(f"{period}_{kind}")
+    # The older split-by-type spellings never come back either.
+    for t in ("DAF", "IDF"):
+        with pytest.raises(registry.UnknownDatasetError):
+            registry.get(f"{period}_{kind}_{t}")
 
 
-@pytest.mark.parametrize("period,grouping", [("WEEKLY", "WEEK_WISE"), ("MONTHLY", "MONTH_WISE")])
-def test_rollup_mape_is_the_mean_of_per_block_mape_per_forecast_type(period, grouping):
-    """Same definition as daily MAPE, over more blocks — NOT recomputed from summed
-    totals, which gives a different figure (7.24% vs 7.78% on a real week)."""
-    d = registry.get(f"{period}_MAPE")
-    assert d.availability == "live"
-    assert d.value == "$mape"
-    assert d.series == "per_forecast_type"
-    assert d.agg == "avg"
-    assert d.fixed_grouping == grouping
+def test_the_daily_forecast_and_mape_datasets_cover_them():
+    """What the roll-ups aggregated is still on the picker, per day."""
+    for code, field in (("FORECAST_DAF", "$forecast"), ("FORECAST_IDF", "$forecast"),
+                        ("MAPE_DAF", "$mape"), ("MAPE_IDF", "$mape")):
+        d = registry.get(code)
+        assert d.availability == "live"
+        assert d.value == field
+        assert d.agg == "avg"
 
 
-def test_a_forecast_type_rollup_counts_two_series_in_the_budget():
-    assert registry.series_cardinality(registry.get("WEEKLY_FORECAST"), {}) == 2
+def test_no_dataset_can_impose_a_date_grouping():
+    """`fixed_grouping` went with the roll-ups — it was their mechanism.
 
-
-def test_the_split_daf_idf_rollup_codes_are_gone():
-    """They were replaced by one dataset per roll-up reporting both types."""
-    for period in ("WEEKLY", "MONTHLY"):
-        for kind in ("FORECAST", "MAPE"):
-            for t in ("DAF", "IDF"):
-                with pytest.raises(registry.UnknownDatasetError):
-                    registry.get(f"{period}_{kind}_{t}")
-
+    While it existed, one ticked weekly dataset rewrote the date axis for every
+    other dataset in the request, with the Block-wise pill still lit and the
+    Filters sheet still printing BLOCK_WISE.
+    """
+    from dataclasses import fields
+    assert "fixed_grouping" not in {f.name for f in fields(registry.Dataset)}
 
 
 def test_only_tam_remains_absent():
     absent = sorted(d.code for d in registry.DATASETS.values() if d.availability == "absent")
     assert absent == ["TAM_BIDDED", "TAM_TRADED"]
 
-
-def test_ordinary_datasets_have_no_fixed_grouping():
-    for code in ("ACTUAL_DEMAND", "FORECAST_DAF", "MAPE_IDF", "ACP_DAM", "DC_PLANT"):
-        assert registry.get(code).fixed_grouping is None
 
 
 # ---------------------------------------- state-level default, plant drill-downs

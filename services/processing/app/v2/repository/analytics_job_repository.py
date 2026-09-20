@@ -37,6 +37,11 @@ STATUS_READY = "ready"
 STATUS_FAILED = "failed"
 STATUS_EXPIRED = "expired"
 STATUS_CANCELLED = "cancelled"
+#: Generated in the request and sent straight to the browser — no server-side file.
+#: Since 2026-09-20 the dashboard never queues, so this is the status every row
+#: written by the filter panel carries; the queue statuses above stay for the rows
+#: already in Mongo and for the worker that still knows how to run them.
+STATUS_COMPLETED = "completed"
 
 #: Statuses that still hold a place in the queue. Dedupe attaches a repeat request
 #: to one of these; a finished job must never block a fresh one.
@@ -44,6 +49,7 @@ ACTIVE_STATUSES = (STATUS_QUEUED, STATUS_RUNNING, STATUS_ASSEMBLING)
 
 STATUSES = ACTIVE_STATUSES + (
     STATUS_READY, STATUS_FAILED, STATUS_EXPIRED, STATUS_CANCELLED,
+    STATUS_COMPLETED,
 )
 
 #: Without every one of these the job cannot be re-run from the row alone.
@@ -141,6 +147,11 @@ def build_job_document(job: Dict[str, Any], *, now: Optional[datetime] = None) -
         "cells_estimate": int(job.get("cells_estimate") or 0),
         "chunks_total": int(job.get("chunks_total") or 0),
         "chunks_done": 0,
+        # Rows are what an in-process background export counts (2026-09-20). The
+        # chunk counters above belong to the scheduler worker, which still owns the
+        # queued rows; both are read by the status route, rows first.
+        "rows_total": int(job.get("rows_total") or 0),
+        "rows_done": 0,
         "parts": [],
         "result": None,
         "download_token": None,
@@ -196,6 +207,29 @@ class AnalyticsJobRepository(GenericRepository):
         )
         return doc["job_id"]
 
+    async def record_completed(self, job: Dict[str, Any]) -> str:
+        """Insert a history row for an export that was generated in the request.
+
+        The dashboard downloads immediately now, so there is no queue to join and
+        no file left behind — what survives is the configuration. The row is what
+        My Exports lists, and its `filters` echo is what the Execute button loads
+        back into the filter panel, which is why `validate_filters` still insists
+        on a complete set.
+        """
+        doc = build_job_document(job, now=_utcnow())
+        now = doc["created_at"]
+        doc.update({
+            "status": STATUS_COMPLETED,
+            "started_at": now,
+            "finished_at": now,
+            "chunks_total": 0,
+            "result": _jsonable(job.get("result") or {}) or None,
+        })
+        await self.collection.insert_one(doc)
+        logger.info("Recorded analytics export %s for user %s (%s cells)",
+                    doc["job_id"], doc["user_id"], doc["cells_estimate"])
+        return doc["job_id"]
+
     # ------------------------------------------------------------- reads ---
 
     async def get(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -224,6 +258,21 @@ class AnalyticsJobRepository(GenericRepository):
             },
             _NO_ID,
         )
+
+    async def set_progress(self, job_id: str, rows_done: int,
+                           rows_total: Optional[int] = None) -> bool:
+        """Record how far a running export has got. Status is not touched.
+
+        Deliberately a plain `$set` with no status guard: it races with nothing —
+        a stale write after the job finished would only move a counter the status
+        route stops reading once `status == ready`.
+        """
+        fields: Dict[str, Any] = {"rows_done": int(rows_done),
+                                  "heartbeat_at": _utcnow()}
+        if rows_total is not None:
+            fields["rows_total"] = int(rows_total)
+        result = await self.collection.update_one({"job_id": job_id}, {"$set": fields})
+        return bool(getattr(result, "matched_count", 0))
 
     # ------------------------------------------------------------ worker ---
 

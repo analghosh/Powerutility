@@ -42,6 +42,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from services.processing.app.v2.helpers import analytics_xlsx  # noqa: E402
 from services.processing.app.v2.repository import (  # noqa: E402
     analytics_job_repository as jobs,
 )
@@ -574,20 +575,24 @@ async def test_run_job_writes_a_csv_and_marks_the_job_ready(tmp_path):
     # One filter header block and one column header for the whole file, not one
     # of each per chunk.
     assert text.count("EPMS Analytics Export") == 1
-    assert text.count("dataset,label,unit,date,block,value") == 1
+    assert text.count("Date,Time block,") == 1
     # Every chunk's rows made it in.
     assert len(source_dates(text)) == 10
 
 
 def source_dates(text):
+    """The dates the assembled CSV actually carries.
+
+    The single-table layout (2026-09-20) puts the identity columns first, so the
+    date is column 1 and `Time block` column 2, followed by one column per series.
+    """
     dates = set()
     for line in text.splitlines():
-        if line.startswith("#") or line.startswith("dataset,"):
+        if line.startswith("#") or line.startswith("Date,"):
             continue
         parts = line.split(",")
-        # dataset,label,unit,date,block,value — date is the 4th column
-        if len(parts) >= 4 and parts[3]:
-            dates.add(parts[3])
+        if parts and parts[0]:
+            dates.add(parts[0])
     return dates
 
 
@@ -931,12 +936,16 @@ async def test_an_xlsx_job_merges_every_chunk_into_one_workbook(tmp_path):
 
     book = load_workbook(path)
     assert "Filters" in book.sheetnames
-    sheet = book[book.sheetnames[0]]
+    # One Data sheet plus Filters, and the dates run DOWN the rows now.
+    assert book.sheetnames == [analytics_xlsx.DATA_SHEET, analytics_xlsx.FILTERS_SHEET]
+    sheet = book[analytics_xlsx.DATA_SHEET]
     header = [cell.value for cell in next(sheet.iter_rows(max_row=1))]
-    # A scalar dataset: no identity column but Block.
-    assert header[:1] == ["Block"]
-    # One column per chunk date, all ten of them, in one sheet.
-    assert len(header) == 1 + 10
+    assert header[:2] == ["Date", "Time block"]
+    # A scalar dataset contributes exactly one value column.
+    assert len(header) == 3
+    # Every chunk's rows made it into the one sheet: ten dates, one block each.
+    dates = {row[0].value.date() for row in sheet.iter_rows(min_row=2)}
+    assert len(dates) == 10
 
 
 @pytest.mark.asyncio
