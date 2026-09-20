@@ -62,7 +62,11 @@ ENTITY_FILTER_KEYS = {
     "exchange": "exchanges",
 }
 
-DEFAULT_GROUPING = "BLOCK_WISE"
+#: Filter key carrying a roll-up dataset's own period. Set by the planner for the
+#: weekly/monthly plans only; absent means "group on the trading day", which is what
+#: every ordinary dashboard query does regardless of the user's Group Date By pill.
+#: See `analytics/grouping.py` — the pill is a column, not an aggregation.
+ROLLUP_GROUPING_KEY = "_rollup_grouping"
 
 
 class CanonicalRow(TypedDict):
@@ -218,6 +222,11 @@ def _as_day(value: Any, name: str) -> datetime:
     raise ValueError(f"{name} must be a date, datetime or ISO string, got {value!r}")
 
 
+#: Public spelling for callers outside this module — the planner needs the same
+#: normalisation to work out which days a roll-up period covers.
+as_day = _as_day
+
+
 def _resolve_band(filters: dict) -> block_bands.Band:
     """The band this filter set groups by.
 
@@ -369,13 +378,22 @@ class SourceGroupAdapter(ABC):
             for d in datasets)
 
     def _group_stage(self, datasets: Sequence[Dataset], filters: dict) -> dict:
-        """The analytics `$group`: one `_id` per output cell, one field per dataset."""
-        date_grouping = filters.get("date_grouping") or DEFAULT_GROUPING
+        """The analytics `$group`: one `_id` per output cell, one field per dataset.
+
+        The date key is the trading **day** unless this plan belongs to a roll-up
+        family, which aggregates over its own week or month. The user's Group Date By
+        never reaches here: it chooses identity columns in the file, not buckets in
+        Mongo. Before 2026-09-20 it keyed this `_id`, which is how Block-wise and
+        Date-wise came to produce identical files.
+        """
+        rollup = filters.get(ROLLUP_GROUPING_KEY)
         band = _resolve_band(filters)
         custom = filters.get("custom_blocks", filters.get("custom"))
 
+        date_key = (grouping.date_key_expr(rollup, f"${self.date_field}") if rollup
+                    else grouping.day_key_expr(f"${self.date_field}"))
         _id: Dict[str, Any] = {
-            ID_DATE: grouping.date_key_expr(date_grouping, f"${self.date_field}"),
+            ID_DATE: date_key,
             ID_BLOCK: grouping.block_key_expr(band, custom),
         }
         if self._wants_entity(datasets):

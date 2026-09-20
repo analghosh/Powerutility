@@ -1,17 +1,22 @@
-"""Export mode selection and job enqueue.
+"""Export mode selection and the history row.
 
-This layer makes one decision — *serve it now, or queue it* — and four things
-about that decision are load-bearing enough that a silent regression in any of
+The dashboard stopped queueing on 2026-09-20 (PTC): a file is generated inside the
+request and downloaded, or the request is refused with priced narrowings. There is
+no third outcome and no promise for later. The queue underneath (`_enqueue`, the
+worker, the retry route) still owns the rows already in Mongo and is tested here
+directly rather than through `export()`.
+
+Four things are load-bearing enough that a silent regression in any of
 them would not show up until a user complained.
 
 1. **The threshold differs by format, and the difference is not cosmetic.** CSV
    yields rows as it goes, so a 500k-cell stream costs constant memory and a
    disconnect wastes nothing. XLSX emits no bytes at all until openpyxl finalises
    the zip central directory, so the same request holds a web worker for a minute
-   with nothing to show for it. A single shared threshold would either queue CSVs
+   with nothing to show for it. A single shared threshold would either refuse CSVs
    that could have streamed or block a worker on a large XLSX. `MODE_THRESHOLDS`
    is the whole point of this module and these tests are what hold the two numbers
-   apart.
+   apart — the line is now "served or refused" rather than "served or queued".
 
 2. **The disk budget is checked before the row is written, not after.** This is a
    single EC2 box with no HA; filling the root volume takes the bidding screens
@@ -26,13 +31,13 @@ them would not show up until a user complained.
    pika TCP connection inline, and a blocking call in an async handler is exactly
    the defect that makes a login rush 401 the whole platform.
 
-4. **The stored filters must be complete.** The row outlives its file by 87 days
-   so that Regenerate can rebuild the export from the row alone. The repository
-   enforces that with `IncompleteFilters`, so the fake job repository here runs
-   the real `build_job_document` rather than accepting any dict — otherwise this
-   test would pass against a service that stores half a filter set and the failure
-   would surface days later, at Regenerate time, in front of the person who
-   needed it.
+4. **The stored filters must be complete.** Nothing keeps a file any more, so the
+   history row IS the export: My Exports lists it and its Execute button loads the
+   configuration back into the filter panel. The repository enforces completeness
+   with `IncompleteFilters`, so the fake job repository here runs the real
+   `build_job_document` rather than accepting any dict — otherwise this test would
+   pass against a service that stores half a filter set and the failure would
+   surface days later, in front of the person pressing Execute.
 
 Mongo, the broker and the clock are all mocked; nothing here touches a database.
 """
@@ -94,7 +99,8 @@ class FakeJobs:
 
     def __init__(self, active=None):
         self.active = active
-        self.created = []
+        self.created = []      # rows written by the (now unreachable) queue path
+        self.recorded = []     # history rows written after an immediate download
         self.hash_lookups = []
 
     async def find_active_by_hash(self, user_id, request_hash):
@@ -107,6 +113,13 @@ class FakeJobs:
     async def create(self, job):
         doc = build_job_document(job)
         self.created.append(doc)
+        return doc["job_id"]
+
+    async def record_completed(self, job):
+        doc = build_job_document(job)
+        doc["status"] = "completed"
+        doc["result"] = job.get("result")
+        self.recorded.append(doc)
         return doc["job_id"]
 
 
@@ -210,16 +223,16 @@ async def test_a_csv_under_the_stream_ceiling_is_streamed():
 
 
 @pytest.mark.asyncio
-async def test_a_csv_over_the_stream_ceiling_is_queued():
+async def test_a_csv_over_the_stream_ceiling_is_refused_not_queued():
     service = _service()
     request = _request(days=65, plants=96, fmt="csv")       # 599,040 cells
     assert _cells(request, service) > 500_000
 
-    outcome = await service.export(request, _context())
+    with pytest.raises(query_svc.BudgetExceeded) as exc:
+        await service.export(request, _context())
 
-    assert outcome["mode"] == svc.MODE_JOB
-    assert outcome["job_id"]
-    assert len(service.jobs.created) == 1
+    assert service.jobs.created == [], "an over-budget request was queued"
+    assert exc.value.suggestions, "a refusal must say how to get under the line"
 
 
 @pytest.mark.asyncio
@@ -241,27 +254,27 @@ async def test_an_xlsx_under_the_inline_ceiling_is_written_in_request():
 
 
 @pytest.mark.asyncio
-async def test_an_xlsx_over_the_inline_ceiling_is_queued():
+async def test_an_xlsx_over_the_inline_ceiling_is_refused_not_queued():
     service = _service()
     request = _request(days=52, plants=40, fmt="xlsx")      # 199,680 cells
     assert 150_000 < _cells(request, service) <= 500_000
 
-    outcome = await service.export(request, _context())
+    with pytest.raises(query_svc.BudgetExceeded):
+        await service.export(request, _context())
 
-    assert outcome["mode"] == svc.MODE_JOB
-    assert len(service.jobs.created) == 1
+    assert service.jobs.created == []
 
 
 @pytest.mark.asyncio
-async def test_the_same_question_streams_as_csv_and_queues_as_xlsx():
+async def test_the_same_question_streams_as_csv_and_is_refused_as_xlsx():
     """The two formats must not share one threshold — §8's whole reason for the
     table. 200k cells is a fine CSV stream and a worker-blocking XLSX."""
     service = _service()
     as_csv = await service.export(_request(days=52, plants=40, fmt="csv"), _context())
-    as_xlsx = await service.export(_request(days=52, plants=40, fmt="xlsx"), _context())
-
     assert as_csv["mode"] == svc.MODE_STREAM
-    assert as_xlsx["mode"] == svc.MODE_JOB
+
+    with pytest.raises(query_svc.BudgetExceeded):
+        await service.export(_request(days=52, plants=40, fmt="xlsx"), _context())
 
 
 def test_mode_thresholds_are_the_configured_cell_bands():
@@ -277,91 +290,100 @@ def test_a_threshold_override_moves_the_boundary():
     assert service.threshold_for("csv") == 1_000
 
 
-# ----------------------------------------------------------------- the queue
+# --------------------------------------------------------- the history row
+#
+# Nothing is queued, so what a generate leaves behind is the configuration. My
+# Exports lists those rows and its Execute button loads one back into the filters.
 
 
 @pytest.mark.asyncio
-async def test_an_identical_in_flight_request_attaches_to_the_existing_job():
+async def test_a_served_export_records_its_configuration():
     jobs = FakeJobs()
     service = _service(jobs=jobs)
-    request = _request(days=65, plants=96, fmt="csv")
+    request = _request(days=52, plants=20, fmt="xlsx")      # 99,840 cells, inline
 
-    first = await service.export(request, _context())
-    jobs.active = dict(jobs.created[0], status=ACTIVE_STATUSES[0])
+    outcome = await service.export(request, _context())
 
-    second = await service.export(request, _context())
-
-    assert second["job_id"] == first["job_id"]
-    assert second["deduped"] is True
-    assert len(jobs.created) == 1, "a duplicate request created a second job"
-
-
-@pytest.mark.asyncio
-async def test_another_users_identical_request_gets_its_own_job():
-    """Dedupe is scoped by owner — the job row is the ownership record."""
-    jobs = FakeJobs()
-    service = _service(jobs=jobs)
-    request = _request(days=65, plants=96, fmt="csv")
-
-    await service.export(request, _context(user_id="u-1"))
-    jobs.active = dict(jobs.created[0], status=ACTIVE_STATUSES[0])
-
-    other = await service.export(request, _context(user_id="u-2"))
-
-    assert other["deduped"] is False
-    assert len(jobs.created) == 2
+    assert outcome["mode"] == svc.MODE_INLINE
+    assert jobs.created == [], "nothing may be queued"
+    assert len(jobs.recorded) == 1
+    row = jobs.recorded[0]
+    assert row["status"] == "completed"
+    assert row["cells_estimate"] == _cells(request, service)
+    assert row["label"]
+    assert row["result"]["filename"] == outcome["filename"]
+    assert row["result"]["row_count"] == outcome["row_count"]
 
 
 @pytest.mark.asyncio
-async def test_csv_and_xlsx_of_the_same_question_are_different_jobs():
-    """The cache key ignores format on purpose — the same data. The job hash must
-    not, or a queued CSV would hand the user an XLSX."""
+async def test_a_streamed_export_records_its_configuration_too():
     jobs = FakeJobs()
     service = _service(jobs=jobs)
 
-    await service.export(_request(days=65, plants=96, fmt="csv"), _context())
-    jobs.active = dict(jobs.created[0], status=ACTIVE_STATUSES[0])
+    outcome = await service.export(_request(days=52, plants=80, fmt="csv"), _context())
 
-    other = await service.export(_request(days=65, plants=96, fmt="xlsx"), _context())
-
-    assert other["deduped"] is False
-    assert len(jobs.created) == 2
+    assert outcome["mode"] == svc.MODE_STREAM
+    assert len(jobs.recorded) == 1
+    assert jobs.recorded[0]["filters"]["format"] == "csv"
 
 
 @pytest.mark.asyncio
-async def test_a_queued_export_needs_an_owner():
-    service = _service()
-    anonymous = {"permissions": [PLANT_PERMISSION]}
-    with pytest.raises(ValueError):
-        await service.export(_request(days=65, plants=96, fmt="csv"), anonymous)
+async def test_a_refused_export_records_nothing():
+    """The user got no file, so there is no configuration worth offering back."""
+    jobs = FakeJobs()
+    service = _service(jobs=jobs)
+
+    with pytest.raises(query_svc.BudgetExceeded):
+        await service.export(_request(days=65, plants=96, fmt="csv"), _context())
+
+    assert jobs.recorded == [] and jobs.created == []
 
 
 @pytest.mark.asyncio
-async def test_a_stream_does_not_need_an_owner():
-    """A small CSV is served straight back; there is no row to own."""
+async def test_a_history_failure_never_costs_the_user_their_file():
+    """The file is already on its way to the browser when the row is written.
+
+    Losing the history entry is a nuisance; turning a delivered export into a 500
+    is not, so the write is best-effort and the outcome is returned regardless.
+    """
+    class BrokenJobs(FakeJobs):
+        async def record_completed(self, job):
+            raise RuntimeError("mongo is down")
+
+    service = _service(jobs=BrokenJobs())
+    outcome = await service.export(_request(days=52, plants=20, fmt="xlsx"), _context())
+
+    assert outcome["mode"] == svc.MODE_INLINE
+    assert outcome["path"]
+
+
+@pytest.mark.asyncio
+async def test_a_history_row_needs_an_owner():
+    """The row is the ownership record; every read of My Exports is scoped by it."""
     service = _service()
     anonymous = {"permissions": [PLANT_PERMISSION]}
     outcome = await service.export(_request(days=1, plants=1, fmt="csv"), anonymous)
+
+    # The export itself still succeeds — losing the history entry must not cost the
+    # user the file they asked for.
     assert outcome["mode"] == svc.MODE_STREAM
+    assert service.jobs.recorded == []
+
+
+# ------------------------------------------------- the queue, still reachable
+#
+# `export()` no longer enqueues, but the rows already in Mongo do, and the retry
+# route still rings the doorbell for them. These call the queue path directly.
 
 
 @pytest.mark.asyncio
-async def test_the_job_carries_its_estimate_and_a_chunk_count():
+async def test_the_dashboard_path_never_enqueues():
+    """The one assertion that pins the 2026-09-20 decision in this module."""
     jobs = FakeJobs()
     service = _service(jobs=jobs)
-    request = _request(days=65, plants=96, fmt="csv")
-
-    await service.export(request, _context())
-    doc = jobs.created[0]
-
-    assert doc["cells_estimate"] == _cells(request, service)
-    assert doc["chunks_total"] >= 1
-    assert doc["chunks_total"] == -(-doc["cells_estimate"] // svc.CHUNK_CELLS)
-    assert doc["status"] == "queued"
-    assert doc["label"]
-
-
-# ------------------------------------------------------------- broker doorbell
+    for days, plants, fmt in ((1, 1, "csv"), (52, 20, "xlsx"), (52, 80, "csv")):
+        await service.export(_request(days=days, plants=plants, fmt=fmt), _context())
+    assert jobs.created == []
 
 
 @pytest.mark.asyncio
@@ -369,8 +391,10 @@ async def test_a_publish_failure_still_returns_a_job():
     """USE_RABBITMQ_JOBS is false locally, so False is the normal return."""
     publisher = FakePublisher(result=False)
     service = _service(publisher=publisher)
+    request = _request(days=65, plants=96, fmt="csv")
+    estimate = service.service.estimate_only(request)
 
-    outcome = await service.export(_request(days=65, plants=96, fmt="csv"), _context())
+    outcome = await service._enqueue(request, "csv", estimate, [], _context())
 
     assert outcome["mode"] == svc.MODE_JOB
     assert outcome["published"] is False
@@ -378,22 +402,14 @@ async def test_a_publish_failure_still_returns_a_job():
 
 
 @pytest.mark.asyncio
-async def test_a_broker_that_raises_still_returns_a_job():
-    publisher = FakePublisher(raises=RuntimeError("connection refused"))
-    service = _service(publisher=publisher)
-
-    outcome = await service.export(_request(days=65, plants=96, fmt="csv"), _context())
-
-    assert outcome["mode"] == svc.MODE_JOB
-    assert outcome["published"] is False
-
-
-@pytest.mark.asyncio
 async def test_the_publish_is_awaited_and_never_the_blocking_variant():
+    """A blocking pika connect on the event loop is the defect that 401s a login rush."""
     publisher = FakePublisher(result=True)
     service = _service(publisher=publisher)
+    request = _request(days=65, plants=96, fmt="csv")
+    estimate = service.service.estimate_only(request)
 
-    outcome = await service.export(_request(days=65, plants=96, fmt="csv"), _context())
+    outcome = await service._enqueue(request, "csv", estimate, [], _context())
 
     assert outcome["published"] is True
     assert publisher.blocking_calls == []
@@ -418,9 +434,27 @@ async def test_the_row_is_written_before_the_doorbell_is_rung():
             return await super().publish_job_trigger_async(**kwargs)
 
     service = _service(jobs=OrderedJobs(), publisher=OrderedPublisher())
-    await service.export(_request(days=65, plants=96, fmt="csv"), _context())
+    request = _request(days=65, plants=96, fmt="csv")
+    await service._enqueue(request, "csv", service.service.estimate_only(request),
+                           [], _context())
 
     assert order == ["create", "publish"]
+
+
+@pytest.mark.asyncio
+async def test_an_identical_in_flight_request_attaches_to_the_existing_job():
+    jobs = FakeJobs()
+    service = _service(jobs=jobs)
+    request = _request(days=65, plants=96, fmt="csv")
+    estimate = service.service.estimate_only(request)
+
+    first = await service._enqueue(request, "csv", estimate, [], _context())
+    jobs.active = dict(jobs.created[0], status=ACTIVE_STATUSES[0])
+    second = await service._enqueue(request, "csv", estimate, [], _context())
+
+    assert second["job_id"] == first["job_id"]
+    assert second["deduped"] is True
+    assert len(jobs.created) == 1, "a duplicate request created a second job"
 
 
 # ---------------------------------------------------------------- disk budget
@@ -432,9 +466,11 @@ async def test_the_disk_budget_refuses_the_job_before_it_is_created(tmp_path):
     jobs = FakeJobs()
     service = _service(jobs=jobs, settings=_settings(
         ANALYTICS_EXPORT_DIR=str(tmp_path), ANALYTICS_EXPORT_DISK_BUDGET_MB=1))
+    request = _request(days=65, plants=96, fmt="csv")
 
     with pytest.raises(svc.ExportStorageExhausted) as exc:
-        await service.export(_request(days=65, plants=96, fmt="csv"), _context())
+        await service._enqueue(request, "csv",
+                               service.service.estimate_only(request), [], _context())
 
     assert jobs.created == [], "an unaffordable job was queued anyway"
     message = str(exc.value)
@@ -447,8 +483,11 @@ async def test_a_budget_with_room_left_queues_normally(tmp_path):
     (tmp_path / "old_export.csv").write_bytes(b"x" * 1024)
     service = _service(settings=_settings(
         ANALYTICS_EXPORT_DIR=str(tmp_path), ANALYTICS_EXPORT_DISK_BUDGET_MB=1))
+    request = _request(days=65, plants=96, fmt="csv")
 
-    outcome = await service.export(_request(days=65, plants=96, fmt="csv"), _context())
+    outcome = await service._enqueue(request, "csv",
+                                     service.service.estimate_only(request),
+                                     [], _context())
     assert outcome["mode"] == svc.MODE_JOB
 
 
@@ -482,12 +521,12 @@ def test_a_zero_budget_disables_the_check(tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_the_stored_filters_are_complete_enough_to_regenerate():
+async def test_the_stored_filters_are_complete_enough_to_replay():
     jobs = FakeJobs()
     service = _service(jobs=jobs)
 
-    await service.export(_request(days=65, plants=96, fmt="csv"), _context())
-    filters = jobs.created[0]["filters"]
+    await service.export(_request(days=52, plants=20, fmt="csv"), _context())
+    filters = jobs.recorded[0]["filters"]
 
     for key in REQUIRED_FILTER_KEYS:
         assert key in filters, f"stored filters are missing {key}"
@@ -498,18 +537,16 @@ async def test_the_stored_filters_are_complete_enough_to_regenerate():
 
 
 @pytest.mark.asyncio
-async def test_a_named_band_is_stored_with_the_ranges_it_had_when_queued():
-    """Regenerate must reproduce the file the user got, so the job carries the
-    band's ranges as they were — not a pointer to a parameter PTC may edit later."""
+async def test_a_named_band_is_stored_with_the_ranges_it_had_when_generated():
+    """Execute must reproduce the file the user got, so the row carries the band's
+    ranges as they were — not a pointer to a parameter PTC may edit later."""
     jobs = FakeJobs()
     service = _service(jobs=jobs, repo=RecordingRepo(
         parameters={"analytics_band_peak": "65-72, 81-88"}))
-    # 1 bucket per day, so it takes 6,000 plants x 96 days to reach the queue.
-    request = _request(days=96, plants=6000, fmt="csv", block_band="PEAK")
-    assert _cells(request, service) > 500_000
+    request = _request(days=96, plants=20, fmt="csv", block_band="PEAK")
 
     await service.export(request, _context())
-    filters = jobs.created[0]["filters"]
+    filters = jobs.recorded[0]["filters"]
     assert filters["block_band"] == "PEAK"
     assert filters["block_band_ranges"] == [[65, 72], [81, 88]]
 
@@ -524,29 +561,29 @@ async def test_an_undefined_named_band_is_refused_before_anything_is_queued():
 
 
 @pytest.mark.asyncio
-async def test_custom_block_ranges_are_stored_with_the_job():
+async def test_custom_block_ranges_are_stored_with_the_row():
+    """CUSTOM left the filter panel on 2026-09-20 but has to keep replaying: rows
+    written before then still hold it, and Execute must reproduce their file."""
     jobs = FakeJobs()
     service = _service(jobs=jobs)
-    # 365 days x 2 custom buckets x 800 plants = 584,000 cells, so it queues.
-    request = _request(days=365, plants=800, fmt="csv",
+    request = _request(days=365, plants=20, fmt="csv",
                        block_band="CUSTOM", custom_blocks=[[1, 48], [49, 96]])
-    assert _cells(request, service) > 500_000
 
     await service.export(request, _context())
-    filters = jobs.created[0]["filters"]
+    filters = jobs.recorded[0]["filters"]
 
     assert filters["block_grouping"] == "CUSTOM"
     assert filters["custom_blocks"] == [[1, 48], [49, 96]]
 
 
 @pytest.mark.asyncio
-async def test_a_stored_job_echo_replays_as_a_request():
-    """Regenerate hands back the row's own filters — `block_grouping`, not
+async def test_a_stored_row_echo_replays_as_a_request():
+    """Execute hands back the row's own filters — `block_grouping`, not
     `block_band`, and ISO date strings."""
     jobs = FakeJobs()
     service = _service(jobs=jobs)
-    await service.export(_request(days=65, plants=96, fmt="csv"), _context())
-    echo = jobs.created[0]["filters"]
+    await service.export(_request(days=52, plants=20, fmt="csv"), _context())
+    echo = jobs.recorded[0]["filters"]
 
     replayed = svc.as_export_request(echo)
 
@@ -576,24 +613,24 @@ def test_an_export_request_that_names_no_format_is_excel():
 
 
 @pytest.mark.asyncio
-async def test_a_denied_dataset_never_reaches_the_queued_job():
-    """Dropped in the service, per §13 — a queued job runs without the caller's
-    token, so a dataset that survives into the row is a dataset the worker will
-    happily export to someone not entitled to it."""
+async def test_a_denied_dataset_never_reaches_the_stored_row():
+    """Dropped in the service, per §13. The row is replayed by Execute, which runs
+    it again with whatever it holds — a dataset that survived into it would be one
+    the user is not entitled to, handed back on the next press."""
     jobs = FakeJobs()
     service = _service(jobs=jobs)
-    request = _request(days=65, plants=96, fmt="csv",
+    request = _request(days=52, plants=20, fmt="csv",
                        datasets=[PLANT_DATASET, "ACTUAL_DEMAND"])
 
     outcome = await service.export(request, _context(permissions=[PLANT_PERMISSION]))
 
-    assert jobs.created[0]["filters"]["datasets"] == [PLANT_DATASET]
+    assert jobs.recorded[0]["filters"]["datasets"] == [PLANT_DATASET]
     assert outcome["denied_datasets"] == ["ACTUAL_DEMAND"]
 
 
 @pytest.mark.asyncio
 async def test_the_estimate_prices_only_the_permitted_datasets():
-    """Otherwise a denied dataset could push an affordable export into the queue."""
+    """Otherwise a denied dataset could push an affordable export over the ceiling."""
     jobs = FakeJobs()
     service = _service(jobs=jobs)
     permitted = _request(days=52, plants=40, fmt="csv")
@@ -639,7 +676,10 @@ async def test_the_stream_carries_the_applied_filter_header():
     header = "".join(lines[:12])
     assert "Format: csv" in header
     assert "Date range: 2026-01-01 to 2026-01-01" in header
-    assert "dataset,label,unit,date,block,value\n" in lines
+    # The single table's headings: identity columns for the grouping, then one
+    # column per (dataset, entity).
+    assert "Date,Time block,Plant wise DC (MW)\n" in lines, lines[:14]
+    assert "# Date grouping: BLOCK_DATE_WISE\n" in lines
 
 
 @pytest.mark.asyncio
