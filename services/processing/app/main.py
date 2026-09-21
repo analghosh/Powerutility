@@ -56,6 +56,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting EPMS Processing Service...")
     from .v2.repository.master_plants_repository import master_plants_repository
     await master_plants_repository.create_indexes()
+    try:
+        from .v2.repository.ppa_details_repository import ppa_details_repository
+        await ppa_details_repository.create_indexes()
+    except Exception as e:
+        logger.error(f"Failed to ensure ppa_details indexes: {e}")
     from .v2.repository.bid_trade_serve_repository import BidTradeServeRepository
     BidTradeServeRepository()
 
@@ -157,6 +162,7 @@ from .v2.api.router.rtm_scheduling_snapshot_routes import router as rtm_scheduli
 from .v2.api.router.price_group_routes import router as price_group_router
 from .v2.api.router.supply_routes import router as supply_router
 from .v2.api.router.master_plants_routes import router as master_plant_router
+from .v2.api.router.ppa_details_routes import router as ppa_details_router
 from .v2.api.router.forecastAnalysis_routes import router as forecast_analysis
 from .v2.api.router.limit_values_routes import router as limit_values_routers
 from .v2.api.router.weather_routes import router as weather_router
@@ -359,6 +365,7 @@ v2_app.include_router(rtm_scheduling_snapshot_v2_router)
 v2_app.include_router(price_group_router)
 v2_app.include_router(supply_router)
 v2_app.include_router(master_plant_router)
+v2_app.include_router(ppa_details_router)
 v2_app.include_router(forecast_analysis)
 v2_app.include_router(limit_values_routers)
 v2_app.include_router(weather_router)

@@ -151,6 +151,10 @@ class Settings(BaseSettings):
     MONGODB_PEAK_DEMAND_SERVE_COLLECTION: str = "peak_demand_serve"
 
     MONGODB_PLANT_MASTER_COLLECTION: str = "plant_master"
+    MONGODB_PPA_DETAILS_COLLECTION: str = "ppa_details"
+
+    # File Storage — PPA agreement document uploads.
+    PPA_DETAILS_UPLOAD_DIR: str = "uploads/ppa_details"
 
     # Limit Values Collection
     MONGODB_LIMIT_VALUES_COLLECTION: str = "limit_values"
