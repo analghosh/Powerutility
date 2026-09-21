@@ -284,6 +284,27 @@ def test_remarks_carry_the_rates_the_charges_are_billed_at(parser, dam_pages):
     assert remarks["max_charges_applied"] is True
 
 
+def test_the_remarks_are_kept_as_printed(parser, dam_pages):
+    """
+    The parsed rates are what a query needs; these lines are what a reader
+    needs. They carry the exchange's own wording for how each charge was
+    arrived at, which is the only explanation on the page for a capped charge.
+    """
+    lines = parser.parse_pages(dam_pages)["remarks"]["lines"]
+
+    assert any("NLDC Application Fee" in line for line in lines)
+    assert "* Max Charges applied" in lines
+    # The footer is not a remark.
+    assert not any("computer generated report" in line for line in lines)
+    assert all(line == line.strip() and line for line in lines)
+
+
+def test_an_rtm_session_note_is_kept_in_the_remarks(parser, rtm_pages):
+    lines = parser.parse_pages(rtm_pages)["remarks"]["lines"]
+
+    assert any("calculated upto session 48" in line for line in lines)
+
+
 def test_rtm_records_the_session_the_figures_stop_at(parser, rtm_pages):
     doc = parser.parse_pages(rtm_pages)
 

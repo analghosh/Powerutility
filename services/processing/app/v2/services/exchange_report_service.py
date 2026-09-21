@@ -23,6 +23,7 @@ import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
+from libs.audit_queue.timezone_utils import utc_to_ist
 from libs.parsers.exchange_obligation_report_parser import (
     ExchangeObligationReportParser,
     ObligationReportParseError,
@@ -38,6 +39,40 @@ logger = logging.getLogger(__name__)
 FIELD_LABELS = {
     "delivery_date": "Delivery Date",
 }
+
+#: A time block is 15 minutes, so there are 96 in a day and block 1 starts at
+#: 00:00. Same convention as everywhere else in this service.
+BLOCKS_PER_HOUR = 4
+MINUTES_PER_BLOCK = 15
+
+
+def _iso_or_none(value: Any) -> Optional[str]:
+    """A timestamp as text, for anything that has to survive JSON."""
+    if isinstance(value, datetime):
+        return value.isoformat()
+    return value if value is None or isinstance(value, str) else str(value)
+
+
+def describe_upload_moment(uploaded_at: datetime) -> Dict[str, Any]:
+    """
+    When the upload happened, in the terms the shift report works in.
+
+    The shift report is laid out by time block, so a timestamp alone cannot be
+    placed on it. The block is derived here, once, at the moment of upload -
+    deriving it later from `uploaded_at` would mean every reader repeating the
+    same UTC-to-IST conversion, and the day boundary makes that easy to get
+    wrong: an upload at 23:10 UTC is block 19 of the *next* IST day.
+
+    The stored UTC instant stays authoritative; these are its IST reading.
+    """
+    ist = utc_to_ist(uploaded_at)
+    block = ist.hour * BLOCKS_PER_HOUR + ist.minute // MINUTES_PER_BLOCK + 1
+    return {
+        "uploaded_at_ist": ist.isoformat(),
+        "uploaded_on_ist_date": ist.date().isoformat(),
+        "uploaded_in_time_block": block,
+        "uploaded_at_ist_time": ist.strftime("%H:%M"),
+    }
 
 
 class UploadRejected(Exception):
@@ -65,6 +100,18 @@ class CategoryNotAvailable(UploadRejected):
     """A category that is listed on the screen but has no parser yet."""
 
 
+class AlreadyUploaded(UploadRejected):
+    """
+    This report has been uploaded before, and the caller has not said to
+    replace it.
+
+    Not an error - a question. Overwriting is usually what the operator wants,
+    because the exchange reissues corrected reports under the same identity.
+    But it silently changes a day's numbers in the reports section, so it
+    should be a decision rather than a side effect of pressing Submit twice.
+    """
+
+
 class FileTooLarge(UploadRejected):
     """Bigger than the drop zone's stated limit."""
 
@@ -85,6 +132,7 @@ class ExchangeReportService:
         market_type: str,
         delivery_date: str,
         actor: Dict[str, Any],
+        confirm_replace: bool = False,
     ) -> Dict[str, Any]:
         category = self._require_available_category(report_category)
         self._require_accepted_extension(category, filename)
@@ -97,6 +145,16 @@ class ExchangeReportService:
         self._require_delivery_date_matches(parsed, delivery_date=delivery_date)
         self._require_every_check_passed(parsed)
 
+        if not confirm_replace:
+            await self._require_not_already_uploaded(
+                parsed,
+                category=category,
+                exchange=exchange,
+                market_type=market_type,
+                delivery_date=delivery_date,
+                data=data,
+            )
+
         document = self._to_document(
             parsed,
             category=category,
@@ -108,6 +166,8 @@ class ExchangeReportService:
         )
         upload_event = {
             "uploaded_at": document["uploaded_at"],
+            "uploaded_at_ist": document["uploaded_at_ist"],
+            "uploaded_in_time_block": document["uploaded_in_time_block"],
             "uploaded_by": document["uploaded_by"],
             "uploaded_by_username": document["uploaded_by_username"],
             "source_filename": filename,
@@ -254,6 +314,74 @@ class ExchangeReportService:
         )
 
     @staticmethod
+    async def _require_not_already_uploaded(
+        parsed: Dict[str, Any],
+        *,
+        category: registry.ReportCategory,
+        exchange: str,
+        market_type: str,
+        delivery_date: str,
+        data: bytes,
+    ) -> None:
+        """
+        Stop and ask if this report is already stored.
+
+        The identity can only be checked after parsing, because the portfolio
+        is printed inside the report and is part of what makes one report
+        distinct from another - the form has no field for it.
+
+        Two different situations are reported separately, because they mean
+        different things to the person deciding. The same file again is almost
+        always a double submit and replacing it changes nothing. A *different*
+        file for the same report is the exchange having reissued it, or the
+        wrong file about to land on a day's numbers, and that is the one worth
+        pausing over.
+        """
+        identity = {
+            "report_category": category.code,
+            "exchange": exchange,
+            "market_type": market_type,
+            "delivery_date_iso": delivery_date,
+            "portfolio_code": parsed.get("portfolio_code"),
+        }
+        existing = await exchange_report_repository.find_by_identity(identity)
+        if not existing:
+            return
+
+        digest = hashlib.sha256(data).hexdigest()
+        identical = existing.get("file_sha256") == digest
+        previous_name = existing.get("source_filename") or "an earlier file"
+
+        message = (
+            f"'{previous_name}' has already been uploaded for "
+            f"{market_type} {exchange} on {delivery_date}"
+        )
+        message += (
+            ". This is the same file. Upload it again to replace it."
+            if identical
+            else ". Uploading this one will replace it."
+        )
+
+        raise AlreadyUploaded(
+            "already_uploaded",
+            message,
+            {
+                "identical_file": identical,
+                "previous": {
+                    "source_filename": existing.get("source_filename"),
+                    "file_sha256": existing.get("file_sha256"),
+                    # Rendered, not passed through: this dict becomes an HTTP
+                    # error body, and a Mongo datetime is not JSON.
+                    "uploaded_at": _iso_or_none(existing.get("uploaded_at")),
+                    "uploaded_at_ist": existing.get("uploaded_at_ist"),
+                    "uploaded_in_time_block": existing.get("uploaded_in_time_block"),
+                    "uploaded_by_username": existing.get("uploaded_by_username"),
+                    "upload_count": existing.get("upload_count"),
+                },
+            },
+        )
+
+    @staticmethod
     def _require_every_check_passed(parsed: Dict[str, Any]) -> None:
         validation = parsed.get("validation") or {}
         if validation.get("passed"):
@@ -288,6 +416,7 @@ class ExchangeReportService:
         later which file a figure came from. The originals stay downloadable
         from the exchange, and the deployment is a single box with no backup.
         """
+        uploaded_at = datetime.now(timezone.utc)
         document = dict(parsed)
         document.update(
             {
@@ -303,9 +432,10 @@ class ExchangeReportService:
                 "source_filename": filename,
                 "file_sha256": hashlib.sha256(data).hexdigest(),
                 "file_size_bytes": len(data),
-                "uploaded_at": datetime.now(timezone.utc),
+                "uploaded_at": uploaded_at,
                 "uploaded_by": actor.get("user_id"),
                 "uploaded_by_username": actor.get("username"),
+                **describe_upload_moment(uploaded_at),
             }
         )
         return document
@@ -340,6 +470,10 @@ class ExchangeReportService:
             ),
             "source_filename": document.get("source_filename"),
             "uploaded_at": document.get("uploaded_at"),
+            "uploaded_at_ist": document.get("uploaded_at_ist"),
+            "uploaded_at_ist_time": document.get("uploaded_at_ist_time"),
+            "uploaded_on_ist_date": document.get("uploaded_on_ist_date"),
+            "uploaded_in_time_block": document.get("uploaded_in_time_block"),
             "uploaded_by_username": document.get("uploaded_by_username"),
         }
 

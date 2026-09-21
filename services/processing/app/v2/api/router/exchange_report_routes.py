@@ -11,6 +11,12 @@ on, a sentence the operator reads, and the detail they need to act:
 * **A category with no parser yet → 422.** The screen lists all four categories
   PTC asked for; three of them have no sample file, and choosing one is a
   request the server understands but cannot carry out.
+* **Already uploaded → 409**, naming the file that is already stored and when
+  it landed. Not a failure: the caller resends with `confirm_replace` once the
+  operator has said yes. Overwriting is usually right, because the exchange
+  reissues corrected reports under the same identity, but it silently changes
+  a day's numbers and should be a decision rather than a double-click.
+
 * **Over the size limit → 413**, with the limit, so the message can be exact.
 
 Nothing on this router answers 200 with an error in the body. That pattern is
@@ -37,7 +43,8 @@ from libs.audit_queue.simple_logger import AuditLogger
 from ....core.dependencies import get_audit_logger
 from ...dependencies import get_user_context
 from ...exchange_reports import registry
-from ...services.exchange_report_service import (CategoryNotAvailable,
+from ...services.exchange_report_service import (AlreadyUploaded,
+                                                 CategoryNotAvailable,
                                                  FileTooLarge, UploadRejected,
                                                  exchange_report_service)
 
@@ -56,6 +63,8 @@ UNPROCESSABLE_REASONS = {"category_not_available"}
 
 
 def _rejection_status(rejection: UploadRejected) -> int:
+    if isinstance(rejection, AlreadyUploaded):
+        return status.HTTP_409_CONFLICT
     if isinstance(rejection, FileTooLarge):
         return status.HTTP_413_REQUEST_ENTITY_TOO_LARGE
     if isinstance(rejection, CategoryNotAvailable) or rejection.reason in UNPROCESSABLE_REASONS:
@@ -160,6 +169,7 @@ async def get_upload_options() -> Dict[str, Any]:
     summary="Upload and store one exchange report",
     responses={
         400: {"description": "The file was unreadable, contradicted the form, or failed its checks"},
+        409: {"description": "Already uploaded; resend with confirm_replace to overwrite"},
         413: {"description": "Larger than the upload limit"},
         422: {"description": "That report category has no parser yet"},
     },
@@ -171,6 +181,10 @@ async def upload_report(
     exchange: str = Form(..., description="IEX, PXIL or HPX"),
     market_type: str = Form(..., description="DAM, GDAM, RTM or HPDAM"),
     delivery_date: str = Form(..., description="Delivery date, YYYY-MM-DD"),
+    confirm_replace: bool = Form(
+        False,
+        description="Replace a report already stored for this identity",
+    ),
     user_context: Dict[str, Any] = Depends(get_user_context),
 ) -> Dict[str, Any]:
     audit = _optional_audit_logger()
@@ -187,6 +201,7 @@ async def upload_report(
             market_type=market_type,
             delivery_date=normalised_date,
             actor=user_context,
+            confirm_replace=confirm_replace,
         )
     except UploadRejected as rejection:
         _audit(
