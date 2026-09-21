@@ -420,7 +420,32 @@ class ExchangeObligationReportParser(BaseParser):
             remarks[field] = int(token) if token.isdigit() else _to_number(token)
 
         remarks["max_charges_applied"] = "* Max Charges applied" in flat
+        remarks["lines"] = ExchangeObligationReportParser._remark_lines(text)
         return remarks
+
+    @staticmethod
+    def _remark_lines(text: str) -> List[str]:
+        """
+        The remarks block as printed, line by line.
+
+        The parsed rates above are the parts worth querying; these are what a
+        reader needs to see. They carry the exchange's own wording about how
+        each charge was arrived at, and that wording is the only explanation
+        on the page for a capped charge or a session-limited RTM figure - so
+        a screen that shows the numbers without them shows less than the PDF.
+        """
+        start = re.search(r"^\s*Remarks\s*:", text, re.MULTILINE)
+        if not start:
+            return []
+
+        lines: List[str] = []
+        for raw in text[start.end():].splitlines():
+            line = raw.strip()
+            if line.startswith("**") or "computer generated report" in line:
+                break
+            if line:
+                lines.append(line)
+        return lines
 
     # -- trade tables ------------------------------------------------------
 
