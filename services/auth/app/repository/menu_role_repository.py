@@ -300,6 +300,7 @@ class MenuRoleRepository(BaseRepository):
             "Weather": "weather",
             "Masters": "masters",
             "Plant Detail": "plant_detail",
+            "PPA Details": "ppa_detail",
             "DAM Limit Values": "dam_limit_values",
             "RTM Limit Values": "rtm_limit_values",
             "Reports": "reports",
