@@ -11,6 +11,27 @@ from ..repository.master_plants_repository import master_plants_repository
 from libs.models.plant_entity import PlantEntity
 
 logger = logging.getLogger(__name__)
+
+
+async def _sync_ppa_details_from_plant(plant_id: Optional[str], plant_name: Optional[str]) -> None:
+    """Best-effort upsert of ppa_details stub when plant_master changes."""
+    if not plant_id:
+        return
+    try:
+        from ..services.ppa_details_services import ppa_details_service
+        await ppa_details_service.sync_from_plant(str(plant_id).strip(), plant_name or "")
+    except Exception as e:
+        logger.error("Failed to sync ppa_details for plant_id=%s: %s", plant_id, e)
+
+
+async def _delete_ppa_details_for_plant(plant_id: Optional[str]) -> None:
+    if not plant_id:
+        return
+    try:
+        from ..services.ppa_details_services import ppa_details_service
+        await ppa_details_service.delete_by_plant_id(str(plant_id).strip())
+    except Exception as e:
+        logger.error("Failed to delete ppa_details for plant_id=%s: %s", plant_id, e)
 class PayloadMapper:
     def __init__(self):
         self.field_mapping = {
@@ -67,6 +88,11 @@ class MasterPlantsService:
             
             new_id = await self.repository.create_plant(cleaned_payload)
 
+            await _sync_ppa_details_from_plant(
+                cleaned_payload.get("plant_id"),
+                cleaned_payload.get("plant_name"),
+            )
+
             logger.info(f"Master plant created | _id={new_id}")
             return new_id
         except Exception as e:
@@ -105,8 +131,19 @@ class MasterPlantsService:
                 doc = await self.repository.get_plant_by_id(plant_oid)
                 return self._prepare_for_output(doc)
 
+            existing = await self.repository.get_plant_by_id(plant_oid)
+            old_plant_id = (existing or {}).get("plant_id")
+
             updated_doc = await self.repository.update_plant(plant_oid, cleaned_updates)
             prepared_doc = self._prepare_for_output(updated_doc)
+
+            new_plant_id = (updated_doc or {}).get("plant_id") or old_plant_id
+            new_plant_name = (updated_doc or {}).get("plant_name")
+            # If plant_id changed, drop the old ppa row then upsert under the new id
+            if old_plant_id and new_plant_id and str(old_plant_id) != str(new_plant_id):
+                await _delete_ppa_details_for_plant(old_plant_id)
+            await _sync_ppa_details_from_plant(new_plant_id, new_plant_name)
+
             return prepared_doc
         except Exception as e:
 
@@ -123,6 +160,7 @@ class MasterPlantsService:
                 return False
 
             if plant_id:
+                await _delete_ppa_details_for_plant(plant_id)
                 try:
                     from ..repository.supply_manual_repository import supply_manual_repository
                     deleted_count = await supply_manual_repository.delete_by_plant_for_today_tomorrow(
@@ -218,6 +256,13 @@ class MasterPlantsService:
                 plants=plants_data,
                 filter_criteria=self._create_plant_upsert_filter
             )
+
+            try:
+                from ..services.ppa_details_services import ppa_details_service
+                ppa_sync = await ppa_details_service.repository.bulk_upsert_from_plants(plants_data)
+                logger.info("PPA details synced after plant file upload | %s", ppa_sync)
+            except Exception as ppa_err:
+                logger.error("Plant file upload succeeded but PPA sync failed: %s", ppa_err)
 
             return {
                 "message": "File processed successfully",

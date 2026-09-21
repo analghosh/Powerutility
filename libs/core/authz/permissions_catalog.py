@@ -93,6 +93,8 @@ DEFAULT_PERMISSIONS_CATALOG = [
     "masters:write",
     "plant_detail:read",
     "plant_detail:write",
+    "ppa_detail:read",
+    "ppa_detail:write",
     "dam_limit_values:read",
     "dam_limit_values:write",
     "rtm_limit_values:read",
