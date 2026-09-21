@@ -13,6 +13,7 @@ from .base_processor import BaseProcessor
 from libs.models.supply_serve_entity import SupplyServeEntity, SupplyServeHistoricalEntity
 from libs.models.demand_serve_entity import DemandServeEntity
 from libs.models.dc_sg_entity import DCSgEntity
+from libs.models.urs_serve_entity import URS_DC_SG
 from libs.enum.updated_flag import UpdatedFlag
 from libs.enum.raw_data_status import RawDataStatus
 from libs.core.job_entities import JobDetail
@@ -21,6 +22,7 @@ from ..repository.supply_serve_repository import supply_serve_repository
 from ..repository.plant_repository import plant_repository
 from ..repository.dc_sg_repository import dc_sg_repository
 from ..repository.demand_serve_repository import demand_serve_repository
+from ..repository.urs_serve_repository import urs_serve_repository
 from ..core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -522,7 +524,34 @@ class SupplyProcessor(BaseProcessor):
         try:
             supply_entities = []
             historical_entities = []
-            
+            urs_documents = []
+
+            # This path bypasses dc_sg staging, so it also bypasses the URS
+            # diversion in stage 1. Without the same guard below, a backfill
+            # would write URS rows straight into supply_serve_historical under
+            # a third dc_sg value - the exact double count the separate
+            # collection exists to prevent.
+            raw_data, urs_raw = self._split_out_urs(raw_data)
+            for raw_record in urs_raw:
+                plant = await self._resolve_plant(raw_record)
+                if not plant:
+                    continue
+                scheduled_at = self._parse_scheduled_at(raw_record)
+                if not scheduled_at:
+                    continue
+                doc = self._build_urs_document(
+                    raw_record, plant, scheduled_at, plant.get("plant_id"), provider_config
+                )
+                if doc:
+                    urs_documents.append(doc)
+
+            if urs_documents:
+                result = await urs_serve_repository.bulk_upsert(urs_documents)
+                logger.info(
+                    "Historical: stored %d URS rows into urs_serve (%s)",
+                    len(urs_documents), result,
+                )
+
             for raw_record in raw_data:
                 # Basic validation similar to _create_dc_sg_entity_from_raw but direct to SupplyServeEntity
                 # We need to create a temporary DC_SG entity logic or direct mapping.
@@ -633,7 +662,8 @@ class SupplyProcessor(BaseProcessor):
             # We need to look up existing records to determine changes/updated_flag
             lookup_keys = []
             valid_raw_items = []
-            
+            urs_documents = []
+
             dropped_date_count = 0
             dropped_plant_count = 0
             dropped_mandatory_fields_count = 0
@@ -706,7 +736,21 @@ class SupplyProcessor(BaseProcessor):
                 final_plant_id = p_entity.get("plant_id")
                 dc_sg_val = item.get("dc_sg")
                 time_block = item.get("time_block")
-                
+
+                # Un-requisitioned surplus is not a schedule and must not be
+                # staged into dc_sg: it is already counted inside this plant's
+                # SG row, and letting it through would have every downstream
+                # reader add it a second time. Diverted here, where the plant
+                # has just been resolved, so the name, technology and prices
+                # can be snapshotted without a second lookup.
+                if str(dc_sg_val).upper() == URS_DC_SG:
+                    urs_doc = self._build_urs_document(
+                        item, p_entity, scheduled_at, final_plant_id, provider_config
+                    )
+                    if urs_doc:
+                        urs_documents.append(urs_doc)
+                    continue
+
                 if final_plant_id and dc_sg_val and time_block:
                     item["_parsed_scheduled_at"] = scheduled_at # Cache parsed date
                     item["_resolved_plant_id"] = final_plant_id
@@ -722,6 +766,16 @@ class SupplyProcessor(BaseProcessor):
                     dropped_mandatory_fields_count += 1
                     if dropped_mandatory_fields_count <= 5:
                         logger.warning(f"Missing mandatory fields for item. Plant: {final_plant_id}, DC/SG: {dc_sg_val}, Block: {time_block}")
+
+            # Written before the dc_sg staging below, and on its own: a failure
+            # to store URS is reported but must not abandon the schedule data,
+            # which is what the rest of the platform runs on.
+            if urs_documents:
+                urs_result = await urs_serve_repository.bulk_upsert(urs_documents)
+                logger.info(
+                    "Stage 1: stored %d URS rows into urs_serve (%s)",
+                    len(urs_documents), urs_result,
+                )
 
             if dropped_date_count > 0 or dropped_plant_count > 0 or dropped_mandatory_fields_count > 0:
                  logger.warning(f"Stage 1 Dropped Records: Date Errors={dropped_date_count}, Plant Lookup Failed={dropped_plant_count}, Missing Fields={dropped_mandatory_fields_count}")
@@ -1944,6 +1998,108 @@ class SupplyProcessor(BaseProcessor):
         if value is None: return None
         try: return int(value)
         except (ValueError, TypeError): return None
+
+    @staticmethod
+    def _optional_float(value: Any) -> Optional[float]:
+        """
+        Like _safe_float, but keeps "not known" distinct from zero.
+
+        plant_master stores an absent price as the *string* "None", which
+        float() rejects and _safe_float would turn into 0.0 - a fixed cost of
+        zero rupees, which is a figure a reader would act on rather than
+        question.
+        """
+        if value in (None, "", "None", "null"):
+            return None
+        try:
+            return float(value)
+        except (ValueError, TypeError):
+            return None
+
+    @staticmethod
+    def _split_out_urs(raw_data: List[Dict[str, Any]]) -> tuple:
+        """Separate URS records from schedule records. Returns (rest, urs)."""
+        rest, urs = [], []
+        for item in raw_data:
+            (urs if str(item.get("dc_sg")).upper() == URS_DC_SG else rest).append(item)
+        return rest, urs
+
+    @staticmethod
+    def _parse_scheduled_at(item: Dict[str, Any]) -> Optional[datetime]:
+        value = item.get("scheduled_at") or item.get("timestamp") or item.get("date_time")
+        if isinstance(value, datetime):
+            return value
+        if isinstance(value, str):
+            try:
+                return datetime.fromisoformat(value.replace("Z", "+00:00"))
+            except ValueError:
+                return None
+        return None
+
+    async def _resolve_plant(self, item: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Approval number first, then plant id — the same order stage 1 uses."""
+        approval_no = item.get("approval_no")
+        if approval_no:
+            plant = await self.plant_repository.find_one(
+                {"approval_no": str(approval_no).strip()}
+            )
+            if plant:
+                return plant
+        plant_id = item.get("plant_id")
+        if plant_id:
+            return await self.plant_repository.find_one({"plant_id": str(plant_id).strip()})
+        return None
+
+    def _build_urs_document(
+        self,
+        item: Dict[str, Any],
+        plant: Dict[str, Any],
+        scheduled_at: datetime,
+        plant_id: str,
+        provider_config: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """
+        One urs_serve document, with the plant as it stands right now.
+
+        The plant's name, technology and cost are copied onto the row rather
+        than joined at read time: the weighted average is meant to be the rate
+        that was visible when the block was scheduled, and plant_master holds
+        only the current figure.
+        """
+        time_block = self._safe_int(item.get("time_block"))
+        if not time_block or not 1 <= time_block <= 96:
+            return None
+
+        # plant_master keeps Rs/kWh; the report and mplive both work in Rs/MWh.
+        fc_kwh = self._optional_float(plant.get("fc_price"))
+        vc_kwh = self._optional_float(plant.get("vc_price"))
+        fc = None if fc_kwh is None else fc_kwh * 1000
+        vc = None if vc_kwh is None else vc_kwh * 1000
+
+        if fc is None and vc is None:
+            total = None
+        else:
+            # A missing half is treated as zero so a plant with only a variable
+            # cost still carries a usable rate; price_complete records that the
+            # figure is partial, which the total alone cannot show.
+            total = (fc or 0.0) + (vc or 0.0)
+
+        return {
+            "scheduled_at": datetime(scheduled_at.year, scheduled_at.month, scheduled_at.day),
+            "time_block": time_block,
+            "plant_id": str(plant_id),
+            "plant_name": plant.get("plant_name"),
+            "technology": plant.get("technology"),
+            "volume": self._safe_float(item.get("volume")),
+            "sg_beforelosses": self._optional_float(item.get("sg_beforelosses")),
+            "fc_price": fc,
+            "vc_price": vc,
+            "total_fc_vc_price": total,
+            "price_complete": fc is not None and vc is not None,
+            "source": self._resolve_source(provider_config),
+            "source_revision_number": self._safe_int(item.get("revision_no")),
+            "schedule_published_time": item.get("schedule_published_time"),
+        }
     
 
 
