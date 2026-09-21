@@ -61,6 +61,13 @@ class ExchangeReportRepository(GenericRepository):
             [("report_category", 1), ("delivery_date_iso", -1)],
             name="ix_uploaded_report_category_date",
         )
+        # The lists are keyed on the upload day now, so it needs the same
+        # covering index the delivery day has.
+        await self.create_index(
+            COLLECTION,
+            [("report_category", 1), ("uploaded_on_ist_date", -1)],
+            name="ix_uploaded_report_category_upload_date",
+        )
         self._indexes_ready = True
 
     @staticmethod
@@ -95,11 +102,14 @@ class ExchangeReportRepository(GenericRepository):
         filters: Dict[str, Any],
         limit: int = 50,
         skip: int = 0,
+        sort_field: str = "delivery_date_iso",
     ) -> List[Dict[str, Any]]:
         cursor = (
             self.db[COLLECTION]
             .find(filters, LIST_PROJECTION)
-            .sort([("delivery_date_iso", -1), ("uploaded_at", -1)])
+            # Sorted by whatever the list is keyed on, so the newest row of the
+            # period being looked at is the first one read.
+            .sort([(sort_field, -1), ("uploaded_at", -1)])
             .skip(skip)
             .limit(limit)
         )
@@ -108,13 +118,14 @@ class ExchangeReportRepository(GenericRepository):
     async def count(self, filters: Dict[str, Any]) -> int:
         return await self.db[COLLECTION].count_documents(filters)
 
-    async def delivery_dates(
+    async def dates_with_reports(
         self,
         filters: Dict[str, Any],
         limit: int = 60,
+        date_field: str = "delivery_date_iso",
     ) -> List[Dict[str, Any]]:
         """
-        Which delivery dates have reports, newest first.
+        Which dates have reports, newest first.
 
         The daily view is a date picker, and a plain date input cannot say
         which days were actually uploaded - so an operator picking a quiet
@@ -127,7 +138,7 @@ class ExchangeReportRepository(GenericRepository):
             {"$match": filters},
             {
                 "$group": {
-                    "_id": "$delivery_date_iso",
+                    "_id": f"${date_field}",
                     "report_count": {"$sum": 1},
                     "markets": {"$addToSet": "$market_type"},
                     "exchanges": {"$addToSet": "$exchange"},
@@ -140,7 +151,10 @@ class ExchangeReportRepository(GenericRepository):
         grouped = await self.db[COLLECTION].aggregate(pipeline).to_list(length=limit)
         return [
             {
-                "delivery_date": row["_id"],
+                # Named for what it is rather than for one of the two bases:
+                # under `date_basis=uploaded` a key called `delivery_date`
+                # would be holding an upload date.
+                "date": row["_id"],
                 "report_count": row.get("report_count", 0),
                 "markets": sorted(filter(None, row.get("markets") or [])),
                 "exchanges": sorted(filter(None, row.get("exchanges") or [])),

@@ -30,6 +30,11 @@ from libs.parsers.exchange_obligation_report_parser import (
 )
 
 from ..exchange_reports import registry
+from ..exchange_reports.registry import (
+    DEFAULT_DATE_BASIS,
+    date_basis_of,
+    resolve_date_field,
+)
 from ..repository.exchange_report_repository import exchange_report_repository
 
 logger = logging.getLogger(__name__)
@@ -225,9 +230,12 @@ class ExchangeReportService:
         if any(name.endswith(extension) for extension in category.accepted_extensions):
             return
         accepted = ", ".join(category.accepted_extensions)
+        # "is published as" is right for a report the exchange issues in one
+        # fixed format, and wrong for a catch-all that simply takes a list.
+        verb = "accepts" if category.stores_file_only else "is published as"
         raise UploadRejected(
             "unsupported_file_type",
-            f"{category.label} is published as {accepted}. "
+            f"{category.label} {verb} {accepted}. "
             f"'{filename}' is not one of those.",
             {"accepted_extensions": list(category.accepted_extensions)},
         )
@@ -493,9 +501,11 @@ class ExchangeReportService:
         market_type: Optional[str] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
+        date_basis: str = DEFAULT_DATE_BASIS,
         limit: int = 50,
         skip: int = 0,
     ) -> Dict[str, Any]:
+        date_field = resolve_date_field(date_basis)
         filters: Dict[str, Any] = {}
         if report_category:
             filters["report_category"] = report_category
@@ -509,9 +519,11 @@ class ExchangeReportService:
                 window["$gte"] = date_from
             if date_to:
                 window["$lte"] = date_to
-            filters["delivery_date_iso"] = window
+            filters[date_field] = window
 
-        documents = await exchange_report_repository.find_many(filters, limit=limit, skip=skip)
+        documents = await exchange_report_repository.find_many(
+            filters, limit=limit, skip=skip, sort_field=date_field
+        )
         total = await exchange_report_repository.count(filters)
         return {
             "items": [
@@ -521,27 +533,36 @@ class ExchangeReportService:
             "total": total,
             "limit": limit,
             "skip": skip,
+            "date_basis": date_basis_of(date_field),
         }
 
     async def delivery_dates(
         self,
         *,
         report_category: Optional[str] = None,
+        date_basis: str = DEFAULT_DATE_BASIS,
         limit: int = 60,
     ) -> Dict[str, Any]:
         """
-        The delivery dates that have reports, newest first.
+        The dates that have reports, newest first.
 
         The daily view picks one date, so it needs to know which dates are
         worth picking. Each entry also carries the markets and exchanges
         uploaded that day, which is what the operator is really asking when
         they open a date: "is RTM in yet?"
         """
+        date_field = resolve_date_field(date_basis)
         filters: Dict[str, Any] = {}
         if report_category:
             filters["report_category"] = report_category
-        dates = await exchange_report_repository.delivery_dates(filters, limit=limit)
-        return {"items": dates, "total": len(dates)}
+        dates = await exchange_report_repository.dates_with_reports(
+            filters, limit=limit, date_field=date_field
+        )
+        return {
+            "items": dates,
+            "total": len(dates),
+            "date_basis": date_basis_of(date_field),
+        }
 
     async def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
         from ..repository.exchange_report_repository import COLLECTION
