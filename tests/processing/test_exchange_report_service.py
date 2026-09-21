@@ -8,13 +8,16 @@ here is that a report which disagrees with the form, or with itself, never
 reaches the database.
 """
 
+from datetime import datetime, timezone
+
 import pytest
 
 from libs.parsers.exchange_obligation_report_parser import ObligationReportParseError
 from services.processing.app.v2.exchange_reports import registry
 from services.processing.app.v2.services import exchange_report_service as module
 from services.processing.app.v2.services.exchange_report_service import (
-    CategoryNotAvailable, ExchangeReportService, FileTooLarge, UploadRejected)
+    AlreadyUploaded, CategoryNotAvailable, ExchangeReportService, FileTooLarge,
+    UploadRejected, describe_upload_moment)
 
 ACTOR = {"user_id": "u-1", "username": "localdev"}
 PDF_NAME = "IEX180926DOR_PTC0136_PY0_Test.pdf"
@@ -61,9 +64,15 @@ class _StubParser:
 
 
 class _StubRepository:
-    def __init__(self, replaced=False):
+    def __init__(self, replaced=False, existing=None):
         self.saved = []
         self.replaced = replaced
+        self.existing = existing
+        self.identity_lookups = []
+
+    async def find_by_identity(self, identity):
+        self.identity_lookups.append(identity)
+        return self.existing
 
     async def save(self, document, upload_event):
         self.saved.append((document, upload_event))
@@ -77,12 +86,12 @@ class _StubRepository:
 def service(monkeypatch):
     """A service whose parser and repository are both stubs."""
 
-    def build(parsed=None, raises=None, replaced=False):
+    def build(parsed=None, raises=None, replaced=False, existing=None):
         instance = ExchangeReportService()
         instance._obligation_parser = _StubParser(
             result=parsed if parsed is not None else _parsed(), raises=raises
         )
-        repository = _StubRepository(replaced=replaced)
+        repository = _StubRepository(replaced=replaced, existing=existing)
         monkeypatch.setattr(module, "exchange_report_repository", repository)
         instance.repository_stub = repository
         return instance
@@ -433,6 +442,195 @@ async def test_the_gdam_sell_annexure_is_counted_separately(service):
 
     assert result["summary"]["block_count"] == 96
     assert result["summary"]["sell_block_count"] == 96
+
+
+# --------------------------------------------------------------------------
+# When the upload happened — the shift report works in time blocks
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "utc,expected_block,expected_ist_date,expected_time",
+    [
+        # 18:30 UTC is exactly midnight IST: the first block of the NEXT day.
+        ("2026-09-20T18:30:00+00:00", 1, "2026-09-21", "00:00"),
+        # 18:29:59 UTC is the last second of the IST day: block 96.
+        ("2026-09-20T18:29:59+00:00", 96, "2026-09-20", "23:59"),
+        ("2026-09-20T00:00:00+00:00", 23, "2026-09-20", "05:30"),
+        ("2026-09-20T23:10:00+00:00", 19, "2026-09-21", "04:40"),
+    ],
+)
+def test_the_upload_moment_is_read_in_ist(utc, expected_block, expected_ist_date, expected_time):
+    """
+    The shift report is laid out by time block, so the block has to be derived
+    from the IST reading of the instant, not from UTC. The day boundary is
+    where that matters: 23:10 UTC is early morning on the following IST date.
+    """
+    moment = describe_upload_moment(datetime.fromisoformat(utc))
+
+    assert moment["uploaded_in_time_block"] == expected_block
+    assert moment["uploaded_on_ist_date"] == expected_ist_date
+    assert moment["uploaded_at_ist_time"] == expected_time
+
+
+@pytest.mark.asyncio
+async def test_the_stored_report_records_the_block_it_was_uploaded_in(service):
+    uploader = service()
+
+    result = await _upload(uploader)
+    document, upload_event = uploader.repository_stub.saved[0]
+
+    assert 1 <= document["uploaded_in_time_block"] <= 96
+    assert document["uploaded_at_ist"].endswith("+05:30")
+    assert document["uploaded_on_ist_date"]
+    # The history entry carries it too, so a replaced upload keeps the block
+    # it originally landed in.
+    assert upload_event["uploaded_in_time_block"] == document["uploaded_in_time_block"]
+    assert result["summary"]["uploaded_in_time_block"] == document["uploaded_in_time_block"]
+
+
+@pytest.mark.asyncio
+async def test_the_utc_instant_stays_authoritative(service):
+    """The IST fields are a reading of it, not a replacement for it."""
+    uploader = service()
+
+    await _upload(uploader)
+    document, _ = uploader.repository_stub.saved[0]
+
+    assert document["uploaded_at"].tzinfo is timezone.utc
+
+
+# --------------------------------------------------------------------------
+# Already uploaded — ask before overwriting a day's numbers
+# --------------------------------------------------------------------------
+
+def _stored(filename="IEX180926DOR_PTC0136_PY0_Test.pdf", sha="a" * 64):
+    return {
+        "source_filename": filename,
+        "file_sha256": sha,
+        "uploaded_at": datetime(2026, 9, 20, 6, 30, tzinfo=timezone.utc),
+        "uploaded_at_ist": "2026-09-20T12:00:00+05:30",
+        "uploaded_in_time_block": 49,
+        "uploaded_by_username": "someone_else",
+        "upload_count": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_second_upload_of_the_same_report_asks_first(service):
+    uploader = service(existing=_stored())
+
+    with pytest.raises(AlreadyUploaded) as raised:
+        await _upload(uploader)
+
+    assert raised.value.reason == "already_uploaded"
+    assert uploader.repository_stub.saved == []
+
+
+@pytest.mark.asyncio
+async def test_the_question_names_the_file_already_stored(service):
+    """The operator has to recognise what they are about to overwrite."""
+    uploader = service(existing=_stored(filename="yesterdays_download.pdf"))
+
+    with pytest.raises(AlreadyUploaded) as raised:
+        await _upload(uploader)
+
+    assert "yesterdays_download.pdf" in raised.value.message
+    previous = raised.value.details["previous"]
+    assert previous["source_filename"] == "yesterdays_download.pdf"
+    assert previous["uploaded_by_username"] == "someone_else"
+    assert previous["uploaded_in_time_block"] == 49
+
+
+@pytest.mark.asyncio
+async def test_the_same_file_again_is_reported_as_the_same_file(service):
+    """
+    A double submit and a reissued report both land here, and they mean
+    different things. The digest is what tells them apart.
+    """
+    import hashlib
+
+    digest = hashlib.sha256(b"%PDF-1.4 pretend").hexdigest()
+    uploader = service(existing=_stored(sha=digest))
+
+    with pytest.raises(AlreadyUploaded) as raised:
+        await _upload(uploader)
+
+    assert raised.value.details["identical_file"] is True
+    assert "This is the same file" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_a_different_file_for_the_same_report_says_it_will_replace(service):
+    uploader = service(existing=_stored(sha="b" * 64))
+
+    with pytest.raises(AlreadyUploaded) as raised:
+        await _upload(uploader)
+
+    assert raised.value.details["identical_file"] is False
+    assert "will replace it" in raised.value.message
+
+
+@pytest.mark.asyncio
+async def test_the_question_survives_being_turned_into_an_http_body(service):
+    """
+    The details of a refusal become a JSON error body. The stored timestamp
+    comes back from Mongo as a datetime, which is not JSON, so it has to be
+    rendered here rather than passed through - otherwise the 409 that was
+    meant to ask a question arrives as a 500.
+    """
+    import json
+
+    uploader = service(existing=_stored())
+
+    with pytest.raises(AlreadyUploaded) as raised:
+        await _upload(uploader)
+
+    body = json.dumps({"reason": raised.value.reason, **raised.value.details})
+    assert "2026-09-20T06:30:00+00:00" in body
+
+
+@pytest.mark.asyncio
+async def test_confirming_the_replacement_goes_through(service):
+    uploader = service(existing=_stored(), replaced=True)
+
+    result = await _upload(uploader, confirm_replace=True)
+
+    assert result["replaced_previous_upload"] is True
+    assert len(uploader.repository_stub.saved) == 1
+    # Confirmed means do not ask again; the lookup is skipped entirely.
+    assert uploader.repository_stub.identity_lookups == []
+
+
+@pytest.mark.asyncio
+async def test_the_identity_checked_includes_the_portfolio_from_inside_the_file(service):
+    """
+    The form has no portfolio field - it is printed in the report - so the
+    duplicate check can only run after parsing.
+    """
+    uploader = service(existing=_stored())
+
+    with pytest.raises(AlreadyUploaded):
+        await _upload(uploader)
+
+    assert uploader.repository_stub.identity_lookups == [
+        {
+            "report_category": registry.OBLIGATION_REPORT,
+            "exchange": "IEX",
+            "market_type": "DAM",
+            "delivery_date_iso": "2026-09-19",
+            "portfolio_code": "S2PY0PTC0136",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_first_upload_is_not_questioned(service):
+    uploader = service(existing=None)
+
+    result = await _upload(uploader)
+
+    assert result["replaced_previous_upload"] is False
+    assert len(uploader.repository_stub.identity_lookups) == 1
 
 
 # --------------------------------------------------------------------------
