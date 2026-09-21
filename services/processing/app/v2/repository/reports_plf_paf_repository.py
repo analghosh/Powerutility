@@ -70,7 +70,18 @@ class ReportsPlfPafRepository:
                     }
                 }
             },
-            {"$group": {"_id": "$scheduled_at"}},
+            # Grouped on the calendar day rather than the raw value: a row stamped
+            # with a time of day would otherwise present as a date of its own.
+            {
+                "$group": {
+                    "_id": {
+                        "$dateToString": {
+                            "format": "%Y-%m-%d",
+                            "date": "$scheduled_at",
+                        }
+                    }
+                }
+            },
         ]
         rows = await self.repository.aggregate(
             collection_name,
@@ -85,10 +96,21 @@ class ReportsPlfPafRepository:
         from_block: int,
         to_block: int,
     ) -> List[Dict[str, Any]]:
+        # Day ranges, not an equality list: matching exact midnight datetimes
+        # would silently drop a day whose rows carry a time of day.
+        day_windows = [
+            {
+                "scheduled_at": {
+                    "$gte": _to_datetime(d),
+                    "$lt": _to_datetime(d) + timedelta(days=1),
+                }
+            }
+            for d in dates
+        ]
         return [
             {
                 "$match": {
-                    "scheduled_at": {"$in": [_to_datetime(d) for d in dates]},
+                    "$or": day_windows,
                     "time_block": {"$gte": from_block, "$lte": to_block},
                     "dc_sg": {"$in": [DC_TYPE, SG_TYPE]},
                     # $avg ignores non-numeric volumes; match the same rows so the
