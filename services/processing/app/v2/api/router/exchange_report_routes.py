@@ -36,17 +36,19 @@ from datetime import date, datetime
 from typing import Any, Dict, Optional
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
-                     Request, UploadFile, status)
+                     Request, Response, UploadFile, status)
 
 from libs.audit_queue.simple_logger import AuditLogger
 
 from ....core.dependencies import get_audit_logger
 from ...dependencies import get_user_context
 from ...exchange_reports import registry
+from ...exchange_reports.registry import DEFAULT_DATE_BASIS
 from ...services.exchange_report_service import (AlreadyUploaded,
                                                  CategoryNotAvailable,
                                                  FileTooLarge, UploadRejected,
                                                  exchange_report_service)
+from ...services.other_report_service import other_report_service
 
 logger = logging.getLogger(__name__)
 
@@ -178,8 +180,12 @@ async def upload_report(
     request: Request,
     file: UploadFile = File(..., description="The report file published by the exchange"),
     report_category: str = Form(..., description="A code from GET /exchange-reports/categories"),
-    exchange: str = Form(..., description="IEX, PXIL or HPX"),
-    market_type: str = Form(..., description="DAM, GDAM, RTM or HPDAM"),
+    # Optional at the signature, required by the parsing flow's own rules.
+    # A store-only category asks for neither: the file can be about anything,
+    # so a forced IEX/DAM would be an answer nobody meant. The obligation flow
+    # still rejects a missing one, with its own message.
+    exchange: Optional[str] = Form(None, description="IEX, PXIL or HPX"),
+    market_type: Optional[str] = Form(None, description="DAM, GDAM, RTM or HPDAM"),
     delivery_date: str = Form(..., description="Delivery date, YYYY-MM-DD"),
     confirm_replace: bool = Form(
         False,
@@ -191,6 +197,21 @@ async def upload_report(
     normalised_date = _parse_iso_date(delivery_date, "delivery_date")
     filename = file.filename or ""
     data = await file.read()
+
+    # One uploader screen, two destinations. A store-only category has no
+    # parser and no parsed identity, so it cannot go through the obligation
+    # flow at all - the category decides, rather than the caller having to
+    # know which endpoint to post to.
+    selected = registry.get_category(report_category)
+    if selected is not None and selected.stores_file_only:
+        return await _upload_other_report(
+            request=request,
+            audit=audit,
+            data=data,
+            filename=filename,
+            delivery_date=normalised_date,
+            user_context=user_context,
+        )
 
     try:
         result = await exchange_report_service.upload(
@@ -239,6 +260,118 @@ async def upload_report(
     return {"data": result}
 
 
+async def _upload_other_report(
+    *,
+    request: Request,
+    audit: Optional[AuditLogger],
+    data: bytes,
+    filename: str,
+    delivery_date: str,
+    user_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Store the file as uploaded, and audit it the same way a parse is."""
+    try:
+        result = await other_report_service.upload(
+            data=data,
+            filename=filename,
+            delivery_date=delivery_date,
+            actor=user_context,
+        )
+    except UploadRejected as rejection:
+        _audit(
+            audit,
+            request,
+            user_context,
+            action="upload",
+            message=f"Rejected {filename}: {rejection.message}",
+            success=False,
+            report_category=registry.OTHER_REPORTS,
+            delivery_date=delivery_date,
+            rejection_reason=rejection.reason,
+        )
+        raise _as_http_error(rejection) from rejection
+
+    _audit(
+        audit,
+        request,
+        user_context,
+        action="upload",
+        message=f"Stored Other Report for {delivery_date} from {filename}",
+        success=True,
+        report_category=registry.OTHER_REPORTS,
+        delivery_date=delivery_date,
+        replaced_previous_upload=result["replaced_previous_upload"],
+    )
+    return {"data": result}
+
+
+@router.get(
+    "/other",
+    summary="List files uploaded under Other Reports, newest upload first",
+)
+async def list_other_reports(
+    date_from: Optional[str] = Query(None, description="Upload date, YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="Upload date, YYYY-MM-DD"),
+    limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """
+    Declared before `/{report_id}` so the path is not read as an id.
+
+    Always keyed on the upload day: nothing is read out of these files, so
+    their delivery date carries no independent meaning.
+    """
+    result = await other_report_service.list_reports(
+        date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
+        date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
+        limit=limit,
+        skip=skip,
+    )
+    return {"data": result}
+
+
+@router.get(
+    "/other/dates",
+    summary="Upload dates that have Other Reports, newest first",
+)
+async def get_other_report_dates(
+    limit: int = Query(60, ge=1, le=365),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    result = await other_report_service.upload_dates(limit=limit)
+    return {"data": result}
+
+
+@router.get(
+    "/other/{report_id}/file",
+    summary="Download one Other Report exactly as it was uploaded",
+    responses={404: {"description": "No such report, or its file is not in storage"}},
+)
+async def download_other_report_file(
+    report_id: str,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Response:
+    try:
+        stored = await other_report_service.get_file(report_id)
+    except UploadRejected as rejection:
+        raise _as_http_error(rejection) from rejection
+
+    if stored is None:
+        raise HTTPException(status_code=404, detail="No such report")
+
+    # Sent as an attachment whatever the type, so a PDF or a spreadsheet is
+    # saved rather than rendered in place. The name is quoted because uploaded
+    # filenames contain spaces.
+    return Response(
+        content=stored["content"],
+        media_type=stored["content_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{stored["filename"]}"'
+        },
+    )
+
+
 @router.get(
     "",
     summary="List uploaded reports, newest delivery date first",
@@ -247,8 +380,15 @@ async def list_reports(
     report_category: Optional[str] = Query(None),
     exchange: Optional[str] = Query(None),
     market_type: Optional[str] = Query(None),
-    date_from: Optional[str] = Query(None, description="Delivery date, YYYY-MM-DD"),
-    date_to: Optional[str] = Query(None, description="Delivery date, YYYY-MM-DD"),
+    date_from: Optional[str] = Query(None, description="Start of the date window, YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="End of the date window, YYYY-MM-DD"),
+    date_basis: str = Query(
+        DEFAULT_DATE_BASIS,
+        description=(
+            "Which date `date_from`/`date_to` apply to: `uploaded` (the day the "
+            "report was put in, the default) or `delivery` (the day the power flows)"
+        ),
+    ),
     limit: int = Query(50, ge=1, le=200),
     skip: int = Query(0, ge=0),
     user_context: Dict[str, Any] = Depends(get_user_context),
@@ -263,6 +403,7 @@ async def list_reports(
         market_type=market_type,
         date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
         date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
+        date_basis=date_basis,
         limit=limit,
         skip=skip,
     )
@@ -271,18 +412,26 @@ async def list_reports(
 
 @router.get(
     "/delivery-dates",
-    summary="Delivery dates that have uploaded reports, newest first",
+    summary="Dates that have uploaded reports, newest first",
 )
 async def get_delivery_dates(
     report_category: Optional[str] = Query("obligation_report"),
+    date_basis: str = Query(
+        DEFAULT_DATE_BASIS,
+        description="`uploaded` (default) or `delivery` — which date to group by",
+    ),
     limit: int = Query(60, ge=1, le=365),
     user_context: Dict[str, Any] = Depends(get_user_context),
 ) -> Dict[str, Any]:
     """
     Declared before `/{report_id}` so the path is not read as an id.
+
+    The path keeps its original name so links and the shipped client keep
+    working; `date_basis` decides which date the days are actually grouped by.
     """
     result = await exchange_report_service.delivery_dates(
         report_category=report_category,
+        date_basis=date_basis,
         limit=limit,
     )
     return {"data": result}
