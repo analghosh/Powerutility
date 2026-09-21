@@ -5,10 +5,10 @@ Separate from ``exchange_uploaded_report`` on purpose. That collection holds one
 document per (exchange, market, category, delivery date, portfolio), enforced by
 a unique index, because the exchange publishes exactly one obligation report per
 that tuple and re-publishes corrections under the same identity. Other Reports is
-the opposite case: several unrelated files can land for the same day and market,
-and there is no portfolio in them to tell them apart. Widening the shared index
-to allow that would have meant dropping and rebuilding a unique index on live
-UAT and PROD data, to make it looser for every category at once.
+the opposite case: several unrelated files can land for the same day, and there
+is no portfolio, exchange or market in them to tell them apart. Widening the
+shared index to allow that would have meant dropping and rebuilding a unique
+index on live UAT and PROD data, to make it looser for every category at once.
 
 Two collections here:
 
@@ -40,12 +40,15 @@ logger = logging.getLogger(__name__)
 COLLECTION = "exchange_other_report"
 FILE_COLLECTION = "exchange_other_report_file"
 
-#: What makes two uploads the same report. The filename is part of it, so two
-#: different files for one day sit side by side, while re-uploading the same
-#: name replaces rather than duplicating.
+#: What makes two uploads the same file: the day it is for, and its name.
+#: Two different files for one day sit side by side; re-uploading the same name
+#: replaces rather than duplicating.
+#:
+#: Exchange and market are deliberately absent. An Other Report can be about
+#: anything - a desk note, a regulatory circular - so the uploader does not ask
+#: for them, and including a field nobody fills would make every upload unique
+#: on a null and defeat the replace.
 IDENTITY_FIELDS = (
-    "exchange",
-    "market_type",
     "delivery_date_iso",
     "source_filename",
 )
@@ -64,7 +67,7 @@ class OtherReportRepository(GenericRepository):
         await self.create_index(
             COLLECTION,
             [(field, 1) for field in IDENTITY_FIELDS],
-            name="uq_other_report_identity",
+            name="uq_other_report_day_file",
             unique=True,
         )
         # Both list screens are keyed on the upload day.
@@ -156,8 +159,6 @@ class OtherReportRepository(GenericRepository):
                 "$group": {
                     "_id": "$uploaded_on_ist_date",
                     "report_count": {"$sum": 1},
-                    "markets": {"$addToSet": "$market_type"},
-                    "exchanges": {"$addToSet": "$exchange"},
                     "last_uploaded_at": {"$max": "$uploaded_at"},
                 }
             },
@@ -169,8 +170,6 @@ class OtherReportRepository(GenericRepository):
             {
                 "date": row["_id"],
                 "report_count": row.get("report_count", 0),
-                "markets": sorted(filter(None, row.get("markets") or [])),
-                "exchanges": sorted(filter(None, row.get("exchanges") or [])),
                 "last_uploaded_at": row.get("last_uploaded_at"),
             }
             for row in grouped
