@@ -13,13 +13,21 @@ from libs.models.plant_entity import PlantEntity
 logger = logging.getLogger(__name__)
 
 
-async def _sync_ppa_details_from_plant(plant_id: Optional[str], plant_name: Optional[str]) -> None:
+async def _sync_ppa_details_from_plant(
+    plant_id: Optional[str],
+    plant_name: Optional[str],
+    category: Optional[str] = None,
+) -> None:
     """Best-effort upsert of ppa_details stub when plant_master changes."""
     if not plant_id:
         return
     try:
         from ..services.ppa_details_services import ppa_details_service
-        await ppa_details_service.sync_from_plant(str(plant_id).strip(), plant_name or "")
+        await ppa_details_service.sync_from_plant(
+            str(plant_id).strip(),
+            plant_name or "",
+            category,
+        )
     except Exception as e:
         logger.error("Failed to sync ppa_details for plant_id=%s: %s", plant_id, e)
 
@@ -91,6 +99,7 @@ class MasterPlantsService:
             await _sync_ppa_details_from_plant(
                 cleaned_payload.get("plant_id"),
                 cleaned_payload.get("plant_name"),
+                cleaned_payload.get("category"),
             )
 
             logger.info(f"Master plant created | _id={new_id}")
@@ -139,10 +148,11 @@ class MasterPlantsService:
 
             new_plant_id = (updated_doc or {}).get("plant_id") or old_plant_id
             new_plant_name = (updated_doc or {}).get("plant_name")
+            new_category = (updated_doc or {}).get("category")
             # If plant_id changed, drop the old ppa row then upsert under the new id
             if old_plant_id and new_plant_id and str(old_plant_id) != str(new_plant_id):
                 await _delete_ppa_details_for_plant(old_plant_id)
-            await _sync_ppa_details_from_plant(new_plant_id, new_plant_name)
+            await _sync_ppa_details_from_plant(new_plant_id, new_plant_name, new_category)
 
             return prepared_doc
         except Exception as e:

@@ -13,7 +13,7 @@ router = APIRouter(prefix="/ppa_details", tags=["PPA Details V2"])
 
 
 class PpaDetailsUpdate(BaseModel):
-    category: Optional[str] = None
+    # plant_id, plant_name, category are synced from plant_master — not updatable here
     ppa_signing_date: Optional[str] = Field(None, description="ISO date or YYYY-MM-DD")
     agreement_term: Optional[float] = Field(None, description="Agreement term in years")
     expiry: Optional[str] = Field(None, description="Override expiry date; else computed from COD + term")
@@ -60,7 +60,7 @@ async def sync_ppa_from_plants(
 ):
     """
     Ensure every plant in plant_master has a corresponding ppa_details row
-    with the same plant_id and plant_name. Safe to re-run (upsert).
+    with the same plant_id, plant_name, and category. Safe to re-run (upsert).
     """
     correlation_id = user_context.get("correlation_id")
     audit_logger.log_system_operation(

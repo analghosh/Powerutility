@@ -114,9 +114,14 @@ class PpaDetailsService:
 
         return updates
 
-    async def sync_from_plant(self, plant_id: str, plant_name: str) -> str:
-        """Create or refresh ppa_details stub from plant_master values."""
-        return await self.repository.upsert_from_plant(plant_id, plant_name)
+    async def sync_from_plant(
+        self,
+        plant_id: str,
+        plant_name: str,
+        category: Optional[str] = None,
+    ) -> str:
+        """Create or refresh ppa_details stub from plant_master (plant_id, plant_name, category)."""
+        return await self.repository.upsert_from_plant(plant_id, plant_name, category)
 
     async def sync_all_from_plants(self) -> Dict[str, Any]:
         """Backfill ppa_details for every plant in plant_master."""
@@ -171,9 +176,10 @@ class PpaDetailsService:
         if not existing:
             return None
 
-        # plant_id / plant_name are owned by plant_master
+        # plant_id / plant_name / category are owned by plant_master
         updates.pop("plant_id", None)
         updates.pop("plant_name", None)
+        updates.pop("category", None)
         updates.pop("_id", None)
         updates.pop("ppa_files", None)
 

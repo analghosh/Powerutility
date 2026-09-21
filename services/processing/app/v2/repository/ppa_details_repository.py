@@ -52,11 +52,16 @@ class PpaDetailsRepository(GenericRepository):
         result = await collection.insert_one(data)
         return str(result.inserted_id)
 
-    async def upsert_from_plant(self, plant_id: str, plant_name: str) -> str:
+    async def upsert_from_plant(
+        self,
+        plant_id: str,
+        plant_name: str,
+        category: Optional[str] = None,
+    ) -> str:
         """
         Ensure a ppa_details row exists for the given plant.
-        Only sets plant_id / plant_name (and timestamps on insert).
-        Does not overwrite existing PPA field values.
+        Syncs plant_id / plant_name / category from plant_master.
+        Does not overwrite other PPA field values.
         """
         if not plant_id:
             raise ValueError("plant_id is required to upsert ppa_details")
@@ -68,6 +73,7 @@ class PpaDetailsRepository(GenericRepository):
             {
                 "$set": {
                     "plant_name": plant_name or "",
+                    "category": category,
                     "updated_at": now,
                 },
                 "$setOnInsert": {
@@ -87,7 +93,7 @@ class PpaDetailsRepository(GenericRepository):
         return str(existing["_id"]) if existing else ""
 
     async def bulk_upsert_from_plants(self, plants: List[Dict[str, Any]]) -> Dict[str, int]:
-        """Upsert ppa_details stubs for a list of plant dicts with plant_id / plant_name."""
+        """Upsert ppa_details stubs for plants — syncs plant_id, plant_name, category."""
         if not plants:
             return {"inserted": 0, "updated": 0, "total": 0}
 
@@ -101,12 +107,14 @@ class PpaDetailsRepository(GenericRepository):
                 continue
             seen.add(plant_id)
             plant_name = plant.get("plant_name") or ""
+            category = plant.get("category")
             ops.append(
                 UpdateOne(
                     {"plant_id": plant_id},
                     {
                         "$set": {
                             "plant_name": plant_name,
+                            "category": category,
                             "updated_at": now,
                         },
                         "$setOnInsert": {
@@ -166,7 +174,10 @@ class PpaDetailsRepository(GenericRepository):
     async def update_ppa(self, ppa_oid: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if not ObjectId.is_valid(ppa_oid):
             return None
-        updates = {k: v for k, v in updates.items() if k not in ("_id", "plant_id")}
+        # plant_id / plant_name / category are owned by plant_master
+        updates = {
+            k: v for k, v in updates.items() if k not in ("_id", "plant_id", "plant_name", "category")
+        }
         updates["updated_at"] = datetime.utcnow()
         collection = self.db[self.collection_name]
         await collection.update_one({"_id": ObjectId(ppa_oid)}, {"$set": updates})
@@ -180,6 +191,23 @@ class PpaDetailsRepository(GenericRepository):
             {"plant_id": plant_id},
             {"$set": {"plant_name": plant_name, "updated_at": datetime.utcnow()}},
         )
+        return result.matched_count > 0
+
+    async def update_synced_plant_fields(
+        self,
+        plant_id: str,
+        plant_name: Optional[str] = None,
+        category: Optional[str] = None,
+    ) -> bool:
+        if not plant_id:
+            return False
+        updates: Dict[str, Any] = {"updated_at": datetime.utcnow()}
+        if plant_name is not None:
+            updates["plant_name"] = plant_name
+        if category is not None:
+            updates["category"] = category
+        collection = self.db[self.collection_name]
+        result = await collection.update_one({"plant_id": plant_id}, {"$set": updates})
         return result.matched_count > 0
 
     async def delete_by_id(self, ppa_oid: str) -> bool:

@@ -1,7 +1,7 @@
 """
 PPA Details Entity Model
 Stores Power Purchase Agreement details for plants from plant_master.
-plant_id and plant_name are sourced from plant_master and kept in sync.
+plant_id, plant_name, and category are sourced from plant_master and kept in sync.
 """
 
 from datetime import datetime, date
@@ -29,9 +29,9 @@ class PpaDetailsEntity(BaseModel):
     # Sourced from plant_master (synced automatically)
     plant_id: str = Field(..., description="Plant ID from plant_master")
     plant_name: str = Field(..., description="Plant name from plant_master")
+    category: Optional[str] = Field(default=None, description="Category from plant_master")
 
     # PPA-specific fields
-    category: Optional[str] = Field(default=None, description="Category")
     ppa_signing_date: Optional[datetime] = Field(default=None, description="PPA signing date")
     agreement_term: Optional[float] = Field(default=None, description="Agreement term in years")
     expiry: Optional[datetime] = Field(default=None, description="Expiry date based on COD + agreement term")
