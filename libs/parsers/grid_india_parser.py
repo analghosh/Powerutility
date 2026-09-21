@@ -20,22 +20,6 @@ logger = logging.getLogger(__name__)
 URS_TYPE = "URS"
 
 
-def _sum_blocks(*lists) -> List[float]:
-    """Add several 96-block arrays element-wise, tolerating short or ragged ones."""
-    totals = [0.0] * 96
-    for values in lists:
-        if not values:
-            continue
-        for idx in range(min(96, len(values))):
-            try:
-                value = values[idx]
-                if value is not None:
-                    totals[idx] += float(value)
-            except (ValueError, TypeError):
-                continue
-    return totals
-
-
 class GridIndiaParser(BaseParser):
     """
     Parser for Grid India formatted JSON data.
@@ -118,19 +102,26 @@ class GridIndiaParser(BaseParser):
                 "approval_no": None
             })
 
-            # Aggregation storage for URS: plant_id -> {'volume': []}.
+            # Aggregation storage for URS: plant_id -> {'volume': [], 'sg_bl': []}.
             #
-            # Un-requisitioned surplus is DERIVED, not published. Grid India
-            # sends no FullschdList entry of type "URS" for this utility -
-            # verified against a live payload, whose schedule types are only
-            # ISGS, OA_REMC, OA_PX and OA_GNA. What it does send is the two
-            # halves the definition is made of: EntitlementList, the share of
-            # each plant's declared capacity, and RequisitionList, how much of
-            # that share was actually asked for. The remainder is the surplus.
+            # URS here is what was AVAILED - surplus actually scheduled to this
+            # utility from another beneficiary's un-requisitioned capacity, per
+            # selling plant. It arrives as its own FullschdList entry, keyed on
+            # SellerAcronym like any other schedule.
             #
-            # Filled after EntitlementList is read, further down.
+            # Grid India omits these entries entirely on a day when no URS was
+            # drawn, which is why a payload can show none: the NetScheduleSummary
+            # URS row is then 96 blocks of zero. An empty screen on such a day is
+            # correct, not a fault.
+            #
+            # Counted into aggregated_sg as well, deliberately: the schedule a
+            # plant is running to includes what was drawn from URS, and every SG
+            # figure on this platform has always been that sum. This accumulator
+            # is additive - it records what the URS half was, which SG alone
+            # cannot tell you.
             aggregated_urs = defaultdict(lambda: {
                 "volume": [0.0] * 96,
+                "sg_bl": [0.0] * 96,
                 "revision_no": full_schd_revision_no,
                 "approval_no": None
             })
@@ -245,6 +236,7 @@ class GridIndiaParser(BaseParser):
 
                     # Aggregate
                     entry = aggregated_sg[plant_id]
+                    urs_entry = aggregated_urs[plant_id] if schd_type == "URS" else None
                     # Update revision if we found one? (Usually global, but just in case)
                     # Accumulate values
                     for idx in range(96):
@@ -272,8 +264,11 @@ class GridIndiaParser(BaseParser):
                         entry["volume"][idx] += v
                         entry["sg_bl"][idx] += b
 
+                        if urs_entry is not None:
+                            urs_entry["volume"][idx] += v
+                            urs_entry["sg_bl"][idx] += b
+
                 # 4. Process EntitlementList (DC) — the final entitlement is the DC before-loss value
-                entitlement_final = {}
                 entitlement_list = group.get("EntitlementList", [])
                 for ent_item in entitlement_list:
                     plant_id = ent_item.get("SellerAcronym")
@@ -305,13 +300,6 @@ class GridIndiaParser(BaseParser):
                                  data_source.get("EntireSharedEntAmount") or []
                     offbar_list = data_source.get("EntireSharedOffbarEntAmount") or []
 
-                    # The full final entitlement, both halves, for the URS
-                    # derivation below. Kept separate from `vol_list` because DC
-                    # deliberately carries the on-bar half only, and changing
-                    # that would move every DC figure on the platform.
-                    off_final_list = data_source.get("OffbarFinalEntAmount") or []
-                    entitlement_final[plant_id] = _sum_blocks(vol_list, off_final_list)
-
                     entry = aggregated_dc[plant_id]
                     for idx in range(96):
                         if idx < len(vol_list) and vol_list[idx] is not None:
@@ -329,43 +317,6 @@ class GridIndiaParser(BaseParser):
                                 entry["offbar"][idx] += float(offbar_list[idx])
                             except (ValueError, TypeError):
                                 pass
-
-                # 5. Derive URS: the entitlement that was not requisitioned.
-                #
-                # Both lists are keyed on SellerAcronym and both run 96 blocks.
-                # A plant with an entitlement and no requisition row at all has
-                # requisitioned nothing, so its whole share is surplus - which
-                # is why the lookup defaults to empty rather than skipping.
-                requisitions = {}
-                for req_item in group.get("RequisitionList", []) or []:
-                    seller = req_item.get("SellerAcronym")
-                    if not seller:
-                        continue
-                    req_data = req_item.get("RequisitionData") or {}
-                    # One block populated per fuel, the same shape as the
-                    # entitlement and schedule lists.
-                    req_source = (
-                        req_data.get("ThermalReqJsonData")
-                        or req_data.get("NuclearReqJsonData")
-                        or req_data.get("HydroReqJsonData")
-                        or req_data.get("GasReqJsonData")
-                        or {}
-                    )
-                    requisitions[seller] = _sum_blocks(
-                        req_source.get("OnbarReqAmount") or [],
-                        req_source.get("OffbarReqAmount") or [],
-                    )
-
-                for plant_id, ent_blocks in entitlement_final.items():
-                    req_blocks = requisitions.get(plant_id, [0.0] * 96)
-                    entry = aggregated_urs[plant_id]
-                    for idx in range(96):
-                        # Floored at zero: a surplus cannot be negative, and a
-                        # requisition above the entitlement is a source-data
-                        # fault rather than a quantity to report. Verified
-                        # against a live payload - 19 plants x 96 blocks, no
-                        # negative anywhere.
-                        entry["volume"][idx] += max(ent_blocks[idx] - req_blocks[idx], 0.0)
 
             # Append DC Aggregated Records (from EntitlementList)
             for plant_id, agg in aggregated_dc.items():
@@ -415,6 +366,7 @@ class GridIndiaParser(BaseParser):
                     agg["volume"],
                     agg["revision_no"],
                     agg["approval_no"],
+                    sg_beforelosses_list=agg["sg_bl"],
                     schedule_published_time=schedule_published_time
                 )
 
