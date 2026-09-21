@@ -279,13 +279,17 @@ class TestGridIndiaFuelTypes(unittest.TestCase):
 
 class TestGridIndiaURS(unittest.TestCase):
     """
-    Un-requisitioned surplus.
+    Un-requisitioned surplus AVAILED — surplus actually scheduled to this
+    utility from another beneficiary's un-requisitioned capacity.
 
-    Grid India publishes no FullschdList entry of type "URS" - a live payload
-    carries only ISGS, OA_REMC, OA_PX and OA_GNA. It does publish both halves
-    the definition is made of: EntitlementList, this utility's share of each
-    plant's declared capacity, and RequisitionList, how much of that share was
-    actually asked for. URS is the remainder, per plant, per block.
+    It arrives as its own FullschdList entry, keyed on SellerAcronym like any
+    other schedule, with the volume in TotalDrwBoundarySchdAmount. The fixtures
+    below mirror a real payload: the fuel block sits under
+    URSFullScheduleJsonData, which also names the generator type.
+
+    Grid India omits these entries on a day when no URS was drawn — a live
+    payload for such a day carries none, and its NetScheduleSummary URS row is
+    96 blocks of zero. An empty report on such a day is correct.
     """
 
     def setUp(self):
@@ -295,124 +299,103 @@ class TestGridIndiaURS(unittest.TestCase):
     def _blocks(value):
         return [value] + [0.0] * 95
 
-    def _payload(self, entitlements=None, requisitions=None, schedules=None):
-        group = {
-            "EntitlementList": entitlements or [],
-            "RequisitionList": requisitions or [],
-            "FullschdList": schedules or [],
-        }
-        return json.dumps({"ResponseBody": {
-            "Date": "21-09-2026",
-            "FullSchdRevisionNo": 137,
-            "GroupWiseDataList": [group],
-        }})
-
-    def _entitlement(self, plant_id, onbar, offbar=None, fuel="Thermal"):
-        """Thermal and Gas split the entitlement; Nuclear and Hydro do not."""
-        if fuel in ("Thermal", "Gas"):
-            data = {"OnbarFinalEntAmount": self._blocks(onbar)}
-            if offbar is not None:
-                data["OffbarFinalEntAmount"] = self._blocks(offbar)
-        else:
-            data = {"FinalEntAmount": self._blocks(onbar)}
-        return {"SellerAcronym": plant_id, "EntitlementData": {f"{fuel}EntJsonData": data}}
-
-    def _requisition(self, plant_id, onbar, offbar=0.0, fuel="Thermal"):
+    def _urs_entry(self, plant_id, value, fuel="Thermal", key="TotalDrwBoundarySchdAmount"):
         return {
+            "EnergyScheduleTypeName": "URS",
             "SellerAcronym": plant_id,
-            "RequisitionData": {f"{fuel}ReqJsonData": {
-                "OnbarReqAmount": self._blocks(onbar),
-                "OffbarReqAmount": self._blocks(offbar),
+            "BuyerAcronym": "PONDY",
+            "FullScheduleData": {
+                "ISGSFullScheduleJsonData": None,
+                "URSFullScheduleJsonData": {
+                    "ISGSGeneratorTypeId": 1,
+                    "ISGSGeneratorTypeName": fuel.upper(),
+                    f"URS{fuel}FullScheduleJsonData": {
+                        "UnRegSchdAmount": self._blocks(value),
+                        key: self._blocks(value),
+                    },
+                },
+            },
+        }
+
+    def _isgs_entry(self, plant_id, value):
+        return {
+            "EnergyScheduleTypeName": "ISGS",
+            "SellerAcronym": plant_id,
+            "FullScheduleData": {"ISGSFullScheduleJsonData": {
+                "ISGSGeneratorTypeName": "THERMAL",
+                "ISGSThermalFullScheduleJsonData": {
+                    "TotalDrwBoundarySchdAmount": self._blocks(value)
+                },
             }},
         }
 
-    def _urs(self, rows, plant_id, time_block=1):
+    def _payload(self, entries):
+        return json.dumps({"ResponseBody": {
+            "Date": "21-09-2026",
+            "FullSchdRevisionNo": 137,
+            "GroupWiseDataList": [{"FullschdList": entries}],
+        }})
+
+    def _row(self, rows, plant_id, dc_sg, time_block=1):
         return next(
             (r for r in rows
-             if r["plant_id"] == plant_id and r["dc_sg"] == "URS"
+             if r["plant_id"] == plant_id and r["dc_sg"] == dc_sg
              and r["time_block"] == time_block),
             None,
         )
 
-    def test_urs_is_the_entitlement_that_was_not_requisitioned(self):
-        rows = self.parser.parse(self._payload(
-            entitlements=[self._entitlement("KUDGI", 50.0)],
-            requisitions=[self._requisition("KUDGI", 20.0)],
-        ))
-        self.assertEqual(self._urs(rows, "KUDGI")["volume"], 30.0)
+    def test_a_urs_entry_is_stored_against_its_selling_plant(self):
+        rows = self.parser.parse(self._payload([self._urs_entry("TelanganaSTPP", 12.5)]))
+        self.assertEqual(self._row(rows, "TelanganaSTPP", "URS")["volume"], 12.5)
 
-    def test_a_fully_requisitioned_plant_has_no_surplus(self):
-        rows = self.parser.parse(self._payload(
-            entitlements=[self._entitlement("NLCEXP", 21.35)],
-            requisitions=[self._requisition("NLCEXP", 21.35)],
-        ))
-        self.assertEqual(self._urs(rows, "NLCEXP")["volume"], 0.0)
+    def test_urs_is_also_counted_into_sg(self):
+        # SG has always meant the whole schedule, URS included. Splitting it out
+        # would move DSM, PLF and every scheduling screen at once.
+        rows = self.parser.parse(self._payload([
+            self._isgs_entry("VALLURNTECL", 50.0),
+            self._urs_entry("VALLURNTECL", 30.0),
+        ]))
+        self.assertEqual(self._row(rows, "VALLURNTECL", "SG")["volume"], 80.0)
+        self.assertEqual(self._row(rows, "VALLURNTECL", "URS")["volume"], 30.0)
 
-    def test_a_plant_with_no_requisition_row_is_entirely_surplus(self):
-        # Requisitioning nothing is not the same as being absent from the feed:
-        # the whole share is un-requisitioned.
-        rows = self.parser.parse(self._payload(
-            entitlements=[self._entitlement("KKNP", 33.79, fuel="Nuclear")],
-            requisitions=[],
-        ))
-        self.assertEqual(self._urs(rows, "KKNP")["volume"], 33.79)
+    def test_a_plant_with_no_urs_entry_gets_no_urs_rows(self):
+        rows = self.parser.parse(self._payload([self._isgs_entry("KUDGI", 42.0)]))
+        self.assertIsNone(self._row(rows, "KUDGI", "URS"))
+        self.assertEqual(self._row(rows, "KUDGI", "SG")["volume"], 42.0)
 
-    def test_both_halves_of_a_split_entitlement_count(self):
-        rows = self.parser.parse(self._payload(
-            entitlements=[self._entitlement("RSTPSU7", 40.0, offbar=10.0)],
-            requisitions=[self._requisition("RSTPSU7", 15.0, offbar=5.0)],
-        ))
-        self.assertEqual(self._urs(rows, "RSTPSU7")["volume"], 30.0)
-
-    def test_a_requisition_above_the_entitlement_is_not_negative_surplus(self):
-        rows = self.parser.parse(self._payload(
-            entitlements=[self._entitlement("MAPS", 10.0, fuel="Nuclear")],
-            requisitions=[self._requisition("MAPS", 25.0, fuel="Nuclear")],
-        ))
-        self.assertEqual(self._urs(rows, "MAPS")["volume"], 0.0)
-
-    def test_a_requisition_without_an_entitlement_yields_nothing(self):
-        # No share of the plant means no surplus of it to report.
-        rows = self.parser.parse(self._payload(
-            requisitions=[self._requisition("GHOST", 12.0)],
-        ))
-        self.assertIsNone(self._urs(rows, "GHOST"))
+    def test_a_day_with_no_urs_at_all_produces_no_urs_rows(self):
+        rows = self.parser.parse(self._payload([self._isgs_entry("KUDGI", 42.0)]))
+        self.assertEqual([r for r in rows if r["dc_sg"] == "URS"], [])
 
     def test_every_block_of_the_day_is_written(self):
-        rows = self.parser.parse(self._payload(
-            entitlements=[self._entitlement("KUDGI", 50.0)],
-            requisitions=[self._requisition("KUDGI", 20.0)],
-        ))
+        rows = self.parser.parse(self._payload([self._urs_entry("KUDGI", 12.5)]))
         urs = [r for r in rows if r["dc_sg"] == "URS"]
         self.assertEqual(len(urs), 96)
         self.assertEqual(sorted(r["time_block"] for r in urs), list(range(1, 97)))
 
-    def test_the_derivation_does_not_disturb_sg(self):
-        # SG comes from FullschdList and must read exactly as it did before URS
-        # was derived at all.
-        schedule = {
-            "EnergyScheduleTypeName": "ISGS",
-            "SellerAcronym": "KUDGI",
-            "FullScheduleData": {"ISGSFullScheduleJsonData": {
-                "ISGSGeneratorTypeName": "THERMAL",
-                "ISGSThermalFullScheduleJsonData": {
-                    "TotalDrwBoundarySchdAmount": self._blocks(18.0)
-                },
-            }},
-        }
-        rows = self.parser.parse(self._payload(
-            entitlements=[self._entitlement("KUDGI", 50.0)],
-            requisitions=[self._requisition("KUDGI", 20.0)],
-            schedules=[schedule],
-        ))
-        sg = next(r for r in rows if r["plant_id"] == "KUDGI"
-                  and r["dc_sg"] == "SG" and r["time_block"] == 1)
-        self.assertEqual(sg["volume"], 18.0)
-        self.assertEqual(self._urs(rows, "KUDGI")["volume"], 30.0)
+    def test_a_non_thermal_seller_is_not_read_as_zero(self):
+        # The nuclear DC rows were zero for months because only the thermal
+        # spelling was read. URS splits by fuel the same way.
+        for fuel in ("Nuclear", "Hydro", "Gas"):
+            with self.subTest(fuel=fuel):
+                rows = self.parser.parse(self._payload([
+                    self._urs_entry("KKNP", 7.25, fuel=fuel)
+                ]))
+                self.assertEqual(self._row(rows, "KKNP", "URS")["volume"], 7.25)
 
-    def test_a_payload_with_no_entitlements_yields_no_urs(self):
-        rows = self.parser.parse(self._payload())
-        self.assertEqual([r for r in rows if r["dc_sg"] == "URS"], [])
+    def test_the_older_field_spelling_still_reads(self):
+        # Grid India has shipped four spellings of this field across versions.
+        rows = self.parser.parse(self._payload([
+            self._urs_entry("NTPL", 9.5, key="TotalDrwBoundrySchdAmt")
+        ]))
+        self.assertEqual(self._row(rows, "NTPL", "URS")["volume"], 9.5)
+
+    def test_several_urs_entries_for_one_plant_are_summed(self):
+        rows = self.parser.parse(self._payload([
+            self._urs_entry("KUDGI", 10.0),
+            self._urs_entry("KUDGI", 2.5),
+        ]))
+        self.assertEqual(self._row(rows, "KUDGI", "URS")["volume"], 12.5)
 
 
 if __name__ == '__main__':
