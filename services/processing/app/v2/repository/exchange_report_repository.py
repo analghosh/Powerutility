@@ -108,6 +108,47 @@ class ExchangeReportRepository(GenericRepository):
     async def count(self, filters: Dict[str, Any]) -> int:
         return await self.db[COLLECTION].count_documents(filters)
 
+    async def delivery_dates(
+        self,
+        filters: Dict[str, Any],
+        limit: int = 60,
+    ) -> List[Dict[str, Any]]:
+        """
+        Which delivery dates have reports, newest first.
+
+        The daily view is a date picker, and a plain date input cannot say
+        which days were actually uploaded - so an operator picking a quiet
+        Sunday sees an empty screen with no way to tell "nothing was uploaded"
+        from "I picked the wrong day". This answers that in one round trip,
+        and it groups rather than paging 200 summary rows the caller would
+        only reduce to a set of dates anyway.
+        """
+        pipeline = [
+            {"$match": filters},
+            {
+                "$group": {
+                    "_id": "$delivery_date_iso",
+                    "report_count": {"$sum": 1},
+                    "markets": {"$addToSet": "$market_type"},
+                    "exchanges": {"$addToSet": "$exchange"},
+                    "last_uploaded_at": {"$max": "$uploaded_at"},
+                }
+            },
+            {"$sort": {"_id": -1}},
+            {"$limit": limit},
+        ]
+        grouped = await self.db[COLLECTION].aggregate(pipeline).to_list(length=limit)
+        return [
+            {
+                "delivery_date": row["_id"],
+                "report_count": row.get("report_count", 0),
+                "markets": sorted(filter(None, row.get("markets") or [])),
+                "exchanges": sorted(filter(None, row.get("exchanges") or [])),
+                "last_uploaded_at": row.get("last_uploaded_at"),
+            }
+            for row in grouped
+        ]
+
     async def find_by_identity(self, identity: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         return await self.db[COLLECTION].find_one(identity)
 

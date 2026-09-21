@@ -270,6 +270,25 @@ async def list_reports(
 
 
 @router.get(
+    "/delivery-dates",
+    summary="Delivery dates that have uploaded reports, newest first",
+)
+async def get_delivery_dates(
+    report_category: Optional[str] = Query("obligation_report"),
+    limit: int = Query(60, ge=1, le=365),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """
+    Declared before `/{report_id}` so the path is not read as an id.
+    """
+    result = await exchange_report_service.delivery_dates(
+        report_category=report_category,
+        limit=limit,
+    )
+    return {"data": result}
+
+
+@router.get(
     "/{report_id}",
     summary="One uploaded report, with all its time blocks",
     responses={404: {"description": "No such report"}},

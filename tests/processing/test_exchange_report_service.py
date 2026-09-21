@@ -64,11 +64,13 @@ class _StubParser:
 
 
 class _StubRepository:
-    def __init__(self, replaced=False, existing=None):
+    def __init__(self, replaced=False, existing=None, dates=None):
         self.saved = []
         self.replaced = replaced
         self.existing = existing
         self.identity_lookups = []
+        self.dates = dates if dates is not None else []
+        self.date_queries = []
 
     async def find_by_identity(self, identity):
         self.identity_lookups.append(identity)
@@ -81,17 +83,21 @@ class _StubRepository:
         stored["upload_count"] = 2 if self.replaced else 1
         return {"document": stored, "replaced": self.replaced}
 
+    async def delivery_dates(self, filters, limit=60):
+        self.date_queries.append((filters, limit))
+        return self.dates
+
 
 @pytest.fixture
 def service(monkeypatch):
     """A service whose parser and repository are both stubs."""
 
-    def build(parsed=None, raises=None, replaced=False, existing=None):
+    def build(parsed=None, raises=None, replaced=False, existing=None, dates=None):
         instance = ExchangeReportService()
         instance._obligation_parser = _StubParser(
             result=parsed if parsed is not None else _parsed(), raises=raises
         )
-        repository = _StubRepository(replaced=replaced, existing=existing)
+        repository = _StubRepository(replaced=replaced, existing=existing, dates=dates)
         monkeypatch.setattr(module, "exchange_report_repository", repository)
         instance.repository_stub = repository
         return instance
@@ -658,3 +664,97 @@ def test_every_unavailable_category_says_why():
     for entry in registry.describe_categories():
         if not entry["implemented"]:
             assert entry["unavailable_reason"]
+
+
+# --------------------------------------------------------------------------
+# Which delivery dates the daily view can open
+# --------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_delivery_dates_are_scoped_to_one_category(service):
+    """
+    The daily view only ever shows one category, and the dropdown lists four.
+    Offering dates that belong to a different report would open empty days.
+    """
+    uploader = service()
+
+    await uploader.delivery_dates(report_category=registry.OBLIGATION_REPORT)
+
+    filters, limit = uploader.repository_stub.date_queries[0]
+    assert filters == {"report_category": registry.OBLIGATION_REPORT}
+    assert limit == 60
+
+
+@pytest.mark.asyncio
+async def test_delivery_dates_without_a_category_asks_for_all_of_them(service):
+    uploader = service()
+
+    await uploader.delivery_dates()
+
+    filters, _ = uploader.repository_stub.date_queries[0]
+    assert filters == {}
+
+
+@pytest.mark.asyncio
+async def test_delivery_dates_are_returned_with_a_count(service):
+    rows = [
+        {
+            "delivery_date": "2026-09-19",
+            "report_count": 3,
+            "markets": ["DAM", "GDAM", "RTM"],
+            "exchanges": ["IEX"],
+            "last_uploaded_at": datetime(2026, 9, 21, 5, 30, tzinfo=timezone.utc),
+        },
+        {
+            "delivery_date": "2026-09-18",
+            "report_count": 1,
+            "markets": ["DAM"],
+            "exchanges": ["IEX"],
+            "last_uploaded_at": None,
+        },
+    ]
+    uploader = service(dates=rows)
+
+    result = await uploader.delivery_dates()
+
+    assert result["total"] == 2
+    assert [row["delivery_date"] for row in result["items"]] == [
+        "2026-09-19",
+        "2026-09-18",
+    ]
+    assert result["items"][0]["markets"] == ["DAM", "GDAM", "RTM"]
+
+
+@pytest.mark.asyncio
+async def test_no_uploads_yet_is_an_empty_list_not_an_error(service):
+    """An empty archive and a failed read must not look the same on screen."""
+    uploader = service(dates=[])
+
+    result = await uploader.delivery_dates()
+
+    assert result == {"items": [], "total": 0}
+
+
+@pytest.mark.asyncio
+async def test_an_upload_history_entry_reads_the_same_way_as_the_document(service):
+    """
+    "Earlier uploads" is rendered by the same code as "uploaded", so a history
+    entry has to carry the same fields. Leaving the split IST reading off would
+    make a reader localise the UTC instant and print a clock time that
+    contradicts the time block beside it.
+    """
+    uploader = service()
+
+    await _upload(uploader)
+    document, upload_event = uploader.repository_stub.saved[0]
+
+    for field in (
+        "uploaded_at",
+        "uploaded_at_ist",
+        "uploaded_on_ist_date",
+        "uploaded_at_ist_time",
+        "uploaded_in_time_block",
+        "uploaded_by",
+        "uploaded_by_username",
+    ):
+        assert upload_event[field] == document[field], field
