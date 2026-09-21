@@ -180,8 +180,12 @@ async def upload_report(
     request: Request,
     file: UploadFile = File(..., description="The report file published by the exchange"),
     report_category: str = Form(..., description="A code from GET /exchange-reports/categories"),
-    exchange: str = Form(..., description="IEX, PXIL or HPX"),
-    market_type: str = Form(..., description="DAM, GDAM, RTM or HPDAM"),
+    # Optional at the signature, required by the parsing flow's own rules.
+    # A store-only category asks for neither: the file can be about anything,
+    # so a forced IEX/DAM would be an answer nobody meant. The obligation flow
+    # still rejects a missing one, with its own message.
+    exchange: Optional[str] = Form(None, description="IEX, PXIL or HPX"),
+    market_type: Optional[str] = Form(None, description="DAM, GDAM, RTM or HPDAM"),
     delivery_date: str = Form(..., description="Delivery date, YYYY-MM-DD"),
     confirm_replace: bool = Form(
         False,
@@ -205,8 +209,6 @@ async def upload_report(
             audit=audit,
             data=data,
             filename=filename,
-            exchange=exchange,
-            market_type=market_type,
             delivery_date=normalised_date,
             user_context=user_context,
         )
@@ -264,8 +266,6 @@ async def _upload_other_report(
     audit: Optional[AuditLogger],
     data: bytes,
     filename: str,
-    exchange: str,
-    market_type: str,
     delivery_date: str,
     user_context: Dict[str, Any],
 ) -> Dict[str, Any]:
@@ -274,8 +274,6 @@ async def _upload_other_report(
         result = await other_report_service.upload(
             data=data,
             filename=filename,
-            exchange=exchange,
-            market_type=market_type,
             delivery_date=delivery_date,
             actor=user_context,
         )
@@ -288,8 +286,6 @@ async def _upload_other_report(
             message=f"Rejected {filename}: {rejection.message}",
             success=False,
             report_category=registry.OTHER_REPORTS,
-            exchange=exchange,
-            market_type=market_type,
             delivery_date=delivery_date,
             rejection_reason=rejection.reason,
         )
@@ -300,14 +296,9 @@ async def _upload_other_report(
         request,
         user_context,
         action="upload",
-        message=(
-            f"Stored Other Report {exchange} {market_type} for "
-            f"{delivery_date} from {filename}"
-        ),
+        message=f"Stored Other Report for {delivery_date} from {filename}",
         success=True,
         report_category=registry.OTHER_REPORTS,
-        exchange=exchange,
-        market_type=market_type,
         delivery_date=delivery_date,
         replaced_previous_upload=result["replaced_previous_upload"],
     )
@@ -319,8 +310,6 @@ async def _upload_other_report(
     summary="List files uploaded under Other Reports, newest upload first",
 )
 async def list_other_reports(
-    exchange: Optional[str] = Query(None),
-    market_type: Optional[str] = Query(None),
     date_from: Optional[str] = Query(None, description="Upload date, YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="Upload date, YYYY-MM-DD"),
     limit: int = Query(50, ge=1, le=200),
@@ -334,8 +323,6 @@ async def list_other_reports(
     their delivery date carries no independent meaning.
     """
     result = await other_report_service.list_reports(
-        exchange=exchange,
-        market_type=market_type,
         date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
         date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
         limit=limit,
