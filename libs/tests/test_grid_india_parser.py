@@ -277,5 +277,103 @@ class TestGridIndiaFuelTypes(unittest.TestCase):
         self.assertEqual(dc.get("entire_shared_offbar_ent_amount", 0.0), 0.0)
 
 
+class TestGridIndiaURS(unittest.TestCase):
+    """
+    Un-requisitioned surplus.
+
+    URS arrives in FullschdList alongside ISGS, keyed on the same
+    SellerAcronym, and used to be summed straight into the plant's SG with
+    nothing left to say how much of that total it was. It is now emitted a
+    second time under its own dc_sg so it stays recoverable - while SG keeps
+    including it, because that is what SG has always meant on this platform and
+    splitting it out would move DSM, PLF and every scheduling screen at once.
+    """
+
+    def setUp(self):
+        self.parser = GridIndiaParser()
+
+    @staticmethod
+    def _blocks(value):
+        return [value] + [0.0] * 95
+
+    def _payload(self, entries):
+        return json.dumps({"ResponseBody": {
+            "Date": "20-09-2026",
+            "FullSchdRevisionNo": 104,
+            "GroupWiseDataList": [{"FullschdList": entries}],
+        }})
+
+    def _isgs(self, plant_id, value):
+        return {
+            "EnergyScheduleTypeName": "ISGS",
+            "SellerAcronym": plant_id,
+            "FullScheduleData": {"ISGSFullScheduleJsonData": {
+                "ISGSGeneratorTypeName": "THERMAL",
+                "ISGSThermalFullScheduleJsonData": {
+                    "TotalDrwBoundrySchdAmt": self._blocks(value)
+                },
+            }},
+        }
+
+    def _urs(self, plant_id, value, fuel="Thermal"):
+        return {
+            "EnergyScheduleTypeName": "URS",
+            "SellerAcronym": plant_id,
+            "FullScheduleData": {"URSFullScheduleJsonData": {
+                f"URS{fuel}FullScheduleJsonData": {
+                    "TotalDrwBoundrySchdAmt": self._blocks(value)
+                }
+            }},
+        }
+
+    def _block_one(self, rows, plant_id, dc_sg):
+        return next(
+            (r for r in rows
+             if r["plant_id"] == plant_id and r["dc_sg"] == dc_sg and r["time_block"] == 1),
+            None,
+        )
+
+    def test_urs_is_emitted_without_changing_sg(self):
+        rows = self.parser.parse(self._payload([
+            self._isgs("VALLURNTECL", 50.0),
+            self._urs("VALLURNTECL", 30.0),
+        ]))
+        self.assertEqual(self._block_one(rows, "VALLURNTECL", "SG")["volume"], 80.0)
+        self.assertEqual(self._block_one(rows, "VALLURNTECL", "URS")["volume"], 30.0)
+
+    def test_a_plant_with_no_urs_gets_no_urs_rows(self):
+        rows = self.parser.parse(self._payload([self._isgs("KUDGI", 42.0)]))
+        self.assertIsNone(self._block_one(rows, "KUDGI", "URS"))
+        self.assertEqual(self._block_one(rows, "KUDGI", "SG")["volume"], 42.0)
+
+    def test_urs_only_plant_appears_in_both(self):
+        rows = self.parser.parse(self._payload([self._urs("KUDGI", 12.5)]))
+        self.assertEqual(self._block_one(rows, "KUDGI", "SG")["volume"], 12.5)
+        self.assertEqual(self._block_one(rows, "KUDGI", "URS")["volume"], 12.5)
+
+    def test_every_block_of_the_day_is_written(self):
+        rows = self.parser.parse(self._payload([self._urs("KUDGI", 12.5)]))
+        urs = [r for r in rows if r["dc_sg"] == "URS"]
+        self.assertEqual(len(urs), 96)
+        self.assertEqual(sorted(r["time_block"] for r in urs), list(range(1, 97)))
+
+    def test_a_non_thermal_seller_is_not_read_as_zero(self):
+        # The nuclear DC rows were zero for months because only the thermal
+        # spelling was read. URS splits by fuel the same way.
+        for fuel in ("Nuclear", "Hydro", "Gas"):
+            with self.subTest(fuel=fuel):
+                rows = self.parser.parse(
+                    self._payload([self._urs("KKNP", 7.25, fuel=fuel)])
+                )
+                self.assertEqual(self._block_one(rows, "KKNP", "URS")["volume"], 7.25)
+
+    def test_several_urs_entries_for_one_plant_are_summed(self):
+        rows = self.parser.parse(self._payload([
+            self._urs("KUDGI", 10.0),
+            self._urs("KUDGI", 2.5),
+        ]))
+        self.assertEqual(self._block_one(rows, "KUDGI", "URS")["volume"], 12.5)
+
+
 if __name__ == '__main__':
     unittest.main()
