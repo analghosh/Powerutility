@@ -19,9 +19,14 @@ than leaving as an absence:
 * **No validation checks**, because there is no expected shape to check
   against.
 
-What is kept: who uploaded it, when, under which exchange, market and delivery
-date, the original filename, the size, and a SHA-256 so a re-upload of an
-identical file is recognisable.
+Nor is an exchange or a market asked for. An Other Report can be about
+anything - a desk note, a regulatory circular, a settlement working - so
+forcing a choice of IEX/PXIL/HPX and DAM/RTM would only record an answer
+nobody meant.
+
+What is kept: who uploaded it, when, which day it is for, the original
+filename, its size and type, and a SHA-256 so a re-upload of an identical file
+is recognisable.
 """
 
 import hashlib
@@ -63,8 +68,6 @@ class OtherReportService:
         *,
         data: bytes,
         filename: str,
-        exchange: str,
-        market_type: str,
         delivery_date: str,
         actor: Dict[str, Any],
     ) -> Dict[str, Any]:
@@ -72,14 +75,10 @@ class OtherReportService:
 
         self._require_accepted_extension(category, filename)
         self._require_within_size_limit(data)
-        self._require_known_choice("exchange", exchange, registry.EXCHANGES)
-        self._require_known_choice("market_type", market_type, registry.MARKETS)
         self._require_filename(filename)
 
         document = self._to_document(
             category=category,
-            exchange=exchange,
-            market_type=market_type,
             delivery_date=delivery_date,
             filename=filename,
             data=data,
@@ -106,10 +105,8 @@ class OtherReportService:
         stored = result["document"]
 
         logger.info(
-            "Stored other report %s %s %s for %s (replaced=%s)",
+            "Stored other report %s for %s (replaced=%s)",
             filename,
-            exchange,
-            market_type,
             delivery_date,
             result["replaced"],
         )
@@ -126,9 +123,9 @@ class OtherReportService:
 
     # -- individual rules --------------------------------------------------
     #
-    # Extension, size and the exchange/market choices are the same rules the
-    # obligation flow applies, so they are the same code. A second copy would
-    # only drift, and the wording of a refusal is what the operator reads.
+    # Extension and size are the same rules the obligation flow applies, so
+    # they are the same code. A second copy would only drift, and the wording
+    # of a refusal is what the operator reads.
 
     _require_accepted_extension = staticmethod(
         ExchangeReportService._require_accepted_extension
@@ -136,7 +133,6 @@ class OtherReportService:
     _require_within_size_limit = staticmethod(
         ExchangeReportService._require_within_size_limit
     )
-    _require_known_choice = staticmethod(ExchangeReportService._require_known_choice)
 
     @staticmethod
     def _require_filename(filename: str) -> None:
@@ -157,8 +153,6 @@ class OtherReportService:
     def _to_document(
         *,
         category: registry.ReportCategory,
-        exchange: str,
-        market_type: str,
         delivery_date: str,
         filename: str,
         data: bytes,
@@ -168,8 +162,6 @@ class OtherReportService:
         return {
             "report_category": category.code,
             "report_category_label": category.label,
-            "exchange": exchange,
-            "market_type": market_type,
             "delivery_date_iso": delivery_date,
             "source_filename": filename,
             "content_type": _guess_content_type(filename),
@@ -199,8 +191,6 @@ class OtherReportService:
             # on the category code, so a second store-only category later
             # needs no frontend change.
             "stores_file_only": True,
-            "exchange": document.get("exchange"),
-            "market_type": document.get("market_type"),
             "delivery_date": document.get("delivery_date_iso"),
             "source_filename": document.get("source_filename"),
             "content_type": document.get("content_type"),
@@ -218,18 +208,12 @@ class OtherReportService:
     async def list_reports(
         self,
         *,
-        exchange: Optional[str] = None,
-        market_type: Optional[str] = None,
         date_from: Optional[str] = None,
         date_to: Optional[str] = None,
         limit: int = 50,
         skip: int = 0,
     ) -> Dict[str, Any]:
         filters: Dict[str, Any] = {}
-        if exchange:
-            filters["exchange"] = exchange
-        if market_type:
-            filters["market_type"] = market_type
         if date_from or date_to:
             window: Dict[str, Any] = {}
             if date_from:
