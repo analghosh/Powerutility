@@ -12,6 +12,7 @@ from .forecast_serve_entity import (
 )
 from .supply_serve_entity import SupplyServeEntity, SupplyServeHistoricalEntity
 from .plant_entity import PlantEntity
+from .ppa_details_entity import PpaDetailsEntity, PpaFileInfo
 from .peak_demand_serve_entity import PeakDemandServeEntity
 from .renewable_serve_entity import RenewableServeEntity, RenewableServeHistoricalEntity
 from .power_exchange_entity import PowerExchangeEntity, MarketEnum, ExchangeEnum
@@ -35,6 +36,8 @@ __all__ = [
     'SupplyServeEntity',
     'SupplyServeHistoricalEntity',
     'PlantEntity',
+    'PpaDetailsEntity',
+    'PpaFileInfo',
     'PeakDemandServeEntity',
     'RenewableServeEntity',
     'RenewableServeHistoricalEntity',

@@ -26,6 +26,7 @@ from .api.router.new_dam_bidding_routes import (
 )
 from .api.router.supply_routes import router as supply_router
 from .api.router.master_plants_routes import router as master_plants_router
+from .api.router.ppa_details_routes import router as ppa_details_router
 from .api.router.limit_values_routes import router as limit_values_routers
 from .api.router.renewable_routes import router as renewable_router
 from .api.router.dam_sheduling_routes import router as dam_scheduling_router
@@ -110,6 +111,10 @@ v2_app = FastAPI(
             "description": "Master plants management operations"
         },
         {
+            "name": "PPA Details V2",
+            "description": "PPA details management — synced from plant master"
+        },
+        {
             "name": "Renewable V2",
             "description": "Renewable energy data operations with JWT authentication"
         },
@@ -164,6 +169,7 @@ v2_app.include_router(new_rtm_bidding_public_router)
 v2_app.include_router(new_dam_bidding_router)
 v2_app.include_router(supply_router)
 v2_app.include_router(master_plants_router)
+v2_app.include_router(ppa_details_router)
 v2_app.include_router(limit_values_routers)
 v2_app.include_router(renewable_router)
 v2_app.include_router(dam_scheduling_router)
