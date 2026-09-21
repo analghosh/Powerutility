@@ -15,6 +15,10 @@ from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
+#: Marks a record as un-requisitioned surplus rather than a schedule or an
+#: entitlement. Shared with the supply processor, which routes on it.
+URS_TYPE = "URS"
+
 
 class GridIndiaParser(BaseParser):
     """
@@ -92,6 +96,22 @@ class GridIndiaParser(BaseParser):
 
             # Aggregation storage for SG: plant_id -> {'volume': [], 'sg_bl': [], ...}
             aggregated_sg = defaultdict(lambda: {
+                "volume": [0.0] * 96,
+                "sg_bl": [0.0] * 96,
+                "revision_no": full_schd_revision_no,
+                "approval_no": None
+            })
+
+            # Aggregation storage for URS: plant_id -> {'volume': [], 'sg_bl': []}.
+            #
+            # URS is also added to aggregated_sg above, and deliberately so: the
+            # schedule a plant is actually running to includes what was drawn
+            # from un-requisitioned surplus, and every SG figure on the platform
+            # has always been the sum of the two. Splitting it out of SG here
+            # would move DSM, PLF and every scheduling screen at once. This
+            # accumulator is additive - it records what the URS half was, which
+            # the SG total alone cannot tell you.
+            aggregated_urs = defaultdict(lambda: {
                 "volume": [0.0] * 96,
                 "sg_bl": [0.0] * 96,
                 "revision_no": full_schd_revision_no,
@@ -180,7 +200,18 @@ class GridIndiaParser(BaseParser):
                             data_source = isgs_data.get("ISGSHydroFullScheduleJsonData", {})
                     elif schd_type == "URS":
                         urs_data = full_schd_data.get("URSFullScheduleJsonData", {})
-                        data_source = urs_data.get("URSThermalFullScheduleJsonData", {})
+                        # Grid India splits URS by fuel the same way it splits
+                        # ISGS. Reading only the thermal spelling is how the
+                        # nuclear DC rows came to be zero for months; a URS
+                        # block for a hydro or gas seller would fail the same
+                        # way, as 96 blocks of zero rather than a skip.
+                        data_source = (
+                            urs_data.get("URSThermalFullScheduleJsonData")
+                            or urs_data.get("URSNuclearFullScheduleJsonData")
+                            or urs_data.get("URSHydroFullScheduleJsonData")
+                            or urs_data.get("URSGasFullScheduleJsonData")
+                            or {}
+                        )
                     elif schd_type == "OA_REMC":
                         data_source = full_schd_data.get("OAFullScheduleJsonData", {})
 
@@ -197,6 +228,10 @@ class GridIndiaParser(BaseParser):
 
                     # Aggregate
                     entry = aggregated_sg[plant_id]
+                    # URS is counted twice on purpose: once into the plant's SG
+                    # total, which is what SG has always meant here, and once
+                    # into its own bucket so the URS half stays recoverable.
+                    urs_entry = aggregated_urs[plant_id] if schd_type == "URS" else None
                     # Update revision if we found one? (Usually global, but just in case)
                     # Accumulate values
                     for idx in range(96):
@@ -223,6 +258,10 @@ class GridIndiaParser(BaseParser):
                                 
                         entry["volume"][idx] += v
                         entry["sg_bl"][idx] += b
+
+                        if urs_entry is not None:
+                            urs_entry["volume"][idx] += v
+                            urs_entry["sg_bl"][idx] += b
 
                 # 4. Process EntitlementList (DC) — the final entitlement is the DC before-loss value
                 entitlement_list = group.get("EntitlementList", [])
@@ -301,6 +340,26 @@ class GridIndiaParser(BaseParser):
                     "SG", 
                     agg["volume"], 
                     agg["revision_no"], 
+                    agg["approval_no"],
+                    sg_beforelosses_list=agg["sg_bl"],
+                    schedule_published_time=schedule_published_time
+                )
+
+            # Append URS Aggregated Records.
+            #
+            # Emitted under their own dc_sg so they ride the existing raw-data
+            # transport without being mistaken for a schedule: the supply
+            # processor diverts them to urs_serve and they never reach
+            # supply_serve. Written last so that a failure here cannot cost the
+            # DC and SG records that were already appended above.
+            for plant_id, agg in aggregated_urs.items():
+                self._append_records(
+                    raw_data,
+                    date_str,
+                    plant_id,
+                    URS_TYPE,
+                    agg["volume"],
+                    agg["revision_no"],
                     agg["approval_no"],
                     sg_beforelosses_list=agg["sg_bl"],
                     schedule_published_time=schedule_published_time
