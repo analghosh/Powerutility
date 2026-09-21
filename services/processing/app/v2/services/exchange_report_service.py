@@ -164,9 +164,17 @@ class ExchangeReportService:
             data=data,
             actor=actor,
         )
+        # The same shape as the document's own upload fields, so anything that
+        # can render "when this landed" for the current upload renders an
+        # earlier one without a second code path. The split IST date and time
+        # are carried rather than left to be derived from `uploaded_at`: a
+        # reader localising the UTC instant would print a clock time that
+        # contradicts the time block beside it.
         upload_event = {
             "uploaded_at": document["uploaded_at"],
             "uploaded_at_ist": document["uploaded_at_ist"],
+            "uploaded_on_ist_date": document["uploaded_on_ist_date"],
+            "uploaded_at_ist_time": document["uploaded_at_ist_time"],
             "uploaded_in_time_block": document["uploaded_in_time_block"],
             "uploaded_by": document["uploaded_by"],
             "uploaded_by_username": document["uploaded_by_username"],
@@ -514,6 +522,26 @@ class ExchangeReportService:
             "limit": limit,
             "skip": skip,
         }
+
+    async def delivery_dates(
+        self,
+        *,
+        report_category: Optional[str] = None,
+        limit: int = 60,
+    ) -> Dict[str, Any]:
+        """
+        The delivery dates that have reports, newest first.
+
+        The daily view picks one date, so it needs to know which dates are
+        worth picking. Each entry also carries the markets and exchanges
+        uploaded that day, which is what the operator is really asking when
+        they open a date: "is RTM in yet?"
+        """
+        filters: Dict[str, Any] = {}
+        if report_category:
+            filters["report_category"] = report_category
+        dates = await exchange_report_repository.delivery_dates(filters, limit=limit)
+        return {"items": dates, "total": len(dates)}
 
     async def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:
         from ..repository.exchange_report_repository import COLLECTION
