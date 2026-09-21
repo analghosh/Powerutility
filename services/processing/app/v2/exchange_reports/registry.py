@@ -57,11 +57,6 @@ CATEGORIES: Dict[str, ReportCategory] = {
         # spreadsheet here would only fail later, in the parser.
         accepted_extensions=(".pdf",),
         implemented=True,
-        description=(
-            "The exchange's Daily Obligation Summary Report: the day's funds "
-            "position, charges and fees, and the traded quantity, rate and "
-            "amount for all 96 time blocks."
-        ),
     ),
     BACKING_QUANTUM_SCHEDULE_COST: ReportCategory(
         code=BACKING_QUANTUM_SCHEDULE_COST,
@@ -101,11 +96,9 @@ CATEGORIES: Dict[str, ReportCategory] = {
         ),
         implemented=True,
         stores_file_only=True,
-        description=(
-            "Anything that does not belong to one of the categories above. "
-            "The file is stored and handed back exactly as uploaded - nothing "
-            "is read out of it, so no figures appear on any other screen."
-        ),
+        # No description: the label says enough, and the hint under the
+        # dropdown was repeating what the drop zone and the success panel
+        # already say.
     ),
 }
 
