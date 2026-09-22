@@ -8,9 +8,9 @@ on, a sentence the operator reads, and the detail they need to act:
 * **Wrong file, unreadable file, file that contradicts the form, or a report
   that failed its consistency checks → 400**, naming what disagreed. These are
   all "fix the input and try again", which is why they share a status.
-* **A category with no parser yet → 422.** The screen lists all four categories
-  PTC asked for; three of them have no sample file, and choosing one is a
-  request the server understands but cannot carry out.
+* **A category with no parser yet → 422.** The screen lists every category PTC
+  asked for, and one of them still has no sample file; choosing it is a request
+  the server understands but cannot carry out.
 * **Already uploaded → 409**, naming the file that is already stored and when
   it landed. Not a failure: the caller resends with `confirm_replace` once the
   operator has said yes. Overwriting is usually right, because the exchange
@@ -18,6 +18,11 @@ on, a sentence the operator reads, and the detail they need to act:
   a day's numbers and should be a decision rather than a double-click.
 
 * **Over the size limit → 413**, with the limit, so the message can be exact.
+* **A form field the chosen category needs but did not get → 400**, naming the
+  field as the screen labels it. Which fields those are depends on the
+  category: a delivery-dated one needs a Delivery Date, a month-keyed one
+  needs a Year and a Month, and neither should be answered with FastAPI's own
+  `body -> period_year`.
 
 Nothing on this router answers 200 with an error in the body. That pattern is
 already costing PTC real bids elsewhere in this service, where
@@ -32,7 +37,7 @@ own the moment that layer lands.
 """
 
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, Optional
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
@@ -49,6 +54,7 @@ from ...services.exchange_report_service import (AlreadyUploaded,
                                                  FileTooLarge, UploadRejected,
                                                  exchange_report_service)
 from ...services.other_report_service import other_report_service
+from ...services.period_report_service import period_report_service
 
 logger = logging.getLogger(__name__)
 
@@ -94,6 +100,118 @@ def _parse_iso_date(value: str, field: str) -> str:
             detail={
                 "reason": "invalid_date",
                 "message": f"'{value}' is not a date. {field} must be YYYY-MM-DD.",
+            },
+        )
+
+
+#: India Standard Time. The uploader's Uploaded Date is a wall clock the
+#: operator reads off the screen in front of them, so it is IST, not UTC and
+#: not the browser's zone - a laptop left on a foreign timezone would
+#: otherwise file a report hours into the wrong shift.
+IST = timezone(timedelta(hours=5, minutes=30))
+
+#: How far ahead of the server clock a declared upload time may be. Wide
+#: enough for ordinary clock skew between the operator's machine and the box,
+#: narrow enough that a mistyped year is still refused.
+FUTURE_UPLOAD_TOLERANCE = timedelta(minutes=5)
+
+
+def _parse_upload_moment(value: str) -> datetime:
+    """
+    The operator's Uploaded Date and time, as the UTC instant it names.
+
+    Read as IST because that is the clock the form shows. The browser sends a
+    `datetime-local` value with no zone on it at all, so something has to
+    decide what zone it meant, and deciding here means one answer rather than
+    one per reader's machine.
+
+    A time in the future is refused rather than clamped. The shift view is laid
+    out by upload time block, and a report recorded as arriving in a block that
+    has not happened yet would sit on a shift nobody has worked - a silent
+    wrong answer, where a refusal is one the operator can fix.
+    """
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except (ValueError, AttributeError):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "invalid_upload_time",
+                "message": (
+                    f"'{value}' is not a date and time. Uploaded Date must be "
+                    "YYYY-MM-DDTHH:MM."
+                ),
+                "field": "uploaded_at",
+            },
+        )
+
+    # A value that already carries a zone is respected; a bare one is IST.
+    localised = parsed if parsed.tzinfo else parsed.replace(tzinfo=IST)
+    as_utc = localised.astimezone(timezone.utc)
+
+    if as_utc > datetime.now(timezone.utc) + FUTURE_UPLOAD_TOLERANCE:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "upload_time_in_future",
+                "message": (
+                    "The Uploaded Date is in the future. A report cannot be "
+                    "recorded as having arrived before it did."
+                ),
+                "field": "uploaded_at",
+                "uploaded_at": localised.isoformat(),
+            },
+        )
+    return as_utc
+
+
+def _require_period(
+    period_year: Optional[int],
+    period_month: Optional[int],
+    *,
+    label: str,
+) -> None:
+    """
+    Year and Month for a month-keyed category.
+
+    Checked here rather than in the signature so the refusal names the field
+    on the screen. FastAPI's own 422 for a missing form field says
+    `body -> period_year`, which is not a label the operator has ever seen.
+    """
+    if period_year is None or period_month is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "missing_period",
+                "message": (
+                    f"{label} covers a calendar month, so it needs a Year and "
+                    "a Month."
+                ),
+                "field": "period_year" if period_year is None else "period_month",
+            },
+        )
+    if not 1 <= period_month <= 12:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "invalid_period",
+                "message": f"'{period_month}' is not a month. Months are 1 to 12.",
+                "field": "period_month",
+            },
+        )
+    # An upper bound as well as a lower one: a report can be filed for next
+    # month, but a year beyond that is a typo rather than a forward filing.
+    latest = date.today().year + 1
+    if not registry.MIN_PERIOD_YEAR <= period_year <= latest:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "invalid_period",
+                "message": (
+                    f"'{period_year}' is not a year this report can be filed "
+                    f"under. Use {registry.MIN_PERIOD_YEAR} to {latest}."
+                ),
+                "field": "period_year",
             },
         )
 
@@ -186,7 +304,22 @@ async def upload_report(
     # still rejects a missing one, with its own message.
     exchange: Optional[str] = Form(None, description="IEX, PXIL or HPX"),
     market_type: Optional[str] = Form(None, description="DAM, GDAM, RTM or HPDAM"),
-    delivery_date: str = Form(..., description="Delivery date, YYYY-MM-DD"),
+    # Optional at the signature, required by whichever flow the category
+    # selects. A month-keyed category asks for Year and Month instead: a
+    # report covering September has no one day the power flowed on, so a
+    # delivery date there would be a value nobody chose.
+    delivery_date: Optional[str] = Form(None, description="Delivery date, YYYY-MM-DD"),
+    period_year: Optional[int] = Form(None, description="Year, for a month-keyed category"),
+    period_month: Optional[int] = Form(None, description="Month 1-12, for a month-keyed category"),
+    # The operator's own answer to "when did this land", defaulting on the
+    # screen to now. Reports are often typed in during a later shift than the
+    # one they belong to, and the shift view is laid out by upload time block.
+    # Absent, the server clock stands - see `resolve_upload_moment`, which
+    # keeps the observed arrival time either way.
+    uploaded_at: Optional[str] = Form(
+        None,
+        description="Uploaded date and time as an IST wall clock, YYYY-MM-DDTHH:MM",
+    ),
     confirm_replace: bool = Form(
         False,
         description="Replace a report already stored for this identity",
@@ -194,15 +327,45 @@ async def upload_report(
     user_context: Dict[str, Any] = Depends(get_user_context),
 ) -> Dict[str, Any]:
     audit = _optional_audit_logger()
-    normalised_date = _parse_iso_date(delivery_date, "delivery_date")
     filename = file.filename or ""
+    declared_upload_moment = (
+        _parse_upload_moment(uploaded_at) if uploaded_at else None
+    )
+
+    # One uploader screen, three destinations. A store-only category has no
+    # parser and no parsed identity, so it cannot go through the obligation
+    # flow at all, and a month-keyed one is filed under a month rather than a
+    # day - the category decides, rather than the caller having to know which
+    # endpoint to post to.
+    selected = registry.get_category(report_category)
+
+    if selected is not None and selected.period_keyed:
+        _require_period(period_year, period_month, label=selected.label)
+        data = await file.read()
+        return await _upload_period_report(
+            request=request,
+            audit=audit,
+            data=data,
+            filename=filename,
+            report_category=selected.code,
+            period_year=period_year,
+            period_month=period_month,
+            uploaded_at=declared_upload_moment,
+            user_context=user_context,
+        )
+
+    if not delivery_date:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "missing_delivery_date",
+                "message": "A Delivery Date is needed for this report category.",
+                "field": "delivery_date",
+            },
+        )
+    normalised_date = _parse_iso_date(delivery_date, "delivery_date")
     data = await file.read()
 
-    # One uploader screen, two destinations. A store-only category has no
-    # parser and no parsed identity, so it cannot go through the obligation
-    # flow at all - the category decides, rather than the caller having to
-    # know which endpoint to post to.
-    selected = registry.get_category(report_category)
     if selected is not None and selected.stores_file_only:
         return await _upload_other_report(
             request=request,
@@ -210,6 +373,7 @@ async def upload_report(
             data=data,
             filename=filename,
             delivery_date=normalised_date,
+            uploaded_at=declared_upload_moment,
             user_context=user_context,
         )
 
@@ -223,6 +387,7 @@ async def upload_report(
             delivery_date=normalised_date,
             actor=user_context,
             confirm_replace=confirm_replace,
+            uploaded_at=declared_upload_moment,
         )
     except UploadRejected as rejection:
         _audit(
@@ -267,6 +432,7 @@ async def _upload_other_report(
     data: bytes,
     filename: str,
     delivery_date: str,
+    uploaded_at: Optional[datetime],
     user_context: Dict[str, Any],
 ) -> Dict[str, Any]:
     """Store the file as uploaded, and audit it the same way a parse is."""
@@ -276,6 +442,7 @@ async def _upload_other_report(
             filename=filename,
             delivery_date=delivery_date,
             actor=user_context,
+            uploaded_at=uploaded_at,
         )
     except UploadRejected as rejection:
         _audit(
@@ -303,6 +470,161 @@ async def _upload_other_report(
         replaced_previous_upload=result["replaced_previous_upload"],
     )
     return {"data": result}
+
+
+async def _upload_period_report(
+    *,
+    request: Request,
+    audit: Optional[AuditLogger],
+    data: bytes,
+    filename: str,
+    report_category: str,
+    period_year: int,
+    period_month: int,
+    uploaded_at: Optional[datetime],
+    user_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Store a month's file as uploaded, and audit it the same way a parse is."""
+    period = registry.period_label(period_year, period_month)
+    try:
+        result = await period_report_service.upload(
+            data=data,
+            filename=filename,
+            report_category=report_category,
+            period_year=period_year,
+            period_month=period_month,
+            actor=user_context,
+            uploaded_at=uploaded_at,
+        )
+    except UploadRejected as rejection:
+        _audit(
+            audit,
+            request,
+            user_context,
+            action="upload",
+            message=f"Rejected {filename}: {rejection.message}",
+            success=False,
+            report_category=report_category,
+            period=period,
+            rejection_reason=rejection.reason,
+        )
+        raise _as_http_error(rejection) from rejection
+
+    _audit(
+        audit,
+        request,
+        user_context,
+        action="upload",
+        message=(
+            f"Stored {result['summary']['report_category_label']} for "
+            f"{period} from {filename}"
+        ),
+        success=True,
+        report_category=report_category,
+        period=period,
+        replaced_previous_upload=result["replaced_previous_upload"],
+    )
+    return {"data": result}
+
+
+def _require_period_category(code: str) -> registry.ReportCategory:
+    """The category a read route names, refusing one that is not month-keyed."""
+    category = registry.get_category(code)
+    if category is None or not category.period_keyed:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "reason": "not_a_period_category",
+                "message": (
+                    f"'{code}' is not a report category filed by month."
+                ),
+                "period_categories": [
+                    entry.code
+                    for entry in registry.CATEGORIES.values()
+                    if entry.period_keyed
+                ],
+            },
+        )
+    return category
+
+
+@router.get(
+    "/period",
+    summary="List files uploaded under a month-keyed category (LTOA, STOA)",
+)
+async def list_period_reports(
+    report_category: str = Query(..., description="ltoa or stoa"),
+    year: Optional[int] = Query(None, ge=registry.MIN_PERIOD_YEAR),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """
+    Declared before `/{report_id}` so the path is not read as an id.
+
+    Year and month are optional so a tab can also ask "what is filed under
+    this category at all", which is what the empty state needs in order to
+    suggest a month that has something in it.
+    """
+    category = _require_period_category(report_category)
+    result = await period_report_service.list_reports(
+        report_category=category.code,
+        period_year=year,
+        period_month=month,
+        limit=limit,
+        skip=skip,
+    )
+    return {"data": result}
+
+
+@router.get(
+    "/period/months",
+    summary="Months that have files for a month-keyed category, newest first",
+)
+async def get_period_months(
+    report_category: str = Query(..., description="ltoa or stoa"),
+    limit: int = Query(60, ge=1, le=365),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """
+    The picker's hints. A Year/Month pair cannot tell "nothing was uploaded
+    for September" from "I picked the wrong month" on its own.
+    """
+    category = _require_period_category(report_category)
+    result = await period_report_service.periods(
+        report_category=category.code, limit=limit
+    )
+    return {"data": result}
+
+
+@router.get(
+    "/period/{report_id}/file",
+    summary="Download one LTOA / STOA file exactly as it was uploaded",
+    responses={404: {"description": "No such report, or its file is not in storage"}},
+)
+async def download_period_report_file(
+    report_id: str,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Response:
+    try:
+        stored = await period_report_service.get_file(report_id)
+    except UploadRejected as rejection:
+        raise _as_http_error(rejection) from rejection
+
+    if stored is None:
+        raise HTTPException(status_code=404, detail="No such report")
+
+    # Sent as an attachment whatever the type, so a PDF or a spreadsheet is
+    # saved rather than rendered in place. The name is quoted because uploaded
+    # filenames contain spaces.
+    return Response(
+        content=stored["content"],
+        media_type=stored["content_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{stored["filename"]}"'
+        },
+    )
 
 
 @router.get(
