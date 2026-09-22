@@ -181,7 +181,12 @@ class GridIndiaParser(BaseParser):
                 for schd_item in full_schd_list:
                     schd_type = schd_item.get("EnergyScheduleTypeName")
                     plant_id = schd_item.get("SellerAcronym")
-                    full_schd_data = schd_item.get("FullScheduleData", {})
+                    # ``or {}`` rather than a .get default throughout this
+                    # block: Grid India ships these keys PRESENT and null on
+                    # every entry that does not use them, so the default never
+                    # fires and the next .get would raise on None - aborting
+                    # the whole payload, DC and SG included, over one row.
+                    full_schd_data = schd_item.get("FullScheduleData") or {}
 
                     if not plant_id:
                         continue
@@ -195,19 +200,19 @@ class GridIndiaParser(BaseParser):
 
                     data_source = {}
                     if schd_type == "ISGS":
-                        isgs_data = full_schd_data.get("ISGSFullScheduleJsonData", {})
+                        isgs_data = full_schd_data.get("ISGSFullScheduleJsonData") or {}
                         isgs_gen_type = isgs_data.get("ISGSGeneratorTypeName")
                         if isgs_gen_type == "THERMAL":
-                            data_source = isgs_data.get("ISGSThermalFullScheduleJsonData", {})
+                            data_source = isgs_data.get("ISGSThermalFullScheduleJsonData") or {}
                         elif isgs_gen_type == "NUCLEAR":
-                            data_source = isgs_data.get("ISGSNuclearFullScheduleJsonData", {})
+                            data_source = isgs_data.get("ISGSNuclearFullScheduleJsonData") or {}
                         elif isgs_gen_type == "HYDRO":
                             # Bhutan hydro imports (Punatsangchhu_II) arrive here. Without
                             # this branch data_source stays empty and the plant is written
                             # as 96 blocks of zero rather than skipped — a silent loss.
-                            data_source = isgs_data.get("ISGSHydroFullScheduleJsonData", {})
+                            data_source = isgs_data.get("ISGSHydroFullScheduleJsonData") or {}
                     elif schd_type == "URS":
-                        urs_data = full_schd_data.get("URSFullScheduleJsonData", {})
+                        urs_data = full_schd_data.get("URSFullScheduleJsonData") or {}
                         # Grid India splits URS by fuel the same way it splits
                         # ISGS. Reading only the thermal spelling is how the
                         # nuclear DC rows came to be zero for months; a URS
@@ -221,7 +226,7 @@ class GridIndiaParser(BaseParser):
                             or {}
                         )
                     elif schd_type == "OA_REMC":
-                        data_source = full_schd_data.get("OAFullScheduleJsonData", {})
+                        data_source = full_schd_data.get("OAFullScheduleJsonData") or {}
 
                     if data_source:
                         vol_list = data_source.get("TotalDrwBoundrySchdAmt") or \
