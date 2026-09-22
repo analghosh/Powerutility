@@ -245,7 +245,21 @@ def resolve_window() -> List[date]:
 
 
 async def _already_done(day: date) -> bool:
-    return await _database()[STATE_COLLECTION].find_one({"_id": day.isoformat()}) is not None
+    """
+    Only a COMPLETED day counts as done.
+
+    A failed day is still recorded - the operators cannot read the service log,
+    so an invisible failure is indistinguishable from a quiet day - but it stays
+    pending so the next run retries it.
+    """
+    state = await _database()[STATE_COLLECTION].find_one({"_id": day.isoformat()})
+    return bool(state) and state.get("status") == "completed"
+
+
+async def backfill_state() -> List[Dict[str, Any]]:
+    """Everything recorded so far, for the read endpoint in processing."""
+    cursor = _database()[STATE_COLLECTION].find({}).sort("_id", 1)
+    return await cursor.to_list(length=None)
 
 
 async def _record(day: date, outcome: Dict[str, Any]) -> None:
@@ -280,9 +294,11 @@ async def run_backfill(days: List[date], write: bool = True) -> Dict[str, Any]:
         try:
             payload = await asyncio.to_thread(fetch_day, metadata, day)
         except Exception as exc:
-            # Not recorded as done, so the next restart retries this day.
             failed += 1
             logger.warning("URS backfill %s: fetch failed: %s", day, exc)
+            # Recorded as failed, not as done: visible to whoever reads the
+            # state, and still retried on the next run.
+            await _record(day, {"status": "failed", "stage": "fetch", "error": str(exc)})
             continue
 
         try:
@@ -290,6 +306,7 @@ async def run_backfill(days: List[date], write: bool = True) -> Dict[str, Any]:
         except Exception as exc:
             failed += 1
             logger.error("URS backfill %s: parse failed: %s", day, exc, exc_info=True)
+            await _record(day, {"status": "failed", "stage": "parse", "error": str(exc)})
             continue
 
         rows += outcome["rows"]
@@ -302,6 +319,8 @@ async def run_backfill(days: List[date], write: bool = True) -> Dict[str, Any]:
         )
 
         await _record(day, {
+            "status": "completed",
+            "error": None,
             "feed_total": outcome["feed_total"],
             "parsed_total": outcome["parsed_total"],
             "rows": outcome["rows"],
@@ -369,3 +388,32 @@ async def run_startup_backfill() -> None:
         await run_backfill(days, write=True)
     except Exception as exc:
         logger.error("URS backfill aborted: %s", exc, exc_info=True)
+
+
+async def run_backfill_job() -> Dict[str, Any]:
+    """
+    Manual trigger, via the scheduler's ``/jobs/urs_backfill/trigger`` route.
+
+    The startup hook fires once and leaves no trace anyone without shell access
+    can read. This is the same work behind a lever that can be pulled on demand
+    and whose outcome lands in ``urs_backfill_state``, which the processing
+    service exposes. Still skips days already completed.
+    """
+    if not backfill_enabled():
+        return {"ran": False, "reason": "disabled by URS_BACKFILL_ON_START"}
+
+    window = resolve_window()
+    if not window:
+        return {"ran": False, "reason": "empty window"}
+
+    days = await pending_days()
+    if not days:
+        return {
+            "ran": False,
+            "reason": "every day in the window is already done",
+            "window": [window[0].isoformat(), window[-1].isoformat()],
+        }
+
+    result = await run_backfill(days, write=True)
+    result["window"] = [window[0].isoformat(), window[-1].isoformat()]
+    return result
