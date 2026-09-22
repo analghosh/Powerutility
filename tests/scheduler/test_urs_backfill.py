@@ -11,7 +11,7 @@ lives in the ``urs_backfill_state`` collection and is asserted in
 import os
 import unittest
 from datetime import date, timedelta
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from services.scheduler.app.services import urs_backfill
 
@@ -105,6 +105,37 @@ class PendingDaysTests(unittest.IsolatedAsyncioTestCase):
 
             done.add(window[-1].isoformat())
             self.assertEqual(await urs_backfill.pending_days(), [])
+
+
+class AlreadyDoneTests(unittest.IsolatedAsyncioTestCase):
+    """
+    Only a completed day is done.
+
+    A failed day is still recorded - the operators cannot read the service log,
+    so an unrecorded failure is indistinguishable from a quiet day - but it must
+    stay pending so the next run retries it.
+    """
+
+    @staticmethod
+    def _db_returning(state):
+        collection = MagicMock()
+        collection.find_one = AsyncMock(return_value=state)
+        return MagicMock(__getitem__=MagicMock(return_value=collection))
+
+    async def _already_done_with(self, state):
+        with patch.object(urs_backfill, "_database", return_value=self._db_returning(state)):
+            return await urs_backfill._already_done(date(2026, 9, 18))
+
+    async def test_a_completed_day_is_done(self):
+        self.assertTrue(await self._already_done_with({"_id": "2026-09-18", "status": "completed"}))
+
+    async def test_a_failed_day_is_not_done(self):
+        self.assertFalse(await self._already_done_with(
+            {"_id": "2026-09-18", "status": "failed", "stage": "fetch", "error": "refused"}
+        ))
+
+    async def test_an_unrecorded_day_is_not_done(self):
+        self.assertFalse(await self._already_done_with(None))
 
 
 class FeedTotalTests(unittest.TestCase):

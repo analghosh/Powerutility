@@ -16,6 +16,12 @@ logger = logging.getLogger(__name__)
 
 COLLECTION = "urs_serve"
 
+#: Written by the scheduler's one-time backfill. Read here because the people
+#: who need to know whether it ran have no shell and no database access to the
+#: host - without this, a backfill that failed and a fortnight that was simply
+#: quiet look identical from outside.
+BACKFILL_STATE_COLLECTION = "urs_backfill_state"
+
 #: An aggregation that walks a whole day for every plant should finish in well
 #: under a second on an indexed collection. A minute means something is wrong -
 #: better to fail the request than to hold a worker open indefinitely.
@@ -96,6 +102,13 @@ class UrsRepository(GenericRepository):
         return await self.aggregate(
             COLLECTION, pipeline, max_time_ms=_AGGREGATE_MAX_TIME_MS
         )
+
+    async def backfill_state(self) -> List[Dict[str, Any]]:
+        """What the one-time backfill recorded, oldest day first."""
+        # find_many takes no sort; at most one document per day in a capped
+        # window, so ordering them here costs nothing.
+        rows = await self.find_many(BACKFILL_STATE_COLLECTION, limit=100)
+        return sorted(rows, key=lambda row: str(row.get("_id")))
 
 
 urs_repository = UrsRepository()
