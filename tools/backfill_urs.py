@@ -64,22 +64,15 @@ from typing import Any, Dict, List, Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from pymongo import MongoClient  # noqa: E402
-
-from libs.parsers.parser_factory import create_parser  # noqa: E402
 from services.scheduler.app.core.config import settings  # noqa: E402
 from services.scheduler.app.processors.supply_processor import SupplyProcessor  # noqa: E402
-from services.scheduler.app.repository.urs_serve_repository import (  # noqa: E402
-    urs_serve_repository,
+from services.scheduler.app.services.urs_backfill import (  # noqa: E402
+    MAX_DAYS,
+    REQUEST_GAP_SECONDS,
+    fetch_day,
+    load_provider,
+    process_payload,
 )
-
-#: A guard, not a limit of the feed. A fat-fingered year turns into hundreds of
-#: calls against a government gateway on PTC's credential; refuse instead.
-MAX_DAYS = 31
-
-#: The gateway is not ours and this is a bulk read. One request at a time, with
-#: a pause, so a backfill never looks like a flood from PTC's account.
-REQUEST_GAP_SECONDS = 1.5
 
 
 def parse_args() -> argparse.Namespace:
@@ -157,100 +150,11 @@ def date_range(first: str, last: str) -> List[date]:
     return [start + timedelta(days=i) for i in range(span)]
 
 
-def load_provider(code: str) -> Dict[str, Any]:
-    client = MongoClient(settings.MONGODB_URI, serverSelectionTimeoutMS=8000)
-    provider = client[settings.MONGODB_DATABASE]["providers"].find_one({"code": code})
-    if not provider:
-        raise SystemExit(f"no provider with code {code} in {settings.MONGODB_DATABASE}.providers")
-    if not (provider.get("metadata") or {}).get("api_url"):
-        raise SystemExit(f"provider {code} has no metadata.api_url")
-    return provider
-
-
-def fetch_day(metadata: Dict[str, Any], day: date) -> Dict[str, Any]:
-    """One payload, at the day's final revision."""
-    body = dict(metadata.get("body") or {})
-    body["Date"] = day.strftime("%d-%m-%Y")
-    # -1 is the feed's own "latest revision" sentinel. A backfill wants the
-    # settled picture, never whichever intraday revision we happened to catch.
-    body["SchdRevNo"] = -1
-
-    request = urllib.request.Request(
-        metadata["api_url"],
-        data=json.dumps(body).encode("utf-8"),
-        headers=metadata.get("headers") or {"Content-Type": "application/json"},
-        method=(metadata.get("method") or "POST").upper(),
-    )
-    with urllib.request.urlopen(request, timeout=metadata.get("timeout", 60)) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def feed_urs_total(payload: Dict[str, Any]) -> Optional[float]:
-    """
-    The feed's own URS figure, from NetScheduleSummary.
-
-    Kept as an independent check on the parser: the summary is computed by Grid
-    India, the per-plant rows are computed here, and the two must agree. A
-    silent divergence is what a parser bug looks like.
-    """
-    try:
-        groups = payload["ResponseBody"]["GroupWiseDataList"]
-        total = 0.0
-        for group in groups:
-            for row in group["NetScheduleSummary"]["NetSchdDataList"]:
-                if row.get("EnergyScheduleTypeName") == "URS":
-                    total += sum(row.get("NetSchdAmount") or [])
-        return total
-    except (KeyError, IndexError, TypeError):
-        return None
-
-
-async def backfill_day(
-    processor: SupplyProcessor,
-    provider: Dict[str, Any],
-    payload: Dict[str, Any],
-    write: bool,
-) -> Dict[str, Any]:
-    parser_type = (provider.get("metadata") or {}).get("parser_type") or "grid_india"
-    records = create_parser(parser_type=parser_type).parse(payload)
-
-    # DC/SG deliberately discarded - see the module docstring.
-    _, urs_records = processor._split_out_urs(records)
-
-    documents: List[Dict[str, Any]] = []
-    unresolved: Dict[str, int] = {}
-    for record in urs_records:
-        plant = await processor._resolve_plant(record)
-        if not plant:
-            key = str(record.get("plant_id") or "?")
-            unresolved[key] = unresolved.get(key, 0) + 1
-            continue
-        scheduled_at = processor._parse_scheduled_at(record)
-        if not scheduled_at:
-            continue
-        document = processor._build_urs_document(
-            record, plant, scheduled_at, plant.get("plant_id"), provider
-        )
-        if document:
-            documents.append(document)
-
-    result = {}
-    if write and documents:
-        result = await urs_serve_repository.bulk_upsert(documents)
-
-    return {
-        "urs_records": len(urs_records),
-        "documents": documents,
-        "plants": sorted({d["plant_id"] for d in documents}),
-        "parsed_total": round(sum(d["volume"] or 0.0 for d in documents), 3),
-        "unresolved": unresolved,
-        "write_result": result,
-    }
-
-
 async def main() -> int:
     args = parse_args()
-    provider = load_provider(args.provider)
+    provider = await load_provider(args.provider)
+    if not provider:
+        raise SystemExit(f"no usable provider with code {args.provider}")
     metadata = provider["metadata"]
     processor = SupplyProcessor()
 
@@ -287,14 +191,12 @@ async def main() -> int:
             if dump_dir:
                 (dump_dir / f"{day.isoformat()}.json").write_text(json.dumps(payload))
 
-        outcome = await backfill_day(processor, provider, payload, args.write)
-        feed_total = feed_urs_total(payload)
+        outcome = await process_payload(processor, provider, payload, args.write)
+        feed_total = outcome["feed_total"]
         written += len(outcome["documents"]) if args.write else 0
 
         notes = []
-        if feed_total is not None and abs(feed_total - outcome["parsed_total"]) > 0.5:
-            # Loud on purpose. The two numbers come from different places and a
-            # gap means the per-plant rows do not add up to the feed's own total.
+        if outcome["mismatch"]:
             notes.append(f"MISMATCH vs feed (delta {feed_total - outcome['parsed_total']:+.2f})")
         if outcome["unresolved"]:
             missing = ", ".join(f"{k}x{v}" for k, v in sorted(outcome["unresolved"].items()))
