@@ -80,6 +80,40 @@ def describe_upload_moment(uploaded_at: datetime) -> Dict[str, Any]:
     }
 
 
+def resolve_upload_moment(declared_at: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    The upload fields for one stored report, given what the operator declared.
+
+    The Report Uploader lets the operator set the Uploaded Date and time. That
+    is deliberate - reports are often put in during a later shift than the one
+    they belong to, and the shift view is laid out by the upload time block, so
+    a file that arrived at 23:50 and was typed in at 00:10 belongs on the
+    earlier shift or it is on the wrong page entirely.
+
+    Both instants are kept, and that is the point of this function existing
+    rather than the caller writing one timestamp:
+
+    * ``uploaded_at`` is what the operator declared, and is what every screen
+      reads and every listing is keyed on.
+    * ``received_at`` is the server clock at the moment the bytes arrived, and
+      is never writable from the form.
+
+    Keeping only the declared one would make the audit trail something the form
+    can rewrite: a file could be recorded as having landed at any time, with
+    nothing left to contradict it. ``uploaded_at_declared`` says which of the
+    two cases a row is, so a reader is never left guessing whether a timestamp
+    was typed or observed.
+    """
+    received_at = datetime.now(timezone.utc)
+    effective = declared_at or received_at
+    return {
+        "uploaded_at": effective,
+        "received_at": received_at,
+        "uploaded_at_declared": declared_at is not None,
+        **describe_upload_moment(effective),
+    }
+
+
 class UploadRejected(Exception):
     """
     An upload that will not be stored.
@@ -138,6 +172,7 @@ class ExchangeReportService:
         delivery_date: str,
         actor: Dict[str, Any],
         confirm_replace: bool = False,
+        uploaded_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         category = self._require_available_category(report_category)
         self._require_accepted_extension(category, filename)
@@ -168,6 +203,7 @@ class ExchangeReportService:
             filename=filename,
             data=data,
             actor=actor,
+            uploaded_at=uploaded_at,
         )
         # The same shape as the document's own upload fields, so anything that
         # can render "when this landed" for the current upload renders an
@@ -181,6 +217,8 @@ class ExchangeReportService:
             "uploaded_on_ist_date": document["uploaded_on_ist_date"],
             "uploaded_at_ist_time": document["uploaded_at_ist_time"],
             "uploaded_in_time_block": document["uploaded_in_time_block"],
+            "uploaded_at_declared": document["uploaded_at_declared"],
+            "received_at": document["received_at"],
             "uploaded_by": document["uploaded_by"],
             "uploaded_by_username": document["uploaded_by_username"],
             "source_filename": filename,
@@ -423,6 +461,7 @@ class ExchangeReportService:
         filename: str,
         data: bytes,
         actor: Dict[str, Any],
+        uploaded_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         """
         Build the stored document.
@@ -432,7 +471,7 @@ class ExchangeReportService:
         later which file a figure came from. The originals stay downloadable
         from the exchange, and the deployment is a single box with no backup.
         """
-        uploaded_at = datetime.now(timezone.utc)
+        moment = resolve_upload_moment(uploaded_at)
         document = dict(parsed)
         document.update(
             {
@@ -448,10 +487,9 @@ class ExchangeReportService:
                 "source_filename": filename,
                 "file_sha256": hashlib.sha256(data).hexdigest(),
                 "file_size_bytes": len(data),
-                "uploaded_at": uploaded_at,
                 "uploaded_by": actor.get("user_id"),
                 "uploaded_by_username": actor.get("username"),
-                **describe_upload_moment(uploaded_at),
+                **moment,
             }
         )
         return document
@@ -490,6 +528,10 @@ class ExchangeReportService:
             "uploaded_at_ist_time": document.get("uploaded_at_ist_time"),
             "uploaded_on_ist_date": document.get("uploaded_on_ist_date"),
             "uploaded_in_time_block": document.get("uploaded_in_time_block"),
+            # Whether the upload time was typed on the form or observed by the
+            # server. Carried on every listing row so a reader is never left
+            # guessing which of the two a stamp is.
+            "uploaded_at_declared": document.get("uploaded_at_declared"),
             "uploaded_by_username": document.get("uploaded_by_username"),
         }
 
