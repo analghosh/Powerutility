@@ -19,20 +19,26 @@ from services.scheduler.app.services import urs_backfill
 class ResolveWindowTests(unittest.TestCase):
     """The window is always strictly behind today."""
 
+    KEYS = ("URS_BACKFILL_FROM", "URS_BACKFILL_TO")
+
     def setUp(self):
-        for key in ("URS_BACKFILL_DAYS", "URS_BACKFILL_FROM", "URS_BACKFILL_TO"):
-            os.environ.pop(key, None)
+        self._clear()
         self.addCleanup(self._clear)
 
-    @staticmethod
-    def _clear():
-        for key in ("URS_BACKFILL_DAYS", "URS_BACKFILL_FROM", "URS_BACKFILL_TO"):
+    @classmethod
+    def _clear(cls):
+        for key in cls.KEYS:
             os.environ.pop(key, None)
 
-    def test_the_window_ends_yesterday(self):
+    def test_the_default_window_is_pinned_not_relative(self):
+        """
+        A relative window would make a late or repeated deployment fetch a
+        different fortnight than the one this exists to recover.
+        """
         window = urs_backfill.resolve_window()
-        self.assertEqual(window[-1], date.today() - timedelta(days=1))
-        self.assertEqual(len(window), urs_backfill.DEFAULT_DAYS)
+        self.assertEqual(window[0], urs_backfill.DEFAULT_WINDOW_FROM)
+        self.assertEqual(window[-1], urs_backfill.DEFAULT_WINDOW_TO)
+        self.assertTrue(all(day < date.today() for day in window))
 
     def test_an_explicit_window_is_clamped_to_yesterday(self):
         """Asking for future days yields the past ones, not an error and not a guess."""
@@ -47,13 +53,10 @@ class ResolveWindowTests(unittest.TestCase):
         os.environ["URS_BACKFILL_TO"] = str(date.today() + timedelta(days=5))
         self.assertEqual(urs_backfill.resolve_window(), [])
 
-    def test_an_oversized_request_is_capped_not_honoured(self):
-        os.environ["URS_BACKFILL_DAYS"] = "3650"
-        self.assertEqual(len(urs_backfill.resolve_window()), urs_backfill.MAX_DAYS)
-
-    def test_a_junk_day_count_falls_back_to_the_default(self):
-        os.environ["URS_BACKFILL_DAYS"] = "last week"
-        self.assertEqual(len(urs_backfill.resolve_window()), urs_backfill.DEFAULT_DAYS)
+    def test_an_oversized_window_is_refused_not_truncated(self):
+        os.environ["URS_BACKFILL_FROM"] = "2020-01-01"
+        os.environ["URS_BACKFILL_TO"] = str(date.today() - timedelta(days=1))
+        self.assertEqual(urs_backfill.resolve_window(), [])
 
     def test_a_malformed_explicit_window_yields_nothing(self):
         os.environ["URS_BACKFILL_FROM"] = "08/09/2026"
@@ -62,16 +65,28 @@ class ResolveWindowTests(unittest.TestCase):
 
 
 class FlagTests(unittest.TestCase):
-    def test_the_backfill_is_off_unless_explicitly_switched_on(self):
+    """
+    On by default, because the operators cannot set an environment variable on
+    this host - a redeploy is their only lever. Running once is what makes that
+    safe, not the flag.
+    """
+
+    def setUp(self):
+        self.addCleanup(os.environ.pop, "URS_BACKFILL_ON_START", None)
+
+    def test_it_is_on_with_nothing_configured(self):
         os.environ.pop("URS_BACKFILL_ON_START", None)
-        self.assertFalse(urs_backfill._flag_is_set("URS_BACKFILL_ON_START"))
-        for value in ("1", "true", "TRUE", "yes", "on"):
+        self.assertTrue(urs_backfill.backfill_enabled())
+
+    def test_it_can_be_switched_off(self):
+        for value in ("0", "false", "FALSE", "no", "off"):
             os.environ["URS_BACKFILL_ON_START"] = value
-            self.assertTrue(urs_backfill._flag_is_set("URS_BACKFILL_ON_START"), value)
-        for value in ("0", "false", "no", ""):
+            self.assertFalse(urs_backfill.backfill_enabled(), value)
+
+    def test_anything_else_leaves_it_on(self):
+        for value in ("1", "true", "yes", "on", ""):
             os.environ["URS_BACKFILL_ON_START"] = value
-            self.assertFalse(urs_backfill._flag_is_set("URS_BACKFILL_ON_START"), value)
-        os.environ.pop("URS_BACKFILL_ON_START", None)
+            self.assertTrue(urs_backfill.backfill_enabled(), value)
 
 
 class PendingDaysTests(unittest.IsolatedAsyncioTestCase):
@@ -80,18 +95,15 @@ class PendingDaysTests(unittest.IsolatedAsyncioTestCase):
         A restart must not refetch. Every date already recorded in
         urs_backfill_state drops out, so a second run has nothing to do.
         """
-        os.environ["URS_BACKFILL_DAYS"] = "3"
-        self.addCleanup(os.environ.pop, "URS_BACKFILL_DAYS", None)
-
         window = urs_backfill.resolve_window()
-        done = {window[0].isoformat(), window[1].isoformat()}
+        done = {day.isoformat() for day in window[:-1]}
 
         with patch.object(urs_backfill, "_already_done", new=AsyncMock(
             side_effect=lambda day: day.isoformat() in done
         )):
-            self.assertEqual(await urs_backfill.pending_days(), [window[2]])
+            self.assertEqual(await urs_backfill.pending_days(), [window[-1]])
 
-            done.add(window[2].isoformat())
+            done.add(window[-1].isoformat())
             self.assertEqual(await urs_backfill.pending_days(), [])
 
 
