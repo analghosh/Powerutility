@@ -20,16 +20,23 @@ Everything here runs through the live ``SupplyProcessor`` methods rather than a
 reimplementation, so a backfilled row is identical to one the cron would have
 written. Writes are upserts keyed on (scheduled_at, time_block, plant_id).
 
-Switched OFF unless ``URS_BACKFILL_ON_START`` is set. Once a date has been
-processed it is recorded in ``urs_backfill_state`` and never fetched again, so
-leaving the flag on costs nothing and a restart loop cannot hammer PTC's
-gateway credential. Delete the flag - and eventually this module - once the
-gap is closed.
+ON by default and configured by nobody: the people who need this have no shell
+and no database access to the host, so a redeploy has to be the whole operation.
 
-    URS_BACKFILL_ON_START=true     # required; nothing happens without it
-    URS_BACKFILL_DAYS=14           # how far back from yesterday (default 14, max 31)
-    URS_BACKFILL_FROM=2026-09-08   # or name the window exactly
+That is only safe because of two things. The window is a PINNED PAIR OF DATES,
+not "the last fortnight" - so this code running unexpectedly, months later, on
+another environment, still asks for the same fourteen September days and not
+for whatever fortnight happens to precede it. And every date attempted is
+recorded in ``urs_backfill_state``, so it happens exactly once per database no
+matter how many times the service restarts.
+
+    URS_BACKFILL_ON_START=false    # the off switch, if it ever needs one
+    URS_BACKFILL_FROM=2026-09-08   # or move the window
     URS_BACKFILL_TO=2026-09-21
+
+**This module is temporary.** Once the gap is closed - check
+``urs_backfill_state`` has a document per date - delete it and its call in
+``main.py``. It is inert until then, not harmless-forever by design.
 """
 
 import asyncio
@@ -58,7 +65,12 @@ _has_run = False
 #: A guard, not a limit of the feed. Keeps a mistyped window from turning into
 #: hundreds of calls on a government gateway against PTC's account.
 MAX_DAYS = 31
-DEFAULT_DAYS = 14
+
+#: The gap this exists to close: the fortnight before URS storage shipped.
+#: Pinned rather than computed from today on purpose - a relative window would
+#: make a late or repeated deployment fetch a different, unintended fortnight.
+DEFAULT_WINDOW_FROM = date(2026, 9, 8)
+DEFAULT_WINDOW_TO = date(2026, 9, 21)
 
 #: The gateway is not ours and this is a bulk read. One at a time, with a pause.
 REQUEST_GAP_SECONDS = 1.5
@@ -68,8 +80,22 @@ REQUEST_GAP_SECONDS = 1.5
 START_DELAY_SECONDS = 30
 
 
-def _flag_is_set(name: str) -> bool:
-    return str(os.getenv(name, "")).strip().lower() in {"1", "true", "yes", "on"}
+TRUTHY = {"1", "true", "yes", "on"}
+FALSEY = {"0", "false", "no", "off"}
+
+
+def backfill_enabled() -> bool:
+    """
+    On unless explicitly switched off.
+
+    Inverted from the usual feature-flag default because the operators cannot
+    set an environment variable on this host - redeploying is the only lever
+    they have. The run-once state collection is what makes that acceptable.
+    """
+    value = str(os.getenv("URS_BACKFILL_ON_START", "")).strip().lower()
+    if value in FALSEY:
+        return False
+    return True
 
 
 def _database():
@@ -205,13 +231,11 @@ def resolve_window() -> List[date]:
             logger.error("URS backfill: window %s..%s is empty", explicit_from, explicit_to)
             return []
     else:
-        try:
-            days = int(os.getenv("URS_BACKFILL_DAYS", str(DEFAULT_DAYS)))
-        except ValueError:
-            days = DEFAULT_DAYS
-        days = max(1, min(days, MAX_DAYS))
-        end = yesterday
-        start = end - timedelta(days=days - 1)
+        start = DEFAULT_WINDOW_FROM
+        end = min(DEFAULT_WINDOW_TO, yesterday)
+        if end < start:
+            # The pinned window has not finished yet. Nothing to recover.
+            return []
 
     span = (end - start).days + 1
     if span > MAX_DAYS:
@@ -315,7 +339,8 @@ async def run_startup_backfill() -> None:
     """
     global _has_run
 
-    if not _flag_is_set("URS_BACKFILL_ON_START"):
+    if not backfill_enabled():
+        logger.info("URS backfill disabled by URS_BACKFILL_ON_START")
         return
     if _has_run:
         return
