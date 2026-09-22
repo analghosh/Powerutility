@@ -103,6 +103,37 @@ class UrsDate(BaseModel):
 
 
 @router.get(
+    "/backfill-status",
+    summary="What the one-time URS backfill did",
+    responses={500: {"description": "Failed to read the backfill state"}},
+)
+async def get_urs_backfill_status(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    """
+    One row per day the backfill attempted, with what it found.
+
+    Exists because the people who need this answer have no shell and no
+    database access to the host. Without it, "the backfill never ran", "it ran
+    and the gateway refused it" and "it ran and those days were genuinely
+    quiet" are indistinguishable from outside - all three look like an empty
+    report.
+
+    An empty list means the backfill has not run at all.
+    """
+    try:
+        return await urs_controller.get_backfill_state()
+    except Exception as exc:
+        logger.error("Failed to read URS backfill state: %s", exc, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"message": "Failed to read the backfill state"},
+        ) from exc
+
+
+@router.get(
     "/dates",
     response_model=List[UrsDate],
     summary="Days that hold URS data",
