@@ -139,6 +139,18 @@ async def lifespan(app: FastAPI):
     # Run timeblock seeder
     run_timeblock_seeder()
     
+    # One-time URS backfill, if it has been switched on. Backgrounded so a slow
+    # gateway cannot hold up start-up, and a no-op on every restart after the
+    # first - see services/urs_backfill.py.
+    try:
+        import asyncio as _asyncio
+
+        from .services.urs_backfill import run_startup_backfill
+
+        _asyncio.create_task(run_startup_backfill())
+    except Exception as backfill_error:
+        logger.warning("Could not schedule the URS backfill: %s", backfill_error)
+
     # Step 2: Start the cron scheduler as a background task
     try:
         import asyncio
