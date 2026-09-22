@@ -8,10 +8,18 @@ parse is a user who fills in the form, waits for the upload and then gets an
 error, and a file type advertised in the hint text but rejected on submit is
 the same failure one step later.
 
-Three of the four categories have no parser yet because no sample file exists
-for them. They are listed rather than hidden, so the screen shows the full set
-PTC asked for, and each says plainly that it is not ready instead of failing
-at submit with something that reads like a bug.
+A category that has no parser is not necessarily unfinished. Three states are
+kept apart here, because the screen has to say something different about each:
+
+* **parsed** - a sample file exists and figures are read out of it.
+* **store-only** (`stores_file_only`) - the file is kept and handed back byte
+  for byte, and nothing is read out of it. A finished state, not a pending one.
+* **not available** (`implemented=False`) - listed so the screen shows the full
+  set PTC asked for, and says plainly that it is not ready instead of failing
+  at submit with something that reads like a bug.
+
+A store-only category is filed either by delivery day or, when `period_keyed`
+is set, by calendar month.
 """
 
 from dataclasses import dataclass
@@ -36,6 +44,13 @@ class ReportCategory:
     #: layout to parse, not because a parser is still to come — so it is a
     #: finished state, unlike `implemented=False`.
     stores_file_only: bool = False
+    #: True when the report covers a calendar month rather than a delivery
+    #: day. The uploader asks for Year and Month instead of a Delivery Date,
+    #: and the file is filed under that month. A monthly report has no single
+    #: day the power flowed on, so forcing one would record an answer nobody
+    #: meant — the same reasoning that keeps exchange and market off a
+    #: store-only category.
+    period_keyed: bool = False
 
 
 OBLIGATION_REPORT = "obligation_report"
@@ -65,19 +80,29 @@ CATEGORIES: Dict[str, ReportCategory] = {
         implemented=False,
         unavailable_reason=_NO_SAMPLE,
     ),
+    # LTOA and STOA are month reports, and store-only for the same reason
+    # Other Reports is: no sample file has been supplied, so there is no
+    # layout to parse. Keeping the file is still worth doing — an upload that
+    # is refused outright leaves the operator nowhere to put the month's
+    # report, and a stored file is what a parser will be written against when
+    # a sample does arrive.
     LTOA: ReportCategory(
         code=LTOA,
         label="LTOA",
-        accepted_extensions=(".xlsx", ".xls", ".csv"),
-        implemented=False,
-        unavailable_reason=_NO_SAMPLE,
+        # Wider than a spreadsheet: the open-access reports these carry are
+        # published as PDFs as often as workbooks.
+        accepted_extensions=(".xlsx", ".xls", ".csv", ".pdf"),
+        implemented=True,
+        stores_file_only=True,
+        period_keyed=True,
     ),
     STOA: ReportCategory(
         code=STOA,
         label="STOA",
-        accepted_extensions=(".xlsx", ".xls", ".csv"),
-        implemented=False,
-        unavailable_reason=_NO_SAMPLE,
+        accepted_extensions=(".xlsx", ".xls", ".csv", ".pdf"),
+        implemented=True,
+        stores_file_only=True,
+        period_keyed=True,
     ),
     OTHER_REPORTS: ReportCategory(
         code=OTHER_REPORTS,
@@ -139,6 +164,7 @@ def describe_categories() -> List[Dict[str, object]]:
             "unavailable_reason": category.unavailable_reason,
             "description": category.description,
             "stores_file_only": category.stores_file_only,
+            "period_keyed": category.period_keyed,
         }
         for category in (CATEGORIES[code] for code in CATEGORY_ORDER)
     ]
@@ -182,3 +208,36 @@ def date_basis_of(date_field: str) -> str:
         if field == date_field:
             return basis
     return DEFAULT_DATE_BASIS
+
+
+# --- Month reports ------------------------------------------------------------
+#
+# LTOA and STOA cover a calendar month rather than a delivery day, so the
+# uploader asks for a Year and a Month. Both are validated here rather than at
+# the route, so the screen, the uploader and any later parser agree on what a
+# period is.
+
+#: Month names in the order they are numbered, so `MONTH_NAMES[0]` is January.
+#: Used for the stored label and for anything that has to print a period back.
+MONTH_NAMES: List[str] = [
+    "January", "February", "March", "April", "May", "June",
+    "July", "August", "September", "October", "November", "December",
+]
+
+#: The earliest year a report can be filed under. Open access in India dates
+#: from well after this, so anything below it is a mistyped year rather than an
+#: old report.
+MIN_PERIOD_YEAR = 2000
+
+
+def month_name(month: int) -> str:
+    """"9" -> "September". Falls back to the number for an out-of-range month,
+    so a stored label never reads as a crash."""
+    if isinstance(month, int) and 1 <= month <= 12:
+        return MONTH_NAMES[month - 1]
+    return str(month)
+
+
+def period_label(year: int, month: int) -> str:
+    """The period as the operator picked it, e.g. "September 2021"."""
+    return f"{month_name(month)} {year}"

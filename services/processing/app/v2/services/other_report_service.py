@@ -32,7 +32,7 @@ is recognisable.
 import hashlib
 import logging
 import mimetypes
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Dict, Optional
 
 from ..exchange_reports import registry
@@ -40,7 +40,7 @@ from ..repository.other_report_repository import other_report_repository
 from .exchange_report_service import (
     ExchangeReportService,
     UploadRejected,
-    describe_upload_moment,
+    resolve_upload_moment,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,6 +70,7 @@ class OtherReportService:
         filename: str,
         delivery_date: str,
         actor: Dict[str, Any],
+        uploaded_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
         category = registry.get_category(registry.OTHER_REPORTS)
 
@@ -83,6 +84,7 @@ class OtherReportService:
             filename=filename,
             data=data,
             actor=actor,
+            uploaded_at=uploaded_at,
         )
         upload_event = {
             "uploaded_at": document["uploaded_at"],
@@ -90,6 +92,8 @@ class OtherReportService:
             "uploaded_on_ist_date": document["uploaded_on_ist_date"],
             "uploaded_at_ist_time": document["uploaded_at_ist_time"],
             "uploaded_in_time_block": document["uploaded_in_time_block"],
+            "uploaded_at_declared": document["uploaded_at_declared"],
+            "received_at": document["received_at"],
             "uploaded_by": document["uploaded_by"],
             "uploaded_by_username": document["uploaded_by_username"],
             "source_filename": filename,
@@ -157,8 +161,8 @@ class OtherReportService:
         filename: str,
         data: bytes,
         actor: Dict[str, Any],
+        uploaded_at: Optional[datetime] = None,
     ) -> Dict[str, Any]:
-        uploaded_at = datetime.now(timezone.utc)
         return {
             "report_category": category.code,
             "report_category_label": category.label,
@@ -167,10 +171,9 @@ class OtherReportService:
             "content_type": _guess_content_type(filename),
             "file_sha256": hashlib.sha256(data).hexdigest(),
             "file_size_bytes": len(data),
-            "uploaded_at": uploaded_at,
             "uploaded_by": actor.get("user_id"),
             "uploaded_by_username": actor.get("username"),
-            **describe_upload_moment(uploaded_at),
+            **resolve_upload_moment(uploaded_at),
         }
 
     # -- reads -------------------------------------------------------------
@@ -201,6 +204,7 @@ class OtherReportService:
             "uploaded_on_ist_date": document.get("uploaded_on_ist_date"),
             "uploaded_at_ist_time": document.get("uploaded_at_ist_time"),
             "uploaded_in_time_block": document.get("uploaded_in_time_block"),
+            "uploaded_at_declared": document.get("uploaded_at_declared"),
             "uploaded_by_username": document.get("uploaded_by_username"),
             "upload_count": document.get("upload_count"),
         }
