@@ -39,6 +39,12 @@ changes nothing.
     # then commit it
     ./.venv/bin/python tools/backfill_urs.py --from 2026-09-08 --to 2026-09-21 --write
 
+Fetching and storing can be done from different machines, which matters because
+the gateway answers very few of them. Save the payloads where it does answer
+(--dump-dir, or Postman's "Save response"), then parse them anywhere:
+
+    ./.venv/bin/python tools/backfill_urs.py --from-dir ./urs-payloads
+
 Must run on a host the gateway accepts: gateway.grid-india.in TLS-resets any
 address that is not allow-listed, so this works on the UAT/PROD box and not on a
 laptop. Run it from the backend root with the service venv.
@@ -78,12 +84,52 @@ REQUEST_GAP_SECONDS = 1.5
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("--from", dest="date_from", required=True, help="first date, YYYY-MM-DD")
-    p.add_argument("--to", dest="date_to", required=True, help="last date, YYYY-MM-DD (inclusive)")
+    p.add_argument("--from", dest="date_from", help="first date, YYYY-MM-DD")
+    p.add_argument("--to", dest="date_to", help="last date, YYYY-MM-DD (inclusive)")
     p.add_argument("--provider", default="GRID_INDIA_SUPPLY", help="provider code to borrow the endpoint and credential from")
     p.add_argument("--write", action="store_true", help="upsert into urs_serve; without it nothing is written")
-    p.add_argument("--dump-dir", help="also save each raw payload here, for inspection")
-    return p.parse_args()
+    p.add_argument("--dump-dir", help="also save each fetched payload here, for inspection")
+    p.add_argument("--from-dir", help="read payloads already saved in this directory instead of calling the gateway")
+    args = p.parse_args()
+    if not args.from_dir and not (args.date_from and args.date_to):
+        p.error("give --from and --to, or --from-dir")
+    return args
+
+
+def load_saved_payloads(directory: str) -> List[tuple]:
+    """
+    Payloads already on disk, from a machine the gateway does answer.
+
+    The date is read from each payload rather than from its filename, so
+    anything works - a Postman "Save response", a browser download, whatever
+    the operator had to hand on the box that could reach the gateway.
+    """
+    folder = Path(directory)
+    if not folder.is_dir():
+        raise SystemExit(f"--from-dir {directory} is not a directory")
+
+    found = []
+    for path in sorted(folder.glob("*.json")):
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError) as exc:
+            print(f"skipping {path.name}: {exc}")
+            continue
+        stamp = ((payload.get("ResponseBody") or {}).get("Date") or "").strip()
+        try:
+            day = datetime.strptime(stamp, "%d-%m-%Y").date()
+        except ValueError:
+            print(f"skipping {path.name}: no readable ResponseBody.Date ({stamp!r})")
+            continue
+        found.append((day, payload, path.name))
+
+    if not found:
+        raise SystemExit(f"no usable payloads in {directory}")
+    # One date can arrive twice at different revisions; the later file wins.
+    latest = {}
+    for day, payload, name in found:
+        latest[day] = (payload, name)
+    return [(day, *latest[day]) for day in sorted(latest)]
 
 
 def date_range(first: str, last: str) -> List[date]:
@@ -204,10 +250,12 @@ async def backfill_day(
 
 async def main() -> int:
     args = parse_args()
-    days = date_range(args.date_from, args.date_to)
     provider = load_provider(args.provider)
     metadata = provider["metadata"]
     processor = SupplyProcessor()
+
+    saved = load_saved_payloads(args.from_dir) if args.from_dir else None
+    days = [row[0] for row in saved] if saved else date_range(args.date_from, args.date_to)
 
     dump_dir = Path(args.dump_dir) if args.dump_dir else None
     if dump_dir:
@@ -215,6 +263,7 @@ async def main() -> int:
 
     print(f"database : {settings.MONGODB_DATABASE} on {settings.MONGODB_URI.split('@')[-1]}")
     print(f"provider : {provider.get('code')}  ({metadata.get('parser_type')})")
+    print(f"source   : {'saved payloads in ' + args.from_dir if saved else 'gateway fetch'}")
     print(f"range    : {days[0]} .. {days[-1]}  ({len(days)} days)")
     print(f"mode     : {'WRITE to urs_serve' if args.write else 'dry run, nothing written'}")
     print("-" * 78)
@@ -223,17 +272,20 @@ async def main() -> int:
     written = 0
     failures = 0
     for index, day in enumerate(days):
-        if index:
-            time.sleep(REQUEST_GAP_SECONDS)
-        try:
-            payload = fetch_day(metadata, day)
-        except (urllib.error.URLError, ssl.SSLError, TimeoutError, json.JSONDecodeError) as exc:
-            failures += 1
-            print(f"{day.isoformat():<12}{'-':>11}{'-':>11}{'-':>7}{'-':>8}  FETCH FAILED: {exc}")
-            continue
+        if saved:
+            payload = saved[index][1]
+        else:
+            if index:
+                time.sleep(REQUEST_GAP_SECONDS)
+            try:
+                payload = fetch_day(metadata, day)
+            except (urllib.error.URLError, ssl.SSLError, TimeoutError, json.JSONDecodeError) as exc:
+                failures += 1
+                print(f"{day.isoformat():<12}{'-':>11}{'-':>11}{'-':>7}{'-':>8}  FETCH FAILED: {exc}")
+                continue
 
-        if dump_dir:
-            (dump_dir / f"{day.isoformat()}.json").write_text(json.dumps(payload))
+            if dump_dir:
+                (dump_dir / f"{day.isoformat()}.json").write_text(json.dumps(payload))
 
         outcome = await backfill_day(processor, provider, payload, args.write)
         feed_total = feed_urs_total(payload)
