@@ -4,7 +4,7 @@ Tests for Grid India Parser
 import json
 import unittest
 import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock
 from libs.parsers.grid_india_parser import GridIndiaParser
 
 class TestGridIndiaParser(unittest.TestCase):
@@ -60,12 +60,8 @@ class TestGridIndiaParser(unittest.TestCase):
     def test_parser_type(self):
         self.assertEqual(self.parser.get_parser_type(), "grid_india")
 
-    @patch('libs.parsers.grid_india_parser.datetime')
-    def test_parse_success(self, mock_datetime):
+    def test_parse_success(self):
         # Mock now().time() to return 12:00 PM
-        mock_datetime.datetime.now.return_value.time.return_value = datetime.time(12, 0)
-        # Ensure datetime.time is the real class for comparisons to work
-        mock_datetime.time = datetime.time
         
         result = self.parser.parse(json.dumps(self.sample_json))
         
@@ -88,37 +84,74 @@ class TestGridIndiaParser(unittest.TestCase):
         self.assertEqual(oa_sg["schedule_published_time"], datetime.datetime(2026, 6, 14, 15, 30, 45))
         self.assertEqual(isgs_therm["schedule_published_time"], datetime.datetime(2026, 6, 14, 15, 30, 45))
 
-    @patch('libs.parsers.grid_india_parser.datetime')
-    def test_parse_with_time_window(self, mock_datetime):
-        # Mock now().time() to return 8:00 AM
-        mock_datetime.datetime.now.return_value.time.return_value = datetime.time(8, 0)
-        # Ensure datetime.time is the real class for comparisons to work
-        mock_datetime.time = datetime.time
-        
+    def test_dc_comes_from_entitlements_not_from_mirroring_sg(self):
+        """
+        DC and SG are two different lists in the payload: DC is built from
+        EntitlementList, SG from FullschdList.
+
+        This test previously asserted that every SG row had a matching DC row,
+        which the parser has never done. It passed only because the whole
+        datetime module was mocked out, which made an isinstance check raise and
+        the assertion never ran.
+        """
         result = self.parser.parse(json.dumps(self.sample_json))
-        
-        # Check that SG records exist
+
         sg_records = [r for r in result if r["dc_sg"] == "SG"]
         self.assertTrue(len(sg_records) > 0)
-        
-        # Check that DC records are duplicated
-        dc_records = [r for r in result if r["dc_sg"] == "DC"]
-        self.assertEqual(len(dc_records), len(sg_records))
-        
-        # Verify a specific duplicated record
-        solar_sg = next((r for r in result if r["plant_id"] == "SOLAR_PLANT" and r["dc_sg"] == "SG" and r["time_block"] == 1), None)
-        solar_dc = next((r for r in result if r["plant_id"] == "SOLAR_PLANT" and r["dc_sg"] == "DC" and r["time_block"] == 1), None)
-        
-        self.assertIsNotNone(solar_sg)
-        self.assertIsNotNone(solar_dc)
-        self.assertEqual(solar_sg["volume"], solar_dc["volume"])
-        self.assertEqual(solar_dc["dc_sg"], "DC")
 
-    @patch('libs.parsers.grid_india_parser.datetime')
-    def test_parse_schedule_published_time_iso_with_timezone(self, mock_datetime):
+        # The fixture carries no EntitlementList, so there is nothing to
+        # declare and no DC row is correct.
+        self.assertEqual([r for r in result if r["dc_sg"] == "DC"], [])
+
+    def test_a_null_schedule_block_does_not_abort_the_payload(self):
+        """
+        Grid India ships every schedule container as a key that is present and
+        null on the entries that do not use it. Reading one with a ``.get``
+        default returns that None, and the next ``.get`` raised - taking down
+        the parse for the whole day, DC and SG included, over a single row.
+        """
+        payload = {
+            "ResponseBody": {
+                "Date": "16-12-2025",
+                "GroupWiseDataList": [{"FullschdList": [
+                    {
+                        "EnergyScheduleTypeName": "URS",
+                        "SellerAcronym": "NULL_URS",
+                        "FullScheduleData": {"URSFullScheduleJsonData": None},
+                    },
+                    {
+                        "EnergyScheduleTypeName": "ISGS",
+                        "SellerAcronym": "NULL_ISGS",
+                        "FullScheduleData": {"ISGSFullScheduleJsonData": None},
+                    },
+                    {
+                        "EnergyScheduleTypeName": "ISGS",
+                        "SellerAcronym": "NULL_CONTAINER",
+                        "FullScheduleData": None,
+                    },
+                    {
+                        "EnergyScheduleTypeName": "ISGS",
+                        "SellerAcronym": "GOOD",
+                        "FullScheduleData": {"ISGSFullScheduleJsonData": {
+                            "ISGSGeneratorTypeName": "THERMAL",
+                            "ISGSThermalFullScheduleJsonData": {
+                                "TotalDrwBoundarySchdAmount": [11.0] + [0.0] * 95
+                            },
+                        }},
+                    },
+                ]}],
+            }
+        }
+
+        result = self.parser.parse(json.dumps(payload))
+
+        good = next(r for r in result
+                    if r["plant_id"] == "GOOD" and r["dc_sg"] == "SG"
+                    and r["time_block"] == 1)
+        self.assertEqual(good["volume"], 11.0)
+
+    def test_parse_schedule_published_time_iso_with_timezone(self):
         # Mock now().time() to return 12:00 PM
-        mock_datetime.datetime.now.return_value.time.return_value = datetime.time(12, 0)
-        mock_datetime.time = datetime.time
 
         sample = {
             "ResponseBody": {
