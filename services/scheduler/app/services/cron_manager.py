@@ -285,6 +285,7 @@ class CronManager(BaseCronManager):
             # System Maintenance Jobs
             "system_cleanup": self._execute_system_cleanup_job,
             "integration_apilog_cleanup": self._execute_integration_apilog_cleanup_job,
+            "urs_backfill": self._execute_urs_backfill_job,
             "scheduling_history_cleanup": self._execute_scheduling_history_cleanup_job,
             "retry_failed_jobs": self._execute_retry_failed_jobs,
             "data_migration": self._execute_data_migration_job,
@@ -1747,6 +1748,24 @@ class CronManager(BaseCronManager):
             # Cleanup connections after job execution
             self._cleanup_job_connections()
     
+    def _execute_urs_backfill_job(self, payload: Optional[Dict[str, Any]] = None):
+        """
+        One-time URS recovery, triggered by hand.
+
+        Seeded disabled: nothing schedules this. It exists so the backfill can
+        be run without shell access to the host, and so its outcome is readable
+        afterwards. Skips any day already completed, so triggering it twice
+        costs nothing.
+        """
+        logger.info("Executing URS backfill job")
+        try:
+            from .urs_backfill import run_backfill_job
+
+            return self._safe_run_async(run_backfill_job())
+        except Exception as e:
+            logger.error("Error in URS backfill job: %s", str(e))
+            return {"status": "error", "error": str(e)}
+
     def _execute_system_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
         """Execute system cleanup job — dynamically cleans all *_integration_apilog collections."""
         logger.info("Executing system cleanup job")

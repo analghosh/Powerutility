@@ -251,6 +251,19 @@ class SchedulerJobSeeder(BaseJobSeeder):
                 "priority": 8
             },
             {
+                "job_type": "urs_backfill",
+                "name": "URS Backfill (one-time)",
+                "type": "maintenance",
+                # Never scheduled. Seeded only so it can be triggered by hand
+                # from the scheduler API; the work is a one-time recovery of
+                # days that predate URS storage, not something to repeat.
+                "schedule": "0 0 31 2 *",
+                "enabled": False,
+                "timezone": getattr(self.settings, 'CRON_TIMEZONE', 'UTC'),
+                "description": "Recovers un-requisitioned surplus for a pinned past window into urs_serve. Trigger manually; skips days already done.",
+                "priority": 9
+            },
+            {
                 "job_type": "integration_apilog_cleanup",
                 "name": "Integration API Log Cleanup",
                 "type": "maintenance",

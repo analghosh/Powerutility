@@ -21,6 +21,12 @@ class UrsController:
             to_block=to_block,
         )
 
+    async def get_backfill_state(self) -> List[Dict[str, Any]]:
+        """What the scheduler's one-time URS backfill recorded, if anything."""
+        from ..repository.urs_repository import urs_repository
+
+        return await urs_repository.backfill_state()
+
     async def get_dates(self, limit: int = 60) -> List[Dict[str, Any]]:
         from ..repository.urs_repository import urs_repository
 
