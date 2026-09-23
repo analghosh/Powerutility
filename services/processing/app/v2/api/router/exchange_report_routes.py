@@ -761,18 +761,83 @@ async def download_other_report_file(
     )
 
 
+def _dsm_windows(
+    *,
+    report_from: Optional[str],
+    report_to: Optional[str],
+    uploaded_from: Optional[str],
+    uploaded_to: Optional[str],
+    date_from: Optional[str],
+    date_to: Optional[str],
+    date_basis: Optional[str],
+) -> tuple:
+    """
+    The settlement window and the upload window a DSM read asks for.
+
+    Two windows rather than one window and a basis, because they are two
+    different questions and an operator can mean both at once: "of the
+    statements that came in yesterday, show me April". A basis could only ever
+    express one of them.
+
+    `date_from`/`date_to`/`date_basis` are the earlier single-window form and
+    still work — they fill in whichever window the basis names, and only when
+    that window was not given explicitly, so a caller mixing the two forms
+    gets the explicit one rather than a silent override.
+    """
+    report = dsm_service.DateWindow(
+        _parse_iso_date(report_from, "report_from") if report_from else None,
+        _parse_iso_date(report_to, "report_to") if report_to else None,
+    )
+    uploaded = dsm_service.DateWindow(
+        _parse_iso_date(uploaded_from, "uploaded_from") if uploaded_from else None,
+        _parse_iso_date(uploaded_to, "uploaded_to") if uploaded_to else None,
+    )
+
+    if date_from or date_to:
+        legacy = dsm_service.DateWindow(
+            _parse_iso_date(date_from, "date_from") if date_from else None,
+            _parse_iso_date(date_to, "date_to") if date_to else None,
+        )
+        if dsm_service.resolve_date_field(date_basis) == "report_date":
+            report = report if report.is_set else legacy
+        else:
+            uploaded = uploaded if uploaded.is_set else legacy
+
+    for window, label in ((report, "Settlement Date"), (uploaded, "Uploaded Date")):
+        # Refused rather than answered with nothing. A backwards window returns
+        # zero rows on every basis, which reads as "there is no data" instead
+        # of "those two dates are the wrong way round".
+        if window.start and window.end and window.start > window.end:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "reason": "backwards_window",
+                    "message": (
+                        f"The {label} window starts after it ends: "
+                        f"{window.start} to {window.end}."
+                    ),
+                    "field": label,
+                },
+            )
+    return report, uploaded
+
+
 @router.get(
     "/dsm",
     summary="Settlement days that have DSM figures, without their blocks",
 )
 async def list_dsm_days(
-    date_from: Optional[str] = Query(None, description="Start of the window, YYYY-MM-DD"),
-    date_to: Optional[str] = Query(None, description="End of the window, YYYY-MM-DD"),
+    report_from: Optional[str] = Query(None, description="Settlement day, from, YYYY-MM-DD"),
+    report_to: Optional[str] = Query(None, description="Settlement day, to, YYYY-MM-DD"),
+    uploaded_from: Optional[str] = Query(None, description="Upload day, from, YYYY-MM-DD"),
+    uploaded_to: Optional[str] = Query(None, description="Upload day, to, YYYY-MM-DD"),
+    date_from: Optional[str] = Query(None, description="Single-window form: start"),
+    date_to: Optional[str] = Query(None, description="Single-window form: end"),
     date_basis: str = Query(
         dsm_service.DEFAULT_DATE_BASIS,
         description=(
-            "Which date the window applies to: `report` (the settlement day, "
-            "the default) or `uploaded` (the day the statement was put in)"
+            "Which date `date_from`/`date_to` apply to: `report` (the "
+            "settlement day, the default) or `uploaded`"
         ),
     ),
     limit: int = Query(62, ge=1, le=400),
@@ -785,12 +850,17 @@ async def list_dsm_days(
     The blocks are left out: a fortnight of them is 1,440 rows, and a summary
     that carried them would be megabytes of numbers nothing displays.
     """
-    result = await dsm_report_service.list_days(
-        date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
-        date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
+    report, uploaded = _dsm_windows(
+        report_from=report_from,
+        report_to=report_to,
+        uploaded_from=uploaded_from,
+        uploaded_to=uploaded_to,
+        date_from=date_from,
+        date_to=date_to,
         date_basis=date_basis,
-        limit=limit,
-        skip=skip,
+    )
+    result = await dsm_report_service.list_days(
+        report=report, uploaded=uploaded, limit=limit, skip=skip
     )
     return {"data": result}
 
@@ -800,27 +870,39 @@ async def list_dsm_days(
     summary="Every DSM block in a window, as the screen and the export read it",
 )
 async def list_dsm_rows(
-    date_from: Optional[str] = Query(None, description="Start of the window, YYYY-MM-DD"),
-    date_to: Optional[str] = Query(None, description="End of the window, YYYY-MM-DD"),
+    report_from: Optional[str] = Query(None, description="Settlement day, from, YYYY-MM-DD"),
+    report_to: Optional[str] = Query(None, description="Settlement day, to, YYYY-MM-DD"),
+    uploaded_from: Optional[str] = Query(None, description="Upload day, from, YYYY-MM-DD"),
+    uploaded_to: Optional[str] = Query(None, description="Upload day, to, YYYY-MM-DD"),
+    date_from: Optional[str] = Query(None, description="Single-window form: start"),
+    date_to: Optional[str] = Query(None, description="Single-window form: end"),
     date_basis: str = Query(
         dsm_service.DEFAULT_DATE_BASIS,
-        description="`report` (the settlement day, the default) or `uploaded`",
+        description="Which date `date_from`/`date_to` apply to: `report` or `uploaded`",
     ),
     limit: int = Query(62, ge=1, le=400, description="Settlement days, not rows"),
     skip: int = Query(0, ge=0),
     user_context: Dict[str, Any] = Depends(get_user_context),
 ) -> Dict[str, Any]:
     """
+    Both windows are optional and are ANDed when both are given, which is how
+    "of the statements that came in yesterday, show me April" is asked.
+
     `limit` counts settlement days rather than rows, because that is the unit
     the operator picks: 1-15 April is fifteen days, and a cap expressed in rows
     would cut a day in half.
     """
-    result = await dsm_report_service.rows(
-        date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
-        date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
+    report, uploaded = _dsm_windows(
+        report_from=report_from,
+        report_to=report_to,
+        uploaded_from=uploaded_from,
+        uploaded_to=uploaded_to,
+        date_from=date_from,
+        date_to=date_to,
         date_basis=date_basis,
-        limit=limit,
-        skip=skip,
+    )
+    result = await dsm_report_service.rows(
+        report=report, uploaded=uploaded, limit=limit, skip=skip
     )
     return {"data": result}
 
