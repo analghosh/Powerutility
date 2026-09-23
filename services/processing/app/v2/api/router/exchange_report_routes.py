@@ -53,6 +53,8 @@ from ...services.exchange_report_service import (AlreadyUploaded,
                                                  CategoryNotAvailable,
                                                  FileTooLarge, UploadRejected,
                                                  exchange_report_service)
+from ...services import dsm_report_service as dsm_service
+from ...services.dsm_report_service import dsm_report_service
 from ...services.other_report_service import other_report_service
 from ...services.period_report_service import period_report_service
 
@@ -354,6 +356,18 @@ async def upload_report(
             user_context=user_context,
         )
 
+    if selected is not None and selected.dates_from_file:
+        data = await file.read()
+        return await _upload_dsm_report(
+            request=request,
+            audit=audit,
+            data=data,
+            filename=filename,
+            uploaded_at=declared_upload_moment,
+            confirm_replace=confirm_replace,
+            user_context=user_context,
+        )
+
     if not delivery_date:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -468,6 +482,59 @@ async def _upload_other_report(
         report_category=registry.OTHER_REPORTS,
         delivery_date=delivery_date,
         replaced_previous_upload=result["replaced_previous_upload"],
+    )
+    return {"data": result}
+
+
+async def _upload_dsm_report(
+    *,
+    request: Request,
+    audit: Optional[AuditLogger],
+    data: bytes,
+    filename: str,
+    uploaded_at: Optional[datetime],
+    confirm_replace: bool,
+    user_context: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Parse the statement, store its days, and audit it like any other parse."""
+    try:
+        result = await dsm_report_service.upload(
+            data=data,
+            filename=filename,
+            actor=user_context,
+            uploaded_at=uploaded_at,
+            confirm_replace=confirm_replace,
+        )
+    except UploadRejected as rejection:
+        _audit(
+            audit,
+            request,
+            user_context,
+            action="upload",
+            message=f"Rejected {filename}: {rejection.message}",
+            success=False,
+            report_category=registry.DSM_REPORT,
+            rejection_reason=rejection.reason,
+        )
+        raise _as_http_error(rejection) from rejection
+
+    summary = result["summary"]
+    _audit(
+        audit,
+        request,
+        user_context,
+        action="upload",
+        message=(
+            f"Stored DSM Report for {summary['report_date_from']} to "
+            f"{summary['report_date_to']} ({summary['day_count']} days, "
+            f"{summary['block_count']} blocks) from {filename}"
+        ),
+        success=True,
+        report_category=registry.DSM_REPORT,
+        delivery_date=summary["report_date_from"],
+        record_count=summary["block_count"],
+        replaced_previous_upload=result["replaced_previous_upload"],
+        replaced_days=result["replaced_days"],
     )
     return {"data": result}
 
@@ -685,6 +752,130 @@ async def download_other_report_file(
     # Sent as an attachment whatever the type, so a PDF or a spreadsheet is
     # saved rather than rendered in place. The name is quoted because uploaded
     # filenames contain spaces.
+    return Response(
+        content=stored["content"],
+        media_type=stored["content_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{stored["filename"]}"'
+        },
+    )
+
+
+@router.get(
+    "/dsm",
+    summary="Settlement days that have DSM figures, without their blocks",
+)
+async def list_dsm_days(
+    date_from: Optional[str] = Query(None, description="Start of the window, YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="End of the window, YYYY-MM-DD"),
+    date_basis: str = Query(
+        dsm_service.DEFAULT_DATE_BASIS,
+        description=(
+            "Which date the window applies to: `report` (the settlement day, "
+            "the default) or `uploaded` (the day the statement was put in)"
+        ),
+    ),
+    limit: int = Query(62, ge=1, le=400),
+    skip: int = Query(0, ge=0),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """
+    Declared before `/{report_id}` so the path is not read as an id.
+
+    The blocks are left out: a fortnight of them is 1,440 rows, and a summary
+    that carried them would be megabytes of numbers nothing displays.
+    """
+    result = await dsm_report_service.list_days(
+        date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
+        date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
+        date_basis=date_basis,
+        limit=limit,
+        skip=skip,
+    )
+    return {"data": result}
+
+
+@router.get(
+    "/dsm/rows",
+    summary="Every DSM block in a window, as the screen and the export read it",
+)
+async def list_dsm_rows(
+    date_from: Optional[str] = Query(None, description="Start of the window, YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="End of the window, YYYY-MM-DD"),
+    date_basis: str = Query(
+        dsm_service.DEFAULT_DATE_BASIS,
+        description="`report` (the settlement day, the default) or `uploaded`",
+    ),
+    limit: int = Query(62, ge=1, le=400, description="Settlement days, not rows"),
+    skip: int = Query(0, ge=0),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """
+    `limit` counts settlement days rather than rows, because that is the unit
+    the operator picks: 1-15 April is fifteen days, and a cap expressed in rows
+    would cut a day in half.
+    """
+    result = await dsm_report_service.rows(
+        date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
+        date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
+        date_basis=date_basis,
+        limit=limit,
+        skip=skip,
+    )
+    return {"data": result}
+
+
+@router.get(
+    "/dsm/dates",
+    summary="Which days have DSM figures, on both the settlement and the upload basis",
+)
+async def get_dsm_dates(
+    limit: int = Query(400, ge=1, le=1000),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    """Both bases in one call: the screen offers both, and a second round trip
+    on every toggle would be a spinner where a dropdown should be."""
+    result = await dsm_report_service.dates(limit=limit)
+    return {"data": result}
+
+
+@router.get(
+    "/dsm/uploads",
+    summary="DSM statements as uploaded, newest first",
+)
+async def list_dsm_uploads(
+    date_from: Optional[str] = Query(None, description="Upload date, YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="Upload date, YYYY-MM-DD"),
+    limit: int = Query(50, ge=1, le=200),
+    skip: int = Query(0, ge=0),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Dict[str, Any]:
+    result = await dsm_report_service.list_uploads(
+        date_from=_parse_iso_date(date_from, "date_from") if date_from else None,
+        date_to=_parse_iso_date(date_to, "date_to") if date_to else None,
+        limit=limit,
+        skip=skip,
+    )
+    return {"data": result}
+
+
+@router.get(
+    "/dsm/{report_id}/file",
+    summary="Download one DSM statement exactly as it was uploaded",
+    responses={404: {"description": "No such statement, or its file is not in storage"}},
+)
+async def download_dsm_report_file(
+    report_id: str,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Response:
+    try:
+        stored = await dsm_report_service.get_file(report_id)
+    except UploadRejected as rejection:
+        raise _as_http_error(rejection) from rejection
+
+    if stored is None:
+        raise HTTPException(status_code=404, detail="No such report")
+
     return Response(
         content=stored["content"],
         media_type=stored["content_type"],

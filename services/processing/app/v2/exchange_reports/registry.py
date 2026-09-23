@@ -19,7 +19,9 @@ kept apart here, because the screen has to say something different about each:
   at submit with something that reads like a bug.
 
 A store-only category is filed either by delivery day or, when `period_keyed`
-is set, by calendar month.
+is set, by calendar month. A third shape exists for parsed categories whose
+file carries its own dates: `dates_from_file` means the operator is asked for
+neither, because the answer is inside the workbook.
 """
 
 from dataclasses import dataclass
@@ -44,6 +46,14 @@ class ReportCategory:
     #: layout to parse, not because a parser is still to come — so it is a
     #: finished state, unlike `implemented=False`.
     stores_file_only: bool = False
+    #: True when the dates the report covers are printed inside the file
+    #: itself, so the uploader asks for no date at all beyond the Uploaded
+    #: Date. A DSM workbook carries a fortnight of settlement days in one
+    #: sheet; asking for a single Delivery Date would record one of them as
+    #: though it were the whole file. Exchange and market are dropped for the
+    #: same reason they are dropped from a store-only category: a deviation
+    #: settlement is against the grid, not against an exchange.
+    dates_from_file: bool = False
     #: True when the report covers a calendar month rather than a delivery
     #: day. The uploader asks for Year and Month instead of a Delivery Date,
     #: and the file is filed under that month. A monthly report has no single
@@ -57,6 +67,7 @@ OBLIGATION_REPORT = "obligation_report"
 BACKING_QUANTUM_SCHEDULE_COST = "backing_quantum_schedule_cost"
 LTOA = "ltoa"
 STOA = "stoa"
+DSM_REPORT = "dsm_report"
 OTHER_REPORTS = "other_reports"
 
 _NO_SAMPLE = (
@@ -104,6 +115,24 @@ CATEGORIES: Dict[str, ReportCategory] = {
         stores_file_only=True,
         period_keyed=True,
     ),
+    # The one parsed category that is not filed under a date the operator
+    # types. A DSM workbook is a block-by-block settlement statement covering
+    # however many days the period ran to, and every one of those days is
+    # named in its own Date column.
+    DSM_REPORT: ReportCategory(
+        code=DSM_REPORT,
+        label="DSM Report",
+        # No .xls: reading the old binary format needs xlrd, which is not in
+        # this service's dependency set. Advertising it here would mean an
+        # operator picking a file the parser then cannot open.
+        accepted_extensions=(".xlsx", ".csv"),
+        implemented=True,
+        dates_from_file=True,
+        description=(
+            "Block-wise deviation settlement. The days it covers are read "
+            "out of the file's own Date column."
+        ),
+    ),
     OTHER_REPORTS: ReportCategory(
         code=OTHER_REPORTS,
         label="Other Reports",
@@ -133,6 +162,7 @@ CATEGORY_ORDER: List[str] = [
     BACKING_QUANTUM_SCHEDULE_COST,
     LTOA,
     STOA,
+    DSM_REPORT,
     # Last: it is the fallback, so anything with a category of its own should
     # be found before a reader gets here.
     OTHER_REPORTS,
@@ -165,6 +195,7 @@ def describe_categories() -> List[Dict[str, object]]:
             "description": category.description,
             "stores_file_only": category.stores_file_only,
             "period_keyed": category.period_keyed,
+            "dates_from_file": category.dates_from_file,
         }
         for category in (CATEGORIES[code] for code in CATEGORY_ORDER)
     ]
