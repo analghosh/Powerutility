@@ -50,11 +50,88 @@ DEFAULT_BID_CONFIGURATION = {
 
 BID_CONFIGURATION_KEY = "bid_configuration"
 SHIFTS_KEY = "shifts"
-SHIFT_TIMING_PATTERN = re.compile(r"^([1-9]|1[0-9]|2[0-4])-([1-9]|1[0-9]|2[0-4])$")
+# Hours only: "1-8", "22-6", "1-24". Minutes: "9:30-18:15", "1:00-8:30".
+SHIFT_TIMING_HOURS_PATTERN = re.compile(r"^(\d{1,2})-(\d{1,2})$")
+SHIFT_TIMING_MINUTES_PATTERN = re.compile(
+    r"^(\d{1,2}):(\d{2})-(\d{1,2}):(\d{2})$"
+)
+MINUTES_PER_DAY = 24 * 60
+SHIFT_TIMING_ERROR = (
+    "shift_timing must be a start-end window on the 1-24 clock, "
+    "hours only or with minutes. "
+    "Valid: '1-8', '1-24', '22-6', '9:30-18:15'. "
+    "Invalid: '0-8', '1-25', '24:30-1:00', '9:30-18', 'abc'. "
+    "Hours are 1-24; minutes are 00-59; hour 24 is only allowed as 24:00."
+)
 RESERVED_PARAMETER_KEYS = {SHIFTS_KEY}
 SHIFTS_RESERVED_MESSAGE = (
     "Shifts must be managed via /parameters/shifts, not generic parameter CRUD"
 )
+
+
+def _clock_to_minutes(hour: int, minute: int) -> int:
+    """Minutes past midnight. Hour 1 is 01:00; hour 24 is 24:00 (end of day)."""
+    if not 1 <= hour <= 24 or not 0 <= minute <= 59 or (hour == 24 and minute != 0):
+        raise ValueError(SHIFT_TIMING_ERROR)
+    return hour * 60 + minute
+
+
+def parse_shift_timing(shift_timing: Any) -> tuple[int, int, str]:
+    """
+    Parse a shift window into minutes past midnight.
+
+    Returns ``(start_minute, end_minute, stored)``. ``stored`` is what to
+    persist: hour-only input is canonicalized without leading zeros ("1-8"),
+    and minute input is kept as submitted ("9:30-18:15"). Hour-only "9-18"
+    is 09:00–18:00 (540, 1080), not a different clock.
+
+    The window is half-open ``[start, end)`` on the IST 24h clock. A start
+    later than the end wraps past midnight ("22-6", "22:30-06:15"). Equal
+    start and end is a full day. Adjacent windows such as "1-8" and "8-12"
+    share the boundary instant with the later window only: 08:00 belongs to
+    "8-12".
+    """
+    timing = str(shift_timing or "").strip()
+    hours = SHIFT_TIMING_HOURS_PATTERN.fullmatch(timing)
+    if hours:
+        start_hour, end_hour = int(hours.group(1)), int(hours.group(2))
+        return (
+            _clock_to_minutes(start_hour, 0),
+            _clock_to_minutes(end_hour, 0),
+            f"{start_hour}-{end_hour}",
+        )
+    minutes = SHIFT_TIMING_MINUTES_PATTERN.fullmatch(timing)
+    if minutes:
+        start_hour, start_minute, end_hour, end_minute = (
+            int(minutes.group(i)) for i in range(1, 5)
+        )
+        return (
+            _clock_to_minutes(start_hour, start_minute),
+            _clock_to_minutes(end_hour, end_minute),
+            timing,
+        )
+    raise ValueError(SHIFT_TIMING_ERROR)
+
+
+def shift_contains_minute(
+    start_minute: int,
+    end_minute: int,
+    minute_of_day: int,
+) -> bool:
+    """
+    Whether ``minute_of_day`` (0–1439) falls in the half-open shift window.
+
+    Equal bounds cover the whole day. When start is after end, the window
+    is ``[start, 1440) ∪ [0, end)``.
+    """
+    if not 0 <= minute_of_day < MINUTES_PER_DAY:
+        return False
+    if start_minute == end_minute:
+        return True
+    if start_minute < end_minute:
+        return start_minute <= minute_of_day < end_minute
+    return minute_of_day >= start_minute or minute_of_day < end_minute
+
 
 # Default NOC / ceiling bid prices per market (auto-created if missing).
 DEFAULT_BID_PRICES = {
@@ -594,14 +671,15 @@ class ParameterService:
 
     @staticmethod
     def _normalize_shift_timing(shift_timing: Any) -> str:
-        timing = str(shift_timing or "").strip()
-        if not SHIFT_TIMING_PATTERN.fullmatch(timing):
-            raise ValueError(
-                "shift_timing must be start-end hours in 1-24 format, e.g. '1-8' or '1-24'"
-            )
-        start_str, end_str = timing.split("-", 1)
-        start, end = int(start_str), int(end_str)
-        return f"{start}-{end}"
+        """Validate and return the string to persist.
+
+        Hour-only values are stored without leading zeros ("01-08" → "1-8"),
+        which is how existing rows are already saved. Minute values are stored
+        exactly as submitted ("9:30-18:15", "1:00-8:30") so a later read returns
+        the same text. "9-18" means 09:00–18:00 and is not rewritten with minutes.
+        """
+        _start, _end, stored = parse_shift_timing(shift_timing)
+        return stored
 
     @staticmethod
     def _normalize_shift_record(raw: Any) -> Optional[Dict[str, str]]:
