@@ -29,8 +29,8 @@ current.
 
 import hashlib
 import logging
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from datetime import date, datetime
+from typing import Any, Dict, List, NamedTuple, Optional
 
 from ..exchange_reports import dsm_parser, registry
 from ..repository.dsm_report_repository import dsm_report_repository
@@ -44,21 +44,22 @@ from .other_report_service import DEFAULT_CONTENT_TYPE, _guess_content_type
 
 logger = logging.getLogger(__name__)
 
-#: Which date a list of settlement rows is keyed on.
+#: The two dates a stored settlement day carries, and the field each one lives
+#: on. Both are plain YYYY-MM-DD strings, so a range compares lexically.
 #:
-#: The screen offers both, because they answer different questions. "Show me
-#: 1-15 April" is about the days the power deviated; "show me what came in
-#: yesterday" is about the day somebody uploaded the statement. Neither is a
-#: safe default for the other — a statement for March uploaded in May appears
-#: under March on one basis and May on the other, and a reader given only one
-#: of those would conclude the other month is empty.
+#: They answer different questions and the screen asks for both independently.
+#: "Show me 1-15 April" is about the days the power deviated; "show me what
+#: came in yesterday" is about the day somebody uploaded the statement. Neither
+#: is a safe default for the other — a statement for March uploaded in May
+#: appears under March on one and May on the other — and the pair of them
+#: together is a third question again: "of what came in yesterday, show me
+#: April". Asking for one window per date rather than one window and a basis is
+#: what makes that last question expressible at all.
 DATE_BASIS_REPORT = "report"
 DATE_BASIS_UPLOADED = "uploaded"
 
 DEFAULT_DATE_BASIS = DATE_BASIS_REPORT
 
-#: Basis -> the field on a stored day that carries it as YYYY-MM-DD. Both are
-#: plain strings, so a range compares lexically.
 DATE_BASIS_FIELDS: Dict[str, str] = {
     DATE_BASIS_REPORT: "report_date",
     DATE_BASIS_UPLOADED: "uploaded_on_ist_date",
@@ -66,7 +67,10 @@ DATE_BASIS_FIELDS: Dict[str, str] = {
 
 
 def resolve_date_field(date_basis: Optional[str]) -> str:
-    """The day field a `date_basis` selects. Unknown values fall back."""
+    """The day field a `date_basis` selects. Unknown values fall back.
+
+    Kept for the single-window form of these routes, which is still how a
+    caller that only cares about one of the two dates asks."""
     return DATE_BASIS_FIELDS.get(
         (date_basis or DEFAULT_DATE_BASIS).strip().lower(),
         DATE_BASIS_FIELDS[DEFAULT_DATE_BASIS],
@@ -80,6 +84,39 @@ def date_basis_of(date_field: str) -> str:
         if field == date_field:
             return basis
     return DEFAULT_DATE_BASIS
+
+
+class DateWindow(NamedTuple):
+    """One open-ended date range. Either end may be absent, and a window with
+    neither end is no filter at all rather than an empty result."""
+
+    start: Optional[str] = None
+    end: Optional[str] = None
+
+    @property
+    def is_set(self) -> bool:
+        return bool(self.start or self.end)
+
+    @property
+    def days(self) -> Optional[int]:
+        """How many days the window spans, or None when either end is open."""
+        if not (self.start and self.end):
+            return None
+        return (date.fromisoformat(self.end) - date.fromisoformat(self.start)).days + 1
+
+    def as_filter(self, field: str) -> Dict[str, Any]:
+        if not self.is_set:
+            return {}
+        bounds: Dict[str, Any] = {}
+        if self.start:
+            bounds["$gte"] = self.start
+        if self.end:
+            bounds["$lte"] = self.end
+        return {field: bounds}
+
+    def describe(self) -> Optional[Dict[str, Optional[str]]]:
+        """Echoed back so a caller can see which windows actually applied."""
+        return {"from": self.start, "to": self.end} if self.is_set else None
 
 
 class DsmReportService:
@@ -339,19 +376,30 @@ class DsmReportService:
         }
 
     @staticmethod
-    def _window(
-        date_from: Optional[str], date_to: Optional[str], date_basis: Optional[str]
-    ) -> Dict[str, Any]:
-        field = resolve_date_field(date_basis)
-        filters: Dict[str, Any] = {}
-        if date_from or date_to:
-            window: Dict[str, Any] = {}
-            if date_from:
-                window["$gte"] = date_from
-            if date_to:
-                window["$lte"] = date_to
-            filters[field] = window
-        return filters
+    def _filters(report: DateWindow, uploaded: DateWindow) -> Dict[str, Any]:
+        """
+        The two windows as one Mongo filter.
+
+        They sit on different fields, so a plain merge is the AND the screen
+        means: a settlement window and an upload window given together select
+        the days that satisfy both, which is the question "of what came in
+        yesterday, show me April". A window with neither end drops out
+        entirely rather than matching nothing.
+        """
+        return {
+            **report.as_filter("report_date"),
+            **uploaded.as_filter("uploaded_on_ist_date"),
+        }
+
+    @staticmethod
+    def _describe(report: DateWindow, uploaded: DateWindow) -> Dict[str, Any]:
+        """Which windows actually applied, echoed back for the caller."""
+        return {
+            "windows": {
+                "report": report.describe(),
+                "uploaded": uploaded.describe(),
+            }
+        }
 
     @staticmethod
     def _as_day_row(document: Dict[str, Any]) -> Dict[str, Any]:
@@ -378,22 +426,20 @@ class DsmReportService:
     async def list_days(
         self,
         *,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        date_basis: Optional[str] = None,
+        report: DateWindow = DateWindow(),
+        uploaded: DateWindow = DateWindow(),
         limit: int = 62,
         skip: int = 0,
     ) -> Dict[str, Any]:
         """
-        The settlement days in a window, without their blocks.
+        The settlement days matching the windows, without their blocks.
 
         Used for the screen's day summary and for the "which days does this
         window actually hold" question. The blocks are left out because a
         fortnight of them is 1,440 rows, and a summary that carries them would
         be megabytes of numbers nothing displays.
         """
-        field = resolve_date_field(date_basis)
-        filters = self._window(date_from, date_to, date_basis)
+        filters = self._filters(report, uploaded)
         documents = await dsm_report_repository.find_days(
             filters, limit=limit, skip=skip, with_blocks=False
         )
@@ -403,27 +449,26 @@ class DsmReportService:
             "total": total,
             "limit": limit,
             "skip": skip,
-            "date_basis": date_basis_of(field),
+            **self._describe(report, uploaded),
         }
 
     async def rows(
         self,
         *,
-        date_from: Optional[str] = None,
-        date_to: Optional[str] = None,
-        date_basis: Optional[str] = None,
+        report: DateWindow = DateWindow(),
+        uploaded: DateWindow = DateWindow(),
         limit: int = 62,
         skip: int = 0,
     ) -> Dict[str, Any]:
         """
-        Every block in a window, flattened into the table the screen draws.
+        Every block matching the windows, flattened into the table the screen
+        draws.
 
         `limit` counts settlement days rather than rows, because that is the
         unit the operator picks: a from/to of 1-15 April is fifteen days, and
         a cap expressed in rows would cut a day in half.
         """
-        field = resolve_date_field(date_basis)
-        filters = self._window(date_from, date_to, date_basis)
+        filters = self._filters(report, uploaded)
         documents = await dsm_report_repository.find_days(
             filters, limit=limit, skip=skip, with_blocks=True
         )
@@ -451,7 +496,7 @@ class DsmReportService:
             "total_days": total_days,
             "limit": limit,
             "skip": skip,
-            "date_basis": date_basis_of(field),
+            **self._describe(report, uploaded),
             # The column order the screen and the export both use, so neither
             # has to restate the report's own layout.
             "columns": [
