@@ -269,8 +269,14 @@ class ExchangeReportService:
             return
         accepted = ", ".join(category.accepted_extensions)
         # "is published as" is right for a report the exchange issues in one
-        # fixed format, and wrong for a catch-all that simply takes a list.
-        verb = "accepts" if category.stores_file_only else "is published as"
+        # fixed format, and wrong for a catch-all that simply takes a list -
+        # or for any category that accepts more than one type, where there is
+        # no single format it is published as.
+        verb = (
+            "accepts"
+            if category.stores_file_only or len(category.accepted_extensions) > 1
+            else "is published as"
+        )
         raise UploadRejected(
             "unsupported_file_type",
             f"{category.label} {verb} {accepted}. "
