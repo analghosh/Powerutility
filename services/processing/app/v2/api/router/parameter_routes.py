@@ -672,12 +672,21 @@ async def set_active_exchange(
 # ---------------------------------------------------------------------------
 # Shift master
 # ---------------------------------------------------------------------------
+_SHIFT_TIMING_DESCRIPTION = (
+    "Start-end window on the 1-24 clock in IST, half-open [start, end). "
+    "Hours only ('1-8', '1-24', '22-6') means :00 on both ends. "
+    "With minutes: '9:30-18:15', '1:00-8:30'. "
+    "Hour 24 is end-of-day and only valid as 24:00. "
+    "A start later than the end wraps past midnight; equal start and end is a full day."
+)
+
+
 class ShiftCreate(BaseModel):
     shift_name: str = Field(..., min_length=1, description="Unique shift name")
     shift_timing: str = Field(
         ...,
-        description="Hour window in 1-24 format, e.g. '1-8' or '1-24'",
-        examples=["1-8", "2-8", "8-12", "1-24"],
+        description=_SHIFT_TIMING_DESCRIPTION,
+        examples=["1-8", "1-24", "22-6", "9:30-18:15"],
     )
 
     @field_validator("shift_name")
@@ -693,7 +702,8 @@ class ShiftUpdate(BaseModel):
     shift_name: Optional[str] = Field(None, min_length=1, description="Unique shift name")
     shift_timing: Optional[str] = Field(
         None,
-        description="Hour window in 1-24 format, e.g. '1-8' or '1-24'",
+        description=_SHIFT_TIMING_DESCRIPTION,
+        examples=["1-8", "1-24", "22-6", "9:30-18:15"],
     )
 
     @field_validator("shift_name")
@@ -725,7 +735,11 @@ class ShiftListResponse(BaseModel):
     response_model=ShiftListResponse,
     status_code=status.HTTP_200_OK,
     summary="List shifts",
-    description="Returns all configured shift names and hour windows (1-24).",
+    description=(
+        "Returns all configured shift names and windows. "
+        "shift_timing is returned exactly as stored "
+        "('1-8' or '9:30-18:15')."
+    ),
 )
 async def get_shifts(
     request: Request,
@@ -771,7 +785,11 @@ async def get_shifts(
     response_model=ShiftResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Create shift",
-    description="Create a unique shift name with a 1-24 hour window.",
+    description=(
+        "Create a unique shift name with a 1-24 window. "
+        "Accepts hours only ('9-18', '1-8', '22-6') or hours and minutes "
+        "('9:30-18:15'). Hour 24 is only valid as 24:00."
+    ),
 )
 async def create_shift(
     request: Request,
@@ -824,7 +842,11 @@ async def create_shift(
     response_model=ShiftResponse,
     status_code=status.HTTP_200_OK,
     summary="Update shift",
-    description="Update a shift name and/or hour window by id.",
+    description=(
+        "Update a shift name and/or window by id. "
+        "shift_timing accepts hours only or hours and minutes; "
+        "the stored string is kept as submitted for minute format."
+    ),
 )
 async def update_shift(
     request: Request,
