@@ -1326,12 +1326,15 @@ class DemandProcessor(BaseProcessor):
                     daf_raw_data, metadata, provider_config, existing_daf, supply_map
                 )
             else:
-                # If DAF doesn't exist, create it from IDF data but labeled as DAF
-                # This will populate it with the actuals we have
-                return await self._create_demand_entity(
-                    daf_raw_data, metadata, provider_config, supply_map
+                # No DAF row to sync into. The IDF forecast was already popped
+                # into forecast_serve, so a row built from it would carry
+                # forecast=0 and show as a 0 MW Day Ahead Forecast. DAF rows
+                # come from the day-ahead feeds only.
+                logger.warning(
+                    f"No DAF row for scheduled_at={scheduled_at}, block={time_block}; not creating one from IDF"
                 )
-                
+                return None
+
         except Exception as e:
             logger.error(f"Error syncing IDF to DAF: {str(e)}")
             return None
