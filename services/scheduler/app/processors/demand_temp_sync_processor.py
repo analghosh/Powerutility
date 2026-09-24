@@ -188,6 +188,17 @@ class DemandTempSyncProcessor(BaseProcessor):
                     elif isinstance(raw_sa, datetime):
                         scheduled_at = raw_sa
 
+                # The lookups above are all for today, so a temp row for any
+                # other day would be written under that day with today's
+                # forecast and inserted_at. temp_demand_serve is keyed on
+                # time_block alone and can already hold tomorrow's rows.
+                if scheduled_at.date() != today:
+                    logger.warning(
+                        f"Skipping temp block {block_num}: dated {scheduled_at.date()}, not {today}"
+                    )
+                    skipped += 1
+                    continue
+
                 drawal_before_loss = (drawal / demand_multiplier) if demand_multiplier > 0 else 0.0
 
                 if drawal == 0:
