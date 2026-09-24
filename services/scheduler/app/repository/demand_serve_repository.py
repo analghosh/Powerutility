@@ -5,7 +5,10 @@ Handles database operations for demand serve and historical collections
 
 import logging
 from datetime import datetime, timedelta
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Tuple
+
+from pymongo import ReplaceOne
+from pymongo.errors import BulkWriteError
 
 from libs.database.base_serve_repository import BaseServeRepository
 from libs.models import DemandServeEntity, DemandServeHistoricalEntity
@@ -259,8 +262,7 @@ class DemandServeRepository(BaseServeRepository):
 
             logger.info(f"Processing {len(entities)} entities with {len(unique_keys)} unique keys")
 
-            deletes = []
-            inserts = []
+            ops = []
 
             for (scheduled_at, time_block, type_val), entity_list in unique_keys.items():
                 try:
@@ -274,21 +276,28 @@ class DemandServeRepository(BaseServeRepository):
                     if time_block is not None:
                         filter_criteria["time_block"] = time_block
 
-                    deletes.append(filter_criteria)
-
                     entity_dict = entity_to_insert.model_dump(by_alias=True)
-                    inserts.append(entity_dict)
+                    entity_dict.pop("_id", None)
+                    now = datetime.now()
+                    entity_dict["created_at"] = now
+                    entity_dict["updated_at"] = now
+                    entity_dict.setdefault("inserted_at", now)
+                    ops.append(ReplaceOne(filter_criteria, entity_dict, upsert=True))
 
                 except Exception as key_error:
                     logger.error(f"Error preparing key {scheduled_at}, {time_block}: {key_error}")
 
-            # Execute Bulk Optimized Operation
-            result = await self.bulk_delete_then_insert_optimized(deletes, inserts)
+            # One replace per key instead of all deletes then all inserts: a row is
+            # never absent, and a failure leaves the old row in place. The split
+            # form lost every row it had deleted whenever one insert hit the
+            # unique index (another job re-creating the key mid-batch) and
+            # ordered=True stopped the rest.
+            matched, upserted = await self._replace_by_key(ops)
 
             return {
-                "total_processed": result.get("total", 0),
-                "inserted_count": result.get("inserted", 0),
-                "duplicates_removed": result.get("deleted", 0),
+                "total_processed": matched + matched + upserted,
+                "inserted_count": matched + upserted,
+                "duplicates_removed": matched,
                 "error_count": 0,
                 "errors": []
             }
@@ -296,6 +305,40 @@ class DemandServeRepository(BaseServeRepository):
         except Exception as e:
             logger.error("Error in bulk insert with deduplication: %s", str(e))
             raise
+
+    async def _replace_by_key(self, ops: List[ReplaceOne], batch_size: int = 500) -> Tuple[int, int]:
+        """
+        Run upserting replaces unordered. Two upserts racing for the same missing
+        key can both try to insert and one gets E11000; by then the row exists,
+        so that op is retried once as a plain replace.
+        """
+        matched = upserted = 0
+        for i in range(0, len(ops), batch_size):
+            batch = ops[i:i + batch_size]
+            try:
+                result = await self.serve_collection.bulk_write(batch, ordered=False)
+                matched += result.matched_count
+                upserted += result.upserted_count
+            except BulkWriteError as bwe:
+                details = bwe.details or {}
+                matched += details.get("nMatched", 0)
+                upserted += details.get("nUpserted", 0)
+                write_errors = details.get("writeErrors", [])
+                dup_indexes = [e["index"] for e in write_errors if e.get("code") == 11000]
+                others = [e for e in write_errors if e.get("code") != 11000]
+                if dup_indexes:
+                    logger.warning(
+                        f"demand_serve: {len(dup_indexes)} upserts raced another writer, retrying"
+                    )
+                    retry = await self.serve_collection.bulk_write(
+                        [batch[j] for j in dup_indexes], ordered=False
+                    )
+                    matched += retry.matched_count
+                    upserted += retry.upserted_count
+                if others:
+                    raise
+        logger.info(f"Bulk replace result for demand_serve: matched={matched} upserted={upserted}")
+        return matched, upserted
 
     async def insert_demand_serve(self, demand_serve: DemandServeEntity) -> str:
         """Insert a new demand serve record"""
