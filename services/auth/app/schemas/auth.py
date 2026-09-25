@@ -121,10 +121,21 @@ class VerifyLoginRequest(BaseModel):
     }
 
 
+class PasswordExpiryInfo(BaseModel):
+    """Where the password sits in its expiry cycle; sent only when the user should be told"""
+    status: str = Field(..., description="'warning' (expires soon) or 'expired'")
+    age_days: Optional[int] = Field(None, description="Whole days since the password was last changed")
+    days_remaining: Optional[int] = Field(None, description="Days until the password expires (0 once expired)")
+    expires_at: Optional[str] = Field(None, description="When the password expires / expired")
+
+
 class LoginResponse(BaseModel):
     """Login response schema with minimal user info and tokens"""
     user: MinimalUserResponse = Field(..., description="Minimal user information")
     tokens: TokenResponse = Field(..., description="Authentication tokens")
+    password_expiry: Optional[PasswordExpiryInfo] = Field(
+        None, description="Present from day 80: the password expires soon and should be changed"
+    )
 
     model_config = {
         "json_schema_extra": {
@@ -148,6 +159,22 @@ class LoginResponse(BaseModel):
             ]
         }
     }
+
+
+class PasswordChangeRequiredResponse(BaseModel):
+    """Login response when the password has expired: no session, only a change token"""
+    password_expired: bool = Field(True, description="Always true: the password must be changed before any access")
+    password_change_token: str = Field(..., description="Single-use token for /change-expired-password")
+    expires_in: int = Field(..., description="Seconds the change token stays valid")
+    message: str = Field(..., description="What the user must do next")
+    password_expiry: Optional[PasswordExpiryInfo] = Field(None, description="How old the password is")
+
+
+class ExpiredPasswordChangeRequest(BaseModel):
+    """Change an expired password using the token login returned in place of a session"""
+    password_change_token: str = Field(..., description="Token from the login response")
+    current_password: str = Field(..., description="The expired password")
+    new_password: str = Field(..., description="New password; must meet the policy and differ from the last 5")
 
 
 class RefreshTokenRequest(BaseModel):

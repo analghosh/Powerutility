@@ -164,6 +164,11 @@ class UserRepository(BaseRepository):
             return False
 
     async def update_password(self, user_id: str, new_password: str) -> bool:
+        """
+        Store a new password and restart its expiry cycle. Reuse is checked by
+        the caller (password_policy.matches_recent_password): bcrypt salts every
+        hash, so comparing a fresh hash against stored ones can never match.
+        """
         try:
             salt = bcrypt.gensalt(rounds=settings.BCRYPT_ROUNDS)
             hashed_password = bcrypt.hashpw(new_password.encode('utf-8'), salt)
@@ -172,13 +177,15 @@ class UserRepository(BaseRepository):
             if not user_doc:
                 return False
 
-            password_history = user_doc.get("password_history", [])
-            if hashed_password in password_history:
-                raise ValueError("Password has been used recently")
-
-            password_history.append(hashed_password)
-            if len(password_history) > settings.PASSWORD_HISTORY_COUNT:
-                password_history.pop(0)
+            # History keeps the passwords being replaced, in the same shape
+            # admin_reset_password writes.
+            password_history = list(user_doc.get("password_history") or [])
+            if user_doc.get("password_hash"):
+                password_history.append({
+                    "password_hash": user_doc["password_hash"],
+                    "changed_at": user_doc.get("password_changed_at") or datetime.now(),
+                })
+            password_history = password_history[-settings.PASSWORD_HISTORY_COUNT:]
 
             return await self.update(user_id, {
                 "password_hash": hashed_password,

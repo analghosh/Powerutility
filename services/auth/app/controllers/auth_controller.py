@@ -6,7 +6,7 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import HTTPException, status, Request
 from services.auth.app.services.auth_service import auth_service
-from services.auth.app.schemas.auth import LoginRequest, RefreshTokenRequest, ChangePasswordRequest, VerifyLoginRequest
+from services.auth.app.schemas.auth import LoginRequest, RefreshTokenRequest, ChangePasswordRequest, VerifyLoginRequest, ExpiredPasswordChangeRequest
 from services.auth.app.core.dto import AuthUserDTO
 from datetime import datetime
 import sys
@@ -85,6 +85,9 @@ class AuthController:
             # Check if this is a temporary token response (MFA enabled user)
             if "temporary_token" in result:
                 # MFA required logging handled at route layer to avoid duplication
+                return result
+            elif result.get("password_expired"):
+                # No session was issued; the service has logged the blocked login
                 return result
             else:
                 # Log successful login without MFA
@@ -382,6 +385,28 @@ class AuthController:
                 detail="Internal server error"
             )
     
+    async def change_expired_password(self, change_data: ExpiredPasswordChangeRequest, request: Request) -> Dict[str, Any]:
+        """
+        Change an expired password with the token login issued in its place,
+        then open the session login withheld.
+        """
+        try:
+            request_info = self._extract_request_info(request)
+            return await self.auth_service.change_expired_password(
+                password_change_token=change_data.password_change_token,
+                current_password=change_data.current_password,
+                new_password=change_data.new_password,
+                request_info=request_info
+            )
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Change expired password controller error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Internal server error"
+            )
+
     async def admin_unlock_user(self, user_id: str, admin_user: "AuthUserDTO", request: Request) -> Dict[str, Any]:
         """
         Admin unlock user account

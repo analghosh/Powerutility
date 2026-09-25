@@ -9,7 +9,8 @@ from ....controllers.auth_controller import auth_controller
 from ....schemas.auth import (
     LoginRequest, LoginResponse, RefreshTokenRequest, LogoutRequest,
     ChangePasswordRequest, UserResponse, MessageResponse,
-    TemporaryTokenResponse, VerifyLoginRequest
+    TemporaryTokenResponse, VerifyLoginRequest,
+    PasswordChangeRequiredResponse, ExpiredPasswordChangeRequest
 )
 from ....schemas.password_policy import (
     PasswordValidationRequest, PasswordValidationResponse, 
@@ -85,6 +86,18 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(
                                 "expires_in": 300,
                                 "message": "Please provide TOTP code to complete login"
                             }
+                        },
+                        "password_expired": {
+                            "summary": "Password Expired - Change Required",
+                            "description": "Password is 90+ days old: no session, only a token for /change-expired-password",
+                            "value": {
+                                "password_expired": True,
+                                "password_change_token": "eyJhbGciOiJIUzI1NiIs...",
+                                "expires_in": 600,
+                                "message": "Your password has expired. Change it to continue.",
+                                "password_expiry": {"status": "expired", "age_days": 95, "days_remaining": 0,
+                                                    "expires_at": "2026-09-19T10:30:00"}
+                            }
                         }
                     }
                 }
@@ -100,7 +113,7 @@ async def get_current_user(credentials: HTTPAuthorizationCredentials = Security(
         }
     }
 )
-async def login(login_data: LoginRequest, request: Request, audit_logger: AuditLogger = Depends(get_audit_logger)) -> Union[LoginResponse, TemporaryTokenResponse]:
+async def login(login_data: LoginRequest, request: Request, audit_logger: AuditLogger = Depends(get_audit_logger)) -> Union[LoginResponse, TemporaryTokenResponse, PasswordChangeRequiredResponse]:
     """
     User login endpoint with support for both traditional and MFA flows
     
@@ -120,8 +133,11 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
     - `password`: User password
     
     ## Response Types:
-    1. **LoginResponse** (non-MFA users): Contains user info and tokens
+    1. **LoginResponse** (non-MFA users): Contains user info and tokens; from day 80 of the
+       password's life it also carries `password_expiry` (days remaining) for a warning
     2. **TemporaryTokenResponse** (MFA users): Contains temporary token and instructions
+    3. **PasswordChangeRequiredResponse** (password 90+ days old): no tokens, only a
+       `password_change_token` for `/change-expired-password`
     
     ## Example Flows:
     
@@ -155,6 +171,9 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
                 user_agent=user_agent
             )
             return TemporaryTokenResponse(**result)
+        elif result.get("password_expired"):
+            # No session: the only thing this login can do is change the password
+            return PasswordChangeRequiredResponse(**result)
         else:
             # Non-MFA user - log successful login (audit_logger methods are async)
             user_info = result.get("user", {})
@@ -201,7 +220,7 @@ async def login(login_data: LoginRequest, request: Request, audit_logger: AuditL
 
 @router.post(
     "/verify-login", 
-    response_model=LoginResponse,
+    response_model=Union[LoginResponse, PasswordChangeRequiredResponse],
     responses={
         200: {
             "description": "Login verification successful",
@@ -275,6 +294,9 @@ async def verify_login(verify_data: VerifyLoginRequest, request: Request, audit_
     """
     try:
         result = await auth_controller.verify_login(verify_data, request)
+        if result.get("password_expired"):
+            # Code accepted but the password has expired: no session was issued
+            return result
         
         # Log successful MFA verification with secure audit logging
         user_info = result.get("user", {})
@@ -650,6 +672,58 @@ async def change_password(
             change_method="admin_endpoint",
             failure_reason="validation_or_permission_error",
             user_agent=user_agent,
+            error_code=e.status_code
+        )
+        raise
+
+
+@router.post(
+    "/change-expired-password",
+    response_model=LoginResponse,
+    responses={
+        200: {"description": "Password changed; the session login withheld is issued"},
+        400: {
+            "description": "Wrong current password, or the new one breaks the policy or was used recently",
+            "content": {"application/json": {"example": {
+                "detail": "New password must not match any of your last 5 passwords"}}}
+        },
+        401: {
+            "description": "Change token missing, expired, already used, or not a change token",
+            "content": {"application/json": {"example": {
+                "detail": "Your password change session has expired. Sign in again."}}}
+        },
+        403: {"description": "Account locked after too many wrong current passwords"}
+    }
+)
+async def change_expired_password(
+    change_data: ExpiredPasswordChangeRequest,
+    request: Request,
+    audit_logger: AuditLogger = Depends(get_audit_logger)
+):
+    """
+    Change an expired password (the only action open to a user whose password is 90+ days old)
+
+    ## 🌐 No JWT: authenticated by the change token
+    `/login` (or `/verify-login` for MFA users) returns `password_change_token` instead of
+    a session when the password has expired. That token is single-use, lives
+    `PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES`, and is accepted nowhere else.
+
+    ## Rules (same as `/change-password`)
+    - Current password must be correct; a wrong one counts toward the account lockout
+    - New password must meet the strength policy and differ from the last 5
+    - Success restarts the 90-day cycle and returns the full `LoginResponse`
+    """
+    try:
+        return await auth_controller.change_expired_password(change_data, request)
+    except HTTPException as e:
+        audit_logger.log_security_event(
+            service="auth",
+            event_type="expired_password_change_failed",
+            message="Expired password change failed",
+            success=False,
+            client_ip=request.client.host if request.client else None,
+            failure_reason=str(e.detail),
+            user_agent=request.headers.get("user-agent"),
             error_code=e.status_code
         )
         raise
