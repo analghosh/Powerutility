@@ -25,7 +25,13 @@ neither, because the answer is inside the workbook.
 """
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional
+
+#: Where the sample files the uploader offers for download live. They ship
+#: with the code rather than in the database, because a sample is part of the
+#: category's definition: it has to match the parser in the same release.
+SAMPLES_DIR = Path(__file__).resolve().parent / "samples"
 
 
 @dataclass(frozen=True)
@@ -61,6 +67,14 @@ class ReportCategory:
     #: meant — the same reasoning that keeps exchange and market off a
     #: store-only category.
     period_keyed: bool = False
+    #: File name, inside SAMPLES_DIR, of a file the operator can download to
+    #: see what this category expects. Only parsed categories carry one: a
+    #: store-only category accepts anything, so there is no layout to show.
+    sample_file: Optional[str] = None
+
+    @property
+    def sample_path(self) -> Optional[Path]:
+        return SAMPLES_DIR / self.sample_file if self.sample_file else None
 
 
 OBLIGATION_REPORT = "obligation_report"
@@ -83,6 +97,9 @@ CATEGORIES: Dict[str, ReportCategory] = {
         # spreadsheet here would only fail later, in the parser.
         accepted_extensions=(".pdf",),
         implemented=True,
+        # A real IEX Daily Obligation Report, under the name the exchange
+        # gives it, so the sample also shows the file-name convention.
+        sample_file="IEX180926DOR_PTC0136_PY0_Electricity Department Pud.pdf",
     ),
     BACKING_QUANTUM_SCHEDULE_COST: ReportCategory(
         code=BACKING_QUANTUM_SCHEDULE_COST,
@@ -128,6 +145,9 @@ CATEGORIES: Dict[str, ReportCategory] = {
         accepted_extensions=(".xlsx", ".csv"),
         implemented=True,
         dates_from_file=True,
+        # The nine headers the parser looks for and two rows of made-up
+        # figures, to be overwritten with the real statement.
+        sample_file="DSM Report Sample.xlsx",
         description=(
             "Block-wise deviation settlement. The days it covers are read "
             "out of the file's own Date column."
@@ -196,6 +216,7 @@ def describe_categories() -> List[Dict[str, object]]:
             "stores_file_only": category.stores_file_only,
             "period_keyed": category.period_keyed,
             "dates_from_file": category.dates_from_file,
+            "sample_filename": category.sample_file,
         }
         for category in (CATEGORIES[code] for code in CATEGORY_ORDER)
     ]
