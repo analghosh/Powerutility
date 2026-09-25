@@ -42,6 +42,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import (APIRouter, Depends, File, Form, HTTPException, Query,
                      Request, Response, UploadFile, status)
+from fastapi.responses import FileResponse
 
 from libs.audit_queue.simple_logger import AuditLogger
 
@@ -283,6 +284,42 @@ async def get_upload_options() -> Dict[str, Any]:
             "max_upload_bytes": registry.MAX_UPLOAD_BYTES,
         }
     }
+
+
+#: Content types for the sample files. Stated rather than guessed from the
+#: host's mime table, which on a bare server may not know .xlsx at all.
+SAMPLE_MEDIA_TYPES = {
+    ".pdf": "application/pdf",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".csv": "text/csv",
+}
+
+
+@router.get(
+    "/categories/{category_code}/sample",
+    summary="Download the sample file for one report category",
+    responses={404: {"description": "No such category, or it has no sample file"}},
+)
+async def download_category_sample(category_code: str) -> FileResponse:
+    """
+    What a file for this category should look like.
+
+    Offered on the uploader for the parsed categories only, so an operator
+    can see the layout the parser expects before their upload is refused
+    for not matching it.
+    """
+    category = registry.get_category(category_code)
+    path = category.sample_path if category else None
+    if path is None or not path.is_file():
+        raise HTTPException(status_code=404, detail="No sample file for that category")
+
+    return FileResponse(
+        path,
+        media_type=SAMPLE_MEDIA_TYPES.get(path.suffix.lower(), "application/octet-stream"),
+        headers={
+            "Content-Disposition": f'attachment; filename="{category.sample_file}"'
+        },
+    )
 
 
 @router.post(
