@@ -82,10 +82,11 @@ class Settings(BaseSettings):
     # MODE: "enforce" blocks expired passwords, "warn" only warns, "off" disables.
     PASSWORD_EXPIRY_WARNING_DAYS: int = 10
     PASSWORD_EXPIRY_MODE: Literal["enforce", "warn", "off"] = "enforce"
-    # BRD 3.12.2: passwords for all users except Superadmin expire every 90 days.
+    # Roles whose passwords never expire. Empty: the policy applies to every user,
+    # Superadmin included (PTC's decision; BRD 3.12.2 had exempted Superadmin).
     # Comma-separated role names ("superadmin,admin"); a JSON list also works. Kept a
     # string because a List setting refuses plain text and the service would not start.
-    PASSWORD_EXPIRY_EXEMPT_ROLES: str = "superadmin"
+    PASSWORD_EXPIRY_EXEMPT_ROLES: str = ""
     # Rollout lever: age is never counted from before this date, so setting it to
     # the deploy date gives every existing account a fresh cycle instead of
     # blocking all of them at their next login. Unset = count from the real change.

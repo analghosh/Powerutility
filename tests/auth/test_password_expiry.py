@@ -30,7 +30,7 @@ from services.auth.app.services.jwt_service import jwt_service
 from services.auth.app.services.password_policy import evaluate_password_age
 
 NOW = datetime(2026, 9, 24, 12, 0, 0)
-POLICY = dict(expiry_days=90, warning_days=10, mode="enforce", exempt_roles=["superadmin"], clock_start=None)
+POLICY = dict(expiry_days=90, warning_days=10, mode="enforce", exempt_roles="", clock_start=None)
 
 
 def age(days, roles=("user",), **overrides):
@@ -76,14 +76,17 @@ def test_boundary_is_measured_in_whole_days():
     assert result.status == "warning" and result.days_remaining == 1
 
 
-def test_superadmin_is_exempt_per_brd():
-    assert age(400, roles=["superadmin"]).status == "exempt"
-    assert not age(400, roles=["superadmin"]).blocks_access
+def test_superadmin_expires_like_everyone_else():
+    # PTC, 2026-09-25: the policy applies to every user. (BRD 3.12.2 had exempted Superadmin.)
+    assert age(400, roles=["superadmin"]).blocks_access
+    assert age(85, roles=["superadmin"]).status == "warning"
+    assert age(400, roles=["admin"]).blocks_access
 
 
 def test_exempt_roles_are_configurable():
-    assert age(400, roles=["superadmin"], exempt_roles=[]).blocks_access
+    assert age(400, roles=["superadmin"], exempt_roles="superadmin").status == "exempt"
     assert age(400, roles=["admin"], exempt_roles=["admin"]).status == "exempt"
+    assert age(400, roles=["user"], exempt_roles="superadmin").blocks_access
 
 
 def test_warn_mode_reports_expiry_but_never_blocks():
@@ -134,6 +137,14 @@ def _settings_with(monkeypatch, **env):
     for key, value in env.items():
         monkeypatch.setenv(key, value)
     return Settings()
+
+
+def test_by_default_no_role_is_exempt(monkeypatch):
+    from services.auth.app.core.config import Settings
+    monkeypatch.delenv("PASSWORD_EXPIRY_EXEMPT_ROLES", raising=False)
+    configured = Settings(_env_file=None).PASSWORD_EXPIRY_EXEMPT_ROLES
+    assert configured == ""
+    assert age(400, roles=["superadmin"], exempt_roles=configured).blocks_access
 
 
 def test_blank_clock_start_in_env_means_unset(monkeypatch):
@@ -247,7 +258,7 @@ def _policy_settings(**overrides):
         PASSWORD_EXPIRY_DAYS=90,
         PASSWORD_EXPIRY_WARNING_DAYS=10,
         PASSWORD_EXPIRY_MODE="enforce",
-        PASSWORD_EXPIRY_EXEMPT_ROLES=["superadmin"],
+        PASSWORD_EXPIRY_EXEMPT_ROLES="",
         PASSWORD_EXPIRY_CLOCK_START=None,
     )
     values.update(overrides)
@@ -286,8 +297,15 @@ async def test_login_day_95_gets_no_session_only_a_change_token(blacklist):
 
 
 @pytest.mark.asyncio
-async def test_login_expired_superadmin_is_not_blocked(blacklist):
+async def test_login_expired_superadmin_is_blocked_too(blacklist):
     with _policy_settings():
+        result = await _service(_user_doc(400, roles=["superadmin"])).login("ageuser", "Old@Pass123", REQ)
+    assert "tokens" not in result and result["password_expired"] is True
+
+
+@pytest.mark.asyncio
+async def test_login_expired_exempted_role_is_not_blocked(blacklist):
+    with _policy_settings(PASSWORD_EXPIRY_EXEMPT_ROLES="superadmin"):
         result = await _service(_user_doc(400, roles=["superadmin"])).login("ageuser", "Old@Pass123", REQ)
     assert result["tokens"]["access_token"]
 
