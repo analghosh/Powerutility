@@ -3,6 +3,7 @@ Authentication service using repository pattern
 """
 
 import time
+import asyncio
 import logging
 from fastapi import HTTPException
 from fastapi import Header
@@ -22,6 +23,12 @@ from ..core.config import settings
 from ..services.jwt_service import jwt_service
 from ..services.redis_blacklist import redis_blacklist_service
 from ..services.mfa_service import mfa_service
+from ..services.password_policy import (
+    PasswordAge,
+    PasswordPolicyService,
+    evaluate_password_age,
+    matches_recent_password,
+)
 
 # Import the secure audit logging
 import sys
@@ -44,9 +51,87 @@ class AuthService:
         self.jwt_service = jwt_service
         self.audit_logger : AuditLogger = get_audit_logger()
 
-    
+    def _password_age(self, user) -> PasswordAge:
+        """Where this user's password sits in its 90-day cycle."""
+        return evaluate_password_age(
+            getattr(user, "password_changed_at", None),
+            getattr(user, "roles", None) or [],
+            created_at=getattr(user, "created_at", None),
+        )
 
-    
+    def _password_change_required(self, user, password_age: PasswordAge, request_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Login response for an expired password: no session, only a short-lived
+        token that /change-expired-password accepts. Reached only after every
+        login factor has passed, so it tells nothing to someone guessing passwords.
+        """
+        self.audit_logger.log_security_event(
+            service="auth",
+            event_type="password_expired_login_blocked",
+            message=f"Login blocked until the expired password is changed: {user.username}",
+            user_id=user.id,
+            client_ip=request_info.get("ip_address"),
+            username=user.username,
+            user_agent=request_info.get("user_agent"),
+            password_age_days=password_age.age_days,
+            success=False,
+        )
+        return {
+            "password_expired": True,
+            "password_change_token": self.jwt_service.create_password_change_token(user.id, user.username),
+            "expires_in": int(settings.PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES * 60),
+            "message": "Your password has expired. Change it to continue.",
+            "password_expiry": password_age.to_client(),
+        }
+
+    def _issue_session(self, user_with_perms) -> Dict[str, Any]:
+        """Access + refresh tokens for a user who has passed every check."""
+        user_dict = user_with_perms.to_dict()
+        now = now_ist()
+        user_profile = getattr(user_with_perms, 'profile', {}) or {}
+        return {
+            "user": {
+                "first_name": user_profile.get("first_name"),
+                "last_name": user_profile.get("last_name"),
+                "last_login": getattr(user_with_perms, 'last_login', None),
+                "id": user_with_perms.id
+            },
+            "tokens": {
+                "access_token": self.jwt_service.create_access_token(user_dict),
+                "refresh_token": self.jwt_service.create_refresh_token(user_dict),
+                "token_type": "bearer",
+                "expires_in": int(settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES * 60),
+                "refresh_expires_in": int(settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS * 24 * 60 * 60),
+                "expires_at": now + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRE_MINUTES),
+                "refresh_expires_at": now + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRE_DAYS)
+            },
+            "password_expiry": None,
+        }
+
+    async def _apply_password_change(self, user, current_password: str, new_password: str) -> None:
+        """
+        Validate and store a new password, restarting its 90-day cycle. Raises
+        HTTPException(400) with the reason the user needs to see. The current
+        password is checked through authenticate_user so a wrong guess counts
+        toward the account lockout, as a wrong login does.
+        """
+        if not await self.user_repo.authenticate_user(user.username, current_password):
+            raise HTTPException(400, detail="Current password is incorrect")
+        if new_password == current_password:
+            raise HTTPException(400, detail="New password must be different from your current password")
+        strength = PasswordPolicyService().validate_password_strength(new_password)
+        if not strength["is_valid"]:
+            raise HTTPException(400, detail="; ".join(strength["violations"]))
+        user_doc = await self.user_repo.find_one({"_id": ObjectId(user.id)})
+        # bcrypt is deliberately slow; checking up to five hashes must not stall the event loop.
+        if user_doc and await asyncio.to_thread(matches_recent_password, new_password, user_doc):
+            raise HTTPException(
+                400,
+                detail=f"New password must not match any of your last {settings.PASSWORD_HISTORY_COUNT} passwords",
+            )
+        if not await self.user_repo.update_password(user.id, new_password):
+            raise HTTPException(500, detail="Failed to change password")
+
     async def login(self, username: str, password: str, request_info: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         Authenticate user and return temporary token
@@ -92,6 +177,12 @@ class AuthService:
                     "message": message
                 }
             else:
+                # The password is this user's only factor, so expiry is checked now.
+                # MFA users are checked in verify_login, after their code.
+                password_age = self._password_age(user)
+                if password_age.blocks_access:
+                    return self._password_change_required(user, password_age, request_info)
+
                 # MFA not enabled: complete login immediately (traditional flow)
                 user_with_perms = await self.user_repo.get_user_with_permissions(user.username)
                 if not user_with_perms:
@@ -131,7 +222,8 @@ class AuthService:
                         "refresh_expires_in": refresh_expires_in,
                         "expires_at": access_expires_at,
                         "refresh_expires_at": refresh_expires_at
-                    }
+                    },
+                    "password_expiry": password_age.to_client()
                 }
             
         except Exception as e:
@@ -280,6 +372,12 @@ class AuthService:
                         )
                         return None
             
+            # Every factor has passed; now the password's age decides.
+            password_age = self._password_age(user)
+            if password_age.blocks_access:
+                redis_blacklist_service.invalidate_temporary_token(temporary_token, user_id)
+                return self._password_change_required(user, password_age, request_info)
+
             # Generate final tokens
             user_dict = user_with_perms.to_dict()
             access_token = self.jwt_service.create_access_token(user_dict)
@@ -316,7 +414,8 @@ class AuthService:
                     "refresh_expires_in": refresh_expires_in,
                     "expires_at": access_expires_at,
                     "refresh_expires_at": refresh_expires_at
-                }
+                },
+                "password_expiry": password_age.to_client()
             }
             
         except Exception as e:
@@ -347,6 +446,21 @@ class AuthService:
                 return None
             user = await self.user_repo.get_user_by_id(user_id)
             if not user or not user.is_active:
+                return None
+
+            # A session opened on day 89 must not carry on past day 90: refusing
+            # the refresh sends the user back through login, which blocks them.
+            if self._password_age(user).blocks_access:
+                self.audit_logger.log_security_event(
+                    service="auth",
+                    event_type="token_refresh_denied_password_expired",
+                    message=f"Token refresh refused, password expired: {user.username}",
+                    user_id=user.id,
+                    client_ip=request_info.get("ip_address"),
+                    username=user.username,
+                    user_agent=request_info.get("user_agent"),
+                    success=False
+                )
                 return None
             
             # Generate new access token
@@ -493,31 +607,61 @@ class AuthService:
             if not user:
                 return False
             
-            # Verify current password
-            if not await self.user_repo.authenticate_user(user.username, current_password):
-                return False
+            # Verify current password, validate and store the new one
+            await self._apply_password_change(user, current_password, new_password)
             
-            # Update password
-            success = await self.user_repo.update_password(user_id, new_password)
+            # Log password change with PII protection
+            self.audit_logger.log_security_event(
+                service="auth",
+                event_type="password_change",
+                message=f"Password changed successfully: {user.username}",
+                user_id=user_id,
+                client_ip=request_info.get("ip_address"),
+                username=user.username,
+                user_agent=request_info.get("user_agent"),
+                success=True
+            )
             
-            if success:
-                # Log password change with PII protection
-                self.audit_logger.log_security_event(
-                    service="auth",
-                    event_type="password_change",
-                    message=f"Password changed successfully: {user.username}",
-                    user_id=user_id,
-                    client_ip=request_info.get("ip_address"),
-                    username=user.username,
-                    user_agent=request_info.get("user_agent"),
-                    success=True
-                )
+            return True
             
-            return success
-            
+        except HTTPException:
+            raise
         except Exception as e:
             logger.error(f"Change password error: {e}")
             return False
+
+    async def change_expired_password(self, password_change_token: str, current_password: str,
+                                      new_password: str, request_info: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        The only thing an expired password is good for. Takes the token login
+        issued in place of a session, changes the password under the same rules
+        as /change-password, spends the token, and opens the session.
+        """
+        expired_session = "Your password change session has expired. Sign in again."
+        payload = self.jwt_service.verify_password_change_token(password_change_token)
+        if not payload:
+            raise HTTPException(401, detail=expired_session)
+        user_id = payload["password_change_user_id"]
+        user_with_perms = await self.user_repo.get_user_with_permissions_by_id(user_id)
+        if not user_with_perms or not user_with_perms.is_active:
+            raise HTTPException(401, detail=expired_session)
+
+        await self._apply_password_change(user_with_perms, current_password, new_password)
+        redis_blacklist_service.invalidate_temporary_token(
+            password_change_token, user_id,
+            ttl_seconds=int(settings.PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES * 60),
+        )
+        self.audit_logger.log_security_event(
+            service="auth",
+            event_type="expired_password_changed",
+            message=f"Expired password changed: {user_with_perms.username}",
+            user_id=user_id,
+            client_ip=request_info.get("ip_address"),
+            username=user_with_perms.username,
+            user_agent=request_info.get("user_agent"),
+            success=True
+        )
+        return self._issue_session(user_with_perms)
 
     async def get_user_by_id(self, user_id: str) -> Optional[UserDTO]:
         """Retrieve a single user by ID."""

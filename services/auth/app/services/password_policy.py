@@ -3,14 +3,140 @@ Password Policy Service
 Handles password validation, expiry, and lockout policies
 """
 
+import json
 import re
 import secrets
 import string
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Iterable, List, Optional, Union
+
+import bcrypt
 
 from .interfaces import IPasswordPolicyService
 from ..core.config import settings
+
+
+@dataclass(frozen=True)
+class PasswordAge:
+    """Where a password sits in its expiry cycle."""
+    status: str  # "ok" | "warning" | "expired" | "exempt"
+    age_days: Optional[int] = None
+    days_remaining: Optional[int] = None
+    expires_at: Optional[datetime] = None
+    enforced: bool = False
+
+    @property
+    def blocks_access(self) -> bool:
+        return self.status == "expired" and self.enforced
+
+    def to_client(self) -> Optional[Dict[str, Any]]:
+        """What the login response tells the client; None when there is nothing to say."""
+        if self.status not in ("warning", "expired"):
+            return None
+        return {
+            "status": self.status,
+            "age_days": self.age_days,
+            "days_remaining": self.days_remaining,
+            "expires_at": self.expires_at.isoformat() if self.expires_at else None,
+        }
+
+
+def _role_names(value: Union[str, Iterable[str], None]) -> set:
+    """Role names from a list, a JSON list string, or a comma-separated string."""
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        text = value.strip()
+        if text.startswith("["):
+            try:
+                value = json.loads(text)
+            except ValueError:
+                value = text.strip("[]").replace('"', "").replace("'", "").split(",")
+        else:
+            value = text.split(",")
+    return {str(role).strip() for role in value if str(role).strip()}
+
+
+def evaluate_password_age(
+    changed_at: Optional[datetime],
+    roles: Iterable[str],
+    *,
+    created_at: Optional[datetime] = None,
+    now: Optional[datetime] = None,
+    expiry_days: Optional[int] = None,
+    warning_days: Optional[int] = None,
+    mode: Optional[str] = None,
+    exempt_roles: Union[str, List[str], None] = None,
+    clock_start: Optional[datetime] = None,
+) -> PasswordAge:
+    """
+    Classify a password by whole days since it was last changed.
+
+    Dates are compared as naive local time because that is how the repository
+    writes them (``datetime.now()``); an aware value is converted to match.
+    """
+    expiry_days = settings.PASSWORD_EXPIRY_DAYS if expiry_days is None else expiry_days
+    warning_days = settings.PASSWORD_EXPIRY_WARNING_DAYS if warning_days is None else warning_days
+    mode = settings.PASSWORD_EXPIRY_MODE if mode is None else mode
+    exempt_roles = settings.PASSWORD_EXPIRY_EXEMPT_ROLES if exempt_roles is None else exempt_roles
+    if clock_start is None:
+        clock_start = settings.PASSWORD_EXPIRY_CLOCK_START
+
+    if mode == "off":
+        return PasswordAge("ok")
+    if set(roles or []) & _role_names(exempt_roles):
+        return PasswordAge("exempt")
+
+    def _naive(value: Optional[datetime]) -> Optional[datetime]:
+        if value is None or value.tzinfo is None:
+            return value
+        return value.astimezone().replace(tzinfo=None)
+
+    start = _naive(changed_at) or _naive(created_at)
+    if start is None:
+        return PasswordAge("ok")
+    clock_start = _naive(clock_start)
+    if clock_start is not None and clock_start > start:
+        start = clock_start
+
+    now = _naive(now) or datetime.now()
+    age_days = max(0, (now - start).days)
+    expires_at = start + timedelta(days=expiry_days)
+
+    if age_days >= expiry_days:
+        return PasswordAge("expired", age_days, 0, expires_at, enforced=(mode == "enforce"))
+    if age_days >= expiry_days - warning_days:
+        return PasswordAge("warning", age_days, expiry_days - age_days, expires_at)
+    return PasswordAge("ok", age_days, expiry_days - age_days, expires_at)
+
+
+def matches_recent_password(password: str, user_doc: Dict[str, Any], count: Optional[int] = None) -> bool:
+    """
+    True when ``password`` is one of the user's last ``count`` passwords, the
+    current one included. bcrypt salts every hash, so the only valid comparison
+    is checkpw against each stored hash. History holds raw hashes (written by
+    update_password before this fix) and {"password_hash": ...} dicts (written
+    by admin_reset_password); both are read.
+    """
+    count = settings.PASSWORD_HISTORY_COUNT if count is None else count
+    hashes = [user_doc.get("password_hash")]
+    previous = user_doc.get("password_history") or []
+    if count > 1:
+        for entry in previous[-(count - 1):]:
+            hashes.append(entry.get("password_hash") if isinstance(entry, dict) else entry)
+    encoded = password.encode("utf-8")
+    for stored in hashes:
+        if not stored:
+            continue
+        if isinstance(stored, str):
+            stored = stored.encode("utf-8")
+        try:
+            if bcrypt.checkpw(encoded, bytes(stored)):
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 class PasswordPolicyService(IPasswordPolicyService):
