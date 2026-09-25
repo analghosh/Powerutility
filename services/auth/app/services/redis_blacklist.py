@@ -95,13 +95,14 @@ class RedisBlacklistService:
             logger.error(f"Failed to blacklist access token: {e}")
             return False
     
-    def invalidate_temporary_token(self, temporary_token: str, user_id: str) -> bool:
+    def invalidate_temporary_token(self, temporary_token: str, user_id: str, ttl_seconds: int = 300) -> bool:
         """
         Add temporary token to Redis blacklist with TTL
         
         Args:
             temporary_token: The temporary token to blacklist
             user_id: User ID for audit purposes
+            ttl_seconds: How long to remember it; at least the token's own lifetime
             
         Returns:
             bool: True if successfully blacklisted, False otherwise
@@ -111,9 +112,9 @@ class RedisBlacklistService:
             return False
         
         try:
-            # Set with expiry (5 minutes for temporary tokens)
+            # Set with expiry (5 minutes for MFA temporary tokens by default)
             key = f"blacklist:temp:{temporary_token}"
-            self.redis_client.setex(key, 300, user_id)  # 5 minutes TTL
+            self.redis_client.setex(key, ttl_seconds, user_id)
             
             logger.info(f"Temporary token blacklisted successfully for user {user_id}")
             return True
