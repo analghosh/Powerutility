@@ -234,11 +234,15 @@ def worst_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return max(finished, key=lambda row: (_severity(row), as_utc(row.get("created_at")) or epoch))
 
 
-def last_clean_run(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+def last_clean_run(rows: List[Dict[str, Any]], complete: bool = True) -> Optional[Dict[str, Any]]:
     """
     The newest run in ``rows`` (newest first) in which nothing failed: every
     row of it is a success. A wrapper "success" beside the job's own "error"
     does not count.
+
+    ``complete`` is False when ``rows`` was cut off at a limit: the oldest run
+    in it may then be missing its other rows (a wrapper "success" kept, the
+    job's "error" just past the limit), so that run is not trusted.
     """
     runs: Dict[Any, List[Dict[str, Any]]] = {}
     order: List[Any] = []
@@ -248,6 +252,8 @@ def last_clean_run(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
             runs[key] = []
             order.append(key)
         runs[key].append(row)
+    if not complete and order:
+        order = order[:-1]
     for key in order:
         run = runs[key]
         if all(_status(row) in SUCCESS_STATUSES for row in run):

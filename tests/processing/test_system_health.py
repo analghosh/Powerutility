@@ -375,3 +375,18 @@ def test_a_clean_run_stays_clean():
     rated = _rate_now(repository, PIPELINE)
     assert rated["state"] == jh.STATE_OK
     assert rated["last_success_at"] == "2026-09-28T11:15:00+00:00"
+
+
+
+def test_no_clean_run_in_a_full_scan_reports_how_far_back_it_looked(monkeypatch):
+    monkeypatch.setattr(shs, "RECENT_RUN_SCAN", 4)
+    failing = [_row("error", 15, "r3"), _row("success", 15, "r3")]
+    older = [_row("error", 0, "r2"), _row("success", 0, "r2")]
+    # The scan is full: r1's wrapper success made it in, its error did not.
+    scan = failing + older[:1] + [_row("success", 0, "r1")]
+    scan[-1]["created_at"] = datetime(2026, 9, 27, 11, 45)
+    repository = StubRepository(rows={"any": failing[1], "finished": failing[1], "run": failing, "recent": scan})
+    rated = _rate_now(repository, PIPELINE)
+    assert rated["state"] == jh.STATE_FAILED
+    assert rated["last_success_at"] is None
+    assert rated["no_clean_run_since"] == "2026-09-27T11:45:00+00:00"

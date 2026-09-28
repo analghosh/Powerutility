@@ -289,3 +289,12 @@ def test_run_problem_prefers_the_error_message_then_failed_steps_then_the_summar
     assert jh.run_problem({"result_data": {"message": "Nothing to do"}}) == "Nothing to do"
     assert jh.run_problem({"status": "error"}) is None
     assert jh.run_problem(None) is None
+
+
+
+def test_a_cut_off_scan_does_not_trust_its_oldest_run():
+    # Scan stopped at its limit: the oldest run kept its wrapper "success" but
+    # its "error" row fell just past the limit.
+    rows = [_r("error", 30, "b"), _r("success", 30, "b"), _r("success", 15, "a")]
+    assert jh.last_clean_run(rows, complete=True)["execution_id"] == "a"
+    assert jh.last_clean_run(rows, complete=False) is None
