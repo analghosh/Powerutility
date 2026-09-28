@@ -16,17 +16,29 @@ UTC ``created_at``.
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Dict, Iterable, List, Optional
 
 from bson import ObjectId
 
-from ...core.database import get_audit_database
+from ...core.database import get_audit_database, get_auth_database
 
 logger = logging.getLogger(__name__)
 
 RUN_LOG_COLLECTIONS = ("job_detail", "job_details")
 
-_ROW_FIELDS = {"_id": 0, "status": 1, "created_at": 1, "error_message": 1}
+# Which run log each service writes, for "was it running at the time?".
+RUN_LOG_BY_SERVICE = {"scheduler": "job_detail", "ingestion": "job_details"}
+
+PAGE_MENU_PATH = "/admin/system-health"
+
+_ROW_FIELDS = {
+    "_id": 0,
+    "status": 1,
+    "created_at": 1,
+    "error_message": 1,
+    "result_data.failed_provider_details": 1,
+}
 
 
 def _job_id_filter(job_id: str) -> Dict[str, Any]:
@@ -46,6 +58,7 @@ class SystemHealthRepository:
 
     def __init__(self):
         self.audit_db = get_audit_database()
+        self.auth_db = get_auth_database()
 
     async def ping(self) -> None:
         """Round-trip to MongoDB; raises if the database can't be reached."""
@@ -75,6 +88,39 @@ class SystemHealthRepository:
             )
         )
         return _newest(rows)
+
+    async def any_run_between(self, collection: str, start: datetime, end: datetime) -> bool:
+        """
+        Whether the service writing ``collection`` logged any run at all in the
+        window. Every-minute jobs make a running service log constantly, so an
+        empty window means the service itself was not running.
+        """
+        row = await self.audit_db[collection].find_one(
+            {"created_at": {"$gte": start, "$lte": end}}, {"_id": 1}
+        )
+        return row is not None
+
+    async def roles_have_page(self, role_names: Iterable[str]) -> bool:
+        """Whether any of these roles is granted the System Health menu item."""
+        names = [name for name in role_names if name]
+        if not names:
+            return False
+        menu = await self.auth_db["menus"].find_one({"path": PAGE_MENU_PATH}, {"_id": 1})
+        if not menu:
+            return False
+        roles = await self.auth_db["roles"].find({"name": {"$in": names}}, {"_id": 1}).to_list(length=100)
+        role_ids = [str(role["_id"]) for role in roles]
+        if not role_ids:
+            return False
+        grant = await self.auth_db["menu_roles"].find_one(
+            {
+                "menu_id": str(menu["_id"]),
+                "role_id": {"$in": role_ids},
+                "is_active": {"$ne": False},
+            },
+            {"_id": 1},
+        )
+        return grant is not None
 
 
 system_health_repository = SystemHealthRepository()
