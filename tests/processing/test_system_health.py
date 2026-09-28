@@ -186,7 +186,7 @@ def test_a_partly_failed_run_lists_its_failed_sources():
         "created_at": datetime(2026, 9, 28, 6, 0),
         "error_message": "Processed 1, failed 14",
         "result_data": {"failed_provider_details": [
-            {"provider_code": f"P{i}", "provider_name": f"Provider {i}", "error": "No data fetched from API"}
+            {"provider_code": f"P{i}", "provider_name": f"Provider {i}", "error": "Cannot connect to host"}
             for i in range(14)
         ]},
     }
@@ -196,7 +196,7 @@ def test_a_partly_failed_run_lists_its_failed_sources():
     assert rated["state"] == jh.STATE_PARTIAL
     assert rated["failures_total"] == 14
     assert len(rated["failures"]) == jh.FAILURE_LIST_LIMIT
-    assert rated["failures"][0] == {"name": "Provider 0", "code": "P0", "reason": "No data fetched from API"}
+    assert rated["failures"][0] == {"name": "Provider 0", "code": "P0", "reason": "Cannot connect to host"}
     assert rated["missed_reason"] is None
 
 
@@ -252,3 +252,59 @@ def test_a_job_enabled_in_job_data_but_never_registered_is_turned_off():
 def test_the_cron_status_url_sits_beside_health():
     assert shs.cron_status_url("http://localhost:8004") == "http://localhost:8004/cron/status"
     assert shs.cron_status_url("http://localhost:8002/api/v1/") == "http://localhost:8002/cron/status"
+
+
+
+# ---- "no data returned" is not a failure --------------------------------------
+
+EVERY_15 = {**DAILY_0730, "job_type": "api_raw_data_processor", "schedule": "*/15 * * * *"}
+
+
+def _run(status, details, message="Processed 20, failed 6"):
+    return {
+        "status": status,
+        "created_at": datetime(2026, 9, 28, 6, 15),
+        "error_message": message,
+        "result_data": {"failed_provider_details": details},
+    }
+
+
+def _source(name, error):
+    return {"provider_code": name.upper().replace(" ", "_"), "provider_name": name, "error": error}
+
+
+NO_DATA = "No data fetched from API"
+PXIL_EMPTY = [_source(f"PXIL Exchange DSM {market} Provider", NO_DATA) for market in ("DAM", "GDAM", "HPDAM")] * 2
+
+
+def test_a_run_whose_only_failures_are_empty_sources_is_on_time():
+    run = _run("partial_success", PXIL_EMPTY)
+    rated = _rate(StubRepository(rows={"any": run, "finished": run}), job=EVERY_15)
+    assert rated["state"] == jh.STATE_OK
+    assert rated["failures"] == [] and rated["message"] is None
+    assert rated["no_data_sources"] == [
+        "PXIL Exchange DSM DAM Provider", "PXIL Exchange DSM GDAM Provider", "PXIL Exchange DSM HPDAM Provider",
+    ]
+
+
+def test_an_error_run_where_every_source_was_empty_is_on_time_too():
+    run = _run("error", PXIL_EMPTY[:2], message="Processed 0, failed 2")
+    rated = _rate(StubRepository(rows={"any": run, "finished": run}), job=EVERY_15)
+    assert rated["state"] == jh.STATE_OK
+
+
+def test_a_real_failure_among_empty_sources_still_needs_attention():
+    grid = _source("Grid India Supply", "API fetch error: Cannot connect to host gateway.grid-india.in:443")
+    run = _run("partial_success", PXIL_EMPTY + [grid], message="Processed 20, failed 7")
+    rated = _rate(StubRepository(rows={"any": run, "finished": run}), job=EVERY_15)
+    assert rated["state"] == jh.STATE_PARTIAL
+    assert [failure["name"] for failure in rated["failures"]] == ["Grid India Supply"]
+    assert rated["failures_total"] == 1
+    assert len(rated["no_data_sources"]) == 3
+
+
+def test_a_failed_run_without_source_details_is_unchanged():
+    run = {"status": "error", "created_at": datetime(2026, 9, 28, 6, 15), "error_message": "Failed to fetch API data: TimeoutError"}
+    rated = _rate(StubRepository(rows={"any": run, "finished": run}), job=EVERY_15)
+    assert rated["state"] == jh.STATE_FAILED
+    assert rated["message"] == "Failed to fetch API data: TimeoutError"

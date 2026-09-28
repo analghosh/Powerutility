@@ -181,6 +181,25 @@ def provider_failures(result_data: Optional[Dict[str, Any]]) -> List[Dict[str, s
     return failures
 
 
+# "No data" is not a failure on the page. The ingestion API processor counts a
+# source that returned nothing as failed, while the scrape processor counts
+# the same thing as a successful run; PTC trades on IEX only, so the PXIL DSM
+# and HPX trade feeds return nothing on most runs by design. A source that
+# errors (can't connect, timed out, bad data) is still a failure.
+_NO_DATA = re.compile(r"\bno data (fetched|to store)\b|\b0 records\b", re.IGNORECASE)
+
+
+def is_no_data(reason: Optional[str]) -> bool:
+    return bool(reason) and bool(_NO_DATA.search(reason))
+
+
+def split_no_data(failures: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]], List[Dict[str, str]]]:
+    """(real failures, sources that simply had nothing to return)."""
+    real = [failure for failure in failures if not is_no_data(failure["reason"])]
+    empty = [failure for failure in failures if is_no_data(failure["reason"])]
+    return real, empty
+
+
 # ---- what the schedulers actually registered --------------------------------
 #
 # job_data is not what runs. The scheduler registers several jobs from a
