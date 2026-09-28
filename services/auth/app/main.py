@@ -55,7 +55,20 @@ async def lifespan(app_instance: FastAPI):
     except Exception as e:
         logger.error(f"Error during startup seeding: {e}")
         # Don't fail startup if seeding fails
-    
+
+    # Menu rows added after a deployment's first boot never arrive through the
+    # seeder; add System Health's here. Never fails startup.
+    try:
+        from .core.database import get_auth_database
+        from .core.system_health_menu import ensure_system_health_menu
+        outcome = await ensure_system_health_menu(get_auth_database())
+        if outcome["created"]:
+            logger.info("System Health menu added, granted to: %s", ", ".join(outcome["granted"]) or "no role")
+        else:
+            logger.info("System Health menu not added: %s", outcome["reason"])
+    except Exception as e:
+        logger.error(f"Could not ensure the System Health menu: {e}")
+
     # Initialize centralized RBAC permissions catalog
     from libs.core.authz.permissions_catalog import ensure_permissions_catalog
     from libs.core.dependencies import get_db
