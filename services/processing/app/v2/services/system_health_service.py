@@ -337,6 +337,7 @@ class SystemHealthService:
             "last_success_at": None,
             "missed_since": None,
             "missed_reason": None,
+            "no_clean_run_since": None,
             "message": None,
             "failures": [],
             "failures_total": 0,
@@ -355,11 +356,16 @@ class SystemHealthService:
             if last_finished and last_finished.get("execution_id"):
                 run = await self.repository.run_rows(job_id, last_finished["execution_id"])
                 last_finished = jh.worst_row(run) or last_finished
+            no_clean_run_since = None
             if last_finished and str(last_finished.get("status", "")).lower() in jh.SUCCESS_STATUSES:
                 last_success = last_finished
             else:
                 recent = await self.repository.recent_runs(job_id, jh.FINISHED_STATUSES, RECENT_RUN_SCAN)
-                last_success = jh.last_clean_run(recent)
+                complete = len(recent) < RECENT_RUN_SCAN
+                last_success = jh.last_clean_run(recent, complete=complete)
+                if last_success is None and not complete:
+                    # Nothing clean within the scan: say how far back that holds.
+                    no_clean_run_since = recent[-1].get("created_at")
         except Exception as exc:
             logger.error("System health: run lookup failed for %s: %s", job_id, exc)
             summary.update(state=jh.STATE_FAILED, message="Could not read this job's run history")
@@ -373,6 +379,7 @@ class SystemHealthService:
             last_run_at=_iso((last_row or {}).get("created_at")),
             last_result=(last_finished or {}).get("status"),
             last_success_at=_iso((last_success or {}).get("created_at")),
+            no_clean_run_since=_iso(no_clean_run_since),
             missed_since=_iso(verdict["due_at"]) if verdict["state"] == jh.STATE_MISSED else None,
         )
         if verdict["state"] == jh.STATE_MISSED and verdict["due_at"] is not None:
