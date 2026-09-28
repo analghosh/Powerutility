@@ -305,12 +305,30 @@ RUN_UNFINISHED = "unfinished"
 RUN_PROBLEMS = frozenset({RUN_PARTIAL, RUN_FAILED, RUN_UNFINISHED})
 
 RUNNING_STALE = timedelta(hours=1)
+# However quick a job normally is, give a run at least this long before
+# calling it unfinished; slower jobs get a few times their usual duration.
+RUNNING_STALE_MIN = timedelta(minutes=10)
+RUNNING_STALE_FACTOR = 3
 # A run that starts within this long after one of its schedule's slots was
-# started by the clock; anything else was triggered (new data, a retry).
-SCHEDULED_WINDOW = timedelta(seconds=90)
+# started by the clock (they start within a second); anything else was
+# triggered (new data, a retry), even a few seconds later.
+SCHEDULED_WINDOW = timedelta(seconds=10)
 
 
-def run_status(statuses: List[Optional[str]], last_seen: Optional[datetime], now: datetime) -> str:
+def running_stale_after(durations: List[Optional[float]]) -> timedelta:
+    """How long a run may go without finishing before it counts as unfinished."""
+    finished = [d for d in durations if isinstance(d, (int, float)) and d >= 0]
+    if not finished:
+        return RUNNING_STALE
+    return max(RUNNING_STALE_MIN, timedelta(seconds=max(finished) * RUNNING_STALE_FACTOR))
+
+
+def run_status(
+    statuses: List[Optional[str]],
+    last_seen: Optional[datetime],
+    now: datetime,
+    stale_after: timedelta = RUNNING_STALE,
+) -> str:
     """A run's status from every row it wrote."""
     seen = {str(status).lower() for status in statuses if status}
     if seen & FAILED_STATUSES:
@@ -320,7 +338,7 @@ def run_status(statuses: List[Optional[str]], last_seen: Optional[datetime], now
     if seen & SUCCESS_STATUSES:
         return RUN_OK
     last_seen = as_utc(last_seen)
-    if last_seen is not None and now - last_seen < RUNNING_STALE:
+    if last_seen is not None and now - last_seen < stale_after:
         return RUN_RUNNING
     return RUN_UNFINISHED
 

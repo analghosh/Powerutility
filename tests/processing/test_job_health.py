@@ -317,7 +317,9 @@ def test_a_run_with_only_a_start_marker_is_running_until_it_goes_stale():
 def test_a_run_on_a_schedule_slot_was_scheduled_and_any_other_was_triggered():
     every_15 = "*/15 * * * *"
     assert jh.run_trigger(_utc(6, 0) + timedelta(seconds=0.3), every_15, "Asia/Kolkata") == "scheduled"
-    assert jh.run_trigger(_utc(6, 1) + timedelta(seconds=5), every_15, "Asia/Kolkata") == "scheduled"
+    assert jh.run_trigger(_utc(6, 0) + timedelta(seconds=5), every_15, "Asia/Kolkata") == "scheduled"
+    # 17:45:23 IST on the test site: a triggered run just after a slot.
+    assert jh.run_trigger(_utc(6, 0) + timedelta(seconds=23), every_15, "Asia/Kolkata") == "triggered"
     assert jh.run_trigger(_utc(6, 10) + timedelta(seconds=23), every_15, "Asia/Kolkata") == "triggered"
     assert jh.run_trigger(_utc(6, 0), None, "Asia/Kolkata") is None
     assert jh.run_trigger(_utc(6, 0), "not cron", "Asia/Kolkata") is None
@@ -333,3 +335,18 @@ def test_run_detail_separates_empty_sources_from_real_failures():
                            "result_data": {"failed_provider_details": [empty, broken]}})
     assert mixed["clean"] is False and mixed["message"] == "Processed 1, failed 2"
     assert [f["name"] for f in mixed["failures"]] == ["Grid India"]
+
+
+
+def test_a_quick_job_s_forgotten_marker_goes_stale_in_minutes_not_an_hour():
+    quick = jh.running_stale_after([14.0, 13.1, None])
+    assert quick == jh.RUNNING_STALE_MIN
+    assert jh.run_status(["processing"], NOW - timedelta(minutes=20), NOW, quick) == jh.RUN_UNFINISHED
+    assert jh.run_status(["processing"], NOW - timedelta(minutes=5), NOW, quick) == jh.RUN_RUNNING
+
+
+def test_a_slow_job_gets_a_few_times_its_usual_duration():
+    slow = jh.running_stale_after([783.7])  # the schedule API's 13-minute runs
+    assert slow == timedelta(seconds=783.7 * 3)
+    assert jh.run_status(["processing"], NOW - timedelta(minutes=30), NOW, slow) == jh.RUN_RUNNING
+    assert jh.running_stale_after([]) == jh.RUNNING_STALE
