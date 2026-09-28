@@ -34,9 +34,12 @@ PAGE_MENU_PATH = "/admin/system-health"
 
 _ROW_FIELDS = {
     "_id": 0,
+    "execution_id": 1,
     "status": 1,
     "created_at": 1,
     "error_message": 1,
+    "result_data.message": 1,
+    "result_data.steps": 1,
     "result_data.failed_provider_details": 1,
 }
 
@@ -88,6 +91,40 @@ class SystemHealthRepository:
             )
         )
         return _newest(rows)
+
+    async def run_rows(self, job_id: str, execution_id: str) -> List[Dict[str, Any]]:
+        """
+        Every row one run wrote. A run can write several final rows under one
+        execution_id (the job's own result and the scheduler wrapper's), and
+        they don't always agree.
+        """
+        query = {"job_id": _job_id_filter(job_id), "execution_id": execution_id}
+        batches = await asyncio.gather(
+            *(
+                self.audit_db[name].find(query, _ROW_FIELDS).to_list(length=50)
+                for name in RUN_LOG_COLLECTIONS
+            )
+        )
+        return [row for batch in batches for row in batch]
+
+    async def recent_runs(
+        self, job_id: str, statuses: Iterable[str], limit: int
+    ) -> List[Dict[str, Any]]:
+        """The job's newest rows with these statuses, newest first, from both logs."""
+        query = {"job_id": _job_id_filter(job_id), "status": {"$in": list(statuses)}}
+        batches = await asyncio.gather(
+            *(
+                self.audit_db[name]
+                .find(query, _ROW_FIELDS)
+                .sort("execution_start", -1)
+                .limit(limit)
+                .to_list(length=limit)
+                for name in RUN_LOG_COLLECTIONS
+            )
+        )
+        rows = [row for batch in batches for row in batch if row.get("created_at")]
+        rows.sort(key=lambda row: row["created_at"], reverse=True)
+        return rows[:limit]
 
     async def any_run_between(self, collection: str, start: datetime, end: datetime) -> bool:
         """
