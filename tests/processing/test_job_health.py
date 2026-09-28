@@ -298,3 +298,38 @@ def test_a_cut_off_scan_does_not_trust_its_oldest_run():
     rows = [_r("error", 30, "b"), _r("success", 30, "b"), _r("success", 15, "a")]
     assert jh.last_clean_run(rows, complete=True)["execution_id"] == "a"
     assert jh.last_clean_run(rows, complete=False) is None
+
+
+
+# ---- run history ---------------------------------------------------------------
+
+def test_a_run_is_as_bad_as_its_worst_row():
+    assert jh.run_status(["success", "error"], _utc(6, 0), NOW) == jh.RUN_FAILED
+    assert jh.run_status(["processing", "partial_success"], _utc(6, 0), NOW) == jh.RUN_PARTIAL
+    assert jh.run_status(["running", "success", "success"], _utc(6, 0), NOW) == jh.RUN_OK
+
+
+def test_a_run_with_only_a_start_marker_is_running_until_it_goes_stale():
+    assert jh.run_status(["running"], NOW - timedelta(minutes=5), NOW) == jh.RUN_RUNNING
+    assert jh.run_status(["processing"], NOW - timedelta(hours=2), NOW) == jh.RUN_UNFINISHED
+
+
+def test_a_run_on_a_schedule_slot_was_scheduled_and_any_other_was_triggered():
+    every_15 = "*/15 * * * *"
+    assert jh.run_trigger(_utc(6, 0) + timedelta(seconds=0.3), every_15, "Asia/Kolkata") == "scheduled"
+    assert jh.run_trigger(_utc(6, 1) + timedelta(seconds=5), every_15, "Asia/Kolkata") == "scheduled"
+    assert jh.run_trigger(_utc(6, 10) + timedelta(seconds=23), every_15, "Asia/Kolkata") == "triggered"
+    assert jh.run_trigger(_utc(6, 0), None, "Asia/Kolkata") is None
+    assert jh.run_trigger(_utc(6, 0), "not cron", "Asia/Kolkata") is None
+
+
+def test_run_detail_separates_empty_sources_from_real_failures():
+    empty = {"provider_code": "P", "provider_name": "PXIL DSM", "error": "No data fetched from API"}
+    broken = {"provider_code": "G", "provider_name": "Grid India", "error": "Cannot connect to host"}
+    only_empty = jh.run_detail({"status": "partial_success", "error_message": "Processed 1, failed 1",
+                                "result_data": {"failed_provider_details": [empty]}})
+    assert only_empty == {"clean": True, "message": None, "failures": [], "no_data_sources": ["PXIL DSM"]}
+    mixed = jh.run_detail({"status": "partial_success", "error_message": "Processed 1, failed 2",
+                           "result_data": {"failed_provider_details": [empty, broken]}})
+    assert mixed["clean"] is False and mixed["message"] == "Processed 1, failed 2"
+    assert [f["name"] for f in mixed["failures"]] == ["Grid India"]

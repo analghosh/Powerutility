@@ -16,7 +16,7 @@ UTC ``created_at``.
 
 import asyncio
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Dict, Iterable, List, Optional
 
 from bson import ObjectId
@@ -31,6 +31,12 @@ RUN_LOG_COLLECTIONS = ("job_detail", "job_details")
 RUN_LOG_BY_SERVICE = {"scheduler": "job_detail", "ingestion": "job_details"}
 
 PAGE_MENU_PATH = "/admin/system-health"
+
+# execution_start is the server's local clock stored as if UTC, so it can sit
+# up to a timezone away from created_at. Bounding it this loosely lets the
+# (job_id, execution_start) index narrow a run-history query, and the exact
+# window is then applied on created_at.
+_LOCAL_CLOCK_SLACK = timedelta(days=1)
 
 _ROW_FIELDS = {
     "_id": 0,
@@ -125,6 +131,60 @@ class SystemHealthRepository:
         rows = [row for batch in batches for row in batch if row.get("created_at")]
         rows.sort(key=lambda row: row["created_at"], reverse=True)
         return rows[:limit]
+
+    async def find_job(self, job_type: str) -> Optional[Dict[str, Any]]:
+        return await self.audit_db["job_data"].find_one({"job_type": job_type})
+
+    async def run_groups(self, job_id: str, start: datetime, end: datetime) -> List[Dict[str, Any]]:
+        """
+        The job's runs that wrote rows in [start, end), one entry per
+        execution_id across both run logs: every status its rows carry, the
+        first and last row times, and the longest duration any row reported.
+        """
+        pipeline = [
+            {"$match": {
+                "job_id": _job_id_filter(job_id),
+                "execution_start": {"$gte": start - _LOCAL_CLOCK_SLACK, "$lt": end + _LOCAL_CLOCK_SLACK},
+                "created_at": {"$gte": start, "$lt": end},
+            }},
+            {"$group": {
+                "_id": {"$ifNull": ["$execution_id", {"$toString": "$_id"}]},
+                "statuses": {"$push": "$status"},
+                "first": {"$min": "$created_at"},
+                "last": {"$max": "$created_at"},
+                "duration": {"$max": "$duration_seconds"},
+            }},
+        ]
+        batches = await asyncio.gather(
+            *(
+                self.audit_db[name].aggregate(pipeline).to_list(length=None)
+                for name in RUN_LOG_COLLECTIONS
+            )
+        )
+        merged: Dict[str, Dict[str, Any]] = {}
+        for batch in batches:
+            for group in batch:
+                run = merged.setdefault(group["_id"], {
+                    "id": group["_id"], "statuses": [], "first": None, "last": None, "duration": None,
+                })
+                run["statuses"] += group["statuses"]
+                for key, pick in (("first", min), ("last", max), ("duration", max)):
+                    values = [value for value in (run[key], group[key]) if value is not None]
+                    run[key] = pick(values) if values else None
+        return list(merged.values())
+
+    async def rows_for_runs(self, job_id: str, execution_ids: List[str]) -> List[Dict[str, Any]]:
+        """Every row those runs wrote, for describing what went wrong."""
+        if not execution_ids:
+            return []
+        query = {"job_id": _job_id_filter(job_id), "execution_id": {"$in": execution_ids}}
+        batches = await asyncio.gather(
+            *(
+                self.audit_db[name].find(query, _ROW_FIELDS).to_list(length=None)
+                for name in RUN_LOG_COLLECTIONS
+            )
+        )
+        return [row for batch in batches for row in batch]
 
     async def any_run_between(self, collection: str, start: datetime, end: datetime) -> bool:
         """

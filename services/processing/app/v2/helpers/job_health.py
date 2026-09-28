@@ -291,6 +291,70 @@ def run_problem(row: Optional[Dict[str, Any]]) -> Optional[str]:
     return str(result["message"]) if result.get("message") else None
 
 
+# ---- run history ------------------------------------------------------------
+#
+# One entry per run, however many rows it wrote. A run with no finished row is
+# still running, unless its start marker is old: then the process stopped
+# mid-run (a restart, a crash) and the run never finished.
+
+RUN_OK = "ok"
+RUN_PARTIAL = "partial"
+RUN_FAILED = "failed"
+RUN_RUNNING = "running"
+RUN_UNFINISHED = "unfinished"
+RUN_PROBLEMS = frozenset({RUN_PARTIAL, RUN_FAILED, RUN_UNFINISHED})
+
+RUNNING_STALE = timedelta(hours=1)
+# A run that starts within this long after one of its schedule's slots was
+# started by the clock; anything else was triggered (new data, a retry).
+SCHEDULED_WINDOW = timedelta(seconds=90)
+
+
+def run_status(statuses: List[Optional[str]], last_seen: Optional[datetime], now: datetime) -> str:
+    """A run's status from every row it wrote."""
+    seen = {str(status).lower() for status in statuses if status}
+    if seen & FAILED_STATUSES:
+        return RUN_FAILED
+    if seen & PARTIAL_STATUSES:
+        return RUN_PARTIAL
+    if seen & SUCCESS_STATUSES:
+        return RUN_OK
+    last_seen = as_utc(last_seen)
+    if last_seen is not None and now - last_seen < RUNNING_STALE:
+        return RUN_RUNNING
+    return RUN_UNFINISHED
+
+
+def run_trigger(started_at: Optional[datetime], schedule: Optional[str], tz_name: Optional[str]) -> Optional[str]:
+    """"scheduled" when a run started on one of its schedule's slots, else "triggered"."""
+    started_at = as_utc(started_at)
+    if started_at is None or not schedule:
+        return None
+    try:
+        tz = pytz.timezone(tz_name or "Asia/Kolkata")
+        slot = croniter(schedule, (started_at + timedelta(seconds=1)).astimezone(tz)).get_prev(datetime)
+    except Exception:
+        return None
+    return "scheduled" if started_at - slot.astimezone(timezone.utc) <= SCHEDULED_WINDOW else "triggered"
+
+
+def run_detail(row: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    What a problem run's worst row says: the cause, the data sources that
+    failed, and the ones that only had nothing to return. ``clean`` is True
+    when every failure was an empty source, which the page treats as fine.
+    """
+    failures = provider_failures((row or {}).get("result_data"))
+    real, empty = split_no_data(failures)
+    clean = bool(failures) and not real
+    return {
+        "clean": clean,
+        "message": None if clean else run_problem(row),
+        "failures": real,
+        "no_data_sources": sorted({failure["name"] for failure in empty}),
+    }
+
+
 # ---- what the schedulers actually registered --------------------------------
 #
 # job_data is not what runs. The scheduler registers several jobs from a

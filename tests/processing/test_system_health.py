@@ -4,7 +4,7 @@ check lives, and how the page's one-line verdict is reached.
 """
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi import HTTPException
@@ -390,3 +390,99 @@ def test_no_clean_run_in_a_full_scan_reports_how_far_back_it_looked(monkeypatch)
     assert rated["state"] == jh.STATE_FAILED
     assert rated["last_success_at"] is None
     assert rated["no_clean_run_since"] == "2026-09-27T11:45:00+00:00"
+
+
+
+# ---- run history endpoint ------------------------------------------------------
+
+class HistoryRepository(StubRepository):
+    def __init__(self, job, groups, rows):
+        super().__init__()
+        self.job, self.groups, self.rows_list = job, groups, rows
+
+    async def find_job(self, job_type):
+        return self.job if self.job and job_type == self.job["job_type"] else None
+
+    async def run_groups(self, job_id, start, end):
+        return [dict(group) for group in self.groups]
+
+    async def rows_for_runs(self, job_id, execution_ids):
+        return [row for row in self.rows_list if row.get("execution_id") in execution_ids]
+
+
+RTM_BOOK = {**DAILY_0730, "job_type": "rtm_block_bid_book_sync", "name": "RTM Block Bid Book Sync",
+            "schedule": "*/15 * * * *", "created_at": datetime(2026, 1, 1)}
+UNAUTHORIZED = "Client error '401 Unauthorized' for url 'https://alphartmapi.iexindia.com/rtm/api/v2/deliverydates/X'"
+
+
+def _group(execution_id, statuses, first, last=None, duration=None):
+    return {"id": execution_id, "statuses": statuses, "first": first, "last": last or first, "duration": duration}
+
+
+def _history(groups, rows, **kwargs):
+    service = _service_with(HistoryRepository(RTM_BOOK, groups, rows))
+    return asyncio.run(service.get_job_runs("rtm_block_bid_book_sync", **kwargs))
+
+
+def test_history_shows_one_entry_per_run_with_the_worse_result():
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0)
+    slot = now - timedelta(minutes=now.minute % 15)  # a */15 slot in the past hour
+    groups = [
+        _group("r2", ["running", "error", "success"], slot, slot + timedelta(seconds=5), 4.83),
+        _group("r1", ["success"], slot - timedelta(minutes=15), duration=2.5),
+    ]
+    rows = [{"execution_id": "r2", "status": "error", "created_at": slot, "error_message": UNAUTHORIZED},
+            {"execution_id": "r2", "status": "success", "created_at": slot + timedelta(seconds=5)}]
+    result = _history(groups, rows)
+    assert [run["id"] for run in result["runs"]] == ["r2", "r1"]
+    newest = result["runs"][0]
+    assert newest["status"] == jh.RUN_FAILED
+    assert newest["message"] == UNAUTHORIZED
+    assert newest["duration_seconds"] == 4.83
+    assert newest["trigger"] == "scheduled"
+    assert result["runs"][1]["status"] == jh.RUN_OK
+    assert result["summary"]["runs"] == 2 and result["summary"]["failed"] == 1 and result["summary"]["ok"] == 1
+
+
+def test_a_forgotten_start_marker_shows_as_not_finished_not_running():
+    long_ago = datetime.now(timezone.utc) - timedelta(hours=5)
+    result = _history([_group("r1", ["running"], long_ago)], [])
+    run = result["runs"][0]
+    assert run["status"] == jh.RUN_UNFINISHED and run["finished_at"] is None
+
+
+def test_failed_only_and_paging_by_cursor():
+    base = datetime.now(timezone.utc) - timedelta(hours=1)
+    groups = [_group(f"r{i}", ["error"] if i % 2 else ["success"], base - timedelta(minutes=15 * i)) for i in range(6)]
+    rows = [{"execution_id": f"r{i}", "status": "error", "created_at": base, "error_message": "boom"} for i in range(6) if i % 2]
+    failed = _history(groups, rows, failed_only=True)
+    assert [run["id"] for run in failed["runs"]] == ["r1", "r3", "r5"]
+    first_page = _history(groups, rows, limit=2)
+    assert [run["id"] for run in first_page["runs"]] == ["r0", "r1"]
+    assert first_page["next_before"] == first_page["runs"][-1]["started_at"]
+
+
+def test_older_pages_have_no_summary_and_stop_before_the_job_existed():
+    before = datetime(2026, 1, 2, tzinfo=timezone.utc)  # window reaches back before created_at
+    result = _history([], [], before=before)
+    assert result["summary"] is None and result["runs"] == [] and result["next_before"] is None
+
+
+def test_an_unknown_job_has_no_history():
+    service = _service_with(HistoryRepository(RTM_BOOK, [], []))
+    assert asyncio.run(service.get_job_runs("nope")) is None
+
+
+def test_the_history_route_is_for_administrators_too(monkeypatch):
+    service = _service_with(HistoryRepository(RTM_BOOK, [], []))
+    monkeypatch.setattr(system_health_routes, "system_health_service", service)
+    with pytest.raises(HTTPException) as refused:
+        asyncio.run(system_health_routes.get_job_runs(
+            "rtm_block_bid_book_sync", None, 50, False, user_context={"roles": ["user"], "permissions": []}
+        ))
+    assert refused.value.status_code == 403
+    with pytest.raises(HTTPException) as missing:
+        asyncio.run(system_health_routes.get_job_runs(
+            "nope", None, 50, False, user_context={"roles": ["admin"], "permissions": []}
+        ))
+    assert missing.value.status_code == 404
