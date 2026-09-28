@@ -10,7 +10,8 @@ at a time however many screens are open.
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from collections import Counter, defaultdict
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import httpx
@@ -33,6 +34,13 @@ JOB_LOOKUP_CONCURRENCY = 16
 ERROR_MESSAGE_LIMIT = 300
 # How far back to look for the last run in which nothing failed.
 RECENT_RUN_SCAN = 200
+
+# Run history: runs are read two days at a time, newest first, and the summary
+# covers the last day. Only problem runs are looked up in detail, at most this
+# many per request.
+RUN_HISTORY_WINDOW = timedelta(days=2)
+RUN_SUMMARY_HOURS = 24
+RUN_DETAIL_CAP = 600
 
 STATUS_UP = "up"
 STATUS_DEGRADED = "degraded"
@@ -400,6 +408,112 @@ class SystemHealthService:
             summary["failures"] = real[: jh.FAILURE_LIST_LIMIT]
             summary["failures_total"] = len(real)
         return summary
+
+
+    # ---- run history -----------------------------------------------------
+
+    def _known_schedule(self, job: Dict[str, Any]) -> Tuple[Optional[str], Optional[str]]:
+        """The schedule the job really runs on, if the last check learned it."""
+        for rated in (self._cached or {}).get("jobs", []):
+            if rated.get("job_type") == job.get("job_type"):
+                return rated.get("schedule") or job.get("schedule"), rated.get("timezone") or job.get("timezone")
+        return job.get("schedule"), job.get("timezone")
+
+    async def get_job_runs(
+        self,
+        job_type: str,
+        before: Optional[datetime] = None,
+        limit: int = 50,
+        failed_only: bool = False,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        One job's runs, newest first, one entry per run however many rows it
+        wrote. None for an unknown job.
+        """
+        job = await self.repository.find_job(job_type)
+        if not job:
+            return None
+        now = datetime.now(timezone.utc)
+        end = jh.as_utc(before) or now
+        start = end - RUN_HISTORY_WINDOW
+        job_id = str(job["_id"])
+        schedule, tz_name = self._known_schedule(job)
+
+        groups = await self.repository.run_groups(job_id, start, end)
+        epoch = datetime.min.replace(tzinfo=timezone.utc)
+        groups.sort(key=lambda group: jh.as_utc(group.get("first")) or epoch, reverse=True)
+
+        runs = []
+        for group in groups:
+            status = jh.run_status(group.get("statuses") or [], group.get("last"), now)
+            first, last = jh.as_utc(group.get("first")), jh.as_utc(group.get("last"))
+            duration = group.get("duration")
+            if not isinstance(duration, (int, float)):
+                duration = (last - first).total_seconds() if first and last and last > first else None
+            runs.append({
+                "id": group["id"],
+                "started_at": first,
+                "finished_at": None if status in (jh.RUN_RUNNING, jh.RUN_UNFINISHED) else last,
+                "duration_seconds": round(duration, 2) if duration is not None else None,
+                "status": status,
+                "trigger": jh.run_trigger(first, schedule, tz_name),
+                "message": None,
+                "failures": [],
+                "failures_total": 0,
+                "no_data_sources": [],
+            })
+
+        # Say what went wrong in each problem run, from its worst row.
+        problem_ids = [run["id"] for run in runs if run["status"] in (jh.RUN_PARTIAL, jh.RUN_FAILED)]
+        rows = await self.repository.rows_for_runs(job_id, problem_ids[:RUN_DETAIL_CAP])
+        rows_by_run: Dict[str, List[Dict[str, Any]]] = defaultdict(list)
+        for row in rows:
+            rows_by_run[row.get("execution_id")].append(row)
+        for run in runs:
+            if run["id"] not in rows_by_run:
+                continue
+            detail = jh.run_detail(jh.worst_row(rows_by_run[run["id"]]))
+            if detail["clean"]:
+                run["status"] = jh.RUN_OK
+            run.update(
+                message=_trim(detail["message"]),
+                failures=detail["failures"][: jh.FAILURE_LIST_LIMIT],
+                failures_total=len(detail["failures"]),
+                no_data_sources=detail["no_data_sources"],
+            )
+
+        summary = None
+        if before is None:
+            cutoff = now - timedelta(hours=RUN_SUMMARY_HOURS)
+            counts = Counter(run["status"] for run in runs if run["started_at"] and run["started_at"] >= cutoff)
+            summary = {"hours": RUN_SUMMARY_HOURS, "runs": sum(counts.values())}
+            for status in (jh.RUN_OK, jh.RUN_PARTIAL, jh.RUN_FAILED, jh.RUN_RUNNING, jh.RUN_UNFINISHED):
+                summary[status] = counts.get(status, 0)
+
+        if failed_only:
+            runs = [run for run in runs if run["status"] in jh.RUN_PROBLEMS]
+        page = runs[:limit]
+        if len(runs) > limit:
+            next_before = page[-1]["started_at"]
+        else:
+            created = jh.as_utc(job.get("created_at"))
+            next_before = start if created is None or start > created else None
+
+        for run in page:
+            run["started_at"], run["finished_at"] = _iso(run["started_at"]), _iso(run["finished_at"])
+        return {
+            "job": {
+                "job_type": job.get("job_type"),
+                "name": job.get("name") or job.get("job_type"),
+                "description": job.get("description"),
+                "schedule": schedule,
+                "timezone": tz_name,
+            },
+            "window": {"from": _iso(start), "to": _iso(end)},
+            "summary": summary,
+            "runs": page,
+            "next_before": _iso(next_before),
+        }
 
 
 system_health_service = SystemHealthService()
