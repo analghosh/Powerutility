@@ -11,20 +11,22 @@ import asyncio
 import logging
 import time
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import httpx
 
 from libs.health.checks import check_redis_health
 from libs.health.health_checker import HealthStatus
+from libs.utils.failure_reasons import safe_reason
 
 from ...core.config import settings
 from ..helpers import job_health as jh
-from ..repository.system_health_repository import system_health_repository
+from ..repository.system_health_repository import RUN_LOG_BY_SERVICE, system_health_repository
 
 logger = logging.getLogger(__name__)
 
 CACHE_SECONDS = 10.0
+ACCESS_CACHE_SECONDS = 60.0
 PROBE_TIMEOUT_SECONDS = 3.0
 # Parallel job lookups; each is a few indexed find_one calls.
 JOB_LOOKUP_CONCURRENCY = 16
@@ -47,6 +49,19 @@ SERVICES: Tuple[Tuple[str, str, str], ...] = (
     ("database", "Database", "Stores all EPMS data"),
     ("cache", "Cache", "Keeps screens fast and sessions active"),
 )
+
+
+# Who may open the page. Mirrors the menu: the super-admin roles and wildcard
+# holders that see every menu, plus any role granted the System Health item.
+SUPER_ADMIN_ROLES = frozenset({"admin", "superadmin", "super_admin"})
+PAGE_PERMISSIONS = frozenset({"*", "admin:*", "system_health:read", "system_health:*"})
+
+
+def has_standing_access(roles: Iterable[str], permissions: Iterable[str]) -> bool:
+    """Access that needs no lookup: a super-admin role or a covering permission."""
+    if any(str(role).lower() in SUPER_ADMIN_ROLES for role in roles or ()):
+        return True
+    return any(permission in PAGE_PERMISSIONS for permission in permissions or ())
 
 
 def health_url(service_url: str) -> str:
@@ -73,12 +88,8 @@ def _iso(value: Optional[datetime]) -> Optional[str]:
 
 
 def _trim(message: Optional[str]) -> Optional[str]:
-    if not message:
-        return None
-    message = str(message).strip()
-    if len(message) > ERROR_MESSAGE_LIMIT:
-        return message[: ERROR_MESSAGE_LIMIT - 1].rstrip() + "…"
-    return message
+    """One line, secrets masked, short enough for the page."""
+    return safe_reason(message, ERROR_MESSAGE_LIMIT)
 
 
 def _redis_url() -> str:
@@ -92,6 +103,26 @@ class SystemHealthService:
         self._cached: Optional[Dict[str, Any]] = None
         self._cached_until = 0.0
         self._lock = asyncio.Lock()
+        self._access: Dict[frozenset, Tuple[float, bool]] = {}
+
+    async def can_view(self, user_context: Dict[str, Any]) -> bool:
+        """Whether this user's roles may see System Health (see PAGE_PERMISSIONS)."""
+        roles = [str(role) for role in user_context.get("roles") or []]
+        if has_standing_access(roles, user_context.get("permissions") or []):
+            return True
+        if not roles:
+            return False
+        key = frozenset(roles)
+        cached = self._access.get(key)
+        if cached and time.monotonic() < cached[0]:
+            return cached[1]
+        try:
+            allowed = await self.repository.roles_have_page(roles)
+        except Exception as exc:
+            logger.error("System health: page grant lookup failed: %s", exc)
+            return False
+        self._access[key] = (time.monotonic() + ACCESS_CACHE_SECONDS, allowed)
+        return allowed
 
     async def get_system_health(self) -> Dict[str, Any]:
         if self._cached and time.monotonic() < self._cached_until:
@@ -201,17 +232,40 @@ class SystemHealthService:
             return []
 
         gate = asyncio.Semaphore(JOB_LOOKUP_CONCURRENCY)
+        # (run log, slot) -> was that service logging anything then? Many jobs
+        # share a slot (midnight), so each is asked once per check.
+        activity: Dict[Tuple[str, datetime], "asyncio.Task[bool]"] = {}
 
         async def rate(job: Dict[str, Any]) -> Dict[str, Any]:
             async with gate:
-                return await self._rate_job(job, now)
+                return await self._rate_job(job, now, activity)
 
         rated = await asyncio.gather(*(rate(job) for job in jobs))
         group_rank = {group: index for index, group in enumerate(jh.GROUP_ORDER)}
         rated.sort(key=lambda job: (group_rank.get(job["group"], 99), job["name"].lower()))
         return rated
 
-    async def _rate_job(self, job: Dict[str, Any], now: datetime) -> Dict[str, Any]:
+    async def _service_was_running(
+        self, service: Optional[str], due_at: datetime, activity: Dict
+    ) -> Optional[bool]:
+        collection = RUN_LOG_BY_SERVICE.get(service or "")
+        if not collection:
+            return None
+        key = (collection, due_at)
+        if key not in activity:
+            start, end = jh.activity_window(due_at)
+            activity[key] = asyncio.ensure_future(
+                self.repository.any_run_between(collection, start, end)
+            )
+        try:
+            return await activity[key]
+        except Exception as exc:
+            logger.warning("System health: activity lookup failed for %s: %s", collection, exc)
+            return None
+
+    async def _rate_job(
+        self, job: Dict[str, Any], now: datetime, activity: Optional[Dict] = None
+    ) -> Dict[str, Any]:
         job_id = str(job["_id"])
         summary = {
             "job_type": job.get("job_type"),
@@ -226,7 +280,10 @@ class SystemHealthService:
             "last_result": None,
             "last_success_at": None,
             "missed_since": None,
+            "missed_reason": None,
             "message": None,
+            "failures": [],
+            "failures_total": 0,
         }
         if not job.get("enabled", False):
             return summary
@@ -254,8 +311,17 @@ class SystemHealthService:
             last_success_at=_iso((last_success or {}).get("created_at")),
             missed_since=_iso(verdict["due_at"]) if verdict["state"] == jh.STATE_MISSED else None,
         )
+        if verdict["state"] == jh.STATE_MISSED and verdict["due_at"] is not None:
+            running = await self._service_was_running(
+                job.get("service"), verdict["due_at"], activity if activity is not None else {}
+            )
+            if running is not None:
+                summary["missed_reason"] = jh.missed_reason(running)
         if verdict["state"] in (jh.STATE_FAILED, jh.STATE_PARTIAL):
             summary["message"] = _trim((last_finished or {}).get("error_message"))
+            failures = jh.provider_failures((last_finished or {}).get("result_data"))
+            summary["failures"] = failures[: jh.FAILURE_LIST_LIMIT]
+            summary["failures_total"] = len(failures)
         return summary
 
 
