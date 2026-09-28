@@ -14,8 +14,9 @@ Two things in the run logs shape these rules:
   clock here.
 """
 
+import re
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Tuple
 
 import pytz
 from croniter import croniter
@@ -178,3 +179,70 @@ def provider_failures(result_data: Optional[Dict[str, Any]]) -> List[Dict[str, s
             "reason": safe_reason(item.get("error")) or "Unknown error",
         })
     return failures
+
+
+# ---- what the schedulers actually registered --------------------------------
+#
+# job_data is not what runs. The scheduler registers several jobs from a
+# hard-coded fallback list in its cron_manager, with schedules and on/off
+# switches that differ from job_data (peak_demand_compute: job_data */15,
+# registered 0 */6; data_migration: enabled in job_data, never registered).
+# Each service's GET /cron/status lists what it registered; these helpers turn
+# that into the schedule a job really runs on.
+
+_TRIGGER_FIELD = re.compile(r"(\w+)='([^']*)'")
+
+
+def cron_from_trigger(trigger: Optional[str]) -> Optional[str]:
+    """
+    APScheduler's ``str(CronTrigger)`` as a five-field cron expression:
+    ``cron[month='*', day='*', day_of_week='*', hour='*/6', minute='0']`` ->
+    ``0 */6 * * *``. None for anything that isn't a cron trigger.
+    """
+    if not trigger or not trigger.startswith("cron["):
+        return None
+    fields = dict(_TRIGGER_FIELD.findall(trigger))
+    return " ".join((
+        fields.get("minute", "0"),
+        fields.get("hour", "*"),
+        fields.get("day", "*"),
+        fields.get("month", "*"),
+        fields.get("day_of_week", "*"),
+    ))
+
+
+def registered_jobs(cron_status: Optional[Mapping[str, Any]]) -> Optional[Dict[str, str]]:
+    """
+    ``{job_type: cron}`` from one service's /cron/status body, or None when the
+    body isn't usable (service down, or a build without the endpoint).
+    """
+    if not isinstance(cron_status, Mapping):
+        return None
+    listing = cron_status.get("jobs")
+    if not isinstance(listing, Mapping) or not isinstance(listing.get("jobs"), list):
+        return None
+    jobs = {}
+    for job in listing["jobs"]:
+        if isinstance(job, Mapping) and job.get("job_id"):
+            jobs[str(job["job_id"])] = cron_from_trigger(job.get("trigger"))
+    return jobs
+
+
+def live_schedule(
+    job: Mapping[str, Any], registered: Mapping[str, Optional[Dict[str, str]]]
+) -> Dict[str, Any]:
+    """
+    How a job is really scheduled, given ``{service: registered_jobs(...)}``.
+    ``scheduled`` is None when that can't be told (a listing is missing), and
+    the caller falls back to job_data.
+    """
+    job_type = job.get("job_type")
+    own = job.get("service")
+    order = [own] + [service for service in registered if service != own]
+    for service in order:
+        jobs = registered.get(service)
+        if jobs and job_type in jobs:
+            return {"scheduled": True, "schedule": jobs[job_type], "service": service}
+    if registered and all(jobs is not None for jobs in registered.values()):
+        return {"scheduled": False, "schedule": None, "service": None}
+    return {"scheduled": None, "schedule": None, "service": None}
