@@ -152,3 +152,38 @@ def test_step_syntax_with_a_start_minute_is_understood():
 )
 def test_jobs_fall_into_the_area_an_operator_would_expect(job_type, service, group):
     assert jh.job_group(job_type, service) == group
+
+
+def test_the_activity_window_straddles_the_missed_slot():
+    start, end = jh.activity_window(_utc(6, 0))
+    assert start == _utc(5, 58)
+    assert end == _utc(6, 5)
+
+
+def test_a_quiet_service_means_it_was_down_and_a_busy_one_means_it_skipped_the_job():
+    assert jh.missed_reason(service_was_running=False) == jh.MISSED_RUNNER_DOWN
+    assert jh.missed_reason(service_was_running=True) == jh.MISSED_NOT_STARTED
+
+
+def test_provider_failures_name_each_source_and_mask_its_reason():
+    result_data = {
+        "failed_provider_details": [
+            {
+                "provider_code": "GRID_INDIA_SUPPLY",
+                "provider_name": "Grid India Supply",
+                "error": "Cannot connect to https://gateway.grid-india.in/x?apikey=SECRET123",
+            },
+            {"provider_code": "HPX_GDAM_PROVIDER", "error": "No data fetched from API"},
+            "not a dict",
+            {"error": "no name at all"},
+        ]
+    }
+    failures = jh.provider_failures(result_data)
+    assert [f["name"] for f in failures] == ["Grid India Supply", "HPX_GDAM_PROVIDER"]
+    assert "SECRET123" not in failures[0]["reason"]
+    assert failures[1]["reason"] == "No data fetched from API"
+
+
+def test_a_run_row_without_details_has_no_failures():
+    assert jh.provider_failures(None) == []
+    assert jh.provider_failures({"failed_providers": 3}) == []

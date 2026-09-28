@@ -15,10 +15,12 @@ Two things in the run logs shape these rules:
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import pytz
 from croniter import croniter
+
+from libs.utils.failure_reasons import safe_reason
 
 # Statuses a run ends in. Anything else ("processing", "running") is a marker.
 SUCCESS_STATUSES = frozenset({"success", "completed"})
@@ -39,6 +41,18 @@ STATE_FAILED = "failed"
 STATE_MISSED = "missed"
 STATE_PAUSED = "paused"
 ATTENTION_STATES = frozenset({STATE_PARTIAL, STATE_FAILED, STATE_MISSED})
+
+# Why a job missed its slot, when the run logs can tell.
+MISSED_RUNNER_DOWN = "runner_down"  # its service logged nothing around the slot
+MISSED_NOT_STARTED = "not_started"  # its service was busy with other jobs
+
+# Around a missed slot, how far to look for any sign of the service running.
+# Every-minute jobs log constantly, so seven quiet minutes means it was down.
+ACTIVITY_BEFORE = timedelta(minutes=2)
+ACTIVITY_AFTER = timedelta(minutes=5)
+
+# Failed data sources listed per job on the page; the rest are counted.
+FAILURE_LIST_LIMIT = 12
 
 GROUP_DATA_COLLECTION = "Data collection"
 GROUP_DEMAND_SUPPLY = "Demand & supply"
@@ -133,3 +147,34 @@ def classify_job(
     else:
         state = STATE_OK
     return {"state": state, "due_at": due_at}
+
+
+def activity_window(due_at: datetime) -> Tuple[datetime, datetime]:
+    """The span checked for any run at all around a missed slot."""
+    return due_at - ACTIVITY_BEFORE, due_at + ACTIVITY_AFTER
+
+
+def missed_reason(service_was_running: bool) -> str:
+    return MISSED_NOT_STARTED if service_was_running else MISSED_RUNNER_DOWN
+
+
+def provider_failures(result_data: Optional[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """
+    The data sources a run failed on, as recorded by the ingestion processors
+    (``failed_provider_details``). Reasons are re-masked here in case a row was
+    written before masking existed.
+    """
+    details = (result_data or {}).get("failed_provider_details") or []
+    failures = []
+    for item in details:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("provider_name") or item.get("provider_code")
+        if not name:
+            continue
+        failures.append({
+            "name": str(name),
+            "code": str(item.get("provider_code") or name),
+            "reason": safe_reason(item.get("error")) or "Unknown error",
+        })
+    return failures
