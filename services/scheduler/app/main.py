@@ -4,6 +4,7 @@ Handles cron jobs and scheduling
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +40,8 @@ class HealthResponse(BaseModel):
     service: str
     version: str
     timestamp: str
+    scheduler_running: bool
+    database: str
 
 
 def run_timeblock_seeder():
@@ -332,6 +335,8 @@ async def health_check():
     return {
         "status": "healthy",
         "service": settings.SERVICE_NAME,
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat(),
         "scheduler_running": cron_manager.is_running(),
         "database": settings.AUDIT_DB_NAME
     }
