@@ -338,6 +338,7 @@ class SystemHealthService:
             "message": None,
             "failures": [],
             "failures_total": 0,
+            "no_data_sources": [],
         }
         if not job.get("enabled", False):
             return summary
@@ -372,10 +373,16 @@ class SystemHealthService:
             if running is not None:
                 summary["missed_reason"] = jh.missed_reason(running)
         if verdict["state"] in (jh.STATE_FAILED, jh.STATE_PARTIAL):
-            summary["message"] = _trim((last_finished or {}).get("error_message"))
             failures = jh.provider_failures((last_finished or {}).get("result_data"))
-            summary["failures"] = failures[: jh.FAILURE_LIST_LIMIT]
-            summary["failures_total"] = len(failures)
+            real, empty = jh.split_no_data(failures)
+            summary["no_data_sources"] = sorted({failure["name"] for failure in empty})
+            if failures and not real:
+                # Every source that "failed" just had nothing to return.
+                summary["state"] = jh.STATE_OK
+                return summary
+            summary["message"] = _trim((last_finished or {}).get("error_message"))
+            summary["failures"] = real[: jh.FAILURE_LIST_LIMIT]
+            summary["failures_total"] = len(real)
         return summary
 
 

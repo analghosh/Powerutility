@@ -234,3 +234,20 @@ def test_registered_nowhere_is_not_scheduled_only_when_every_listing_was_read():
     assert jh.live_schedule(job, {"scheduler": {}, "ingestion": {}})["scheduled"] is False
     assert jh.live_schedule(job, {"scheduler": {}, "ingestion": None})["scheduled"] is None
     assert jh.live_schedule(job, {})["scheduled"] is None
+
+
+@pytest.mark.parametrize(
+    "reason, empty",
+    [
+        ("No data fetched from API", True),
+        ("no data to store", True),
+        ("Successfully fetched and parsed 0 records", True),
+        ("API fetch error: Cannot connect to host gateway.grid-india.in:443", False),
+        ("Failed to fetch API data: TimeoutError", False),
+        ("Data validation failed", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_only_an_empty_answer_counts_as_no_data(reason, empty):
+    assert jh.is_no_data(reason) is empty
