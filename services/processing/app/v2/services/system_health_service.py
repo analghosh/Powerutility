@@ -443,9 +443,15 @@ class SystemHealthService:
         epoch = datetime.min.replace(tzinfo=timezone.utc)
         groups.sort(key=lambda group: jh.as_utc(group.get("first")) or epoch, reverse=True)
 
+        # A start marker with no finish is "running" only while that is still
+        # plausible for this job.
+        stale_after = jh.running_stale_after([
+            group.get("duration") for group in groups
+            if {str(s).lower() for s in group.get("statuses") or []} & jh.FINISHED_STATUSES
+        ])
         runs = []
         for group in groups:
-            status = jh.run_status(group.get("statuses") or [], group.get("last"), now)
+            status = jh.run_status(group.get("statuses") or [], group.get("last"), now, stale_after)
             first, last = jh.as_utc(group.get("first")), jh.as_utc(group.get("last"))
             duration = group.get("duration")
             if not isinstance(duration, (int, float)):
