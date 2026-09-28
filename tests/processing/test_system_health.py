@@ -77,6 +77,14 @@ class StubRepository:
         self.grant_lookups += 1
         return bool(self.granted_roles & set(role_names))
 
+    async def run_rows(self, job_id, execution_id):
+        return self.rows.get("run", [])
+
+    async def recent_runs(self, job_id, statuses, limit):
+        if "recent" in self.rows:
+            return self.rows["recent"]
+        return [row for row in (self.rows.get("success"),) if row]
+
     async def any_run_between(self, collection, start, end):
         self.activity_lookups += 1
         return collection in self.active_logs
@@ -308,3 +316,62 @@ def test_a_failed_run_without_source_details_is_unchanged():
     rated = _rate(StubRepository(rows={"any": run, "finished": run}), job=EVERY_15)
     assert rated["state"] == jh.STATE_FAILED
     assert rated["message"] == "Failed to fetch API data: TimeoutError"
+
+
+
+# ---- one run, two rows: judged by the worse one --------------------------------
+
+def _row(status, minute, execution_id, **extra):
+    return {"status": status, "execution_id": execution_id,
+            "created_at": datetime(2026, 9, 28, 11, minute), **extra}
+
+
+PIPELINE_STEPS = {"steps": [
+    {"step": "idf_forecast_merge", "name": "IDF Forecast Merge", "status": "success", "message": "merged=42"},
+    {"step": "demand_data_processing", "name": "Demand Data Processing", "status": "success", "message": "ok"},
+    {"step": "new_dsm_rate_calculation", "name": "New DSM Rate and Net DSM Calculation", "status": "error",
+     "message": "New DSM data processing failed",
+     "result": {"status": "error", "failed_count": 68, "blocks_total": 68, "processed_count": 0}},
+], "message": "Demand serve pipeline finished — 2/3 steps succeeded"}
+
+NOW_1120 = datetime(2026, 9, 28, 11, 20, tzinfo=timezone.utc)
+PIPELINE = {**DAILY_0730, "job_type": "demand_serve_pipeline", "service": "scheduler", "schedule": "*/15 * * * *"}
+
+
+def _rate_now(repository, job):
+    service = _service_with(repository)
+    return asyncio.run(service._rate_job(job, NOW_1120, {}, None))
+
+
+def test_a_run_whose_wrapper_said_success_but_the_job_said_error_is_failed():
+    error = _row("error", 15, "dsp_1115", result_data=PIPELINE_STEPS)
+    wrapper = _row("success", 15, "dsp_1115")
+    repository = StubRepository(rows={
+        "any": wrapper, "finished": wrapper, "run": [error, wrapper],
+        "recent": [wrapper, error, _row("success", 0, "dsp_1100"), _row("error", 0, "dsp_1100")],
+    })
+    rated = _rate_now(repository, PIPELINE)
+    assert rated["state"] == jh.STATE_FAILED
+    assert rated["message"] == (
+        "New DSM Rate and Net DSM Calculation: New DSM data processing failed (68 of 68 blocks failed)"
+    )
+    assert rated["last_success_at"] is None  # no run in the scan was clean
+
+
+def test_last_worked_is_the_last_run_with_nothing_failed():
+    failing = [_row("error", 15, "r3"), _row("success", 15, "r3")]
+    clean = [_row("success", 0, "r2")]
+    repository = StubRepository(rows={
+        "any": failing[1], "finished": failing[1], "run": failing, "recent": failing + clean,
+    })
+    rated = _rate_now(repository, PIPELINE)
+    assert rated["state"] == jh.STATE_FAILED
+    assert rated["last_success_at"] == "2026-09-28T11:00:00+00:00"
+
+
+def test_a_clean_run_stays_clean():
+    ok = _row("success", 15, "r1")
+    repository = StubRepository(rows={"any": ok, "finished": ok, "run": [ok, _row("success", 15, "r1")]})
+    rated = _rate_now(repository, PIPELINE)
+    assert rated["state"] == jh.STATE_OK
+    assert rated["last_success_at"] == "2026-09-28T11:15:00+00:00"

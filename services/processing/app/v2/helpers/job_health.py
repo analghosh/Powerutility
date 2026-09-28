@@ -200,6 +200,91 @@ def split_no_data(failures: List[Dict[str, str]]) -> Tuple[List[Dict[str, str]],
     return real, empty
 
 
+# ---- one run, several rows --------------------------------------------------
+#
+# A run can write more than one final row under the same execution_id: the job
+# records its own result (often "error") and the scheduler's wrapper records
+# "success" because the job function returned without raising. Judging a job
+# by whichever row is newest made failing jobs blink between red and green.
+# A run is as bad as its worst row, and only a run with no failed row counts
+# as having worked.
+
+def _status(row: Optional[Dict[str, Any]]) -> str:
+    status = (row or {}).get("status")
+    return status.lower() if isinstance(status, str) else ""
+
+
+def _severity(row: Dict[str, Any]) -> int:
+    status = _status(row)
+    if status in FAILED_STATUSES:
+        return 3
+    if status in PARTIAL_STATUSES:
+        return 2
+    if status in SUCCESS_STATUSES:
+        return 1
+    return 0
+
+
+def worst_row(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """The finished row that best describes a run: its worst, newest first."""
+    finished = [row for row in rows if _status(row) in FINISHED_STATUSES]
+    if not finished:
+        return None
+    epoch = datetime.min.replace(tzinfo=timezone.utc)
+    return max(finished, key=lambda row: (_severity(row), as_utc(row.get("created_at")) or epoch))
+
+
+def last_clean_run(rows: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """
+    The newest run in ``rows`` (newest first) in which nothing failed: every
+    row of it is a success. A wrapper "success" beside the job's own "error"
+    does not count.
+    """
+    runs: Dict[Any, List[Dict[str, Any]]] = {}
+    order: List[Any] = []
+    for index, row in enumerate(rows):
+        key = row.get("execution_id") or ("row", index)
+        if key not in runs:
+            runs[key] = []
+            order.append(key)
+        runs[key].append(row)
+    for key in order:
+        run = runs[key]
+        if all(_status(row) in SUCCESS_STATUSES for row in run):
+            return run[0]
+    return None
+
+
+def run_problem(row: Optional[Dict[str, Any]]) -> Optional[str]:
+    """
+    What went wrong in a run, in one line. The job's error message when it
+    wrote one; otherwise its failed steps (pipelines record those in
+    ``result_data.steps`` and leave the message empty), or its own summary.
+    """
+    if not row:
+        return None
+    if row.get("error_message"):
+        return str(row["error_message"])
+    result = row.get("result_data") or {}
+    problems = []
+    for step in result.get("steps") or []:
+        if not isinstance(step, dict):
+            continue
+        status = str(step.get("status") or "").lower()
+        if status in SUCCESS_STATUSES:
+            continue
+        name = step.get("name") or step.get("step") or "A step"
+        text = f"{name}: {step.get('message') or status or 'failed'}"
+        outcome = step.get("result") if isinstance(step.get("result"), dict) else {}
+        failed, total = outcome.get("failed_count"), outcome.get("blocks_total")
+        if isinstance(failed, int) and isinstance(total, int) and total:
+            text += f" ({failed} of {total} blocks failed)"
+        problems.append(text)
+    if problems:
+        return "; ".join(problems)
+    return str(result["message"]) if result.get("message") else None
+
+
 # ---- what the schedulers actually registered --------------------------------
 #
 # job_data is not what runs. The scheduler registers several jobs from a
