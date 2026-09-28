@@ -31,6 +31,8 @@ PROBE_TIMEOUT_SECONDS = 3.0
 # Parallel job lookups; each is a few indexed find_one calls.
 JOB_LOOKUP_CONCURRENCY = 16
 ERROR_MESSAGE_LIMIT = 300
+# How far back to look for the last run in which nothing failed.
+RECENT_RUN_SCAN = 200
 
 STATUS_UP = "up"
 STATUS_DEGRADED = "degraded"
@@ -348,9 +350,16 @@ class SystemHealthService:
                 self.repository.latest_run(job_id),
                 self.repository.latest_run(job_id, jh.FINISHED_STATUSES),
             )
-            last_success = last_finished
-            if not last_finished or last_finished.get("status") not in jh.SUCCESS_STATUSES:
-                last_success = await self.repository.latest_run(job_id, jh.SUCCESS_STATUSES)
+            # The newest run is judged by all of its rows, not whichever
+            # happened to be written last.
+            if last_finished and last_finished.get("execution_id"):
+                run = await self.repository.run_rows(job_id, last_finished["execution_id"])
+                last_finished = jh.worst_row(run) or last_finished
+            if last_finished and str(last_finished.get("status", "")).lower() in jh.SUCCESS_STATUSES:
+                last_success = last_finished
+            else:
+                recent = await self.repository.recent_runs(job_id, jh.FINISHED_STATUSES, RECENT_RUN_SCAN)
+                last_success = jh.last_clean_run(recent)
         except Exception as exc:
             logger.error("System health: run lookup failed for %s: %s", job_id, exc)
             summary.update(state=jh.STATE_FAILED, message="Could not read this job's run history")
@@ -380,7 +389,7 @@ class SystemHealthService:
                 # Every source that "failed" just had nothing to return.
                 summary["state"] = jh.STATE_OK
                 return summary
-            summary["message"] = _trim((last_finished or {}).get("error_message"))
+            summary["message"] = _trim(jh.run_problem(last_finished))
             summary["failures"] = real[: jh.FAILURE_LIST_LIMIT]
             summary["failures_total"] = len(real)
         return summary

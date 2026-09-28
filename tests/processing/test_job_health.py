@@ -251,3 +251,41 @@ def test_registered_nowhere_is_not_scheduled_only_when_every_listing_was_read():
 )
 def test_only_an_empty_answer_counts_as_no_data(reason, empty):
     assert jh.is_no_data(reason) is empty
+
+
+
+# ---- one run, several rows ------------------------------------------------------
+
+def _r(status, minute, execution_id=None, **extra):
+    return {"status": status, "execution_id": execution_id, "created_at": _utc(6, minute), **extra}
+
+
+def test_the_worst_row_of_a_run_describes_it():
+    assert jh.worst_row([_r("success", 1), _r("error", 0)])["status"] == "error"
+    assert jh.worst_row([_r("success", 1), _r("partial_success", 0)])["status"] == "partial_success"
+    assert jh.worst_row([_r("success", 0), _r("success", 1)])["created_at"] == _utc(6, 1)
+    assert jh.worst_row([_r("processing", 0)]) is None
+
+
+def test_the_last_clean_run_skips_runs_with_any_failed_row():
+    rows = [
+        _r("success", 30, "c"), _r("error", 30, "c"),
+        _r("success", 15, "b"), _r("partial_success", 15, "b"),
+        _r("success", 0, "a"),
+    ]
+    assert jh.last_clean_run(rows)["execution_id"] == "a"
+    assert jh.last_clean_run(rows[:4]) is None
+    assert jh.last_clean_run([_r("success", 5)])["status"] == "success"
+
+
+def test_run_problem_prefers_the_error_message_then_failed_steps_then_the_summary():
+    assert jh.run_problem({"error_message": "401 Unauthorized"}) == "401 Unauthorized"
+    steps = {"result_data": {"message": "2/3 steps succeeded", "steps": [
+        {"name": "Step A", "status": "success"},
+        {"name": "Step B", "status": "error", "message": "boom", "result": {"failed_count": 3, "blocks_total": 5}},
+        {"step": "step_c", "status": "failed"},
+    ]}}
+    assert jh.run_problem(steps) == "Step B: boom (3 of 5 blocks failed); step_c: failed"
+    assert jh.run_problem({"result_data": {"message": "Nothing to do"}}) == "Nothing to do"
+    assert jh.run_problem({"status": "error"}) is None
+    assert jh.run_problem(None) is None
