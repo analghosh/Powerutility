@@ -213,6 +213,7 @@ from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
 from .v2.api.router.power_exchange_parameter_routes import router as power_exchange_parameter_router
 from .v2.api.router.analytics_routes import router as analytics_router
+from .v2.api.router.system_health_routes import router as system_health_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -408,6 +409,7 @@ v2_app.include_router(realtimemarket_router)
 v2_app.include_router(cron_orchestrator_router)
 v2_app.include_router(power_exchange_parameter_router)
 v2_app.include_router(analytics_router)
+v2_app.include_router(system_health_router)
 
 
 
