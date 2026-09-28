@@ -92,6 +92,9 @@ DEFAULT_MENUS = [
     {"name": "Permissions", "icon": "🔐", "parent_id": "Administration", "path": "/admin/permissions", "order": 2},
     {"name": "Audit Logs", "icon": "📝", "parent_id": "Administration", "path": "/admin/audit", "order": 3},
     {"name": "Setup", "icon": "⚙️", "parent_id": "Administration", "path": "/admin/setup", "order": 4},
+    # Seeded for fresh installs only: seed_menus skips when any menu exists, so
+    # existing deployments get this row from tools/add_system_health_menu.py.
+    {"name": "System Health", "icon": "🩺", "parent_id": "Administration", "path": "/admin/system-health", "order": 5},
     
     # 10. Reports (Root)
     {"name": "Reports", "icon": "📋", "parent_id": None, "path": "/reports", "order": 10},
