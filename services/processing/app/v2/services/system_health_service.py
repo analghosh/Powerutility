@@ -74,6 +74,11 @@ def health_url(service_url: str) -> str:
     return root.rstrip("/") + "/health"
 
 
+def cron_status_url(service_url: str) -> str:
+    """Each scheduler lists what it registered at /cron/status, beside /health."""
+    return health_url(service_url)[: -len("/health")] + "/cron/status"
+
+
 def overall_status(services: List[Dict[str, Any]], jobs: List[Dict[str, Any]]) -> str:
     if any(service["status"] != STATUS_UP for service in services):
         return OVERALL_DOWN
@@ -137,7 +142,10 @@ class SystemHealthService:
 
     async def _check(self) -> Dict[str, Any]:
         now = datetime.now(timezone.utc)
-        probes, jobs = await asyncio.gather(self._check_services(), self._check_jobs(now))
+        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_SECONDS) as client:
+            probes, jobs = await asyncio.gather(
+                self._check_services(client), self._check_live_jobs(client, now)
+            )
         services = [
             {"key": key, "name": name, "description": description, **probes[key]}
             for key, name, description in SERVICES
@@ -151,15 +159,14 @@ class SystemHealthService:
 
     # ---- services ------------------------------------------------------
 
-    async def _check_services(self) -> Dict[str, Dict[str, Any]]:
-        async with httpx.AsyncClient(timeout=PROBE_TIMEOUT_SECONDS) as client:
-            auth, ingestion, scheduler, database, cache = await asyncio.gather(
-                self._probe_http(client, settings.AUTH_SERVICE_URL),
-                self._probe_http(client, settings.INGESTION_SERVICE_URL),
-                self._probe_http(client, settings.SCHEDULER_SERVICE_URL, scheduler=True),
-                self._probe_database(),
-                self._probe_cache(),
-            )
+    async def _check_services(self, client: httpx.AsyncClient) -> Dict[str, Dict[str, Any]]:
+        auth, ingestion, scheduler, database, cache = await asyncio.gather(
+            self._probe_http(client, settings.AUTH_SERVICE_URL),
+            self._probe_http(client, settings.INGESTION_SERVICE_URL),
+            self._probe_http(client, settings.SCHEDULER_SERVICE_URL, scheduler=True),
+            self._probe_database(),
+            self._probe_cache(),
+        )
         return {
             "auth": auth,
             "ingestion": ingestion,
@@ -224,7 +231,33 @@ class SystemHealthService:
 
     # ---- jobs ----------------------------------------------------------
 
-    async def _check_jobs(self, now: datetime) -> List[Dict[str, Any]]:
+    async def _registered(self, client: httpx.AsyncClient) -> Dict[str, Optional[Dict[str, str]]]:
+        """
+        What the scheduler and ingestion services actually registered, keyed
+        by service. None for a service whose listing couldn't be read.
+        """
+        async def listing(service_url: str) -> Optional[Dict[str, str]]:
+            url = cron_status_url(service_url)
+            try:
+                response = await client.get(url)
+                if response.status_code != 200:
+                    return None
+                return jh.registered_jobs(response.json())
+            except Exception as exc:
+                logger.warning("System health: %s unreadable: %s", url, exc)
+                return None
+
+        scheduler, ingestion = await asyncio.gather(
+            listing(settings.SCHEDULER_SERVICE_URL), listing(settings.INGESTION_SERVICE_URL)
+        )
+        return {"scheduler": scheduler, "ingestion": ingestion}
+
+    async def _check_live_jobs(self, client: httpx.AsyncClient, now: datetime) -> List[Dict[str, Any]]:
+        return await self._check_jobs(now, await self._registered(client))
+
+    async def _check_jobs(
+        self, now: datetime, registered: Optional[Dict[str, Optional[Dict[str, str]]]] = None
+    ) -> List[Dict[str, Any]]:
         try:
             jobs = await self.repository.get_all_jobs()
         except Exception as exc:
@@ -238,7 +271,7 @@ class SystemHealthService:
 
         async def rate(job: Dict[str, Any]) -> Dict[str, Any]:
             async with gate:
-                return await self._rate_job(job, now, activity)
+                return await self._rate_job(job, now, activity, registered)
 
         rated = await asyncio.gather(*(rate(job) for job in jobs))
         group_rank = {group: index for index, group in enumerate(jh.GROUP_ORDER)}
@@ -264,9 +297,25 @@ class SystemHealthService:
             return None
 
     async def _rate_job(
-        self, job: Dict[str, Any], now: datetime, activity: Optional[Dict] = None
+        self,
+        job: Dict[str, Any],
+        now: datetime,
+        activity: Optional[Dict] = None,
+        registered: Optional[Dict[str, Optional[Dict[str, str]]]] = None,
     ) -> Dict[str, Any]:
         job_id = str(job["_id"])
+        # Judge the job by what its scheduler registered, not by job_data,
+        # when the schedulers could be asked.
+        live = jh.live_schedule(job, registered or {})
+        configured_schedule = job.get("schedule")
+        not_scheduled = live["scheduled"] is False and bool(job.get("enabled", False))
+        if live["scheduled"] is not None:
+            job = {
+                **job,
+                "enabled": live["scheduled"],
+                "schedule": live["schedule"] or configured_schedule,
+            }
+        runner = live["service"] or job.get("service")
         summary = {
             "job_type": job.get("job_type"),
             "name": job.get("name") or job.get("job_type") or job_id,
@@ -274,8 +323,13 @@ class SystemHealthService:
             "service": job.get("service"),
             "group": jh.job_group(job.get("job_type"), job.get("service")),
             "schedule": job.get("schedule"),
+            "configured_schedule": configured_schedule,
+            "schedule_source": "scheduler" if live["scheduled"] else "job_data",
             "timezone": job.get("timezone"),
             "state": jh.STATE_PAUSED,
+            # Enabled in job_data but not registered with any scheduler: it
+            # never runs, whatever job_data says.
+            "paused_reason": "not_scheduled" if not_scheduled else None,
             "last_run_at": None,
             "last_result": None,
             "last_success_at": None,
@@ -313,7 +367,7 @@ class SystemHealthService:
         )
         if verdict["state"] == jh.STATE_MISSED and verdict["due_at"] is not None:
             running = await self._service_was_running(
-                job.get("service"), verdict["due_at"], activity if activity is not None else {}
+                runner, verdict["due_at"], activity if activity is not None else {}
             )
             if running is not None:
                 summary["missed_reason"] = jh.missed_reason(running)
