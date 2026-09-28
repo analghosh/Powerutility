@@ -14,7 +14,12 @@ list from menu rows, which has dropped permissions before.
 
     ./.venv/bin/python tools/add_system_health_menu.py                    # dry run
     ./.venv/bin/python tools/add_system_health_menu.py --apply
-    ./.venv/bin/python tools/add_system_health_menu.py --apply --role superadmin --role admin
+    ./.venv/bin/python tools/add_system_health_menu.py --apply --role operator
+
+With no --role, the page goes to every admin-type role that exists (admin,
+superadmin, super_admin, any capitalisation): the same roles the System Health
+API lets in by name. --role names exact roles instead, and fails on one that
+doesn't exist.
 
 MONGODB_URI and AUTH_DB_NAME are read from the environment (defaults:
 mongodb://localhost:27017 and auth_db). Other roles can be given the page later
@@ -36,6 +41,27 @@ MENU_PATH = "/admin/system-health"
 MENU_ICON = "🩺"
 PARENT_PATH = "/admin"
 
+# Matches SUPER_ADMIN_ROLES in the processing system_health_service.
+DEFAULT_ROLE_NAMES = frozenset({"admin", "superadmin", "super_admin"})
+
+
+def resolve_roles(db, explicit):
+    """
+    The role documents to grant, and any explicitly named role that is missing.
+    Without explicit names, every role whose name is an admin-type name.
+    """
+    if explicit:
+        found, missing = [], []
+        for name in explicit:
+            role = db.roles.find_one({"name": name}, {"name": 1})
+            if role:
+                found.append(role)
+            else:
+                missing.append(name)
+        return found, missing
+    roles = db.roles.find({}, {"name": 1})
+    return [r for r in roles if str(r.get("name", "")).lower() in DEFAULT_ROLE_NAMES], []
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
@@ -44,10 +70,10 @@ def main() -> int:
         "--role",
         action="append",
         dest="roles",
-        help="role name to grant the page to; repeatable (default: superadmin)",
+        help="exact role name to grant the page to; repeatable "
+             "(default: every admin/superadmin/super_admin role that exists)",
     )
     args = parser.parse_args()
-    role_names = args.roles or ["superadmin"]
     mode = "APPLY" if args.apply else "DRY RUN"
 
     db = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=5000)[AUTH_DB_NAME]
@@ -58,6 +84,16 @@ def main() -> int:
         print(f"No root menu at {PARENT_PATH}; nothing done.", file=sys.stderr)
         return 1
     parent_id = str(parent["_id"])
+
+    # Settle who gets the page before writing anything, so a misspelt --role
+    # leaves the database untouched.
+    roles, missing_roles = resolve_roles(db, args.roles)
+    if missing_roles:
+        print(f"No role named {', '.join(map(repr, missing_roles))}; nothing done.", file=sys.stderr)
+        return 1
+    if not roles:
+        print("No admin, superadmin or super_admin role found; name one with --role.", file=sys.stderr)
+        return 1
 
     now = datetime.now(timezone.utc)
     menu = db.menus.find_one({"path": MENU_PATH})
@@ -84,12 +120,8 @@ def main() -> int:
             menu_id = None
             print(f"Would create menu row: {row}")
 
-    missing_roles = []
-    for name in role_names:
-        role = db.roles.find_one({"name": name})
-        if not role:
-            missing_roles.append(name)
-            continue
+    for role in roles:
+        name = role["name"]
         role_id = str(role["_id"])
         if menu_id and db.menu_roles.find_one({"menu_id": menu_id, "role_id": role_id}):
             print(f"Role {name!r} already has the page")
@@ -108,9 +140,6 @@ def main() -> int:
         else:
             print(f"Would grant to role {name!r}")
 
-    if missing_roles:
-        print(f"No role named {', '.join(map(repr, missing_roles))}; not granted.", file=sys.stderr)
-        return 1
     if not args.apply:
         print("Dry run only. Re-run with --apply to write.")
     return 0
