@@ -198,3 +198,57 @@ def test_a_partly_failed_run_lists_its_failed_sources():
     assert len(rated["failures"]) == jh.FAILURE_LIST_LIMIT
     assert rated["failures"][0] == {"name": "Provider 0", "code": "P0", "reason": "No data fetched from API"}
     assert rated["missed_reason"] is None
+
+
+
+# ---- judged by what the scheduler registered --------------------------------
+
+TEST_SITE_NOW = datetime(2026, 9, 28, 10, 23, tzinfo=timezone.utc)  # 15:53 IST
+PEAK = {
+    "_id": "694e8adc54a8416eaf1156df",
+    "job_type": "peak_demand_compute",
+    "name": "Peak Demand Compute",
+    "service": "scheduler",
+    "schedule": "*/15 * * * *",  # job_data; the scheduler registers 0 */6
+    "timezone": "Asia/Kolkata",
+    "enabled": True,
+    "created_at": datetime(2026, 1, 1),
+}
+# Started 13:47 IST (a restart), last success 12:00 IST: as on the test site.
+PEAK_MARKER = {"status": "processing", "created_at": datetime(2026, 9, 28, 8, 17, 38)}
+PEAK_SUCCESS = {"status": "success", "created_at": datetime(2026, 9, 28, 6, 30, 1)}
+LIVE = {"scheduler": {"peak_demand_compute": "0 */6 * * *"}, "ingestion": {}}
+
+
+def _rate_at(repository, job, registered):
+    service = _service_with(repository)
+    return asyncio.run(service._rate_job(job, TEST_SITE_NOW, {}, registered))
+
+
+def test_a_job_on_its_registered_schedule_is_not_called_missed():
+    repository = StubRepository(rows={"any": PEAK_MARKER, "finished": PEAK_SUCCESS})
+    rated = _rate_at(repository, PEAK, LIVE)
+    assert rated["state"] == jh.STATE_OK
+    assert rated["schedule"] == "0 */6 * * *"
+    assert rated["configured_schedule"] == "*/15 * * * *"
+    assert rated["schedule_source"] == "scheduler"
+
+
+def test_without_the_listing_the_page_falls_back_to_job_data():
+    repository = StubRepository(rows={"any": PEAK_MARKER, "finished": PEAK_SUCCESS})
+    rated = _rate_at(repository, PEAK, {"scheduler": None, "ingestion": None})
+    assert rated["state"] == jh.STATE_MISSED
+    assert rated["schedule_source"] == "job_data"
+
+
+def test_a_job_enabled_in_job_data_but_never_registered_is_turned_off():
+    migration = {**PEAK, "job_type": "data_migration", "name": "Data Migration", "schedule": "0 2 * * *"}
+    repository = StubRepository()
+    rated = _rate_at(repository, migration, LIVE)
+    assert rated["state"] == jh.STATE_PAUSED
+    assert rated["paused_reason"] == "not_scheduled"
+
+
+def test_the_cron_status_url_sits_beside_health():
+    assert shs.cron_status_url("http://localhost:8004") == "http://localhost:8004/cron/status"
+    assert shs.cron_status_url("http://localhost:8002/api/v1/") == "http://localhost:8002/cron/status"

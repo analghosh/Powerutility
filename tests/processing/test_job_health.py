@@ -187,3 +187,50 @@ def test_provider_failures_name_each_source_and_mask_its_reason():
 def test_a_run_row_without_details_has_no_failures():
     assert jh.provider_failures(None) == []
     assert jh.provider_failures({"failed_providers": 3}) == []
+
+
+# ---- the schedule a job really runs on ---------------------------------------
+
+SIX_HOURLY = "cron[month='*', day='*', day_of_week='*', hour='*/6', minute='0']"
+
+
+def test_an_apscheduler_trigger_reads_back_as_cron():
+    assert jh.cron_from_trigger(SIX_HOURLY) == "0 */6 * * *"
+    assert jh.cron_from_trigger("cron[month='*', day='*', day_of_week='*', hour='8,14', minute='15']") == "15 8,14 * * *"
+    assert jh.cron_from_trigger("cron[hour='2']") == "0 2 * * *"
+    assert jh.cron_from_trigger("interval[0:05:00]") is None
+    assert jh.cron_from_trigger(None) is None
+
+
+def test_a_cron_status_body_becomes_job_type_to_schedule():
+    body = {"service": "scheduler", "jobs": {"jobs": [
+        {"job_id": "peak_demand_compute", "trigger": SIX_HOURLY},
+        {"job_id": "bid_trade_live_sync", "trigger": "cron[month='*', day='*', day_of_week='*', hour='*', minute='*/30']"},
+        {"name": "no id"},
+    ]}}
+    assert jh.registered_jobs(body) == {"peak_demand_compute": "0 */6 * * *", "bid_trade_live_sync": "*/30 * * * *"}
+
+
+def test_an_unusable_body_means_the_listing_is_unknown():
+    assert jh.registered_jobs(None) is None
+    assert jh.registered_jobs({"detail": "Not Found"}) is None
+    assert jh.registered_jobs({"jobs": {"jobs": []}}) == {}
+
+
+def test_the_registered_schedule_wins_over_job_data():
+    registered = {"scheduler": {"peak_demand_compute": "0 */6 * * *"}, "ingestion": {}}
+    live = jh.live_schedule({"job_type": "peak_demand_compute", "service": "scheduler"}, registered)
+    assert live == {"scheduled": True, "schedule": "0 */6 * * *", "service": "scheduler"}
+
+
+def test_a_job_registered_only_by_the_other_service_is_found_there():
+    registered = {"scheduler": {}, "ingestion": {"upload_raw_data_processor": "*/2 * * * *"}}
+    live = jh.live_schedule({"job_type": "upload_raw_data_processor", "service": "scheduler"}, registered)
+    assert live["scheduled"] is True and live["service"] == "ingestion"
+
+
+def test_registered_nowhere_is_not_scheduled_only_when_every_listing_was_read():
+    job = {"job_type": "data_migration", "service": "scheduler"}
+    assert jh.live_schedule(job, {"scheduler": {}, "ingestion": {}})["scheduled"] is False
+    assert jh.live_schedule(job, {"scheduler": {}, "ingestion": None})["scheduled"] is None
+    assert jh.live_schedule(job, {})["scheduled"] is None
