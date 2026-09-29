@@ -1,23 +1,21 @@
 """
 The Report Uploader's rules.
 
-An uploaded report is either trustworthy or it is not stored. That is the
-decision this file implements, and every check below exists to keep a report
-that looks right but is not out of the reports section.
+A report is stored as the exchange issued it. The refusals left are the ones
+where there is nothing to store: wrong category, extension or size, a file the
+parser cannot read, or no delivery day to file it under.
 
-The checks run in cost order - category, extension, size, then the parse - so
-a wrong file is refused before it is read. The last check is the important
-one: the parser cross-references each extracted figure against a total printed
-elsewhere in the same document, and unless every one of those agrees the
-upload is refused with the failing check named. A report that is silently one
-time block short would otherwise be indistinguishable from a good one.
+The parser still cross-references each extracted figure against the totals
+printed in the same document, but a disagreement no longer refuses the upload
+(decided 2026-09-29): the exchange's own arithmetic does not always follow
+the rule a check assumes - an IEX report charged no NLDC fee on a 3.01 MWh
+buy - and a real report turned away is worse than one stored with a note. The
+results are kept on the stored document under `validation`.
 
-Of the operator's choices only the delivery date is checked against the
-file, and only when one is sent: the uploader no longer asks for it on a
-category that prints its own (`delivery_date_from_file`), and takes the
-file's. Market and exchange come from dropdowns and are taken at their word -
-see `_require_delivery_date_matches` for why the available evidence is not
-good enough to overrule them.
+The delivery day is the one printed in the file. A date sent by the form is
+used only when the file names none. Market and exchange come from dropdowns
+and are taken at their word: the page names no market except G-DAM, and HPDAM
+reads exactly like DAM.
 """
 
 import hashlib
@@ -40,12 +38,6 @@ from ..exchange_reports.registry import (
 from ..repository.exchange_report_repository import exchange_report_repository
 
 logger = logging.getLogger(__name__)
-
-#: How the form's fields are named to the operator. The message they read
-#: should use the labels on the screen, not the names of the stored fields.
-FIELD_LABELS = {
-    "delivery_date": "Delivery Date",
-}
 
 #: A time block is 15 minutes, so there are 96 in a day and block 1 starts at
 #: 00:00. Same convention as everywhere else in this service.
@@ -184,11 +176,9 @@ class ExchangeReportService:
 
         parsed = self._parse(category, data, filename)
 
-        if delivery_date:
-            self._require_delivery_date_matches(parsed, delivery_date=delivery_date)
-        else:
-            delivery_date = self._require_delivery_date_in_file(parsed)
-        self._require_every_check_passed(parsed)
+        delivery_date = self._resolve_delivery_date(parsed, delivery_date)
+        parsed = {**parsed, "delivery_date_iso": delivery_date}
+        self._note_failed_checks(parsed, filename)
 
         if not confirm_replace:
             await self._require_not_already_uploaded(
@@ -335,61 +325,17 @@ class ExchangeReportService:
             ) from exc
 
     @staticmethod
-    def _require_delivery_date_matches(
-        parsed: Dict[str, Any],
-        *,
-        delivery_date: str,
-    ) -> None:
+    def _resolve_delivery_date(
+        parsed: Dict[str, Any], sent: Optional[str]
+    ) -> str:
         """
-        Refuse a file delivered on a different day than the one picked.
-
-        This is the one field worth cross-checking. The exchange prints the
-        delivery date on the page, and it is an easy one to get wrong: the
-        file name carries the TRADING date, so a day-ahead report downloaded
-        on the 18th is delivered on the 19th. Filed under the wrong day, a
-        day's obligation lands on top of another day's in the reports section.
-
-        Market and exchange are deliberately not cross-checked. They are
-        chosen from dropdowns, which is what makes them authoritative, and the
-        evidence available to contradict them is not good enough to overrule
-        the operator: the file name is only a naming convention the exchange
-        can change, and the page itself names no market at all except G-DAM -
-        HPDAM in particular is indistinguishable from DAM in the text, so
-        checking against it would have refused every HPDAM report ever
-        uploaded.
+        The day to file the report under: the one printed in it, else the
+        one the form sent. With neither there is no day to file it under, and
+        a report stored under none would never show up in the reports section.
         """
-        file_delivery_date = parsed.get("delivery_date_iso")
-        if not file_delivery_date or file_delivery_date == delivery_date:
-            return
-
-        raise UploadRejected(
-            "file_does_not_match_selection",
-            f"Delivery Date: you selected {delivery_date}, the report is for "
-            f"{file_delivery_date}.",
-            {
-                "mismatches": [
-                    {
-                        "field": "delivery_date",
-                        "label": FIELD_LABELS["delivery_date"],
-                        "selected": delivery_date,
-                        "found_in_file": file_delivery_date,
-                    }
-                ]
-            },
-        )
-
-    @staticmethod
-    def _require_delivery_date_in_file(parsed: Dict[str, Any]) -> str:
-        """
-        The delivery day, read from the report when the screen did not ask.
-
-        The stored report is filed under the date the parser found, so a file
-        that names none would be stored under no day at all and never show up
-        in the reports section. Refused here rather than stored invisibly.
-        """
-        file_delivery_date = parsed.get("delivery_date_iso")
-        if file_delivery_date:
-            return file_delivery_date
+        delivery_date = parsed.get("delivery_date_iso") or sent
+        if delivery_date:
+            return delivery_date
         raise UploadRejected(
             "delivery_date_not_in_file",
             "No Delivery Date could be read from this report. "
@@ -466,18 +412,13 @@ class ExchangeReportService:
         )
 
     @staticmethod
-    def _require_every_check_passed(parsed: Dict[str, Any]) -> None:
+    def _note_failed_checks(parsed: Dict[str, Any], filename: str) -> None:
+        """Logged, not refused - see the module docstring."""
         validation = parsed.get("validation") or {}
-        if validation.get("passed"):
+        if validation.get("passed", True):
             return
-        failed = [check for check in validation.get("checks", []) if not check["passed"]]
-        described = "; ".join(f"{check['check']} ({check['detail']})" for check in failed)
-        raise UploadRejected(
-            "failed_validation",
-            f"The report did not pass its consistency checks - {described}. "
-            "Nothing has been stored.",
-            {"failed_checks": failed},
-        )
+        failed = [c["check"] for c in validation.get("checks", []) if not c["passed"]]
+        logger.warning("Storing %s despite failed checks: %s", filename, failed)
 
     # -- storage shape -----------------------------------------------------
 
