@@ -37,6 +37,23 @@ from libs.models.raw_data_entity import RawDataEntity
 
 logger = logging.getLogger(__name__)
 
+# created_at is the ingestion host's naive local clock; an ObjectId carries UTC.
+# A day either side of the _id time covers any UTC offset.
+_ID_TIME_PAD = timedelta(days=1)
+
+
+def _insert_time_windows(object_ids: List[ObjectId]) -> List[tuple]:
+    """Group ids into (low, high, ids) created_at windows, merging overlapping ones."""
+    windows = []
+    for oid in sorted(object_ids, key=lambda o: o.generation_time):
+        inserted = oid.generation_time.replace(tzinfo=None)
+        if windows and inserted - _ID_TIME_PAD <= windows[-1][1]:
+            windows[-1][1] = inserted + _ID_TIME_PAD
+            windows[-1][2].append(oid)
+        else:
+            windows.append([inserted - _ID_TIME_PAD, inserted + _ID_TIME_PAD, [oid]])
+    return [tuple(w) for w in windows]
+
 
 class RawDataRepository(BaseRepository):
     """
@@ -208,7 +225,24 @@ class RawDataRepository(BaseRepository):
         except Exception as e:
             logger.error("Error fetching raw data by IDs: %s", e, exc_info=True)
             return []
-    
+
+    async def find_by_ids(self, object_ids: List[ObjectId]) -> List[Dict[str, Any]]:
+        """
+        Fetch raw documents by _id without scanning the whole collection.
+
+        This is a time-series collection, so _id is not indexed and an _id-only
+        filter unpacks every bucket ever written. Bounding created_at around each
+        id's own insert time lets MongoDB skip every other bucket. Errors raise.
+        """
+        docs = []
+        for low, high, window_ids in _insert_time_windows(object_ids):
+            cursor = self.collection.find({
+                "_id": {"$in": window_ids},
+                "created_at": {"$gte": low, "$lte": high},
+            })
+            docs.extend(await cursor.to_list(length=len(window_ids)))
+        return docs
+
     
     
     async def get_by_id(self, record_id: str) -> Optional[Dict[str, Any]]:

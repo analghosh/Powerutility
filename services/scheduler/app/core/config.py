@@ -87,6 +87,7 @@ class Settings(BaseSettings):
     SYSTEM_CLEANUP_ENABLED: bool = True
     SYSTEM_CLEANUP_RETENTION_DAYS: int = 90
     SYSTEM_CLEANUP_SCHEDULE: str = "0 2 * * *"  # Daily at 2 AM
+    RAW_DATA_RETENTION_DAYS: int = 7  # *_raw_data kept by the system cleanup job
     
     RETRY_FAILED_JOBS_ENABLED: bool = True
     RETRY_FAILED_JOBS_SCHEDULE: str = "*/15 * * * *"  # Every 15 minutes
