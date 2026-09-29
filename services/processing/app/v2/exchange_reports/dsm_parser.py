@@ -70,6 +70,15 @@ COLUMNS: Tuple[Tuple[str, str], ...] = (
     ("underdrawl_charges", "underdrawl charges"),
 )
 
+#: Columns the latest statement format added (2026-09-29): ``dev_%`` after
+#: Deviation and ``Postfacto_Charges`` at the end. Read when present, never
+#: required, so a statement in the earlier nine-column format still uploads -
+#: its blocks simply carry no value for these.
+OPTIONAL_COLUMNS: Tuple[Tuple[str, str], ...] = (
+    ("dev_percent", "dev"),
+    ("postfacto_charges", "postfacto charges"),
+)
+
 #: The fields carrying figures, in the order the screen and the export show
 #: them. Separate from COLUMNS because the date and time are not figures.
 NUMERIC_FIELDS: Tuple[str, ...] = (
@@ -78,8 +87,10 @@ NUMERIC_FIELDS: Tuple[str, ...] = (
     "frequency",
     "deviation_rate",
     "deviation",
+    "dev_percent",
     "overdrawl_charges",
     "underdrawl_charges",
+    "postfacto_charges",
 )
 
 #: The header each stored field is published under, as PTC reads it. Used for
@@ -92,8 +103,10 @@ FIELD_LABELS: Dict[str, str] = {
     "frequency": "Frequency",
     "deviation_rate": "Deviation Rate",
     "deviation": "Deviation",
+    "dev_percent": "dev_%",
     "overdrawl_charges": "Overdrawl_Charges",
     "underdrawl_charges": "Underdrawl_Charges",
+    "postfacto_charges": "Postfacto_Charges",
 }
 
 _NON_ALPHANUMERIC = re.compile(r"[^a-z0-9]+")
@@ -258,7 +271,8 @@ def _locate_header(grid: List[List[Any]]) -> Tuple[int, Dict[str, int]]:
     column, so a stray earlier row that happens to say "Date" is not mistaken
     for the header.
     """
-    wanted = {header: field for field, header in COLUMNS}
+    wanted = {header: field for field, header in COLUMNS + OPTIONAL_COLUMNS}
+    required = {field for field, _ in COLUMNS}
     for index, row in enumerate(grid[:25]):
         positions: Dict[str, int] = {}
         for column, cell in enumerate(row):
@@ -267,7 +281,7 @@ def _locate_header(grid: List[List[Any]]) -> Tuple[int, Dict[str, int]]:
             # is reporting the same figure twice, not a different one.
             if field and field not in positions:
                 positions[field] = column
-        if len(positions) == len(COLUMNS):
+        if required <= set(positions):
             return index, positions
 
     # Nothing matched in full. Report against the best row found, so the
@@ -278,6 +292,7 @@ def _locate_header(grid: List[List[Any]]) -> Tuple[int, Dict[str, int]]:
             wanted[normalise_header(cell)]: column
             for column, cell in enumerate(row)
             if normalise_header(cell) in wanted
+            and wanted[normalise_header(cell)] in required
         }
         if len(found) > len(best):
             best = found
@@ -302,7 +317,8 @@ def parse(data: bytes, filename: str) -> Dict[str, Any]:
 
     Returns ``{"days": [...], "row_count": int, "date_from": str, "date_to": str}``
     where each day is ``{"report_date": "YYYY-MM-DD", "blocks": [...]}`` and a
-    block carries its number, its time and the seven figures.
+    block carries its number, its time and the figures (the two optional
+    columns as None when the file does not have them).
     """
     grid = _grid(data, filename)
     if not grid:
@@ -311,8 +327,9 @@ def parse(data: bytes, filename: str) -> Dict[str, Any]:
     header_row, positions = _locate_header(grid)
 
     def cell(row: List[Any], field: str) -> Any:
-        column = positions[field]
-        return row[column] if column < len(row) else None
+        # An optional column the statement does not carry reads as blank.
+        column = positions.get(field)
+        return row[column] if column is not None and column < len(row) else None
 
     # Insertion-ordered, so the days come back in the order the file lists
     # them and a same-day re-read is idempotent.

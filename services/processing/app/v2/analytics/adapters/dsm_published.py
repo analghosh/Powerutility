@@ -3,8 +3,10 @@
 The DSM statement as the RPC published it, uploaded through the Report Uploader
 (DSM Report category). One dataset, DSM_PUBLISHED, whose series are the
 statement's own figures — Schedule Total, Actual Total, Frequency, Deviation
-Rate, Deviation, Overdrawl and Underdrawl Charges — so one tick gives the whole
-statement, a column per figure, in the order the RPC prints them.
+Rate, Deviation, dev_%, Overdrawl, Underdrawl and Postfacto Charges — so one tick
+gives the whole statement, a column per figure, in the order the RPC prints
+them. A statement in the earlier format has no dev_% or Postfacto column; those
+cells are blank.
 
 The storage is not shaped like the other groups and the pipeline reshapes it
 first:
