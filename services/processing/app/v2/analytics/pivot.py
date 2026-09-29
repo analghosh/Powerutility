@@ -123,14 +123,19 @@ def _quality(code: str, matrix: List[List[Optional[float]]],
 
 def build_response(rows: Sequence[dict], *, requested: Sequence[str],
                    axes_hint: Optional[dict] = None,
-                   meta: Optional[dict] = None) -> dict:
+                   meta: Optional[dict] = None,
+                   entity_order: Optional[Dict[str, Sequence[str]]] = None) -> dict:
     """Lay canonical rows out on the shared axes and complete the response envelope.
 
     `requested` is the user's ticked dataset list, in their order — it drives the
     series order and guarantees a series exists for every dataset they asked for,
     even one that returned nothing, so the UI can say so explicitly instead of
     quietly rendering a shorter list than the user selected.
+
+    `entity_order` narrows a fixed-entity series kind (see ENTITY_ORDER) to the
+    entities this request chose — the DSM figures a user ticked, for one.
     """
+    fixed_order = {**ENTITY_ORDER, **(entity_order or {})}
     codes = _dedupe(requested or [])
     entries = [(code, registry.get(code)) for code in codes]  # raises on unknown
     wanted = {code for code, _ in entries}
@@ -170,7 +175,7 @@ def build_response(rows: Sequence[dict], *, requested: Sequence[str],
     computed_missing: List[str] = []
     for code, dataset in entries:
         by_entity = matrices[code]
-        fixed = ENTITY_ORDER.get(getattr(dataset, "series", None))
+        fixed = fixed_order.get(getattr(dataset, "series", None))
         if fixed:
             by_entity = {entity: by_entity.get(entity) or
                          _empty_matrix(len(block_keys), len(date_keys))

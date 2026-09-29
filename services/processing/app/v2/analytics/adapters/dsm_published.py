@@ -62,8 +62,9 @@ class DsmPublishedAdapter(SourceGroupAdapter):
 
         band = _resolve_band(filters)
         custom = filters.get("custom_blocks", filters.get("custom"))
-        figures = [{"k": field, "v": f"$blocks.{field}"}
-                   for field in registry.DSM_PUBLISHED_FIELDS]
+        # Only the figures the user chose; the stored statement always has them all.
+        chosen = filters.get("dsm_fields") or registry.DSM_PUBLISHED_FIELDS
+        figures = [{"k": field, "v": f"$blocks.{field}"} for field in chosen]
 
         return [
             # ISO strings compare in date order, so the index on report_date serves this.

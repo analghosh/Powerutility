@@ -31,6 +31,7 @@ import re
 from datetime import date, datetime
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
+from ..analytics import registry
 from . import analytics_layout
 
 #: Columns are no longer fixed — they are the identity columns for the chosen
@@ -121,6 +122,11 @@ def filter_pairs(filters: Optional[Dict[str, Any]],
         value = _text(filters.get(key))
         if value:
             pairs.append((label, value))
+
+    dsm_fields = filters.get("dsm_fields") or []
+    if "DSM_PUBLISHED" in (filters.get("datasets") or []) and dsm_fields:
+        pairs.append(("DSM fields", ", ".join(
+            registry.DSM_PUBLISHED_LABELS.get(f, f) for f in dsm_fields)))
 
     fmt = _text(filters.get("format"))
     if fmt:
