@@ -5,9 +5,9 @@ A refused upload has to tell the operator what to change, so nothing here
 returns a bare 400. Every refusal carries a `reason` code the screen branches
 on, a sentence the operator reads, and the detail they need to act:
 
-* **Wrong file, unreadable file, file that contradicts the form, or a report
-  that failed its consistency checks → 400**, naming what disagreed. These are
-  all "fix the input and try again", which is why they share a status.
+* **Wrong file or unreadable file → 400**, naming what is wrong. Both are
+  "fix the input and try again", which is why they share a status. A report
+  whose figures fail a consistency check is stored anyway, as issued.
 * **A category with no parser yet → 422.** The screen lists every category PTC
   asked for, and one of them still has no sample file; choosing it is a request
   the server understands but cannot carry out.
