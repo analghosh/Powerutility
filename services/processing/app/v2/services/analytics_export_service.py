@@ -345,6 +345,7 @@ class AnalyticsExportService:
             "custom_blocks": [list(pair) for pair in req.custom_blocks],
             "plants": list(req.plants),
             "exchanges": list(req.exchanges),
+            "dsm_fields": list(req.dsm_fields),
             "format": fmt,
             # What the user called it, raw. `filename_for` sanitises on the way out,
             # every time — storing a pre-sanitised name would mean the rule that made

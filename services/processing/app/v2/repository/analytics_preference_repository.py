@@ -26,6 +26,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ...core.config import settings
 from ..analytics import registry
+from ..analytics.models import normalise_dsm_fields
 from .base_repository import GenericRepository
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ logger = logging.getLogger(__name__)
 #: Everything a preference document may carry. A key outside this set is refused
 #: rather than stored: the document is replayed into the filter panel, and an
 #: unvalidated blob replayed into a form is how a preference becomes a payload.
-ALLOWED_KEYS = ("datasets", "plants", "format")
+ALLOWED_KEYS = ("datasets", "plants", "dsm_fields", "format")
 
 #: Export formats a preference may name — the same two the export model accepts.
 #: Order is load-bearing: `FORMATS[0]` is what a user who has never saved a
@@ -104,9 +105,17 @@ def validate(preference: Any) -> Dict[str, Any]:
             raise InvalidPreference(
                 f"Unknown format {fmt!r}; expected one of {', '.join(FORMATS)}")
 
+    try:
+        dsm_fields = normalise_dsm_fields(
+            _string_list(preference.get("dsm_fields"), "dsm_fields", MAX_DATASETS),
+            empty_means_all=False)
+    except ValueError as exc:
+        raise InvalidPreference(str(exc)) from None
+
     return {
         "datasets": datasets,
         "plants": _string_list(preference.get("plants"), "plants", MAX_PLANTS),
+        "dsm_fields": dsm_fields,
         "format": fmt or FORMATS[0],
     }
 
@@ -118,10 +127,15 @@ def sanitize(stored: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[str
     live = [c for c in datasets if c in registry.DATASETS]
     dropped = [c for c in datasets if c not in registry.DATASETS]
     fmt = str(stored.get("format") or FORMATS[0]).lower()
+    # A figure the statement format has since dropped is left out, not refused:
+    # the rest of the saved choice is still worth loading.
+    known = set(registry.DSM_PUBLISHED_FIELDS)
+    dsm_fields = [str(f) for f in (stored.get("dsm_fields") or []) if str(f) in known]
     return (
         {
             "datasets": live,
             "plants": [str(p) for p in (stored.get("plants") or [])],
+            "dsm_fields": dsm_fields,
             "format": fmt if fmt in FORMATS else FORMATS[0],
             "saved_at": stored.get("saved_at"),
         },
@@ -131,7 +145,8 @@ def sanitize(stored: Optional[Dict[str, Any]]) -> Tuple[Dict[str, Any], List[str
 
 def empty_preference() -> Dict[str, Any]:
     """What a user who has never saved anything gets."""
-    return {"datasets": [], "plants": [], "format": FORMATS[0], "saved_at": None}
+    return {"datasets": [], "plants": [], "dsm_fields": [], "format": FORMATS[0],
+            "saved_at": None}
 
 
 class AnalyticsPreferenceRepository(GenericRepository):
