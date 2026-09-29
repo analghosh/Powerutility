@@ -286,5 +286,5 @@ def series_cardinality(dataset: Dataset, ctx: Dict[str, int]) -> int:
     if dataset.series == "per_forecast_type":
         return FORECAST_TYPE_COUNT
     if dataset.series == "per_dsm_field":
-        return len(DSM_PUBLISHED_FIELDS)
+        return max(1, int(ctx.get("dsm_field_count", len(DSM_PUBLISHED_FIELDS))))
     return 1
