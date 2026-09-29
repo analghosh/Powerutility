@@ -149,6 +149,24 @@ class FileTooLarge(UploadRejected):
     """Bigger than the drop zone's stated limit."""
 
 
+class FileNotKept(Exception):
+    """
+    The report exists but its PDF does not: it was uploaded before the upload
+    kept the file (2026-09-29), when only the SHA-256 was stored. Uploading it
+    again stores the file and makes it downloadable.
+    """
+
+    def __init__(self, source_filename: Optional[str]) -> None:
+        self.source_filename = source_filename
+        self.message = (
+            f"The original file{f' ({source_filename})' if source_filename else ''} "
+            "was not kept for this upload - it was uploaded before files were "
+            "stored. Upload it again from the Report Uploader to make it "
+            "downloadable."
+        )
+        super().__init__(self.message)
+
+
 class ExchangeReportService:
     def __init__(self) -> None:
         self._obligation_parser = ExchangeObligationReportParser()
@@ -219,7 +237,9 @@ class ExchangeReportService:
             "source_filename": filename,
             "file_sha256": document["file_sha256"],
         }
-        result = await exchange_report_repository.save(document, upload_event)
+        result = await exchange_report_repository.save(
+            document, upload_event, content=data, content_type="application/pdf"
+        )
         stored = result["document"]
 
         logger.info(
@@ -437,10 +457,9 @@ class ExchangeReportService:
         """
         Build the stored document.
 
-        The PDF's own bytes are not kept - only their SHA-256, which is enough
-        to tell one upload from a re-upload of the same file, and to prove
-        later which file a figure came from. The originals stay downloadable
-        from the exchange, and the deployment is a single box with no backup.
+        The PDF's bytes are stored beside it, by the repository, so the
+        Obligation Report screen can hand back the file exactly as uploaded;
+        the SHA-256 here tells one upload from a re-upload of the same file.
         """
         moment = resolve_upload_moment(uploaded_at)
         document = dict(parsed)
@@ -494,6 +513,7 @@ class ExchangeReportService:
                 "sell_block_count", len(document.get("sell_blocks") or [])
             ),
             "source_filename": document.get("source_filename"),
+            "file_size_bytes": document.get("file_size_bytes"),
             "uploaded_at": document.get("uploaded_at"),
             "uploaded_at_ist": document.get("uploaded_at_ist"),
             "uploaded_at_ist_time": document.get("uploaded_at_ist_time"),
@@ -538,10 +558,17 @@ class ExchangeReportService:
             filters, limit=limit, skip=skip, sort_field=date_field
         )
         total = await exchange_report_repository.count(filters)
+        ids = [str(document["_id"]) for document in documents]
+        # Reports uploaded before files were kept have none to download.
+        with_files = await exchange_report_repository.ids_with_files(ids)
         return {
             "items": [
-                {"id": str(document["_id"]), **self.summarise(document)}
-                for document in documents
+                {
+                    "id": report_id,
+                    **self.summarise(document),
+                    "has_file": report_id in with_files,
+                }
+                for report_id, document in zip(ids, documents)
             ],
             "total": total,
             "limit": limit,
@@ -575,6 +602,29 @@ class ExchangeReportService:
             "items": dates,
             "total": len(dates),
             "date_basis": date_basis_of(date_field),
+        }
+
+    async def get_file(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """
+        The PDF of one report exactly as it was uploaded.
+
+        None when there is no such report; FileNotKept when the report is
+        there but was uploaded before files were kept.
+        """
+        from ..repository.exchange_report_repository import COLLECTION
+
+        document = await exchange_report_repository.find_by_id(COLLECTION, report_id)
+        if not document:
+            return None
+        stored = await exchange_report_repository.find_file(report_id)
+        if not stored:
+            raise FileNotKept(document.get("source_filename"))
+        return {
+            "content": bytes(stored["content"]),
+            "content_type": stored.get("content_type") or "application/pdf",
+            "filename": stored.get("source_filename")
+            or document.get("source_filename")
+            or "obligation-report.pdf",
         }
 
     async def get_report(self, report_id: str) -> Optional[Dict[str, Any]]:

@@ -15,13 +15,20 @@ every processing query return an empty list.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional, Set
+
+from bson import ObjectId
+from bson.binary import Binary
 
 from .base_repository import GenericRepository
 
 logger = logging.getLogger(__name__)
 
 COLLECTION = "exchange_uploaded_report"
+#: The uploaded PDF itself, one document per report, keyed by the report's _id.
+#: Kept apart so listings never carry file bytes. Reports stored before
+#: 2026-09-29 have no entry here: only their SHA-256 was kept.
+FILE_COLLECTION = "exchange_uploaded_report_file"
 
 IDENTITY_FIELDS = (
     "report_category",
@@ -74,9 +81,16 @@ class ExchangeReportRepository(GenericRepository):
     def identity_of(document: Dict[str, Any]) -> Dict[str, Any]:
         return {field: document.get(field) for field in IDENTITY_FIELDS}
 
-    async def save(self, document: Dict[str, Any], upload_event: Dict[str, Any]) -> Dict[str, Any]:
+    async def save(
+        self,
+        document: Dict[str, Any],
+        upload_event: Dict[str, Any],
+        content: Optional[bytes] = None,
+        content_type: str = "application/pdf",
+    ) -> Dict[str, Any]:
         """
-        Store a parsed report, replacing any earlier upload of the same report.
+        Store a parsed report, replacing any earlier upload of the same report,
+        and its file with it.
 
         Returns the stored document, and whether it replaced one, so the screen
         can tell the operator they have just overwritten yesterday's copy.
@@ -95,7 +109,39 @@ class ExchangeReportRepository(GenericRepository):
             upsert=True,
         )
         stored = await self.db[COLLECTION].find_one(identity)
+
+        # Written second and keyed by the report's own id, so a failure here
+        # leaves a report whose file is missing rather than a file nothing
+        # points at. The download route reports the former; the latter would
+        # be invisible. Same shape as the Other / LTOA / DSM file stores.
+        if content is not None:
+            await self.db[FILE_COLLECTION].update_one(
+                {"_id": stored["_id"]},
+                {
+                    "$set": {
+                        "content": Binary(content),
+                        "content_type": content_type,
+                        "source_filename": document.get("source_filename"),
+                        "file_size_bytes": len(content),
+                    }
+                },
+                upsert=True,
+            )
         return {"document": stored, "replaced": existing is not None}
+
+    async def find_file(self, report_id: str) -> Optional[Dict[str, Any]]:
+        """The stored PDF of one report, or None when there is none."""
+        if not ObjectId.is_valid(report_id):
+            return None
+        return await self.db[FILE_COLLECTION].find_one({"_id": ObjectId(report_id)})
+
+    async def ids_with_files(self, report_ids: Iterable[str]) -> Set[str]:
+        """Which of these reports have their PDF stored — one query for a page."""
+        ids = [ObjectId(i) for i in report_ids if ObjectId.is_valid(i)]
+        if not ids:
+            return set()
+        cursor = self.db[FILE_COLLECTION].find({"_id": {"$in": ids}}, {"_id": 1})
+        return {str(doc["_id"]) async for doc in cursor}
 
     async def find_many(
         self,
