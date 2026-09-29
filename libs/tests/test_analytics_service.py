@@ -367,6 +367,24 @@ async def test_a_miss_stores_the_result_under_the_ttl_the_range_deserves():
 
 
 @pytest.mark.asyncio
+async def test_an_uploaded_dataset_is_never_served_from_or_written_to_the_cache():
+    """A DSM statement lands weeks after its days, so a closed range still changes."""
+    today = _today()
+    cache = FakeCache()
+    service = svc.AnalyticsService(repository=RecordingRepo(), cache=cache)
+    request = _request(from_date=today - timedelta(days=30),
+                       to_date=today - timedelta(days=20),
+                       datasets=["DSM_PUBLISHED", "ACTUAL_DEMAND"])
+    cache.store[service.cache_key(request)] = json.dumps({"series": [], "axes": {}})
+
+    response = await service.query(request, SUPER_ADMIN)
+
+    assert response["meta"]["cache"] == "miss"
+    assert "exchange_dsm_report_day" in service.repository.collections
+    assert cache.sets == []
+
+
+@pytest.mark.asyncio
 async def test_a_broken_cache_never_breaks_the_query():
     class ExplodingCache:
         async def get(self, key):
