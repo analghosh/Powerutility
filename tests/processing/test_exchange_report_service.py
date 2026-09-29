@@ -319,50 +319,24 @@ async def test_the_exchange_dropdown_is_taken_at_its_word(service):
 
 
 @pytest.mark.asyncio
-async def test_the_wrong_delivery_date_is_refused(service):
-    """
-    The one field still cross-checked. The file name carries the TRADING
-    date, so picking 18 Sep for a report delivered on the 19th would file a
-    day's obligation on top of another day's.
-    """
+async def test_a_different_delivery_date_is_not_refused_and_the_file_s_wins(service):
+    """The report is filed under the day it prints, whatever the form sent."""
     uploader = service()
 
-    with pytest.raises(UploadRejected) as raised:
-        await _upload(uploader, delivery_date="2026-09-18")
+    result = await _upload(uploader, delivery_date="2026-09-18")
 
-    assert raised.value.reason == "file_does_not_match_selection"
-    assert raised.value.details["mismatches"] == [
-        {
-            "field": "delivery_date",
-            "label": "Delivery Date",
-            "selected": "2026-09-18",
-            "found_in_file": "2026-09-19",
-        }
-    ]
-    assert uploader.repository_stub.saved == []
+    assert len(uploader.repository_stub.saved) == 1
+    assert result["summary"]["delivery_date"] == "2026-09-19"
 
 
 @pytest.mark.asyncio
-async def test_the_date_message_names_the_field_as_the_screen_labels_it(service):
-    """The operator reads "Delivery Date", not the stored field name."""
-    uploader = service()
-
-    with pytest.raises(UploadRejected) as raised:
-        await _upload(uploader, delivery_date="2026-09-18")
-
-    assert "Delivery Date: you selected 2026-09-18" in raised.value.message
-    assert "delivery_date:" not in raised.value.message
-
-
-@pytest.mark.asyncio
-async def test_a_report_printing_no_delivery_date_is_not_refused_over_it(service):
-    """Nothing to compare against is not the same as a disagreement."""
+async def test_a_report_printing_no_delivery_date_is_filed_under_the_sent_one(service):
     uploader = service(parsed=_parsed(delivery_date=None, delivery_date_iso=None))
 
     result = await _upload(uploader)
 
     assert len(uploader.repository_stub.saved) == 1
-    assert result["summary"]["delivery_date"] is None
+    assert result["summary"]["delivery_date"] == "2026-09-19"
 
 
 @pytest.mark.asyncio
@@ -408,7 +382,7 @@ def test_only_the_obligation_report_takes_its_delivery_date_from_the_file():
 
 @pytest.mark.asyncio
 async def test_an_rtm_report_with_no_trading_date_still_uploads(service):
-    """RTM reports print no trading date; only the delivery date is checked."""
+    """RTM reports print no trading date; the delivery date is enough."""
     uploader = service(
         parsed=_parsed(
             market_type="RTM",
@@ -431,26 +405,21 @@ async def test_an_rtm_report_with_no_trading_date_still_uploads(service):
 # --------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_a_report_failing_its_own_checks_is_not_stored(service):
-    uploader = service(
-        parsed=_parsed(
-            validation={
-                "passed": False,
-                "checks": [
-                    {"check": "trade_blocks_count", "passed": False, "detail": "95 of 96 blocks"},
-                    {"check": "trade_blocks_contiguous", "passed": True, "detail": ""},
-                ],
-            }
-        )
-    )
+async def test_a_report_failing_its_own_checks_is_still_stored(service):
+    """Stored as issued; the check results stay on the document."""
+    validation = {
+        "passed": False,
+        "checks": [
+            {"check": "nldc_charge_matches_buy_mwh", "passed": False, "detail": "3.01 vs 0.0"},
+            {"check": "trade_blocks_contiguous", "passed": True, "detail": ""},
+        ],
+    }
+    uploader = service(parsed=_parsed(validation=validation))
 
-    with pytest.raises(UploadRejected) as raised:
-        await _upload(uploader)
+    await _upload(uploader)
 
-    assert raised.value.reason == "failed_validation"
-    assert "Nothing has been stored" in raised.value.message
-    assert [c["check"] for c in raised.value.details["failed_checks"]] == ["trade_blocks_count"]
-    assert uploader.repository_stub.saved == []
+    document, _ = uploader.repository_stub.saved[0]
+    assert document["validation"] == validation
 
 
 # --------------------------------------------------------------------------
