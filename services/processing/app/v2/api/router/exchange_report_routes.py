@@ -405,7 +405,8 @@ async def upload_report(
             user_context=user_context,
         )
 
-    if not delivery_date:
+    date_from_file = selected is not None and selected.delivery_date_from_file
+    if not delivery_date and not date_from_file:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={
@@ -414,7 +415,9 @@ async def upload_report(
                 "field": "delivery_date",
             },
         )
-    normalised_date = _parse_iso_date(delivery_date, "delivery_date")
+    normalised_date = (
+        _parse_iso_date(delivery_date, "delivery_date") if delivery_date else None
+    )
     data = await file.read()
 
     if selected is not None and selected.stores_file_only:
@@ -456,6 +459,7 @@ async def upload_report(
         )
         raise _as_http_error(rejection) from rejection
 
+    stored_date = result["summary"]["delivery_date"]
     _audit(
         audit,
         request,
@@ -463,13 +467,13 @@ async def upload_report(
         action="upload",
         message=(
             f"Stored {result['summary']['report_category_label']} "
-            f"{exchange} {market_type} for {normalised_date} from {filename}"
+            f"{exchange} {market_type} for {stored_date} from {filename}"
         ),
         success=True,
         report_category=report_category,
         exchange=exchange,
         market_type=market_type,
-        delivery_date=normalised_date,
+        delivery_date=stored_date,
         record_count=result["summary"]["block_count"],
         replaced_previous_upload=result["replaced_previous_upload"],
     )

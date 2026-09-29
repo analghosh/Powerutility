@@ -12,8 +12,10 @@ elsewhere in the same document, and unless every one of those agrees the
 upload is refused with the failing check named. A report that is silently one
 time block short would otherwise be indistinguishable from a good one.
 
-Of the operator's four choices only the delivery date is checked against the
-file. Market and exchange come from dropdowns and are taken at their word -
+Of the operator's choices only the delivery date is checked against the
+file, and only when one is sent: the uploader no longer asks for it on a
+category that prints its own (`delivery_date_from_file`), and takes the
+file's. Market and exchange come from dropdowns and are taken at their word -
 see `_require_delivery_date_matches` for why the available evidence is not
 good enough to overrule them.
 """
@@ -169,7 +171,7 @@ class ExchangeReportService:
         report_category: str,
         exchange: str,
         market_type: str,
-        delivery_date: str,
+        delivery_date: Optional[str],
         actor: Dict[str, Any],
         confirm_replace: bool = False,
         uploaded_at: Optional[datetime] = None,
@@ -182,7 +184,10 @@ class ExchangeReportService:
 
         parsed = self._parse(category, data, filename)
 
-        self._require_delivery_date_matches(parsed, delivery_date=delivery_date)
+        if delivery_date:
+            self._require_delivery_date_matches(parsed, delivery_date=delivery_date)
+        else:
+            delivery_date = self._require_delivery_date_in_file(parsed)
         self._require_every_check_passed(parsed)
 
         if not confirm_replace:
@@ -371,6 +376,25 @@ class ExchangeReportService:
                     }
                 ]
             },
+        )
+
+    @staticmethod
+    def _require_delivery_date_in_file(parsed: Dict[str, Any]) -> str:
+        """
+        The delivery day, read from the report when the screen did not ask.
+
+        The stored report is filed under the date the parser found, so a file
+        that names none would be stored under no day at all and never show up
+        in the reports section. Refused here rather than stored invisibly.
+        """
+        file_delivery_date = parsed.get("delivery_date_iso")
+        if file_delivery_date:
+            return file_delivery_date
+        raise UploadRejected(
+            "delivery_date_not_in_file",
+            "No Delivery Date could be read from this report. "
+            "Nothing has been stored.",
+            {"field": "delivery_date"},
         )
 
     @staticmethod
