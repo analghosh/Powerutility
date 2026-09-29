@@ -784,6 +784,34 @@ vendor-rot failures. Client **115 pass**. Browser journey
 large range through the real UI and asserts the button shows `Building… N%` and the
 workbook downloads itself.
 
+## 6i. DSM Published (As Per RPC) — the uploaded DSM statement (2026-09-29)
+
+The DSM Report screen (`/reports/dsm-report`) is hidden in the client; its figures
+are now a dashboard dataset instead. `DSM_PUBLISHED`, group `dsm_published`, reads
+`exchange_dsm_report_day` — what the Report Uploader's DSM Report category writes.
+
+* **One tick, seven columns**, one per published figure, in the RPC's order:
+  Schedule Total, Actual Total, Frequency, Deviation Rate, Deviation,
+  Overdrawl_Charges, Underdrawl_Charges (`series="per_dsm_field"`, cardinality 7;
+  the list is `dsm_parser.NUMERIC_FIELDS`). All seven are always emitted, even for a
+  range with no statement (`pivot.ENTITY_ORDER`), so the file's columns never
+  depend on what was uploaded.
+* **Reshape, not a normal adapter.** One doc per day, `report_date` an ISO string,
+  96 blocks inline. `adapters/dsm_published.py` matches the string range, unwinds the
+  blocks, then the figures, and builds `scheduled_at` / `time_block`. No historical
+  twin, no revisions: a reissued statement replaces its days (unique `report_date`).
+* **Two aggregation rules in one dataset.** Under a block band the charges SUM and
+  the rest AVERAGE; the adapter computes both and `rows_from` keeps the right one.
+* **Never cached.** `Dataset.uploaded=True`: a statement lands weeks after its days
+  and can be reissued, so the 24 h "closed range" cache would hide a fresh upload.
+  Any request that includes it skips the cache read and write.
+* No unit on the dataset: the figures carry different ones and the statement does
+  not state them. Column headings are the statement's own.
+
+Tests: `libs/tests/test_analytics_dsm_published.py` (registry, pipeline, pivot order,
+and a real-Mongo run on a throwaway DB), plus the cache test in
+`test_analytics_service.py`.
+
 ## 7. REMAINING WORK — the actual to-do list
 
 Ordered by priority. Items marked ✅ are **already done** — do not redo them.
