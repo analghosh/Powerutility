@@ -661,3 +661,30 @@ async def test_a_failed_plant_lookup_leaves_the_request_alone():
     service = svc.AnalyticsService(repository=RecordingRepo(fail=["supply_serve"]))
     req = await service.with_plants(_request(datasets=["DC_PLANT"], plants=[]))
     assert req.plants == []
+
+
+# --------------------------------------------- fetch: for another report's use
+
+
+@pytest.mark.asyncio
+async def test_fetch_runs_the_same_plans_without_grants_budget_or_cache():
+    """The Shift Status Report shows dashboard figures to users its own page has
+    authorised. `fetch` must serve them regardless of analytics grants, and must
+    not read or write the cache — drawal is typed in after a day closes, and a
+    cached closed range would hide it for a day."""
+
+    class ExplodingCache:
+        async def get(self, key):
+            raise AssertionError("fetch must not read the cache")
+
+        async def set(self, key, value, ttl=None):
+            raise AssertionError("fetch must not write the cache")
+
+    repo = RecordingRepo(docs={"demand_serve": _demand_docs(100.0, 101.0)})
+    service = svc.AnalyticsService(repository=repo, cache=ExplodingCache())
+
+    response = await service.fetch(_request(datasets=["ACTUAL_DEMAND"]))
+
+    assert [s["dataset"] for s in response["series"]] == ["ACTUAL_DEMAND"]
+    assert response["series"][0]["values"][0] == [100.0]
+    assert repo.collections == ["demand_serve"]
