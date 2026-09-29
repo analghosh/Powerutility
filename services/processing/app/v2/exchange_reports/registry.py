@@ -152,7 +152,8 @@ CATEGORIES: Dict[str, ReportCategory] = {
         accepted_extensions=(".xlsx", ".csv"),
         implemented=True,
         dates_from_file=True,
-        # The nine headers the parser looks for and two rows of made-up
+        # The latest statement format (eleven headers, dev_% and
+        # Postfacto_Charges included, both blank) and two rows of made-up
         # figures, to be overwritten with the real statement.
         sample_file="DSM Report Sample.xlsx",
         description=(

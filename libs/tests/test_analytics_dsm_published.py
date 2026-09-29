@@ -46,13 +46,15 @@ def test_one_dataset_named_as_ptc_asked():
 
 
 def test_one_tick_is_priced_as_one_column_per_published_figure():
-    assert registry.series_cardinality(_dataset(), {}) == 7
+    assert registry.series_cardinality(_dataset(), {}) == 9
     assert FIELDS == ("schedule_total", "actual_total", "frequency", "deviation_rate",
-                      "deviation", "overdrawl_charges", "underdrawl_charges")
+                      "deviation", "dev_percent", "overdrawl_charges",
+                      "underdrawl_charges", "postfacto_charges")
 
 
 def test_only_the_charges_add_up():
-    assert set(registry.DSM_PUBLISHED_SUMMED) == {"overdrawl_charges", "underdrawl_charges"}
+    assert set(registry.DSM_PUBLISHED_SUMMED) == {
+        "overdrawl_charges", "underdrawl_charges", "postfacto_charges"}
 
 
 # ----------------------------------------------------------------- pipeline
@@ -88,7 +90,7 @@ def test_every_figure_is_a_column_in_the_rpc_order_even_with_no_data():
     assert [s["entity"] for s in series] == list(FIELDS)
     assert [s["entity_label"] for s in series] == [
         "Schedule Total", "Actual Total", "Frequency", "Deviation Rate", "Deviation",
-        "Overdrawl_Charges", "Underdrawl_Charges"]
+        "dev_%", "Overdrawl_Charges", "Underdrawl_Charges", "Postfacto_Charges"]
 
 
 def test_the_column_heading_names_the_dataset_and_the_figure():
