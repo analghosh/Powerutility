@@ -18,7 +18,8 @@ FORECAST_TYPE_COUNT = len(FORECAST_TYPES)
 DSM_PUBLISHED_FIELDS: Tuple[str, ...] = dsm_parser.NUMERIC_FIELDS
 #: The ones that are money: when blocks are grouped into bands these add up,
 #: while the MW, Hz and rate figures average.
-DSM_PUBLISHED_SUMMED: Tuple[str, ...] = ("overdrawl_charges", "underdrawl_charges")
+DSM_PUBLISHED_SUMMED: Tuple[str, ...] = (
+    "overdrawl_charges", "underdrawl_charges", "postfacto_charges")
 #: Column names, as the statement's own headers.
 DSM_PUBLISHED_LABELS: Dict[str, str] = {
     field: dsm_parser.FIELD_LABELS[field] for field in DSM_PUBLISHED_FIELDS}
