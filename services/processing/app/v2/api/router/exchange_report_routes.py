@@ -52,7 +52,8 @@ from ...exchange_reports import registry
 from ...exchange_reports.registry import DEFAULT_DATE_BASIS
 from ...services.exchange_report_service import (AlreadyUploaded,
                                                  CategoryNotAvailable,
-                                                 FileTooLarge, UploadRejected,
+                                                 FileNotKept, FileTooLarge,
+                                                 UploadRejected,
                                                  exchange_report_service)
 from ...services import dsm_report_service as dsm_service
 from ...services.dsm_report_service import dsm_report_service
@@ -1071,6 +1072,46 @@ async def get_delivery_dates(
         limit=limit,
     )
     return {"data": result}
+
+
+@router.get(
+    "/{report_id}/file",
+    summary="Download one uploaded Obligation Report exactly as it was uploaded",
+    responses={
+        404: {
+            "description": (
+                "No such report, or it was uploaded before files were kept "
+                "(detail.reason = file_not_kept)"
+            )
+        }
+    },
+)
+async def download_report_file(
+    report_id: str,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+) -> Response:
+    try:
+        stored = await exchange_report_service.get_file(report_id)
+    except FileNotKept as missing:
+        # Told apart from "no such report": the row is on the screen, and the
+        # operator can fix this one by uploading the PDF again.
+        raise HTTPException(
+            status_code=404,
+            detail={"reason": "file_not_kept", "message": missing.message},
+        ) from missing
+
+    if stored is None:
+        raise HTTPException(status_code=404, detail="No such report")
+
+    # An attachment, so the PDF is saved rather than opened in place; quoted
+    # because exchange file names contain spaces.
+    return Response(
+        content=stored["content"],
+        media_type=stored["content_type"],
+        headers={
+            "Content-Disposition": f'attachment; filename="{stored["filename"]}"'
+        },
+    )
 
 
 @router.get(
