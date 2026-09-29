@@ -32,13 +32,14 @@ handover:
 import csv
 import io
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from libs.helpers.historical_date_split import validate_max_date_range_days
+from libs.helpers.timeblock_helper import block_label
 from libs.helpers.reports_forecast_format import (
     REPORTS_FORECAST_FORMAT_JSON,
     normalize_reports_forecast_format,
-    reports_forecast_includes_csv_content,
 )
 
 from ..repository.reports_plf_paf_repository import (
@@ -49,14 +50,18 @@ from ..repository.reports_plf_paf_repository import (
 
 logger = logging.getLogger(__name__)
 
+# Block-wise, like the screen: each plant's average row, then its blocks.
 CSV_HEADERS = [
     "Plant",
     "Technology",
+    "Contracted Capacity (MW)",
+    "Date",
+    "Block",
+    "Time",
     "DC (MW)",
     "SG (MW)",
     "PLF (%)",
     "PAF (%)",
-    "Contracted Capacity (MW)",
 ]
 
 _ROUND_DP = 2
@@ -106,6 +111,48 @@ class ReportsPlfPafService:
     def _round(value: Optional[float]) -> Optional[float]:
         return None if value is None else round(value, _ROUND_DP)
 
+    @staticmethod
+    def _load_factors(
+        dc: Optional[float],
+        sg: Optional[float],
+        capacity: Optional[float],
+    ) -> Tuple[Optional[float], Optional[float]]:
+        """(PLF, PAF) for one plant row or one block, by the same rules."""
+        if dc is None:
+            return None, None
+        # mplive's guard: a plant that declared zero capacity reports PLF 0
+        # rather than dividing by zero. Nuclear and other must-run plants
+        # sit here — RLDC publishes SG for them against a DC of 0.
+        plf = ((sg or 0.0) / dc * 100) if dc else 0.0
+        paf = (dc / capacity * 100) if capacity else None
+        return plf, paf
+
+    @staticmethod
+    def _display_date(iso_date: str) -> str:
+        return datetime.strptime(iso_date, "%Y-%m-%d").strftime("%d-%m-%Y")
+
+    def _build_block_rows(
+        self,
+        blocks: List[Dict[str, Any]],
+        capacity: Optional[float],
+    ) -> List[Dict[str, Any]]:
+        rows = []
+        for block in blocks:
+            dc, sg = block.get("dc"), block.get("sg")
+            plf, paf = self._load_factors(dc, sg, capacity)
+            rows.append(
+                {
+                    "date": self._display_date(block["date"]),
+                    "time_block": block["time_block"],
+                    "time_label": block_label(block["time_block"]),
+                    "dc": self._round(dc),
+                    "sg": self._round(sg),
+                    "plf": self._round(plf),
+                    "paf": self._round(paf),
+                }
+            )
+        return rows
+
     def _build_plant_rows(
         self,
         averages: Dict[Tuple[str, str], Dict[str, float]],
@@ -130,15 +177,7 @@ class ReportsPlfPafService:
             master = plant_master.get(plant_id, {})
             capacity = self._capacity_mw(master)
 
-            if dc is None:
-                plf = None
-                paf = None
-            else:
-                # mplive's guard: a plant that declared zero capacity reports PLF 0
-                # rather than dividing by zero. Nuclear and other must-run plants
-                # sit here — RLDC publishes SG for them against a DC of 0.
-                plf = ((sg or 0.0) / dc * 100) if dc else 0.0
-                paf = (dc / capacity * 100) if capacity else None
+            plf, paf = self._load_factors(dc, sg, capacity)
 
             rows.append(
                 {
@@ -203,8 +242,18 @@ class ReportsPlfPafService:
             "headers": CSV_HEADERS,
             "row_count": len(plants),
         }
-        if reports_forecast_includes_csv_content(fmt) and plants:
-            csv_export["content"] = self.generate_csv(plants)
+        if fmt != REPORTS_FORECAST_FORMAT_JSON:
+            # Only the file needs every block; the screen table never reads them.
+            blocks = await self.repository.find_plant_blocks(
+                from_date=resolved_from,
+                to_date=resolved_to,
+                from_block=from_block,
+                to_block=to_block,
+            )
+            blocks_by_plant: Dict[str, List[Dict[str, Any]]] = {}
+            for block in blocks:
+                blocks_by_plant.setdefault(block["plant_id"], []).append(block)
+            csv_export["content"] = self.generate_csv(plants, blocks_by_plant, plant_master)
             csv_export["filename"] = self.build_csv_filename(
                 resolved_from,
                 resolved_to,
@@ -236,22 +285,82 @@ class ReportsPlfPafService:
 
         return response
 
-    def generate_csv(self, plants: List[Dict[str, Any]]) -> str:
+    async def get_plant_blocks(
+        self,
+        plant_id: str,
+        from_block: int = 1,
+        to_block: int = 96,
+        schedule_date: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """One plant's DC, SG, PLF and PAF for every date and block in the range."""
+        if from_block > to_block:
+            raise ValueError("from_block must be less than or equal to to_block")
+
+        resolved_from, resolved_to = self._resolve_date_range(
+            schedule_date, from_date, to_date
+        )
+        validate_max_date_range_days(resolved_from, resolved_to)
+
+        blocks = await self.repository.find_plant_blocks(
+            from_date=resolved_from,
+            to_date=resolved_to,
+            from_block=from_block,
+            to_block=to_block,
+            plant_id=plant_id,
+        )
+        master = (await self.repository.find_plant_master()).get(plant_id, {})
+        capacity = self._capacity_mw(master)
+
+        return {
+            "query": {
+                "plant_id": plant_id,
+                "from_date": resolved_from,
+                "to_date": resolved_to,
+                "from_block": from_block,
+                "to_block": to_block,
+            },
+            "plant": {
+                "plant_id": plant_id,
+                "plant_name": master.get("plant_name") or plant_id,
+                "technology": master.get("technology"),
+                "contracted_capacity": self._round(capacity),
+            },
+            "blocks": self._build_block_rows(blocks, capacity),
+        }
+
+    def generate_csv(
+        self,
+        plants: List[Dict[str, Any]],
+        blocks_by_plant: Dict[str, List[Dict[str, Any]]],
+        plant_master: Dict[str, Dict[str, Any]],
+    ) -> str:
+        fmt = self._format_csv_value
         output = io.StringIO()
         writer = csv.writer(output)
         writer.writerow(CSV_HEADERS)
-        for row in plants:
+        for plant in plants:
+            plant_columns = [
+                plant.get("plant_name"),
+                plant.get("technology") or "",
+                fmt(plant.get("contracted_capacity")),
+            ]
             writer.writerow(
-                [
-                    row.get("plant_name"),
-                    row.get("technology") or "",
-                    self._format_csv_value(row.get("dc")),
-                    self._format_csv_value(row.get("sg")),
-                    self._format_csv_value(row.get("plf")),
-                    self._format_csv_value(row.get("paf")),
-                    self._format_csv_value(row.get("contracted_capacity")),
-                ]
+                plant_columns
+                + ["All", "All", "Average"]
+                + [fmt(plant.get(k)) for k in ("dc", "sg", "plf", "paf")]
             )
+            # The unrounded capacity, as on screen, so block PAF matches to the cent.
+            capacity = self._capacity_mw(plant_master.get(plant["plant_id"], {}))
+            for block in self._build_block_rows(
+                blocks_by_plant.get(plant["plant_id"], []), capacity
+            ):
+                writer.writerow(
+                    plant_columns
+                    + [block["date"], block["time_block"], block["time_label"]]
+                    + [fmt(block.get(k)) for k in ("dc", "sg", "plf", "paf")]
+                )
         return output.getvalue()
 
     @staticmethod
