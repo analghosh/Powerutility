@@ -35,6 +35,11 @@ class SupplyProcessor(BaseProcessor):
     2. dc_sg -> supply_serve (time-series collection with 4-day rolling window)
     """
 
+    # A Grid India document holds ~4700 rows: read 3 at a time to prevent OOM, but keep
+    # going in the same run so a backlog clears in minutes instead of 3 per run.
+    PENDING_BATCH_SIZE = 3
+    PENDING_BATCHES_PER_RUN = 20
+
     def __init__(self):
         super().__init__()
 
@@ -315,10 +320,11 @@ class SupplyProcessor(BaseProcessor):
                 "status": {"$in": [RawDataStatus.PENDING.value]}
             }
             
-            # Use the repository's collection directly for more control
+            # Use the repository's collection directly for more control.
+            # Oldest first by _id: status rows are stored without created_at.
             pending_status_records = await processing_status_repo.collection.find(
                 pending_status_query
-            ).sort("created_at", 1).limit(3).to_list(length=3)  # Limit to 3 records per batch to prevent OOM
+            ).sort("_id", 1).limit(self.PENDING_BATCH_SIZE).to_list(length=self.PENDING_BATCH_SIZE)
             
             logger.info(f"Found {len(pending_status_records)} pending/failed status records for provider {provider_id}")
             
@@ -348,9 +354,8 @@ class SupplyProcessor(BaseProcessor):
             if not object_ids:
                 return []
             
-            # Query raw data collection with the pending IDs
-            raw_data_query = {"_id": {"$in": object_ids}}
-            pending_raw_data = await self.raw_data_repository.find_many(raw_data_query)
+            # Query raw data collection with the pending IDs, bounded by insert time
+            pending_raw_data = await self.raw_data_repository.find_by_ids(object_ids)
             
             logger.info(f"Successfully fetched {len(pending_raw_data)} raw data records for provider {provider_id}")
             
@@ -362,7 +367,7 @@ class SupplyProcessor(BaseProcessor):
             
         except Exception as e:
             logger.error(f"Error getting pending raw data for provider {provider_id}: {str(e)}")
-            return []
+            raise
 
     @staticmethod
     def _resolve_source(provider_config: Dict[str, Any]) -> str:
