@@ -362,7 +362,7 @@ class SupplyProcessor(BaseProcessor):
             
         except Exception as e:
             logger.error(f"Error getting pending raw data for provider {provider_id}: {str(e)}")
-            return []
+            raise
 
     @staticmethod
     def _resolve_source(provider_config: Dict[str, Any]) -> str:
