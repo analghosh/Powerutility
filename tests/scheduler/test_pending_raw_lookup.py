@@ -23,6 +23,7 @@ from pymongo.errors import NetworkTimeout
 from libs.repository.raw_data_repository import RawDataRepository
 from services.scheduler.app.processors.base_processor import BaseProcessor
 from services.scheduler.app.processors.supply_processor import SupplyProcessor
+from services.scheduler.app.processors.weather_processor import WeatherProcessor
 
 IST = timedelta(hours=5, minutes=30)
 NOW_UTC = datetime(2026, 9, 29, 4, 0, 0)
@@ -162,7 +163,7 @@ class BasePendingLookupTest(unittest.IsolatedAsyncioTestCase):
         rows = [_status_row(r, "failed" if i == 1 else "pending") for i, r in enumerate(pending)]
         random.Random(3).shuffle(rows)
         FakeStatusRepo.rows = rows
-        processor = _processor(SupplyProcessor, history + pending)
+        processor = _processor(WeatherProcessor, history + pending)
 
         with patch("libs.repository.raw_data_processing_status_repository.RawDataProcessingStatusRepository",
                    FakeStatusRepo):
@@ -174,7 +175,7 @@ class BasePendingLookupTest(unittest.IsolatedAsyncioTestCase):
         kept = _raw_doc(NOW_UTC)
         gone = _raw_doc(NOW_UTC - timedelta(minutes=15))
         FakeStatusRepo.rows = [_status_row(gone), _status_row(kept)]
-        processor = _processor(SupplyProcessor, [kept])
+        processor = _processor(WeatherProcessor, [kept])
 
         with patch("libs.repository.raw_data_processing_status_repository.RawDataProcessingStatusRepository",
                    FakeStatusRepo):
