@@ -11,6 +11,8 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 from enum import Enum
 
+from bson import ObjectId
+
 from libs.repository.provider_repository import ProviderRepository
 from libs.repository.raw_data_repository import RawDataRepository
 from libs.middleware.correlation import set_correlation_id, get_correlation_id
@@ -453,15 +455,16 @@ class BaseProcessor(ABC):
     async def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get pending raw data for a provider.
-        First fetches pending status records from raw_data_processing_status based on provider_id,
-        then fetches the corresponding raw data records using a single aggregation pipeline.
+        First fetches pending/failed status records for the provider (oldest first),
+        then the raw documents they point at, bounded by insert time so the
+        time-series raw collection is never scanned end to end.
         
         Args:
             provider_id: Provider configuration ID
             data_type: Data type for dynamic collection selection
             
         Returns:
-            List of raw data documents with pending status
+            List of raw data documents with pending status, in status order
         """
         try:
             from libs.repository.raw_data_processing_status_repository import RawDataProcessingStatusRepository
@@ -475,43 +478,23 @@ class BaseProcessor(ABC):
                 data_type=data_type
             )
             
-            # Determine the raw data collection name dynamically
-            raw_collection_name = self.raw_data_repository.collection.name
-            logger.info(f"Joining against collection: {raw_collection_name}")
-            
-            pipeline = [
-                # Stage 1: Filter pending/failed records for this provider
-                {
-                    "$match": {
-                        "provider_id": provider_id,
-                        "status": {"$in": [RawDataStatus.PENDING.value, RawDataStatus.FAILED.value]}
-                    }
-                },
-                # Stage 2: Oldest first, limit batch size
-                {"$sort": {"created_at": 1}},
-                {"$limit": 50},
-                # Stage 3: Convert string raw_data_id to ObjectId before lookup
-                {
-                    "$addFields": {
-                        "raw_data_id_obj": {"$toObjectId": "$raw_data_id"}
-                    }
-                },
-                # Stage 4: Join to raw data collection
-                {
-                    "$lookup": {
-                        "from": raw_collection_name,
-                        "localField": "raw_data_id_obj",
-                        "foreignField": "_id",
-                        "as": "raw_data"
-                    }
-                },
-                # Stage 5: Flatten — each status record has exactly one raw_data doc
-                {"$unwind": "$raw_data"},
-                # Stage 6: Return only the raw data document
-                {"$replaceRoot": {"newRoot": "$raw_data"}}
-            ]
-            
-            pending_raw_data = await processing_status_repo.collection.aggregate(pipeline).to_list(length=10000)
+            # Oldest first by _id (status rows are stored without created_at), limit batch size
+            status_records = await processing_status_repo.collection.find({
+                "provider_id": provider_id,
+                "status": {"$in": [RawDataStatus.PENDING.value, RawDataStatus.FAILED.value]}
+            }).sort("_id", 1).limit(50).to_list(length=50)
+
+            raw_ids = []
+            for record in status_records:
+                raw_data_id = record.get("raw_data_id")
+                if ObjectId.is_valid(raw_data_id):
+                    raw_ids.append(ObjectId(raw_data_id))
+                else:
+                    logger.warning(f"Invalid raw_data_id format: {raw_data_id}")
+
+            # A status row whose raw document is gone is skipped
+            found = {doc["_id"]: doc for doc in await self.raw_data_repository.find_by_ids(raw_ids)}
+            pending_raw_data = [found[raw_id] for raw_id in raw_ids if raw_id in found]
             
             logger.info(
                 f"Successfully fetched {len(pending_raw_data)} pending raw data records "
