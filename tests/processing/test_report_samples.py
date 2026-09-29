@@ -55,14 +55,50 @@ def test_the_obligation_sample_parses_and_passes_its_own_checks():
     assert parsed["validation"]["passed"] is True
 
 
-def test_the_dsm_sample_is_the_nine_headers_and_two_rows():
+def test_the_dsm_sample_is_the_latest_format_and_two_rows():
     parsed = dsm_parser.parse(_sample_bytes(registry.DSM_REPORT), "DSM Report Sample.xlsx")
     assert parsed["row_count"] == 2
     assert [day["report_date"] for day in parsed["days"]] == ["2025-01-01"]
     first, second = parsed["days"][0]["blocks"]
     assert (first["block"], first["block_time"]) == (1, "00:00")
     assert (second["block"], second["block_time"]) == (2, "00:15")
-    assert all(first[field] is not None for field in dsm_parser.NUMERIC_FIELDS)
+    required = [field for field, _ in dsm_parser.COLUMNS if field in dsm_parser.NUMERIC_FIELDS]
+    assert all(first[field] is not None for field in required)
+    # The two columns the latest format added are in the sample, and blank.
+    assert (first["dev_percent"], first["postfacto_charges"]) == (None, None)
+
+
+def _xlsx(headers, rows):
+    import io
+    from openpyxl import Workbook
+    book = Workbook()
+    sheet = book.active
+    sheet.append(headers)
+    for row in rows:
+        sheet.append(row)
+    buffer = io.BytesIO()
+    book.save(buffer)
+    return buffer.getvalue()
+
+
+OLD_HEADERS = ["Date", "Time", "Schedule Total", "Actual Total", "Frequency",
+               "Deviation Rate", "Deviation", "Overdrawl_Charges", "Underdrawl_Charges"]
+
+
+def test_a_statement_in_the_earlier_nine_column_format_still_uploads():
+    data = _xlsx(OLD_HEADERS, [["01-01-2025", "00:00", 100, 98.5, 50.01, 450, -1.5, 0, 1687.5]])
+    block = dsm_parser.parse(data, "old.xlsx")["days"][0]["blocks"][0]
+    assert block["underdrawl_charges"] == 1687.5
+    assert (block["dev_percent"], block["postfacto_charges"]) == (None, None)
+
+
+def test_the_latest_format_s_extra_figures_are_stored():
+    headers = OLD_HEADERS[:7] + ["dev_%"] + OLD_HEADERS[7:] + ["Postfacto_Charges"]
+    data = _xlsx(headers, [["01-01-2025", "00:00", 100, 98.5, 50.01, 450, -1.5, -1.5, 0, 1687.5, 12.5]])
+    block = dsm_parser.parse(data, "new.xlsx")["days"][0]["blocks"][0]
+    assert block["dev_percent"] == -1.5
+    assert block["postfacto_charges"] == 12.5
+    assert block["overdrawl_charges"] == 0
 
 
 @pytest.mark.asyncio
