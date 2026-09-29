@@ -814,6 +814,33 @@ Tests: `libs/tests/test_analytics_dsm_published.py` (registry, pipeline, pivot o
 and a real-Mongo run on a throwaway DB), plus the cache test in
 `test_analytics_service.py`.
 
+### 6j. Choosing which DSM Published fields to see (2026-09-29)
+
+Every upload still stores the whole statement; the choice only narrows the columns.
+When DSM Published (As Per RPC) is ticked, a **DSM Published fields** box appears
+under the data set list (`DsmFieldPicker`, in its own FilterPanel slot
+`datasetExtraSection` so the list's 440px scroll box cannot hide it). All nine
+start ticked; nothing ticked blocks Apply & Generate.
+
+* **Request:** `dsm_fields` on `AnalyticsQueryRequest`. Empty means every figure and
+  is resolved to the full list by the model (`validate_default=True`), so stored
+  exports and the Filters sheet name what was actually shown. Unknown keys → 422.
+  Kept in RPC order, de-duplicated (`models.normalise_dsm_fields`).
+* **Where it flows:** adapter reads only the chosen figures; `pivot.build_response`
+  takes `entity_order={"per_dsm_field": [...]}`; budget prices `dsm_field_count`
+  columns; cache key; `filters_for` (so My Exports → Execute replays it); Filters
+  sheet / CSV header line `DSM fields`; saved defaults (`[]` = no choice = all).
+* **Catalogue:** the DSM entry of `GET /analytics/datasets` carries
+  `fields: [{key, label}]` and `cardinality_basis: "dsm_fields"`.
+* **Client state:** `filters.dsm_fields` is `null` (all — also what rows and
+  defaults from before this change load as), a list, or `[]` (nothing ticked,
+  blocked). Helpers in `utils/dsmFields.js`.
+
+Tests: `libs/tests/test_analytics_dsm_fields.py` (20, one on real Mongo),
+`client/src/features/analytics/utils/dsmFields.test.js` (8), browser
+`tools/e2e/dsm_fields_journey.mjs` (11 steps; Excel and CSV each 672 rows x 6
+fields = 4,032 cells equal to MongoDB).
+
 ## 7. REMAINING WORK — the actual to-do list
 
 Ordered by priority. Items marked ✅ are **already done** — do not redo them.

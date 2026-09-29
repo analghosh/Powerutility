@@ -27,6 +27,22 @@ EXPORT_FORMATS = ("csv", "xlsx")
 MAX_FILE_NAME_INPUT = 200
 
 
+def normalise_dsm_fields(fields: Any, *, empty_means_all: bool) -> List[str]:
+    """The DSM figures asked for, de-duplicated and in the order the RPC prints them.
+
+    Raises ValueError on a figure the statement does not carry. An empty choice is
+    every figure for a query (so the stored export and the Filters sheet name what
+    was actually shown) and stays empty for a saved default ("no preference").
+    """
+    chosen = {str(f).strip() for f in (fields or []) if str(f).strip()}
+    unknown = sorted(chosen - set(registry.DSM_PUBLISHED_FIELDS))
+    if unknown:
+        raise ValueError(f"Unknown DSM field(s): {', '.join(unknown)}")
+    if not chosen and empty_means_all:
+        return list(registry.DSM_PUBLISHED_FIELDS)
+    return [f for f in registry.DSM_PUBLISHED_FIELDS if f in chosen]
+
+
 class AnalyticsQueryRequest(BaseModel):
     """One dashboard query: a date range, a block range, and what to plot in it."""
 
@@ -55,6 +71,11 @@ class AnalyticsQueryRequest(BaseModel):
                               description="Plant ids; required for a per-plant dataset")
     exchanges: List[str] = Field(default_factory=list,
                                  description="Exchange names; empty means all")
+    dsm_fields: List[str] = Field(
+        default_factory=list, validate_default=True,
+        description=("Which DSM Published (As Per RPC) figures to show; empty means "
+                     "all. Every upload stores the whole statement — this only "
+                     "narrows the columns."))
 
     @model_validator(mode="before")
     @classmethod
@@ -84,6 +105,11 @@ class AnalyticsQueryRequest(BaseModel):
                 raise ValueError(f"Unknown dataset code: {code}") from None
             out.append(code)
         return out
+
+    @field_validator("dsm_fields")
+    @classmethod
+    def _known_dsm_fields(cls, v: List[str]) -> List[str]:
+        return normalise_dsm_fields(v, empty_means_all=True)
 
     @field_validator("date_grouping")
     @classmethod
@@ -170,6 +196,7 @@ class AnalyticsQueryRequest(BaseModel):
             "custom_blocks": [list(p) for p in self.custom_blocks],
             "plants": list(self.plants),
             "exchanges": list(self.exchanges),
+            "dsm_fields": list(self.dsm_fields),
         }
 
 
@@ -221,6 +248,9 @@ class PreferenceRequest(BaseModel):
                                 description="Dataset codes to tick on load")
     plants: List[str] = Field(default_factory=list,
                               description="Plant ids to preselect for by-plant datasets")
+    dsm_fields: List[str] = Field(
+        default_factory=list,
+        description="DSM Published figures to preselect; empty means all")
     format: Literal["csv", "xlsx"] = Field(
         "xlsx", description="File format the Generate button opens on")
 
