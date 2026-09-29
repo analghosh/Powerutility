@@ -64,7 +64,8 @@ INACTIVE_BAND_NOTE = ("Not defined yet â€” set parameter '{key}' under Masters â
 
 #: Which filter multiplies a dataset's series count, for the live cell estimate the
 #: filter panel shows before anything is submitted.
-CARDINALITY_BASIS = {"per_plant": "plants", "per_exchange": "exchanges"}
+CARDINALITY_BASIS = {"per_plant": "plants", "per_exchange": "exchanges",
+                     "per_dsm_field": "dsm_fields"}
 
 #: The series kind this route can enumerate. Exchanges are a fixed three-item list
 #: the frontend already holds; plants are not.
@@ -229,6 +230,11 @@ class AnalyticsController:
                     dataset, {"plant_count": 1,
                               "exchange_count": DEFAULT_EXCHANGE_COUNT}),
             })
+            if dataset.series == "per_dsm_field":
+                # The figures a user can choose between, in the RPC's order.
+                entries[-1]["fields"] = [
+                    {"key": field, "label": registry.DSM_PUBLISHED_LABELS[field]}
+                    for field in registry.DSM_PUBLISHED_FIELDS]
             groups.setdefault(dataset.group, []).append(dataset.code)
 
         return {"data": {

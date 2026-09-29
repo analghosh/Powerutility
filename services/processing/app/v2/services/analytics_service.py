@@ -468,6 +468,8 @@ class AnalyticsService:
         return {
             "plant_count": max(1, len(req.plants)),
             "exchange_count": max(1, len(req.exchanges) or DEFAULT_EXCHANGE_COUNT),
+            # Resolved by the request model, so it is never empty.
+            "dsm_field_count": len(req.dsm_fields),
         }
 
     def estimate_only(self, request: Any,
@@ -516,6 +518,7 @@ class AnalyticsService:
             "custom_blocks": [list(p) for p in req.custom_blocks],
             "plants": sorted(set(req.plants)),
             "exchanges": sorted(set(req.exchanges)),
+            "dsm_fields": list(req.dsm_fields),
         }
         blob = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
         digest = hashlib.sha256(blob.encode("utf-8")).hexdigest()
@@ -652,7 +655,7 @@ class AnalyticsService:
             "partial": result.partial,
             # Part of the question, not the caller, so it belongs in the cached payload.
             "date_grouping": req.date_grouping,
-        })
+        }, entity_order={"per_dsm_field": effective.dsm_fields})
 
         if result.partial:
             # Never cache a partial answer: a transient timeout would otherwise be
