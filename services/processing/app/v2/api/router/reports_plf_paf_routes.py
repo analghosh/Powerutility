@@ -18,7 +18,7 @@ from ...helpers.reports_plf_paf_audit import (
     log_reports_plf_paf_access_attempt,
     log_reports_plf_paf_outcome,
 )
-from ...services.reports_plf_paf_service import CSV_HEADERS, reports_plf_paf_service
+from ...services.reports_plf_paf_service import CSV_HEADERS
 
 from libs.helpers.reports_forecast_format import (
     REPORTS_FORECAST_FORMAT_BOTH,
@@ -164,6 +164,39 @@ class ReportsPlfPafResponse(BaseModel):
     }
 
 
+class ReportsPlfPafBlock(BaseModel):
+    """One plant's figures for one 15-minute block of one date."""
+
+    date: str = Field(..., description="Schedule date, DD-MM-YYYY")
+    time_block: int = Field(..., description="Time block number (1–96)")
+    time_label: str = Field(..., description="Block time span, e.g. 11:45-12:00")
+    dc: Optional[float] = Field(None, description="Declared capacity (MW); null when no DC row")
+    sg: Optional[float] = Field(None, description="Scheduled generation (MW)")
+    plf: Optional[float] = Field(None, description="SG / DC x 100 for this block")
+    paf: Optional[float] = Field(None, description="DC / contracted capacity x 100 for this block")
+
+
+class ReportsPlfPafBlocksPlant(BaseModel):
+    plant_id: str
+    plant_name: str
+    technology: Optional[str] = None
+    contracted_capacity: Optional[float] = None
+
+
+class ReportsPlfPafBlocksQuery(BaseModel):
+    plant_id: str
+    from_date: str
+    to_date: str
+    from_block: int
+    to_block: int
+
+
+class ReportsPlfPafBlocksResponse(BaseModel):
+    query: ReportsPlfPafBlocksQuery
+    plant: ReportsPlfPafBlocksPlant
+    blocks: List[ReportsPlfPafBlock] = Field(default_factory=list)
+
+
 def _validate_block_range(from_block: int, to_block: int) -> None:
     if from_block > to_block:
         raise HTTPException(
@@ -230,6 +263,10 @@ async def get_reports_plf_paf(
 
     The PAF denominator is `plant_master.ppa`, PTC's contracted MW. The legacy
     mplive report divided by the plant's tie-line capacity, which EPMS does not hold.
+
+    `format=csv` returns the block-wise file: each plant's average row, then one
+    row per date and block. `GET /reports-plf-paf/blocks` serves one plant's
+    blocks to the screen.
     """
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")
@@ -289,13 +326,8 @@ async def get_reports_plf_paf(
         )
 
         if is_csv:
-            csv_content = reports_plf_paf_service.generate_csv(result.get("plants") or [])
-            filename = reports_plf_paf_service.build_csv_filename(
-                result["query"]["from_date"],
-                result["query"]["to_date"],
-                from_block,
-                to_block,
-            )
+            csv_content = result["csv_export"]["content"]
+            filename = result["csv_export"]["filename"]
             return Response(
                 content=csv_content,
                 media_type="text/csv",
@@ -435,7 +467,9 @@ async def download_reports_plf_paf_csv(
 
     Equivalent to `GET /reports-plf-paf/?format=csv` with the same query parameters.
 
-    Columns: Plant, Technology, DC (MW), SG (MW), PLF (%), PAF (%), Contracted Capacity (MW).
+    Columns: Plant, Technology, Contracted Capacity (MW), Date, Block, Time,
+    DC (MW), SG (MW), PLF (%), PAF (%). Each plant's first row is its average
+    (Date and Block = All, Time = Average); one row per date and block follows.
     """
     user_id = user_context.get("user_id", "anonymous")
     username = user_context.get("username", "anonymous")
@@ -579,4 +613,150 @@ async def download_reports_plf_paf_csv(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to generate PLF/PAF report CSV.",
+        ) from e
+
+
+@router.get(
+    "/blocks",
+    response_model=ReportsPlfPafBlocksResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get one plant's DC, SG, PLF and PAF for every block in a date range",
+    responses={
+        422: {"description": "Validation error"},
+        500: {"description": "Failed to fetch PLF/PAF block data"},
+    },
+)
+async def get_reports_plf_paf_blocks(
+    request: Request,
+    plant_id: str = Query(..., min_length=1, description="Plant identifier from the report"),
+    schedule_date: Optional[str] = Query(
+        None,
+        description="Single schedule date (YYYY-MM-DD). Use this OR from_date + to_date.",
+        example="2026-08-31",
+        regex=_DATE_PATTERN,
+    ),
+    from_date: Optional[str] = Query(
+        None,
+        description="Start date (YYYY-MM-DD), inclusive.",
+        example="2026-08-29",
+        regex=_DATE_PATTERN,
+    ),
+    to_date: Optional[str] = Query(
+        None,
+        description="End date (YYYY-MM-DD), inclusive.",
+        example="2026-08-31",
+        regex=_DATE_PATTERN,
+    ),
+    from_block: int = Query(1, ge=1, le=96, description="Starting time block (1–96)"),
+    to_block: int = Query(96, ge=1, le=96, description="Ending time block (1–96), inclusive"),
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    """
+    One row per date and block for the plant, by the same rules as the plant row:
+
+    - **PLF** = SG / DC x 100 — 0 when DC is 0, `null` when the block has no DC row.
+    - **PAF** = DC / contracted capacity x 100 — `null` without a contracted capacity.
+
+    The plant row in `GET /reports-plf-paf/` is the average of these blocks.
+    **Date range limit:** 90 days.
+    """
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    endpoint = "GET /reports-plf-paf/blocks"
+    audit = {
+        "user_id": user_id,
+        "username": username,
+        "correlation_id": correlation_id,
+        "endpoint": endpoint,
+        "request": request,
+        "schedule_date": schedule_date,
+        "from_date": from_date,
+        "to_date": to_date,
+        "from_block": from_block,
+        "to_block": to_block,
+    }
+
+    log_reports_plf_paf_access_attempt(audit_logger, **audit)
+
+    try:
+        _validate_block_range(from_block, to_block)
+        result = await reports_plf_paf_controller.get_blocks(
+            plant_id=plant_id,
+            schedule_date=schedule_date,
+            from_date=from_date,
+            to_date=to_date,
+            from_block=from_block,
+            to_block=to_block,
+        )
+        log_reports_plf_paf_outcome(
+            audit_logger,
+            action="reports_plf_paf_blocks_view",
+            success=True,
+            message="User fetched PLF/PAF block data",
+            plant_id=plant_id,
+            record_count=len(result["blocks"]),
+            **audit,
+        )
+        return ReportsPlfPafBlocksResponse(**result)
+
+    except HTTPException as exc:
+        log_reports_plf_paf_outcome(
+            audit_logger,
+            action="reports_plf_paf_blocks_view",
+            success=False,
+            message="PLF/PAF block request failed",
+            plant_id=plant_id,
+            failure_reason=str(exc.detail),
+            http_status=exc.status_code,
+            **audit,
+        )
+        raise
+    except ValueError as e:
+        log_reports_plf_paf_outcome(
+            audit_logger,
+            action="reports_plf_paf_blocks_view",
+            success=False,
+            message="PLF/PAF block request rejected",
+            plant_id=plant_id,
+            failure_reason=str(e),
+            http_status=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            **audit,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(e),
+        ) from e
+    except Exception as e:
+        log_reports_plf_paf_outcome(
+            audit_logger,
+            action="reports_plf_paf_blocks_view",
+            success=False,
+            message="PLF/PAF block request failed",
+            plant_id=plant_id,
+            failure_reason=str(e),
+            http_status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            **audit,
+        )
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ReportsPlfPafBlocksFetchError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id,
+            plant_id=plant_id,
+            from_date=from_date,
+            to_date=to_date,
+        )
+        logger.exception(
+            "Error fetching PLF/PAF blocks for user %s plant=%s from=%s to=%s",
+            user_id,
+            plant_id,
+            from_date,
+            to_date,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch PLF/PAF block data.",
         ) from e
