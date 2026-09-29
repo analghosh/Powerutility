@@ -76,8 +76,9 @@ class _StubRepository:
         self.identity_lookups.append(identity)
         return self.existing
 
-    async def save(self, document, upload_event):
+    async def save(self, document, upload_event, content=None, content_type=None):
         self.saved.append((document, upload_event))
+        self.saved_files = getattr(self, "saved_files", []) + [(content, content_type)]
         stored = dict(document)
         stored["_id"] = "stored-id"
         stored["upload_count"] = 2 if self.replaced else 1
