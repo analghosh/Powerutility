@@ -7,9 +7,21 @@ touching the frontend.
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..exchange_reports import dsm_parser
+
 MARKETS = ("DAM", "RTM", "GDAM", "HPDAM")
 FORECAST_TYPES = ("DAF", "IDF")           # Day Ahead, Intra Day
 FORECAST_TYPE_COUNT = len(FORECAST_TYPES)
+
+#: The figures of an uploaded DSM statement, in the order the RPC prints them —
+#: the parser's own list, so a column the uploader learns to read appears here too.
+DSM_PUBLISHED_FIELDS: Tuple[str, ...] = dsm_parser.NUMERIC_FIELDS
+#: The ones that are money: when blocks are grouped into bands these add up,
+#: while the MW, Hz and rate figures average.
+DSM_PUBLISHED_SUMMED: Tuple[str, ...] = ("overdrawl_charges", "underdrawl_charges")
+#: Column names, as the statement's own headers.
+DSM_PUBLISHED_LABELS: Dict[str, str] = {
+    field: dsm_parser.FIELD_LABELS[field] for field in DSM_PUBLISHED_FIELDS}
 
 
 class UnknownDatasetError(KeyError):
@@ -39,6 +51,11 @@ class Dataset:
     # of zero hertz — it is a gap, and must aggregate as None. Applied before the
     # accumulator, per dataset, so a genuine 0 elsewhere (e.g. OD/UD) still counts.
     sentinel_null: Optional[float] = None
+    # Filled by an upload rather than by a feed, so a PAST date can gain or change
+    # values at any time — a DSM statement arrives weeks after its settlement days
+    # and can be reissued. The 24 h cache for closed ranges would hide a fresh
+    # upload for a day, so a request carrying one of these is not cached.
+    uploaded: bool = False
 
 
 def _d(**kw) -> Dataset:
@@ -158,6 +175,15 @@ _ALL: List[Dataset] = [
        value="$average_demand", unit="MW", agg="avg", permission="analytics:demand"),
     _d(code="TOTAL_ENERGY_MU", label="Total Energy", group="peak",
        value="$total_energy_mu", unit="MU", agg="sum", permission="analytics:demand"),
+    # ---- DSM as published by the RPC ------------------------------------
+    # The DSM statement uploaded through the Report Uploader (DSM Report category),
+    # shown exactly as the RPC published it — the figures are not recomputed. One
+    # tick, one column per figure (series=per_dsm_field); `agg` is nominal, the
+    # adapter applies each figure's own rule (see DSM_PUBLISHED_SUMMED). No unit:
+    # the figures carry different ones and the statement does not state them.
+    _d(code="DSM_PUBLISHED", label="DSM Published (As Per RPC)", group="dsm_published",
+       value="$figures.v", unit="", agg="avg", series="per_dsm_field",
+       uploaded=True, permission="analytics:dsm"),
     # ---- absent -------------------------------------------------------
     _d(code="TAM_TRADED", label="TAM Traded", group="trade",
        unit="MW", agg="sum", availability="absent", permission="analytics:market"),
@@ -258,4 +284,6 @@ def series_cardinality(dataset: Dataset, ctx: Dict[str, int]) -> int:
         return max(1, int(ctx.get("exchange_count", 1)))
     if dataset.series == "per_forecast_type":
         return FORECAST_TYPE_COUNT
+    if dataset.series == "per_dsm_field":
+        return len(DSM_PUBLISHED_FIELDS)
     return 1
