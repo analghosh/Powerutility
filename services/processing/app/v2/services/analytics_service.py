@@ -669,6 +669,34 @@ class AnalyticsService:
         return self._finalise(response, denied=denied, estimate=estimate,
                               cache_state=CACHE_MISS)
 
+    async def fetch(self, request: Any) -> dict:
+        """Answer a query for another report that has already authorised its caller.
+
+        The Shift Status Report shows dashboard figures (forecast, schedule, drawal,
+        bids) in its own layout, and must show the same numbers the dashboard does,
+        so it runs the same plans. Three steps of `query` are skipped on purpose:
+        the per-dataset grant (the caller's page is the grant), the budget (the
+        caller bounds its own range) and the cache — drawal is typed in by operators
+        after the day has closed, and a cached closed range would hide it for 24 h.
+        """
+        req = await self.with_band(request)
+        req = await self.with_plants(req)
+        requested = list(req.datasets)
+        plans = planner.plan(requested, req.to_filters(), self.context_for(req))
+        result = await executor.execute(
+            plans, self.repository,
+            concurrency=int(getattr(self.settings, "ANALYTICS_GROUP_CONCURRENCY",
+                                    executor.DEFAULT_CONCURRENCY)),
+            max_time_ms=int(getattr(self.settings, "ANALYTICS_QUERY_MAX_TIME_MS",
+                                    executor.DEFAULT_MAX_TIME_MS)),
+        )
+        rows = derived.resolve(result.rows, requested)
+        return pivot.build_response(rows, requested=requested, meta={
+            "failed_datasets": result.failed_datasets,
+            "partial": result.partial,
+            "date_grouping": req.date_grouping,
+        })
+
     # ------------------------------------------------------------- envelope
 
     def _denied_response(self, denied: Sequence[str]) -> dict:
