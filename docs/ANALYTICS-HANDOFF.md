@@ -790,17 +790,19 @@ The DSM Report screen (`/reports/dsm-report`) is hidden in the client; its figur
 are now a dashboard dataset instead. `DSM_PUBLISHED`, group `dsm_published`, reads
 `exchange_dsm_report_day` — what the Report Uploader's DSM Report category writes.
 
-* **One tick, seven columns**, one per published figure, in the RPC's order:
-  Schedule Total, Actual Total, Frequency, Deviation Rate, Deviation,
-  Overdrawl_Charges, Underdrawl_Charges (`series="per_dsm_field"`, cardinality 7;
-  the list is `dsm_parser.NUMERIC_FIELDS`). All seven are always emitted, even for a
+* **One tick, nine columns**, one per published figure, in the RPC's order:
+  Schedule Total, Actual Total, Frequency, Deviation Rate, Deviation, dev_%,
+  Overdrawl_Charges, Underdrawl_Charges, Postfacto_Charges
+  (`series="per_dsm_field"`, cardinality 9; the list is `dsm_parser.NUMERIC_FIELDS`).
+  dev_% and Postfacto_Charges came with the latest statement format (2026-09-29) and
+  are optional in the parser, so earlier statements show them blank. All seven are always emitted, even for a
   range with no statement (`pivot.ENTITY_ORDER`), so the file's columns never
   depend on what was uploaded.
 * **Reshape, not a normal adapter.** One doc per day, `report_date` an ISO string,
   96 blocks inline. `adapters/dsm_published.py` matches the string range, unwinds the
   blocks, then the figures, and builds `scheduled_at` / `time_block`. No historical
   twin, no revisions: a reissued statement replaces its days (unique `report_date`).
-* **Two aggregation rules in one dataset.** Under a block band the charges SUM and
+* **Two aggregation rules in one dataset.** Under a block band the three charges SUM and
   the rest AVERAGE; the adapter computes both and `rows_from` keeps the right one.
 * **Never cached.** `Dataset.uploaded=True`: a statement lands weeks after its days
   and can be reissued, so the 24 h "closed range" cache would hide a fresh upload.
