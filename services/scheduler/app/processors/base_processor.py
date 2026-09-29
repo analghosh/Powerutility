@@ -11,6 +11,8 @@ from datetime import datetime
 from typing import Dict, List, Any, Optional
 from enum import Enum
 
+from bson import ObjectId
+
 from libs.repository.provider_repository import ProviderRepository
 from libs.repository.raw_data_repository import RawDataRepository
 from libs.middleware.correlation import set_correlation_id, get_correlation_id
@@ -28,11 +30,39 @@ class ProcessingStatus(Enum):
     FAILED = "failed"
 
 
+def _downgrade_for_unread_providers(status: str, success: bool, error_message: Optional[str],
+                                    result: Optional[Dict[str, Any]]):
+    """
+    A run whose pending raw data could not be read for some provider is not a success.
+    Returns (status, success, error_message), updating result["status"] to match.
+    """
+    details = ((result or {}).get("trigger_details") or {}).get("details") or {}
+    unread = {code: res for code, res in details.items()
+              if isinstance(res, dict) and res.get("pending_lookup_failed")}
+    if status != "success" or not unread:
+        return status, success, error_message
+
+    status = "error" if len(unread) == len(details) else "partial_success"
+    reasons = "; ".join(f"{code}: {res.get('error')}" for code, res in unread.items())
+    result["status"] = status
+    return status, False, error_message or reasons
+
+
+def _merge_batches(done: Dict[str, Any], batch: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold one more processed batch into a provider's result; the latest batch sets the status."""
+    totals = ("processed_documents", "total_documents", "total_records_processed")
+    return {**batch, **{key: done.get(key, 0) + batch.get(key, 0) for key in totals}}
+
+
 class BaseProcessor(ABC):
     """
     Base class for data processors.
     Handles the main processing workflow triggered by cron jobs.
     """
+
+    # Pending raw documents read per batch, and batches one run may process per provider
+    PENDING_BATCH_SIZE = 50
+    PENDING_BATCHES_PER_RUN = 1
     
     def __init__(self):
         from ..core.config import settings
@@ -184,25 +214,46 @@ class BaseProcessor(ABC):
 
             logger.info(f"Provider ID after conversion: {provider_id} (type: {type(provider_id)})")
 
-            # Get pending raw data for this provider in ascending order
+            # Get pending raw data for this provider in ascending order, a batch at a time
             data_type = metadata.get("data_type")
-            raw_data_items = await self._get_pending_raw_data(provider_id, data_type)
-            logger.info(f"_get_pending_raw_data returned {len(raw_data_items)} items for provider: {provider_code}")
-            
-            if not raw_data_items:
+            outcome = None
+            previous_ids = None
+            for _ in range(self.PENDING_BATCHES_PER_RUN):
+                try:
+                    raw_data_items = await self._get_pending_raw_data(provider_id, data_type)
+                except Exception as e:
+                    # Not "No pending data": the run must show that this provider was not read
+                    failure = {
+                        "success": False,
+                        "pending_lookup_failed": True,
+                        "error": f"Could not read pending raw data: {e}",
+                    }
+                    return failure if outcome is None else {**outcome, **failure}
+                logger.info(f"_get_pending_raw_data returned {len(raw_data_items)} items for provider: {provider_code}")
+
+                # Stop when drained, or when the last batch is still pending (its status was not updated)
+                batch_ids = [str(item.get("_id")) for item in raw_data_items]
+                if not raw_data_items or batch_ids == previous_ids:
+                    break
+                previous_ids = batch_ids
+
+                logger.info(f"Found {len(raw_data_items)} pending raw data items for provider: {provider_code}")
+
+                batch = await self._process_raw_data_documents(
+                    raw_data_items=raw_data_items,
+                    metadata=metadata,
+                    provider_config=provider_config,
+                    provider_code=provider_code
+                )
+                outcome = batch if outcome is None else _merge_batches(outcome, batch)
+                if not batch.get("success") or len(raw_data_items) < self.PENDING_BATCH_SIZE:
+                    break
+
+            if outcome is None:
                 logger.info(f"No pending raw data found for provider: {provider_code} (ID: {provider_id})")
                 return {"success": True, "message": "No pending data"}
-                
-            logger.info(f"Found {len(raw_data_items)} pending raw data items for provider: {provider_code}")
-            
-            processing_result = await self._process_raw_data_documents(
-                raw_data_items=raw_data_items,
-                metadata=metadata,
-                provider_config=provider_config,
-                provider_code=provider_code
-            )
-            
-            return processing_result
+
+            return outcome
                 
         except Exception as e:
             logger.error(f"Error in _process_provider_data: {str(e)}")
@@ -453,15 +504,16 @@ class BaseProcessor(ABC):
     async def _get_pending_raw_data(self, provider_id: str, data_type: Optional[str] = None) -> List[Dict[str, Any]]:
         """
         Get pending raw data for a provider.
-        First fetches pending status records from raw_data_processing_status based on provider_id,
-        then fetches the corresponding raw data records using a single aggregation pipeline.
+        First fetches pending/failed status records for the provider (oldest first),
+        then the raw documents they point at, bounded by insert time so the
+        time-series raw collection is never scanned end to end.
         
         Args:
             provider_id: Provider configuration ID
             data_type: Data type for dynamic collection selection
             
         Returns:
-            List of raw data documents with pending status
+            List of raw data documents with pending status, in status order
         """
         try:
             from libs.repository.raw_data_processing_status_repository import RawDataProcessingStatusRepository
@@ -475,43 +527,23 @@ class BaseProcessor(ABC):
                 data_type=data_type
             )
             
-            # Determine the raw data collection name dynamically
-            raw_collection_name = self.raw_data_repository.collection.name
-            logger.info(f"Joining against collection: {raw_collection_name}")
-            
-            pipeline = [
-                # Stage 1: Filter pending/failed records for this provider
-                {
-                    "$match": {
-                        "provider_id": provider_id,
-                        "status": {"$in": [RawDataStatus.PENDING.value, RawDataStatus.FAILED.value]}
-                    }
-                },
-                # Stage 2: Oldest first, limit batch size
-                {"$sort": {"created_at": 1}},
-                {"$limit": 50},
-                # Stage 3: Convert string raw_data_id to ObjectId before lookup
-                {
-                    "$addFields": {
-                        "raw_data_id_obj": {"$toObjectId": "$raw_data_id"}
-                    }
-                },
-                # Stage 4: Join to raw data collection
-                {
-                    "$lookup": {
-                        "from": raw_collection_name,
-                        "localField": "raw_data_id_obj",
-                        "foreignField": "_id",
-                        "as": "raw_data"
-                    }
-                },
-                # Stage 5: Flatten — each status record has exactly one raw_data doc
-                {"$unwind": "$raw_data"},
-                # Stage 6: Return only the raw data document
-                {"$replaceRoot": {"newRoot": "$raw_data"}}
-            ]
-            
-            pending_raw_data = await processing_status_repo.collection.aggregate(pipeline).to_list(length=10000)
+            # Oldest first by _id (status rows are stored without created_at), limit batch size
+            status_records = await processing_status_repo.collection.find({
+                "provider_id": provider_id,
+                "status": {"$in": [RawDataStatus.PENDING.value, RawDataStatus.FAILED.value]}
+            }).sort("_id", 1).limit(self.PENDING_BATCH_SIZE).to_list(length=self.PENDING_BATCH_SIZE)
+
+            raw_ids = []
+            for record in status_records:
+                raw_data_id = record.get("raw_data_id")
+                if ObjectId.is_valid(raw_data_id):
+                    raw_ids.append(ObjectId(raw_data_id))
+                else:
+                    logger.warning(f"Invalid raw_data_id format: {raw_data_id}")
+
+            # A status row whose raw document is gone is skipped
+            found = {doc["_id"]: doc for doc in await self.raw_data_repository.find_by_ids(raw_ids)}
+            pending_raw_data = [found[raw_id] for raw_id in raw_ids if raw_id in found]
             
             logger.info(
                 f"Successfully fetched {len(pending_raw_data)} pending raw data records "
@@ -522,7 +554,7 @@ class BaseProcessor(ABC):
             
         except Exception as e:
             logger.error(f"Error getting pending raw data for provider {provider_id}: {str(e)}")
-            return []
+            raise
     
     async def _update_raw_data_status(self, raw_data_ids: List[str], status: ProcessingStatus) -> bool:
         """
@@ -1101,6 +1133,9 @@ class BaseProcessor(ABC):
                               error_message: Optional[str] = None):
         """Record job completion in audit database"""
         try:
+            status, success, error_message = _downgrade_for_unread_providers(
+                status, success, error_message, result
+            )
             duration_seconds = None
             if execution_start and execution_end:
                 duration_seconds = (execution_end - execution_start).total_seconds()
