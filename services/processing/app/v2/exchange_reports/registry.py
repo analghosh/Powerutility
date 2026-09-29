@@ -60,6 +60,12 @@ class ReportCategory:
     #: same reason they are dropped from a store-only category: a deviation
     #: settlement is against the grid, not against an exchange.
     dates_from_file: bool = False
+    #: True when the one delivery day the report covers is printed in the
+    #: file, so the uploader does not ask for it. An IEX Daily Obligation
+    #: Report names its own Delivery Date; asking the operator to type it
+    #: again only gave them a way to get it wrong. Unlike `dates_from_file`,
+    #: exchange and market are still asked for.
+    delivery_date_from_file: bool = False
     #: True when the report covers a calendar month rather than a delivery
     #: day. The uploader asks for Year and Month instead of a Delivery Date,
     #: and the file is filed under that month. A monthly report has no single
@@ -97,6 +103,7 @@ CATEGORIES: Dict[str, ReportCategory] = {
         # spreadsheet here would only fail later, in the parser.
         accepted_extensions=(".pdf",),
         implemented=True,
+        delivery_date_from_file=True,
         # A real IEX Daily Obligation Report, under the name the exchange
         # gives it, so the sample also shows the file-name convention.
         sample_file="IEX180926DOR_PTC0136_PY0_Electricity Department Pud.pdf",
@@ -216,6 +223,7 @@ def describe_categories() -> List[Dict[str, object]]:
             "stores_file_only": category.stores_file_only,
             "period_keyed": category.period_keyed,
             "dates_from_file": category.dates_from_file,
+            "delivery_date_from_file": category.delivery_date_from_file,
             "sample_filename": category.sample_file,
         }
         for category in (CATEGORIES[code] for code in CATEGORY_ORDER)

@@ -366,6 +366,47 @@ async def test_a_report_printing_no_delivery_date_is_not_refused_over_it(service
 
 
 @pytest.mark.asyncio
+async def test_with_no_date_sent_the_file_s_delivery_date_is_used(service):
+    """The uploader no longer asks for it; the report prints its own."""
+    uploader = service(existing=_stored())
+
+    with pytest.raises(AlreadyUploaded):
+        await _upload(uploader, delivery_date=None)
+
+    assert uploader.repository_stub.identity_lookups[0]["delivery_date_iso"] == "2026-09-19"
+
+
+@pytest.mark.asyncio
+async def test_with_no_date_sent_the_report_is_stored_under_the_file_s_day(service):
+    uploader = service()
+
+    result = await _upload(uploader, delivery_date=None)
+
+    assert len(uploader.repository_stub.saved) == 1
+    assert result["summary"]["delivery_date"] == "2026-09-19"
+
+
+@pytest.mark.asyncio
+async def test_with_no_date_sent_a_report_printing_none_is_refused(service):
+    """Stored under no day, it would never show up in the reports section."""
+    uploader = service(parsed=_parsed(delivery_date=None, delivery_date_iso=None))
+
+    with pytest.raises(UploadRejected) as raised:
+        await _upload(uploader, delivery_date=None)
+
+    assert raised.value.reason == "delivery_date_not_in_file"
+    assert uploader.repository_stub.saved == []
+
+
+def test_only_the_obligation_report_takes_its_delivery_date_from_the_file():
+    from_file = {
+        e["code"] for e in registry.describe_categories() if e["delivery_date_from_file"]
+    }
+
+    assert from_file == {registry.OBLIGATION_REPORT}
+
+
+@pytest.mark.asyncio
 async def test_an_rtm_report_with_no_trading_date_still_uploads(service):
     """RTM reports print no trading date; only the delivery date is checked."""
     uploader = service(
