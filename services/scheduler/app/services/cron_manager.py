@@ -1767,13 +1767,44 @@ class CronManager(BaseCronManager):
             return {"status": "error", "error": str(e)}
 
     def _execute_system_cleanup_job(self, payload: Optional[Dict[str, Any]] = None):
-        """Execute system cleanup job — dynamically cleans all *_integration_apilog collections."""
+        """Execute system cleanup job — cleans all *_integration_apilog collections and keeps
+        RAW_DATA_RETENTION_DAYS of raw ingestion data."""
         logger.info("Executing system cleanup job")
         try:
-            return self._safe_run_async(self._run_integration_apilog_cleanup())
+            result = self._safe_run_async(self._run_integration_apilog_cleanup())
         except Exception as e:
             logger.error("Error in system cleanup job: %s", str(e))
-            return {'status': 'error', 'error': str(e)}
+            result = {'status': 'error', 'error': str(e)}
+
+        try:
+            retention = self._safe_run_async(self._run_raw_data_retention())
+            result['raw_data_retention'] = retention
+            failed = {name: r['error'] for name, r in retention.items() if 'error' in r}
+            if failed:
+                result['status'] = 'error'
+                result['error'] = f"Raw data retention failed for: {failed}"
+        except Exception as e:
+            logger.error("Error in raw data retention: %s", str(e))
+            result['status'] = 'error'
+            result['error'] = f"Raw data retention failed: {e}"
+        return result
+
+    async def _run_raw_data_retention(self):
+        """Keep RAW_DATA_RETENTION_DAYS of raw ingestion data.
+
+        Uses its own client: the fallback delete on a time-series collection
+        unpacks every bucket and can outlast the shared 20 s socket timeout.
+        """
+        from motor.motor_asyncio import AsyncIOMotorClient
+        from services.scheduler.app.services.raw_data_retention import enforce_raw_data_retention
+
+        client = AsyncIOMotorClient(settings.MONGODB_URI, socketTimeoutMS=600000)
+        try:
+            return await enforce_raw_data_retention(
+                client[settings.MONGODB_DATABASE], settings.RAW_DATA_RETENTION_DAYS
+            )
+        finally:
+            client.close()
 
     async def _run_integration_apilog_cleanup(self):
         """Async helper to delete old integration apilog docs across all DBs."""
