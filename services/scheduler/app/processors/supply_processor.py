@@ -35,6 +35,11 @@ class SupplyProcessor(BaseProcessor):
     2. dc_sg -> supply_serve (time-series collection with 4-day rolling window)
     """
 
+    # A Grid India document holds ~4700 rows: read 3 at a time to prevent OOM, but keep
+    # going in the same run so a backlog clears in minutes instead of 3 per run.
+    PENDING_BATCH_SIZE = 3
+    PENDING_BATCHES_PER_RUN = 20
+
     def __init__(self):
         super().__init__()
 
@@ -319,7 +324,7 @@ class SupplyProcessor(BaseProcessor):
             # Oldest first by _id: status rows are stored without created_at.
             pending_status_records = await processing_status_repo.collection.find(
                 pending_status_query
-            ).sort("_id", 1).limit(3).to_list(length=3)  # Limit to 3 records per batch to prevent OOM
+            ).sort("_id", 1).limit(self.PENDING_BATCH_SIZE).to_list(length=self.PENDING_BATCH_SIZE)
             
             logger.info(f"Found {len(pending_status_records)} pending/failed status records for provider {provider_id}")
             

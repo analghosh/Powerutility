@@ -48,11 +48,21 @@ def _downgrade_for_unread_providers(status: str, success: bool, error_message: O
     return status, False, error_message or reasons
 
 
+def _merge_batches(done: Dict[str, Any], batch: Dict[str, Any]) -> Dict[str, Any]:
+    """Fold one more processed batch into a provider's result; the latest batch sets the status."""
+    totals = ("processed_documents", "total_documents", "total_records_processed")
+    return {**batch, **{key: done.get(key, 0) + batch.get(key, 0) for key in totals}}
+
+
 class BaseProcessor(ABC):
     """
     Base class for data processors.
     Handles the main processing workflow triggered by cron jobs.
     """
+
+    # Pending raw documents read per batch, and batches one run may process per provider
+    PENDING_BATCH_SIZE = 50
+    PENDING_BATCHES_PER_RUN = 1
     
     def __init__(self):
         from ..core.config import settings
@@ -204,33 +214,46 @@ class BaseProcessor(ABC):
 
             logger.info(f"Provider ID after conversion: {provider_id} (type: {type(provider_id)})")
 
-            # Get pending raw data for this provider in ascending order
+            # Get pending raw data for this provider in ascending order, a batch at a time
             data_type = metadata.get("data_type")
-            try:
-                raw_data_items = await self._get_pending_raw_data(provider_id, data_type)
-            except Exception as e:
-                # Not "No pending data": the run must show that this provider was not read
-                return {
-                    "success": False,
-                    "pending_lookup_failed": True,
-                    "error": f"Could not read pending raw data: {e}",
-                }
-            logger.info(f"_get_pending_raw_data returned {len(raw_data_items)} items for provider: {provider_code}")
-            
-            if not raw_data_items:
+            outcome = None
+            previous_ids = None
+            for _ in range(self.PENDING_BATCHES_PER_RUN):
+                try:
+                    raw_data_items = await self._get_pending_raw_data(provider_id, data_type)
+                except Exception as e:
+                    # Not "No pending data": the run must show that this provider was not read
+                    failure = {
+                        "success": False,
+                        "pending_lookup_failed": True,
+                        "error": f"Could not read pending raw data: {e}",
+                    }
+                    return failure if outcome is None else {**outcome, **failure}
+                logger.info(f"_get_pending_raw_data returned {len(raw_data_items)} items for provider: {provider_code}")
+
+                # Stop when drained, or when the last batch is still pending (its status was not updated)
+                batch_ids = [str(item.get("_id")) for item in raw_data_items]
+                if not raw_data_items or batch_ids == previous_ids:
+                    break
+                previous_ids = batch_ids
+
+                logger.info(f"Found {len(raw_data_items)} pending raw data items for provider: {provider_code}")
+
+                batch = await self._process_raw_data_documents(
+                    raw_data_items=raw_data_items,
+                    metadata=metadata,
+                    provider_config=provider_config,
+                    provider_code=provider_code
+                )
+                outcome = batch if outcome is None else _merge_batches(outcome, batch)
+                if not batch.get("success") or len(raw_data_items) < self.PENDING_BATCH_SIZE:
+                    break
+
+            if outcome is None:
                 logger.info(f"No pending raw data found for provider: {provider_code} (ID: {provider_id})")
                 return {"success": True, "message": "No pending data"}
-                
-            logger.info(f"Found {len(raw_data_items)} pending raw data items for provider: {provider_code}")
-            
-            processing_result = await self._process_raw_data_documents(
-                raw_data_items=raw_data_items,
-                metadata=metadata,
-                provider_config=provider_config,
-                provider_code=provider_code
-            )
-            
-            return processing_result
+
+            return outcome
                 
         except Exception as e:
             logger.error(f"Error in _process_provider_data: {str(e)}")
@@ -508,7 +531,7 @@ class BaseProcessor(ABC):
             status_records = await processing_status_repo.collection.find({
                 "provider_id": provider_id,
                 "status": {"$in": [RawDataStatus.PENDING.value, RawDataStatus.FAILED.value]}
-            }).sort("_id", 1).limit(50).to_list(length=50)
+            }).sort("_id", 1).limit(self.PENDING_BATCH_SIZE).to_list(length=self.PENDING_BATCH_SIZE)
 
             raw_ids = []
             for record in status_records:
