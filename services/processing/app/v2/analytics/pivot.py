@@ -33,6 +33,15 @@ from . import registry
 #: are already names; forecast types are not.
 ENTITY_LABELS = {
     "per_forecast_type": {"DAF": "Day Ahead", "IDF": "Intra Day"},
+    "per_dsm_field": registry.DSM_PUBLISHED_LABELS,
+}
+
+#: Series kinds whose entities are a fixed, known set. Every one of them becomes a
+#: column in this order even when the range holds no value for it, so the file's
+#: columns do not depend on what happened to be uploaded. Any other kind sorts by
+#: entity name and shows only what came back.
+ENTITY_ORDER = {
+    "per_dsm_field": registry.DSM_PUBLISHED_FIELDS,
 }
 
 
@@ -161,11 +170,19 @@ def build_response(rows: Sequence[dict], *, requested: Sequence[str],
     computed_missing: List[str] = []
     for code, dataset in entries:
         by_entity = matrices[code]
-        if not by_entity:
-            # Asked for, nothing came back. Still render the series so the absence
-            # is visible rather than the row silently vanishing from the table.
-            by_entity = {None: _empty_matrix(len(block_keys), len(date_keys))}
-        ordered = sorted(by_entity.items(), key=lambda kv: (kv[0] is not None, kv[0] or ""))
+        fixed = ENTITY_ORDER.get(getattr(dataset, "series", None))
+        if fixed:
+            by_entity = {entity: by_entity.get(entity) or
+                         _empty_matrix(len(block_keys), len(date_keys))
+                         for entity in fixed}
+            ordered = list(by_entity.items())
+        else:
+            if not by_entity:
+                # Asked for, nothing came back. Still render the series so the
+                # absence is visible rather than the row silently vanishing.
+                by_entity = {None: _empty_matrix(len(block_keys), len(date_keys))}
+            ordered = sorted(by_entity.items(),
+                             key=lambda kv: (kv[0] is not None, kv[0] or ""))
         has_value = False
         for entity, matrix in ordered:
             quality = _quality(code, matrix, failed)
