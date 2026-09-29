@@ -45,14 +45,25 @@ class ReportsPlfPafController:
             to_block=to_block,
             response_format=REPORTS_FORECAST_FORMAT_CSV,
         )
-        csv_content = reports_plf_paf_service.generate_csv(result.get("plants") or [])
-        filename = reports_plf_paf_service.build_csv_filename(
-            result["query"]["from_date"],
-            result["query"]["to_date"],
-            from_block,
-            to_block,
+        return result["csv_export"]["content"], result["csv_export"]["filename"]
+
+    async def get_blocks(
+        self,
+        plant_id: str,
+        from_block: int,
+        to_block: int,
+        schedule_date: Optional[str] = None,
+        from_date: Optional[str] = None,
+        to_date: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return await reports_plf_paf_service.get_plant_blocks(
+            plant_id=plant_id,
+            schedule_date=schedule_date,
+            from_date=from_date,
+            to_date=to_date,
+            from_block=from_block,
+            to_block=to_block,
         )
-        return csv_content, filename
 
 
 reports_plf_paf_controller = ReportsPlfPafController()

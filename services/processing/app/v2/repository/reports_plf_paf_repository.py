@@ -11,6 +11,9 @@ window) and ``supply_serve_historical`` (the archive). The two overlap at the
 roll boundary, so a naive union would count those days twice and skew the
 average. Every date is therefore resolved to exactly one collection — live when
 the date is present there, archive otherwise — before any grouping runs.
+
+The same rows are also read block by block (``find_plant_blocks``) for the
+block-wise view and download; those blocks average back to the plant figures.
 """
 
 import logging
@@ -30,6 +33,8 @@ SG_TYPE = "SG"
 _AGGREGATE_MAX_TIME_MS = 60_000
 # 34 plants x 2 dc_sg types, with generous headroom for master-data growth.
 _PLANT_TOTALS_MAX_DOCS = 5_000
+# A 90-day download reads every plant's blocks: ~250k grouped rows.
+_BLOCKS_MAX_TIME_MS = 120_000
 
 
 def _to_datetime(date_str: str) -> datetime:
@@ -225,6 +230,100 @@ class ReportsPlfPafRepository:
                 e,
             )
             return {}
+
+    @staticmethod
+    def _build_plant_blocks_pipeline(
+        dates: Sequence[str],
+        from_block: int,
+        to_block: int,
+        plant_id: Optional[str],
+    ) -> List[Dict[str, Any]]:
+        match: Dict[str, Any] = {
+            "$or": [
+                {
+                    "scheduled_at": {
+                        "$gte": _to_datetime(d),
+                        "$lt": _to_datetime(d) + timedelta(days=1),
+                    }
+                }
+                for d in dates
+            ],
+            "time_block": {"$gte": from_block, "$lte": to_block},
+            "dc_sg": {"$in": [DC_TYPE, SG_TYPE]},
+            # Same rows the averages read, so the blocks average back to them.
+            "volume": {"$type": "number"},
+        }
+        if plant_id:
+            match["plant_id"] = plant_id
+
+        def volume_of(dc_sg: str) -> Dict[str, Any]:
+            # $avg skips the null, so a block with no DC row reports DC as null.
+            return {"$avg": {"$cond": [{"$eq": ["$dc_sg", dc_sg]}, "$volume", None]}}
+
+        return [
+            {"$match": match},
+            {
+                "$group": {
+                    "_id": {
+                        "plant_id": "$plant_id",
+                        "date": {
+                            "$dateToString": {"format": "%Y-%m-%d", "date": "$scheduled_at"}
+                        },
+                        "time_block": "$time_block",
+                    },
+                    "dc": volume_of(DC_TYPE),
+                    "sg": volume_of(SG_TYPE),
+                }
+            },
+            {"$sort": {"_id.plant_id": 1, "_id.date": 1, "_id.time_block": 1}},
+            {
+                "$project": {
+                    "_id": 0,
+                    "plant_id": "$_id.plant_id",
+                    "date": "$_id.date",
+                    "time_block": "$_id.time_block",
+                    "dc": 1,
+                    "sg": 1,
+                }
+            },
+        ]
+
+    async def find_plant_blocks(
+        self,
+        from_date: str,
+        to_date: str,
+        from_block: int = 1,
+        to_block: int = 96,
+        plant_id: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        DC and SG side by side for every plant, date and block in the range.
+
+        Returns ``[{"plant_id", "date", "time_block", "dc", "sg"}]`` ordered by
+        plant, date and block. Each date comes from one collection, as for the
+        averages, so the overlap day is not read twice.
+        """
+        all_dates = iter_dates_inclusive(from_date, to_date)
+        live_dates = await self._dates_present(self.collection_name, from_date, to_date)
+        sources = (
+            (self.collection_name, [d for d in all_dates if d in live_dates]),
+            (self.historical_collection_name, [d for d in all_dates if d not in live_dates]),
+        )
+
+        rows: List[Dict[str, Any]] = []
+        for collection_name, dates in sources:
+            if not dates:
+                continue
+            rows.extend(
+                await self.repository.aggregate(
+                    collection_name,
+                    self._build_plant_blocks_pipeline(dates, from_block, to_block, plant_id),
+                    max_time_ms=_BLOCKS_MAX_TIME_MS,
+                ) or []
+            )
+        # The two collections cover different dates, so one sort puts them in order.
+        rows.sort(key=lambda r: (r["plant_id"], r["date"], r["time_block"]))
+        return rows
 
     async def find_plant_master(self) -> Dict[str, Dict[str, Any]]:
         """Plant display name, technology and contracted capacity, keyed by plant_id."""
