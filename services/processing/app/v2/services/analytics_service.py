@@ -627,8 +627,11 @@ class AnalyticsService:
                 (user_context or {}).get("user_id", "unknown"))
             raise BudgetExceeded(estimate)
 
+        # A dataset filled by an upload can change for a past date at any time
+        # (see registry `uploaded`), so a closed range is not immutable for it.
+        cacheable = not any(registry.get(code).uploaded for code in allowed)
         key = self.cache_key(effective)
-        cached = await self._cache_get(key)
+        cached = await self._cache_get(key) if cacheable else None
         if cached is not None:
             logger.info("Analytics cache hit for %s", key)
             return self._finalise(cached, denied=denied, estimate=estimate,
@@ -657,7 +660,7 @@ class AnalyticsService:
             logger.warning(
                 "Analytics result not cached: %d group(s) failed",
                 len(result.failed_groups))
-        else:
+        elif cacheable:
             await self._cache_set(key, response, self.cache_ttl(effective))
 
         return self._finalise(response, denied=denied, estimate=estimate,
