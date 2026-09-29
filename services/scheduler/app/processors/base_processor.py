@@ -30,6 +30,24 @@ class ProcessingStatus(Enum):
     FAILED = "failed"
 
 
+def _downgrade_for_unread_providers(status: str, success: bool, error_message: Optional[str],
+                                    result: Optional[Dict[str, Any]]):
+    """
+    A run whose pending raw data could not be read for some provider is not a success.
+    Returns (status, success, error_message), updating result["status"] to match.
+    """
+    details = ((result or {}).get("trigger_details") or {}).get("details") or {}
+    unread = {code: res for code, res in details.items()
+              if isinstance(res, dict) and res.get("pending_lookup_failed")}
+    if status != "success" or not unread:
+        return status, success, error_message
+
+    status = "error" if len(unread) == len(details) else "partial_success"
+    reasons = "; ".join(f"{code}: {res.get('error')}" for code, res in unread.items())
+    result["status"] = status
+    return status, False, error_message or reasons
+
+
 class BaseProcessor(ABC):
     """
     Base class for data processors.
@@ -188,7 +206,15 @@ class BaseProcessor(ABC):
 
             # Get pending raw data for this provider in ascending order
             data_type = metadata.get("data_type")
-            raw_data_items = await self._get_pending_raw_data(provider_id, data_type)
+            try:
+                raw_data_items = await self._get_pending_raw_data(provider_id, data_type)
+            except Exception as e:
+                # Not "No pending data": the run must show that this provider was not read
+                return {
+                    "success": False,
+                    "pending_lookup_failed": True,
+                    "error": f"Could not read pending raw data: {e}",
+                }
             logger.info(f"_get_pending_raw_data returned {len(raw_data_items)} items for provider: {provider_code}")
             
             if not raw_data_items:
@@ -505,7 +531,7 @@ class BaseProcessor(ABC):
             
         except Exception as e:
             logger.error(f"Error getting pending raw data for provider {provider_id}: {str(e)}")
-            return []
+            raise
     
     async def _update_raw_data_status(self, raw_data_ids: List[str], status: ProcessingStatus) -> bool:
         """
@@ -1084,6 +1110,9 @@ class BaseProcessor(ABC):
                               error_message: Optional[str] = None):
         """Record job completion in audit database"""
         try:
+            status, success, error_message = _downgrade_for_unread_providers(
+                status, success, error_message, result
+            )
             duration_seconds = None
             if execution_start and execution_end:
                 duration_seconds = (execution_end - execution_start).total_seconds()
