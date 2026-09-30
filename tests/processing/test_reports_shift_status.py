@@ -27,6 +27,7 @@ from services.processing.app.v2.services.reports_shift_status_service import (
     ReportsShiftStatusService,
     ShiftNotFound,
     editable_dates,
+    shift_person_dates,
 )
 
 SHIFTS = [
@@ -78,10 +79,11 @@ class FakeForecast:
         return self.docs
 
 
-class FakeRemarks:
+class FakeEntries:
     def __init__(self, stored=None):
         self.stored = dict(stored or {})
         self.saves = []
+        self.person_saves = []
 
     async def find_for_dates(self, dates):
         wanted = {d.isoformat() for d in dates}
@@ -96,6 +98,13 @@ class FakeRemarks:
                 "remark": e["remark"], "updated_by_name": username,
                 "updated_at": datetime(2026, 9, 28, 18, 0)})
         return {"saved": len(entries) - len(locked), "locked": locked}
+
+    async def set_shift_person(self, iso_date, names, *, user_id, username):
+        self.person_saves.append((iso_date, names, user_id, username))
+        doc = {"kind": "shift_person", "names": names, "updated_by_name": username,
+               "updated_at": datetime(2026, 9, 29, 9, 0, tzinfo=timezone.utc)}
+        self.stored[(iso_date, 0)] = doc
+        return {"date": iso_date, **doc}
 
 
 def _loader(shifts=SHIFTS):
@@ -134,7 +143,7 @@ TODAY = datetime(2026, 9, 29).date()  # remarks open for 27, 28, 29 and 30 Sep
 def _service(grids=GRIDS, docs=FORECAST_DOCS, remarks=None, shifts=SHIFTS, today=TODAY):
     return ReportsShiftStatusService(
         analytics=FakeAnalytics(grids), forecast_repository=FakeForecast(docs),
-        remarks_repository=FakeRemarks(remarks), shifts_loader=_loader(shifts),
+        entries_repository=FakeEntries(remarks), shifts_loader=_loader(shifts),
         today=lambda: today)
 
 
@@ -296,7 +305,102 @@ def test_shift_person_is_whoever_saved_the_latest_remark_in_the_section():
 
 
 def test_no_remark_means_no_shift_person():
-    assert _report()["sections"][0]["shift_person"] is None
+    section = _report()["sections"][0]
+    assert section["shift_person"] is None
+    assert section["shift_person_source"] is None
+
+
+# ------------------------------------------------------------ shift person
+
+def _names(names, by="sugumar"):
+    return {"kind": "shift_person", "names": names, "updated_by_name": by,
+            "updated_at": datetime(2026, 9, 28, 16, 0, tzinfo=timezone.utc)}
+
+
+def test_typed_names_win_over_the_latest_remark_writer():
+    stored = {("2026-09-28", 0): _names("ajay, vijay"),
+              ("2026-09-28", 70): _remark("b", "ravi", 40)}
+    section = _report(_service(remarks=stored))["sections"][0]
+    assert section["shift_person"] == "ajay, vijay"
+    assert section["shift_person_source"] == "entered"
+    assert section["shift_person_updated_by"] == "sugumar"
+    assert section["shift_person_updated_at"] == "2026-09-28T16:00:00+00:00"
+    assert section["remark_count"] == 1  # the names are not a remark
+
+
+def test_without_typed_names_the_latest_remark_writer_is_the_fallback():
+    stored = {("2026-09-28", 70): _remark("b", "ravi", 40)}
+    section = _report(_service(remarks=stored))["sections"][0]
+    assert section["shift_person"] == "ravi"
+    assert section["shift_person_source"] == "remarks"
+    assert section["shift_person_updated_by"] is None
+
+
+@pytest.mark.parametrize("shift_id", ["a", "c", "edp", FULL_DAY_SHIFT_ID])
+def test_one_set_of_names_per_date_shows_in_every_shift(shift_id):
+    stored = {("2026-09-28", 0): _names("ajay, vijay")}
+    report = _report(_service(remarks=stored), shift_id=shift_id)
+    assert report["sections"][0]["shift_person"] == "ajay, vijay"
+
+
+def test_names_are_read_in_the_same_query_as_the_remarks():
+    calls = []
+
+    class Counting(FakeEntries):
+        async def find_for_dates(self, dates):
+            calls.append(sorted(d.isoformat() for d in dates))
+            return await super().find_for_dates(dates)
+
+    service = _service()
+    service._entries_repository = Counting({("2026-09-28", 0): _names("ajay")})
+    report = asyncio.run(service.get_report("2026-09-28", "2026-09-28", "c"))
+    assert report["sections"][0]["shift_person"] == "ajay"
+    assert calls == [["2026-09-28", "2026-09-29"]]
+
+
+def test_the_shift_person_window_is_today_and_tomorrow():
+    assert shift_person_dates(TODAY) == {"2026-09-29", "2026-09-30"}
+    report = _report(_service(), from_date="2026-09-27", to_date="2026-09-30")
+    assert [s["shift_person_editable"] for s in report["sections"]] == [
+        False, False, True, True]
+    assert report["shift_person_dates"] == ["2026-09-29", "2026-09-30"]
+
+
+@pytest.mark.parametrize("day, names, message", [
+    ("29-09-2026", "ajay", "YYYY-MM-DD"),
+    ("2026-09-29", 5, "text"),
+    ("2026-09-29", None, "text"),
+    ("2026-09-29", " , ", "at least one name"),
+    ("2026-09-29", "x" * 201, "200"),
+    ("2026-09-28", "ajay", "today and tomorrow"),
+    ("2026-10-01", "ajay", "today and tomorrow"),
+])
+def test_names_the_screen_could_not_have_sent_are_refused(day, names, message):
+    with pytest.raises(ValueError, match=message):
+        asyncio.run(_service().save_shift_person(day, names, user_id="u1",
+                                                 username="sugumar"))
+
+
+def test_names_are_tidied_and_can_be_changed_again_and_again():
+    service = _service()
+    first = asyncio.run(service.save_shift_person(
+        "2026-09-29", "ajay,vijay ", user_id="u1", username="sugumar"))
+    assert first["shift_person"] == "ajay, vijay"
+    asyncio.run(service.save_shift_person(
+        "2026-09-29", "ajay, vijay, ravi", user_id="u2", username="ravi"))
+    saves = service.entries_repository.person_saves
+    assert saves == [("2026-09-29", "ajay, vijay", "u1", "sugumar"),
+                     ("2026-09-29", "ajay, vijay, ravi", "u2", "ravi")]
+    report = _report(service, from_date="2026-09-29", to_date="2026-09-29")
+    assert report["sections"][0]["shift_person"] == "ajay, vijay, ravi"
+
+
+def test_a_date_with_names_still_takes_remarks():
+    service = _service(remarks={("2026-09-28", 0): _names("ajay")})
+    result = asyncio.run(service.save_remarks(
+        [{"date": "2026-09-28", "time_block": 67, "remark": "Buy bid not cleared"}],
+        user_id="u1", username="sugumar"))
+    assert result == {"saved": 1, "blocks": 1}
 
 
 OPEN = editable_dates(TODAY)
@@ -361,7 +465,7 @@ def test_submitting_records_who():
         [{"date": "2026-09-28", "time_block": 67, "remark": " Buy bid not cleared "}],
         user_id="u1", username="sugumar"))
     assert result == {"saved": 1, "blocks": 1}
-    entries, user_id, username = service.remarks_repository.saves[0]
+    entries, user_id, username = service.entries_repository.saves[0]
     assert (user_id, username) == ("u1", "sugumar")
     assert entries[0]["remark"] == "Buy bid not cleared"
 
@@ -374,8 +478,8 @@ def test_a_submitted_remark_cannot_be_changed_and_nothing_else_is_written():
              {"date": "2026-09-28", "time_block": 68, "remark": "new"}],
             user_id="u2", username="ravi"))
     assert caught.value.blocks == [{"date": "2026-09-28", "time_block": 67}]
-    assert service.remarks_repository.saves == []
-    assert service.remarks_repository.stored[("2026-09-28", 67)]["remark"] == "first"
+    assert service.entries_repository.saves == []
+    assert service.entries_repository.stored[("2026-09-28", 67)]["remark"] == "first"
 
 
 # ---------------------------------------------------------------- download
@@ -400,6 +504,13 @@ def test_the_download_follows_the_shift_sheet_layout():
     assert first[9:11] == [-60.0, -51.3]
     assert first[13] == "Buy bid not cleared completely"
     assert ws.cell(row=5 + 33, column=4).value == 96
+
+
+def test_the_download_carries_the_typed_names():
+    stored = {("2026-09-28", 0): _names("ajay, vijay"),
+              ("2026-09-28", 63): _remark("x", "sugumar", 5)}
+    ws = _sheet(_report(_service(remarks=stored)))
+    assert ws["E2"].value == "ajay, vijay"
 
 
 def test_each_date_gets_its_own_section_with_a_gap_between():
@@ -468,7 +579,7 @@ def test_the_remarks_route_saves_as_the_signed_in_user(client):
     response = client.put("/reports-shift-status/remarks", json={"remarks": [
         {"date": "2026-09-28", "time_block": 67, "remark": "Buy bid not cleared"}]})
     assert response.status_code == 200
-    assert client.service.remarks_repository.saves[0][2] == "sugumar"
+    assert client.service.entries_repository.saves[0][2] == "sugumar"
 
 
 def test_the_remarks_route_answers_409_for_a_submitted_block(client):
@@ -499,13 +610,39 @@ def test_an_anonymous_caller_cannot_save_remarks(client):
     assert response.status_code == 401
 
 
+def test_the_shift_person_route_saves_as_the_signed_in_user(client):
+    response = client.put("/reports-shift-status/shift-person", json={
+        "date": "2026-09-29", "names": "ajay,vijay"})
+    assert response.status_code == 200
+    assert response.json()["shift_person"] == "ajay, vijay"
+    assert client.service.entries_repository.person_saves[0][3] == "sugumar"
+
+
+@pytest.mark.parametrize("body", [
+    {"date": "2026-09-27", "names": "ajay"},
+    {"date": "2026-09-29", "names": "  "},
+    {"date": "2026-09-29"},
+])
+def test_the_shift_person_route_refuses_bad_input(client, body):
+    assert client.put("/reports-shift-status/shift-person", json=body).status_code == 422
+    assert client.service.entries_repository.person_saves == []
+
+
+def test_an_anonymous_caller_cannot_save_names(client):
+    client.app.dependency_overrides[get_user_context] = lambda: {
+        "user_id": "anonymous", "username": "anonymous"}
+    response = client.put("/reports-shift-status/shift-person", json={
+        "date": "2026-09-29", "names": "ajay"})
+    assert response.status_code == 401
+
+
 # ------------------------------------------------------- remarks on real Mongo
 
 def test_remarks_are_written_once_on_real_mongo():
     from motor.motor_asyncio import AsyncIOMotorClient
     from services.processing.app.core.config import settings
-    from services.processing.app.v2.repository.shift_status_remarks_repository import (
-        ShiftStatusRemarksRepository,
+    from services.processing.app.v2.repository.shift_status_entries_repository import (
+        ShiftStatusEntriesRepository,
     )
     from datetime import date
 
@@ -516,7 +653,7 @@ def test_remarks_are_written_once_on_real_mongo():
         except Exception:
             pytest.skip("MongoDB not reachable")
         collection = mongo[settings.MONGODB_DATABASE][f"zz_shift_remarks_{uuid.uuid4().hex}"]
-        repo = ShiftStatusRemarksRepository()
+        repo = ShiftStatusEntriesRepository(legacy_collection_name=None)
         repo.collection = collection
         try:
             first = await repo.insert_new(
@@ -538,6 +675,84 @@ def test_remarks_are_written_once_on_real_mongo():
             assert indexes["uniq_date_time_block"]["unique"] is True
         finally:
             await collection.drop()
+            mongo.close()
+
+    asyncio.run(run())
+
+
+async def _mongo_or_skip():
+    from motor.motor_asyncio import AsyncIOMotorClient
+    from services.processing.app.core.config import settings
+
+    mongo = AsyncIOMotorClient(settings.MONGODB_URI, serverSelectionTimeoutMS=1500)
+    try:
+        await mongo.admin.command("ping")
+    except Exception:
+        pytest.skip("MongoDB not reachable")
+    return mongo, mongo[settings.MONGODB_DATABASE]
+
+
+def test_names_are_overwritten_and_sit_beside_the_remarks_on_real_mongo():
+    from services.processing.app.v2.repository.shift_status_entries_repository import (
+        ShiftStatusEntriesRepository,
+    )
+    from datetime import date
+
+    async def run():
+        mongo, database = await _mongo_or_skip()
+        collection = database[f"zz_shift_entries_{uuid.uuid4().hex}"]
+        repo = ShiftStatusEntriesRepository(legacy_collection_name=None)
+        repo.collection = collection
+        try:
+            await repo.insert_new(
+                [{"date": "2026-09-29", "time_block": 1, "remark": "x"}],
+                user_id="u1", username="sugumar")
+            await repo.set_shift_person("2026-09-29", "ajay", user_id="u1",
+                                        username="sugumar")
+            await repo.set_shift_person("2026-09-29", "ajay, vijay", user_id="u2",
+                                        username="ravi")
+            found = await repo.find_for_dates([date(2026, 9, 29)])
+            assert found[("2026-09-29", 0)]["names"] == "ajay, vijay"
+            assert found[("2026-09-29", 0)]["updated_by_name"] == "ravi"
+            assert found[("2026-09-29", 0)]["kind"] == "shift_person"
+            assert found[("2026-09-29", 1)]["kind"] == "remark"
+            assert await collection.count_documents({}) == 2
+        finally:
+            await collection.drop()
+            mongo.close()
+
+    asyncio.run(run())
+
+
+def test_the_old_remarks_collection_is_renamed_on_first_use_on_real_mongo():
+    from services.processing.app.v2.repository.shift_status_entries_repository import (
+        ShiftStatusEntriesRepository,
+    )
+    from datetime import date
+
+    async def run():
+        mongo, database = await _mongo_or_skip()
+        suffix = uuid.uuid4().hex
+        legacy = database[f"zz_shift_remarks_{suffix}"]
+        target = database[f"zz_shift_entries_{suffix}"]
+        await legacy.insert_one({"date": "2026-09-28", "time_block": 67,
+                                 "remark": "kept", "updated_by_name": "sugumar"})
+        repo = ShiftStatusEntriesRepository(legacy_collection_name=legacy.name)
+        repo.collection = target
+        try:
+            found = await repo.find_for_dates([date(2026, 9, 28)])
+            assert found[("2026-09-28", 67)]["remark"] == "kept"
+            names = await database.list_collection_names(
+                filter={"name": {"$in": [legacy.name, target.name]}})
+            assert names == [target.name]
+            assert (await target.index_information())["uniq_date_time_block"]["unique"]
+            # A second process finds nothing left to rename.
+            again = ShiftStatusEntriesRepository(legacy_collection_name=legacy.name)
+            again.collection = target
+            assert (await again.find_for_dates([date(2026, 9, 28)])).keys() == found.keys()
+        finally:
+            await legacy.drop()
+            await target.drop()
             mongo.close()
 
     asyncio.run(run())
