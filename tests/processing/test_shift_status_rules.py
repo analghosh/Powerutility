@@ -144,3 +144,19 @@ def test_every_date_in_range_gets_a_section_and_the_range_is_capped():
         rules.section_dates(date(2026, 9, 1), date(2026, 10, 2))
     with pytest.raises(ValueError):
         rules.section_dates(date(2026, 9, 28), date(2026, 9, 27))
+
+
+@pytest.mark.parametrize("typed, stored", [
+    ("ajay", "ajay"),
+    ("ajay,vijay", "ajay, vijay"),
+    ("  ajay ,  vijay kumar ,, ", "ajay, vijay kumar"),
+    ("ajay\nvijay", "ajay vijay"),
+    ("Ajay  Kumar,Vijay", "Ajay Kumar, Vijay"),
+])
+def test_shift_person_names_are_tidied_but_kept_as_typed(typed, stored):
+    assert rules.normalise_names(typed) == stored
+
+
+@pytest.mark.parametrize("typed", ["", "   ", " , ,"])
+def test_shift_person_names_that_name_nobody_are_empty(typed):
+    assert rules.normalise_names(typed) == ""
