@@ -80,6 +80,7 @@ from services.ingestion.app.processors.base_raw_data_processor import BaseRawDat
 from libs.audit_queue.simple_logger import AuditLogger
 from libs.messaging.job_publisher import JobPublisher
 from libs.parsers.parser_factory import create_parser
+from libs.utils.failure_reasons import safe_reason
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
 from services.ingestion.app.repositories.integration_apilog_repository import IntegrationApiLogRepository
 
@@ -261,6 +262,9 @@ class APIRawDataProcessor(BaseRawDataProcessor):
 
             processed_providers = 0
             failed_providers = 0
+            # Which providers failed and why, kept on the run row so System
+            # Health can name them; the service log is not readable from there.
+            provider_failures: List[Dict[str, str]] = []
 
             # Split providers into priority tiers. Demand/supply are processed first
             # and in parallel so their triggers fire immediately; the remaining
@@ -275,7 +279,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 if not tier:
                     continue
                 logger.info("Processing %s provider tier (%d providers) in parallel", tier_name, len(tier))
-                tier_results = await self._process_provider_tier(tier)
+                tier_results = await self._process_provider_tier(tier, provider_failures)
                 processed_providers += sum(1 for ok in tier_results if ok)
                 failed_providers += sum(1 for ok in tier_results if not ok)
 
@@ -291,6 +295,7 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 'processed_providers': processed_providers,
                 'failed_providers': failed_providers,
                 'total_providers': len(providers),
+                'failed_provider_details': provider_failures,
                 'execution_time': execution_time,
                 'execution_id': execution_id
             }
@@ -350,19 +355,25 @@ class APIRawDataProcessor(BaseRawDataProcessor):
                 normal_priority.append(provider)
         return high_priority, normal_priority
 
-    async def _process_provider_tier(self, providers: List[ProviderSummary]) -> List[bool]:
+    async def _process_provider_tier(
+        self,
+        providers: List[ProviderSummary],
+        failures: Optional[List[Dict[str, str]]] = None,
+    ) -> List[bool]:
         """Process a tier of providers concurrently, bounded by a semaphore.
 
         Returns a list of booleans (one per provider) indicating success. External
         API load is capped by API_PROVIDER_CONCURRENCY (default 5) so we don't
         hammer upstream endpoints when many providers exist in one tier.
+        When ``failures`` is given, each failed provider is appended to it with
+        its reason.
         """
         concurrency = max(1, getattr(settings, 'API_PROVIDER_CONCURRENCY', 5))
         semaphore = asyncio.Semaphore(concurrency)
 
         async def _guarded(provider: ProviderSummary) -> bool:
             async with semaphore:
-                return await self._process_and_trigger(provider)
+                return await self._process_and_trigger(provider, failures)
 
         results = await asyncio.gather(
             *[_guarded(provider) for provider in providers],
@@ -374,12 +385,29 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             if isinstance(res, Exception):
                 logger.error("Unhandled exception processing provider %s: %s",
                              getattr(provider, 'code', 'unknown'), str(res))
+                self._record_provider_failure(failures, provider, res)
                 normalized.append(False)
             else:
                 normalized.append(bool(res))
         return normalized
 
-    async def _process_and_trigger(self, provider: ProviderSummary) -> bool:
+    @staticmethod
+    def _record_provider_failure(
+        failures: Optional[List[Dict[str, str]]], provider: ProviderSummary, error: Any
+    ) -> None:
+        if failures is None:
+            return
+        failures.append({
+            'provider_code': str(getattr(provider, 'code', None) or 'unknown'),
+            'provider_name': str(getattr(provider, 'name', None) or getattr(provider, 'code', None) or 'unknown'),
+            'error': safe_reason(error) or 'Unknown error',
+        })
+
+    async def _process_and_trigger(
+        self,
+        provider: ProviderSummary,
+        failures: Optional[List[Dict[str, str]]] = None,
+    ) -> bool:
         """Process a single provider end-to-end and publish its scheduler trigger.
 
         Returns True on success, False otherwise. The publish call is a blocking
@@ -415,10 +443,12 @@ class APIRawDataProcessor(BaseRawDataProcessor):
             error_msg = result.get('error', 'Unknown error') if result else 'No result returned'
             logger.error("Failed to process API data for provider: %s, data_type: %s, error: %s",
                          provider_code, data_type, error_msg)
+            self._record_provider_failure(failures, provider, error_msg)
             return False
 
         except (ValueError, OSError, RuntimeError) as provider_error:
             logger.error("Exception processing provider %s: %s", provider_code, str(provider_error))
+            self._record_provider_failure(failures, provider, provider_error)
             return False
 
     async def _process_provider_data(self, provider: ProviderSummary) -> Dict[str, Any]:

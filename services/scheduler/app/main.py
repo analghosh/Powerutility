@@ -4,6 +4,7 @@ Handles cron jobs and scheduling
 """
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -16,6 +17,7 @@ from .api.v1.routes import scheduler
 
 from .routers import queue_health, job_monitoring, rtm_scheduling_router, bid_trade_live_sync_router, demand_trigger_router
 from .services.cron_manager import cron_manager
+from libs.core.cron_manager import BaseCronManager
 from .seeder.timeblock_seeder import TimeblockSeeder
 from .shared.middleware.error_handler import ErrorHandlerMiddleware
 
@@ -39,6 +41,8 @@ class HealthResponse(BaseModel):
     service: str
     version: str
     timestamp: str
+    scheduler_running: bool
+    database: str
 
 
 def run_timeblock_seeder():
@@ -332,8 +336,26 @@ async def health_check():
     return {
         "status": "healthy",
         "service": settings.SERVICE_NAME,
+        "version": "1.0.0",
+        "timestamp": datetime.now().isoformat(),
         "scheduler_running": cron_manager.is_running(),
         "database": settings.AUDIT_DB_NAME
+    }
+
+
+@app.get("/cron/status")
+async def cron_status():
+    """
+    Jobs as registered with APScheduler, the same shape as ingestion's
+    /cron/status. This is what actually runs: several jobs are registered from
+    the fallback list in cron_manager, whose schedules differ from job_data.
+    Uses the base listing, not CronManager.get_all_jobs, which adds a
+    statistics query per job.
+    """
+    return {
+        "service": settings.SERVICE_NAME,
+        "cron_scheduler_running": cron_manager.is_running(),
+        "jobs": BaseCronManager.get_all_jobs(cron_manager),
     }
 
 

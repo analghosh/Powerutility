@@ -12,6 +12,7 @@ from typing import Dict, Any, List, Optional
 
 from libs.database.mongo_client_factory import get_mongo_client
 from libs.models.integration_apilog_entity import IntegrationApiLogEntity
+from libs.utils.failure_reasons import safe_reason
 from services.ingestion.app.core.config import settings
 from services.ingestion.app.core.logger import get_ingestion_logger
 from services.ingestion.app.processors.base_raw_data_processor import BaseRawDataProcessor
@@ -29,6 +30,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
     def __init__(self, audit_logger=None):
         """Initialize schedule API processor"""
         super().__init__()
+        self._last_fetch_error = None
         self.audit_logger = audit_logger
         self.api_timeout = getattr(settings, 'API_TIMEOUT', 30)
         self.retry_attempts = getattr(settings, 'API_RETRY_ATTEMPTS', 3)
@@ -82,16 +84,21 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
             
             if not api_response:
                 logger.error("Failed to fetch schedule data from API")
+                # Say why on the run row, so System Health can show it.
+                failure = "Failed to fetch API data"
+                reason = safe_reason(self._last_fetch_error)
+                if reason:
+                    failure = f"{failure}: {reason}"
                 result = {
                     'status': 'error',
-                    'error': 'Failed to fetch API data',
+                    'error': failure,
                     'execution_time': (datetime.now() - start_time).total_seconds()
                 }
                 if execution_id:
                     end_time = datetime.now()
                     await self.record_job_completion(
                         job_type, job_name, schedule, start_time, end_time, execution_id,
-                        "error", False, execution_id, result, "Failed to fetch API data"
+                        "error", False, execution_id, result, failure
                     )
                 return result
             
@@ -220,6 +227,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
         Returns:
             Optional[Dict[str, Any]]: API response data or None
         """
+        self._last_fetch_error = None
         try:
             url = api_config['url']
             api_key = api_config['api_key']
@@ -251,6 +259,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                             if response.status != 200:
                                 error_msg = f"API returned status {response.status}: {response.reason}"
                                 logger.error("Schedule API request failed: %s", error_msg)
+                                self._last_fetch_error = error_msg
                                 
                                 if attempt < self.retry_attempts - 1:
                                     logger.info("Retrying schedule API request (attempt %d/%d)", 
@@ -287,6 +296,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
                             return response_data
                             
                 except aiohttp.ClientError as e:
+                    self._last_fetch_error = e
                     logger.error("HTTP client error (attempt %d/%d): %s", 
                                attempt + 1, self.retry_attempts, str(e))
                     
@@ -299,6 +309,7 @@ class ScheduleAPIProcessor(BaseRawDataProcessor):
             
         except Exception as e:
             logger.error("Error fetching schedule data: %s", str(e))
+            self._last_fetch_error = e
             return None
     
     async def _store_supply_serve(

@@ -3,8 +3,9 @@ Configuration settings for Auth Service
 """
 
 import os
-from typing import List, Optional
-from pydantic import model_validator
+from datetime import datetime
+from typing import List, Literal, Optional
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 
@@ -73,6 +74,24 @@ class Settings(BaseSettings):
     PASSWORD_EXPIRY_DAYS: int = 90
     PASSWORD_HISTORY_COUNT: int = 5
     FIRST_LOGIN_PASSWORD_EXPIRY_HOURS: int = 24
+
+    # Password expiry at login (days since password_changed_at):
+    #   age < EXPIRY - WARNING      normal access
+    #   EXPIRY - WARNING <= age     access, plus "expires in N days"
+    #   age >= EXPIRY               no session until the password is changed
+    # MODE: "enforce" blocks expired passwords, "warn" only warns, "off" disables.
+    PASSWORD_EXPIRY_WARNING_DAYS: int = 10
+    PASSWORD_EXPIRY_MODE: Literal["enforce", "warn", "off"] = "enforce"
+    # Roles whose passwords never expire. Empty: the policy applies to every user,
+    # Superadmin included (PTC's decision; BRD 3.12.2 had exempted Superadmin).
+    # Comma-separated role names ("superadmin,admin"); a JSON list also works. Kept a
+    # string because a List setting refuses plain text and the service would not start.
+    PASSWORD_EXPIRY_EXEMPT_ROLES: str = ""
+    # Rollout lever: age is never counted from before this date, so setting it to
+    # the deploy date gives every existing account a fresh cycle instead of
+    # blocking all of them at their next login. Unset = count from the real change.
+    PASSWORD_EXPIRY_CLOCK_START: Optional[datetime] = None
+    PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES: int = 10
     
     # Account Lockout Configuration
     MAX_LOGIN_ATTEMPTS: int = 5
@@ -136,6 +155,30 @@ class Settings(BaseSettings):
     ADMIN_EMAIL: str = os.getenv("ADMIN_EMAIL", "admin@epms.com")
     ADMIN_INITIAL_PASSWORD: str = os.getenv("ADMIN_INITIAL_PASSWORD", "")
     
+    @field_validator("PASSWORD_EXPIRY_CLOCK_START", mode="before")
+    @classmethod
+    def _parse_clock_start(cls, value):
+        # "PASSWORD_EXPIRY_CLOCK_START=" with nothing after it means not set; left to
+        # pydantic it is an invalid date and the auth service refuses to start.
+        # A date is parsed here as local midnight: pydantic 2.6 (the auth service's
+        # pin) would read "2026-10-01" as UTC midnight, 05:30 on an IST host.
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return None
+            try:
+                return datetime.fromisoformat(text)
+            except ValueError:
+                return value
+        return value
+
+    @field_validator("PASSWORD_EXPIRY_MODE", mode="before")
+    @classmethod
+    def _normalise_expiry_mode(cls, value):
+        if isinstance(value, str):
+            return value.strip().lower() or "enforce"
+        return value
+
     @model_validator(mode='after')
     def set_environment_config(self):
         """Set environment-aware configurations after validation"""

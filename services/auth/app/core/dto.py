@@ -27,6 +27,7 @@ class UserDTO:
     mfa_enabled: bool
     mfa_setup_complete: bool
     accessible_menus: list = None  # List of accessible menu IDs
+    password_changed_at: Optional[datetime] = None  # read by the expiry check; not put in tokens
     
     @classmethod
     def from_db_document(cls, user_doc: Dict[str, Any]) -> 'UserDTO':
@@ -48,7 +49,8 @@ class UserDTO:
             password_expires_at=user_doc.get("password_expires_at"),
             mfa_enabled=user_doc.get("mfa_enabled", False),
             mfa_setup_complete=user_doc.get("mfa_setup_complete", False),
-            accessible_menus=[]  # Will be populated by user repository when fetching permissions
+            accessible_menus=[],  # Will be populated by user repository when fetching permissions
+            password_changed_at=user_doc.get("password_changed_at"),
         )
     
     def to_dict(self) -> Dict[str, Any]:
@@ -88,6 +90,7 @@ class AuthUserDTO:
     mfa_enabled: bool
     mfa_setup_complete: bool
     accessible_menus: list = None  # List of accessible menu IDs
+    password_changed_at: Optional[datetime] = None  # read by the expiry check; not put in tokens
     
     @classmethod
     def from_user_dto(cls, user_dto: UserDTO) -> 'AuthUserDTO':
@@ -104,7 +107,8 @@ class AuthUserDTO:
             created_at=user_dto.created_at,
             mfa_enabled=user_dto.mfa_enabled,
             mfa_setup_complete=user_dto.mfa_setup_complete,
-            accessible_menus=user_dto.accessible_menus or []
+            accessible_menus=user_dto.accessible_menus or [],
+            password_changed_at=user_dto.password_changed_at,
         )
     
     def to_dict(self) -> Dict[str, Any]:

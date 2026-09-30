@@ -2,7 +2,7 @@
 JWT Token Service for authentication
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 import uuid
@@ -70,6 +70,34 @@ class JWTService:
         encoded_jwt = jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
         return encoded_jwt
     
+    def create_password_change_token(self, user_id: str, username: str) -> str:
+        """
+        Token for the expired-password screen: it lets its holder change the
+        password and nothing else. It deliberately carries no ``sub`` or
+        ``user_id`` -- processing's middleware accepts any signed token with one
+        of those, and libs' validator requires ``sub`` -- so no service can
+        mistake it for a session. Expiry is anchored to UTC so the lifetime is
+        the one configured, not that plus the host's UTC offset.
+        """
+        expire = datetime.now(timezone.utc) + timedelta(minutes=settings.PASSWORD_CHANGE_TOKEN_EXPIRE_MINUTES)
+        to_encode = {
+            "password_change_user_id": user_id,
+            "username": username,
+            "type": "password_change",
+            "exp": expire,
+        }
+        return jwt.encode(to_encode, self.secret_key, algorithm=self.algorithm)
+
+    def verify_password_change_token(self, token: str) -> Optional[Dict[str, Any]]:
+        """Verify a password-change token; single use, so a spent one is refused."""
+        payload = self.verify_token(token)
+        if payload and payload.get("type") == "password_change" and payload.get("password_change_user_id"):
+            from .redis_blacklist import redis_blacklist_service
+            if redis_blacklist_service.is_temporary_token_blacklisted(token):
+                return None
+            return payload
+        return None
+
     def verify_token(self, token: str) -> Optional[Dict[str, Any]]:
         """Verify and decode token"""
         try:
