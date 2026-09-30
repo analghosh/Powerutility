@@ -18,7 +18,7 @@ Where each column comes from (verified block by block against EDP's sheet for
   It tracks the sheet far better than the frozen intraday figure the dashboard
   plots (26 of 34 blocks within 10 MW against 2); the intraday figure is the
   fallback when no revision is stored.
-* Remarks — `shift_status_remarks`, typed on the screen.
+* Remarks and the Shift Person Name — `shift_status_entries`, typed on the screen.
 
 The definitions (what a shift covers, net schedule, deviation, when a remark is
 due) live in `helpers/shift_status.py`.
@@ -33,6 +33,7 @@ from zoneinfo import ZoneInfo
 
 from ..analytics.models import AnalyticsQueryRequest
 from ..helpers import shift_status as rules
+from ..repository.shift_status_entries_repository import SHIFT_PERSON_BLOCK
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,11 @@ REMARK_DAY_OFFSETS = (1, 0, -1, -2)
 REMARK_WINDOW_TEXT = "tomorrow, today, yesterday and the day before"
 IST = ZoneInfo("Asia/Kolkata")
 
+#: The Shift Person Name is one per date, typed for today or tomorrow only, and can
+#: be changed as often as the desk likes (PTC, 2026-09-30). Offsets as above.
+SHIFT_PERSON_DAY_OFFSETS = (1, 0)
+SHIFT_PERSON_WINDOW_TEXT = "today and tomorrow"
+
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
 Grid = Dict[Tuple[str, int], Optional[float]]
@@ -93,6 +99,12 @@ def _ist_today() -> date:
 def editable_dates(today: date) -> Set[str]:
     """The delivery dates whose blocks may still get a remark."""
     return {(today + timedelta(days=offset)).isoformat() for offset in REMARK_DAY_OFFSETS}
+
+
+def shift_person_dates(today: date) -> Set[str]:
+    """The dates whose Shift Person Name may still be typed or changed."""
+    return {(today + timedelta(days=offset)).isoformat()
+            for offset in SHIFT_PERSON_DAY_OFFSETS}
 
 
 def _parse_date(value: str, field: str) -> date:
@@ -156,13 +168,13 @@ def _forecast_grid(docs: List[dict]) -> Dict[Tuple[str, int], Tuple[float, str]]
 class ReportsShiftStatusService:
 
     def __init__(self, analytics: Any = None, forecast_repository: Any = None,
-                 remarks_repository: Any = None,
+                 entries_repository: Any = None,
                  shifts_loader: Optional[Callable[[], Any]] = None,
                  today: Optional[Callable[[], date]] = None):
         self._today = today or _ist_today
         self._analytics = analytics
         self._forecast_repository = forecast_repository
-        self._remarks_repository = remarks_repository
+        self._entries_repository = entries_repository
         self._shifts_loader = shifts_loader
 
     # ------------------------------------------------------------- plumbing
@@ -184,12 +196,12 @@ class ReportsShiftStatusService:
         return self._forecast_repository
 
     @property
-    def remarks_repository(self):
-        if self._remarks_repository is None:
-            from ..repository.shift_status_remarks_repository import (
-                shift_status_remarks_repository)
-            self._remarks_repository = shift_status_remarks_repository
-        return self._remarks_repository
+    def entries_repository(self):
+        if self._entries_repository is None:
+            from ..repository.shift_status_entries_repository import (
+                shift_status_entries_repository)
+            self._entries_repository = shift_status_entries_repository
+        return self._entries_repository
 
     async def _load_shifts(self) -> List[dict]:
         if self._shifts_loader is None:
@@ -236,7 +248,9 @@ class ReportsShiftStatusService:
         row_dates = sorted({d for _day, rows in layout for d, _b in rows})
         span_from, span_to = row_dates[0].isoformat(), row_dates[-1].isoformat()
 
-        main, plants, forecast_docs, remarks = await asyncio.gather(
+        # Remarks are keyed on each row's date, names on each section's; one read.
+        entry_dates = set(row_dates) | set(days)
+        main, plants, forecast_docs, entries = await asyncio.gather(
             self.analytics.fetch(AnalyticsQueryRequest(
                 from_date=span_from, to_date=span_to, datasets=list(DATASETS))),
             self.analytics.fetch(AnalyticsQueryRequest(
@@ -244,7 +258,7 @@ class ReportsShiftStatusService:
                 plants=list(rules.NON_SRLDC_PLANTS))),
             self.forecast_repository.find_by_date_range_and_block_range(
                 span_from, span_to, 1, rules.BLOCKS_PER_DAY, "IDF"),
-            self.remarks_repository.find_for_dates(row_dates),
+            self.entries_repository.find_for_dates(entry_dates),
         )
         grids = _series_grids(main)
         plant_grids = _series_grids(plants)
@@ -267,16 +281,21 @@ class ReportsShiftStatusService:
                 f"{', '.join(sorted(markets))} on {iso} repeat DAM block for block "
                 "and are left out of I-DAM.")
 
-        writable = editable_dates(self._today())
+        today = self._today()
+        writable = editable_dates(today)
+        person_writable = shift_person_dates(today)
         sections = []
         for day, rows in layout:
+            iso_day = day.isoformat()
             blocks = [self._row(d.isoformat(), b, grids, non_srldc, realtime,
-                                remarks, skipped, writable) for d, b in rows]
-            section_remarks = [remarks[(d.isoformat(), b)] for d, b in rows
-                               if (d.isoformat(), b) in remarks]
+                                entries, skipped, writable) for d, b in rows]
+            section_remarks = [entries[(d.isoformat(), b)] for d, b in rows
+                               if (d.isoformat(), b) in entries]
             sections.append({
-                "date": day.isoformat(),
-                "shift_person": rules.section_person(section_remarks),
+                "date": iso_day,
+                **self._shift_person(entries.get((iso_day, SHIFT_PERSON_BLOCK)),
+                                     section_remarks),
+                "shift_person_editable": iso_day in person_writable,
                 "block_count": len(blocks),
                 "drawal_block_count": sum(r["actual_drawal"] is not None for r in blocks),
                 "over_threshold_count": sum(
@@ -294,8 +313,27 @@ class ReportsShiftStatusService:
             "shifts": options,
             "remark_threshold_mw": rules.REMARK_THRESHOLD_MW,
             "remark_dates": sorted(writable),
+            "shift_person_dates": sorted(person_writable),
             "sections": sections,
             "warnings": warnings,
+        }
+
+    @staticmethod
+    def _shift_person(entered: Optional[dict], section_remarks: List[dict]) -> dict:
+        """The typed names for the date, else whoever wrote the latest remark."""
+        if entered and entered.get("names"):
+            return {
+                "shift_person": entered["names"],
+                "shift_person_source": "entered",
+                "shift_person_updated_by": entered.get("updated_by_name"),
+                "shift_person_updated_at": _utc_iso(entered.get("updated_at")),
+            }
+        derived = rules.section_person(section_remarks)
+        return {
+            "shift_person": derived,
+            "shift_person_source": "remarks" if derived else None,
+            "shift_person_updated_by": None,
+            "shift_person_updated_at": None,
         }
 
     @staticmethod
@@ -368,7 +406,7 @@ class ReportsShiftStatusService:
     @staticmethod
     def validate_remarks(entries: Any, writable: Set[str]) -> List[dict]:
         """Refuse anything the screen could not have sent."""
-        from ..repository.shift_status_remarks_repository import MAX_REMARK_LENGTH
+        from ..repository.shift_status_entries_repository import MAX_REMARK_LENGTH
 
         if not isinstance(entries, list) or not entries:
             raise ValueError("remarks must be a non-empty list")
@@ -409,18 +447,45 @@ class ReportsShiftStatusService:
         which, rather than having half the batch saved behind its back.
         """
         clean = self.validate_remarks(entries, editable_dates(self._today()))
-        existing = await self.remarks_repository.find_for_dates(
+        existing = await self.entries_repository.find_for_dates(
             {_parse_date(e["date"], "date") for e in clean})
         taken = [{"date": e["date"], "time_block": e["time_block"]}
                  for e in clean if (e["date"], e["time_block"]) in existing]
         if taken:
             raise RemarkLocked(taken)
-        result = await self.remarks_repository.insert_new(
+        result = await self.entries_repository.insert_new(
             clean, user_id=user_id, username=username)
         if result["locked"]:
             # Another operator saved one of these blocks in the last instant.
             raise RemarkLocked(result["locked"])
         return {"saved": result["saved"], "blocks": len(clean)}
+
+    # --------------------------------------------------------- shift person
+
+    async def save_shift_person(self, day: Any, names: Any, *, user_id: str,
+                                username: str) -> dict:
+        """Save the date's Shift Person Name, replacing the one before."""
+        iso = _parse_date(day, "date").isoformat()
+        if not isinstance(names, str):
+            raise ValueError("names must be text")
+        clean = rules.normalise_names(names)
+        if not clean:
+            raise ValueError("Enter at least one name")
+        if len(clean) > rules.MAX_SHIFT_PERSON_LENGTH:
+            raise ValueError(
+                f"Shift Person Name can be at most {rules.MAX_SHIFT_PERSON_LENGTH} "
+                "characters")
+        if iso not in shift_person_dates(self._today()):
+            raise ValueError(
+                f"Shift Person Name can only be entered for {SHIFT_PERSON_WINDOW_TEXT}")
+        saved = await self.entries_repository.set_shift_person(
+            iso, clean, user_id=user_id, username=username)
+        return {
+            "date": iso,
+            "shift_person": saved["names"],
+            "shift_person_updated_by": saved.get("updated_by_name"),
+            "shift_person_updated_at": _utc_iso(saved.get("updated_at")),
+        }
 
 
 reports_shift_status_service = ReportsShiftStatusService()
