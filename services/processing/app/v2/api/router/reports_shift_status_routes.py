@@ -1,6 +1,6 @@
 """
 Reports Shift Status API — PTC's shift sheet: forecasts, SRLDC net schedule, drawal,
-deviation, bids and trades per block, with the shift desk's remarks.
+deviation, bids and trades per block, with the shift desk's remarks and names.
 """
 
 import logging
@@ -39,6 +39,21 @@ class ShiftStatusRemarksRequest(BaseModel):
                     "A submitted remark is final; dates are limited to tomorrow, "
                     "today, yesterday and the day before (IST).",
     )
+
+
+class ShiftPersonRequest(BaseModel):
+    date: str = Field(..., description="YYYY-MM-DD; today or tomorrow (IST)")
+    names: str = Field(
+        ..., description="One or more names separated by commas, e.g. 'ajay, vijay'. "
+                         "Replaces the date's earlier names.")
+
+
+def _signed_in_user_id(user_context: Dict[str, Any], action: str) -> str:
+    user_id = user_context.get("user_id")
+    if not user_id or user_id == "anonymous":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
+                            detail=f"Sign in to save {action}.")
+    return str(user_id)
 
 
 def _audit(audit_logger: AuditLogger, request: Request, user_context: Dict[str, Any], *,
@@ -189,13 +204,10 @@ async def save_shift_status_remarks(
     before (IST).
     Nothing is written if any block in the request already has a remark.
     """
-    user_id = user_context.get("user_id")
-    if not user_id or user_id == "anonymous":
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="Sign in to save remarks.")
+    user_id = _signed_in_user_id(user_context, "remarks")
     try:
         result = await reports_shift_status_service.save_remarks(
-            body.remarks, user_id=str(user_id),
+            body.remarks, user_id=user_id,
             username=user_context.get("username") or str(user_id))
     except RemarkLocked as exc:
         _audit(audit_logger, request, user_context, action="reports_shift_status_remarks",
@@ -223,4 +235,51 @@ async def save_shift_status_remarks(
            success=True, message="User submitted shift status remarks",
            remark_blocks=[f"{r.get('date')}#{r.get('time_block')}" for r in body.remarks],
            **result)
+    return result
+
+
+@router.put(
+    "/shift-person",
+    response_model=None,
+    status_code=status.HTTP_200_OK,
+    summary="Save the Shift Person Name for a date",
+    responses={401: {"description": "Not signed in"},
+               422: {"description": "No name, too long, or a date outside the window"}},
+)
+async def save_shift_status_shift_person(
+    request: Request,
+    body: ShiftPersonRequest,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    """
+    One Shift Person Name per date, shown in every shift view of that date. It can
+    be entered for today and tomorrow (IST) and changed as often as needed; each
+    save replaces the one before.
+    """
+    user_id = _signed_in_user_id(user_context, "the Shift Person Name")
+    try:
+        result = await reports_shift_status_service.save_shift_person(
+            body.date, body.names, user_id=user_id,
+            username=user_context.get("username") or user_id)
+    except ValueError as exc:
+        _audit(audit_logger, request, user_context,
+               action="reports_shift_status_shift_person", success=False,
+               message="Shift Person Name refused", failure_reason=str(exc),
+               http_status=422, date=body.date)
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.exception("Saving the shift person name failed")
+        _audit(audit_logger, request, user_context,
+               action="reports_shift_status_shift_person", success=False,
+               message="Shift Person Name failed", failure_reason=str(exc),
+               http_status=500, date=body.date)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to save the Shift Person Name.") from exc
+
+    _audit(audit_logger, request, user_context, action="reports_shift_status_shift_person",
+           success=True, message="User saved the Shift Person Name",
+           date=result["date"], shift_person=result["shift_person"])
     return result
