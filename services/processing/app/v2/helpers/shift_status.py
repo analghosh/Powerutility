@@ -34,6 +34,9 @@ REMARK_THRESHOLD_MW = 15.0
 #: Widest range one request may cover: a month of full days is ~3,000 rows.
 MAX_RANGE_DAYS = 31
 
+#: Longest Shift Person Name kept: room for a desk's worth of names.
+MAX_SHIFT_PERSON_LENGTH = 200
+
 #: The markets whose sum is I-DAM, and the one the other two are checked against.
 IDAM_MARKETS: Tuple[str, ...] = ("DAM", "GDAM", "HPDAM")
 DAM = "DAM"
@@ -157,8 +160,19 @@ def round_mw(value: Optional[float]) -> Optional[float]:
     return None if value is None else round(float(value), 2)
 
 
+def normalise_names(typed: str) -> str:
+    """The Shift Person Name as stored: `"ajay,vijay "` becomes `"ajay, vijay"`.
+
+    The desk types one or more names separated by commas. Each name keeps its own
+    spelling; only the spacing is tidied, and empty names between commas are
+    dropped, so text that names nobody comes back empty.
+    """
+    names = (" ".join(part.split()) for part in typed.split(","))
+    return ", ".join(name for name in names if name)
+
+
 def section_person(remarks: Sequence[dict]) -> Optional[str]:
-    """Who last saved a remark in the section — the sheet's Shift Person Name."""
+    """Who last saved a remark in the section — the fallback Shift Person Name."""
     dated = [r for r in remarks if r.get("updated_at") and r.get("updated_by_name")]
     if not dated:
         return None

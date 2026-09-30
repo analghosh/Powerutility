@@ -201,8 +201,8 @@ class Settings(BaseSettings):
     MONGODB_DAM_SCHEDULING_COLLECTION: str = "serve_dam_scheduling"
     MONGODB_DAM_SCHEDULING_STAGING_COLLECTION: str = "dam_scheduling_staging"
 
-    # Shift Status Report: per-block remarks typed on the screen
-    MONGODB_SHIFT_STATUS_REMARKS_COLLECTION: str = "shift_status_remarks"
+    # Shift Status Report: per-block remarks and each date's Shift Person Name
+    MONGODB_SHIFT_STATUS_ENTRIES_COLLECTION: str = "shift_status_entries"
 
     # Analytics Dashboard
     MONGODB_ANALYTICS_JOBS_COLLECTION: str = "analytics_export_jobs"
