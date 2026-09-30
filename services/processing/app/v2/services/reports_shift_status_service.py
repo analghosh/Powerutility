@@ -59,9 +59,11 @@ FORECAST_SOURCES = (("csv", "Manual"), ("rtm_forecast_api", "Auto"))
 #: One save covers at most one section, and a section is at most 96 blocks.
 MAX_REMARKS_PER_SAVE = 96
 
-#: Remarks may be written for blocks of today and the two days before (PTC,
-#: 2026-09-29), in IST — the shift desk's clock.
-REMARK_WINDOW_DAYS = 3
+#: Remarks may be written for blocks of tomorrow, today and the two days before,
+#: in IST — the shift desk's clock (PTC: today and the two days before on
+#: 2026-09-29, tomorrow added on 2026-09-30). Offsets are days after today.
+REMARK_DAY_OFFSETS = (1, 0, -1, -2)
+REMARK_WINDOW_TEXT = "tomorrow, today, yesterday and the day before"
 IST = ZoneInfo("Asia/Kolkata")
 
 _ISO_DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -90,7 +92,7 @@ def _ist_today() -> date:
 
 def editable_dates(today: date) -> Set[str]:
     """The delivery dates whose blocks may still get a remark."""
-    return {(today - timedelta(days=i)).isoformat() for i in range(REMARK_WINDOW_DAYS)}
+    return {(today + timedelta(days=offset)).isoformat() for offset in REMARK_DAY_OFFSETS}
 
 
 def _parse_date(value: str, field: str) -> date:
@@ -390,8 +392,8 @@ class ReportsShiftStatusService:
                 raise ValueError(f"Block {block} of {day}: a remark cannot be empty")
             if day not in writable:
                 raise ValueError(
-                    f"Block {block} of {day}: remarks can only be entered for today, "
-                    "yesterday and the day before")
+                    f"Block {block} of {day}: remarks can only be entered for "
+                    f"{REMARK_WINDOW_TEXT}")
             if len(remark.strip()) > MAX_REMARK_LENGTH:
                 raise ValueError(f"A remark can be at most {MAX_REMARK_LENGTH} characters")
             if (day, block) in seen:
