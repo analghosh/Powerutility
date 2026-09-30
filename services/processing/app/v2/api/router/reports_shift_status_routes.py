@@ -36,8 +36,8 @@ class ShiftStatusRemarksRequest(BaseModel):
     remarks: List[Dict[str, Any]] = Field(
         ...,
         description="Blocks to submit: {date: YYYY-MM-DD, time_block: 1-96, remark}. "
-                    "A submitted remark is final; dates are limited to today, "
-                    "yesterday and the day before (IST).",
+                    "A submitted remark is final; dates are limited to tomorrow, "
+                    "today, yesterday and the day before (IST).",
     )
 
 
@@ -185,7 +185,8 @@ async def save_shift_status_remarks(
 ):
     """
     Write each block's remark once. A submitted remark cannot be changed or cleared,
-    and blocks can only be remarked for today, yesterday and the day before (IST).
+    and blocks can only be remarked for tomorrow, today, yesterday and the day
+    before (IST).
     Nothing is written if any block in the request already has a remark.
     """
     user_id = user_context.get("user_id")
