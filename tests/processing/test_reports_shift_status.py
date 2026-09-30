@@ -128,7 +128,7 @@ FORECAST_DOCS = [
 ]
 
 
-TODAY = datetime(2026, 9, 29).date()  # remarks open for 27, 28 and 29 Sep
+TODAY = datetime(2026, 9, 29).date()  # remarks open for 27, 28, 29 and 30 Sep
 
 
 def _service(grids=GRIDS, docs=FORECAST_DOCS, remarks=None, shifts=SHIFTS, today=TODAY):
@@ -319,13 +319,13 @@ def test_remarks_the_screen_could_not_have_sent_are_refused(entries, message):
         ReportsShiftStatusService.validate_remarks(entries, OPEN)
 
 
-def test_the_remark_window_is_today_yesterday_and_the_day_before():
-    assert editable_dates(TODAY) == {"2026-09-27", "2026-09-28", "2026-09-29"}
+def test_the_remark_window_is_tomorrow_today_yesterday_and_the_day_before():
+    assert editable_dates(TODAY) == {"2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30"}
 
 
-@pytest.mark.parametrize("day", ["2026-09-26", "2026-09-30"])
+@pytest.mark.parametrize("day", ["2026-09-26", "2026-10-01"])
 def test_a_remark_outside_the_window_is_refused(day):
-    with pytest.raises(ValueError, match="today, yesterday and the day before"):
+    with pytest.raises(ValueError, match="tomorrow, today, yesterday and the day before"):
         ReportsShiftStatusService.validate_remarks(
             [{"date": day, "time_block": 1, "remark": "x"}], OPEN)
 
@@ -335,7 +335,7 @@ def test_rows_say_whether_they_can_still_take_a_remark():
     report = _report(_service(remarks=remarks))
     assert _block(report, "2026-09-28", 63)["remark_editable"] is False  # submitted
     assert _block(report, "2026-09-28", 64)["remark_editable"] is True
-    assert report["remark_dates"] == ["2026-09-27", "2026-09-28", "2026-09-29"]
+    assert report["remark_dates"] == ["2026-09-27", "2026-09-28", "2026-09-29", "2026-09-30"]
     old = _report(_service(today=datetime(2026, 10, 5).date()))
     assert old["sections"][0]["editable_count"] == 0
 
@@ -344,6 +344,15 @@ def test_a_night_shift_row_on_the_next_day_uses_its_own_date_for_the_window():
     report = _report(_service(today=datetime(2026, 10, 1).date()), shift_id="c")
     assert _block(report, "2026-09-28", 90)["remark_editable"] is False  # 3 days back
     assert _block(report, "2026-09-29", 1)["remark_editable"] is True
+
+
+def test_tomorrows_blocks_already_take_a_remark():
+    report = _report(_service(), from_date="2026-09-30", to_date="2026-09-30")
+    assert report["sections"][0]["editable_count"] == 34
+    result = asyncio.run(_service().save_remarks(
+        [{"date": "2026-09-30", "time_block": 63, "remark": "Planned outage"}],
+        user_id="u1", username="sugumar"))
+    assert result == {"saved": 1, "blocks": 1}
 
 
 def test_submitting_records_who():
