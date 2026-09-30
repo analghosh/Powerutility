@@ -115,6 +115,32 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.error(f"Failed to ensure bid price parameter defaults: {e}")
 
+    # The analytics dashboard's peak/off-peak bands are defined in Masters →
+    # Parameters; seed the five keys empty so PTC can find and fill them.
+    try:
+        from .v2.services.analytics_service import ensure_block_band_parameters
+        created = await ensure_block_band_parameters()
+        if created:
+            logger.info(f"Auto-created analytics block band parameters: {created}")
+    except Exception as e:
+        logger.error(f"Failed to ensure analytics block band parameters: {e}")
+
+    # Analytics read-path indexes, plus the unique user_id on the preference rows.
+    # Runs here rather than as a manual deploy step for the same reason every block
+    # above does: a step that must be remembered is a step that gets missed, and the
+    # failure mode is silent — `demand_serve` COLLSCANs on both sides and the screen
+    # merely feels slow. Idempotent, `background=True`, and each index is caught
+    # individually inside `apply`, so a restart costs nothing and cannot be blocked by
+    # one bad index. Still runnable by hand ahead of a deploy:
+    #   ./.venv/bin/python -m migrations.analytics_indexes_2026_09_17
+    try:
+        from migrations.analytics_indexes_2026_09_17 import apply as apply_analytics_indexes
+        from .v2.repository.analytics_repository import AnalyticsRepository
+        created = await apply_analytics_indexes(AnalyticsRepository().db)
+        logger.info(f"Analytics indexes ensured: {len(created)}")
+    except Exception as e:
+        logger.error(f"Failed to ensure analytics indexes: {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down EPMS Processing Service...")
@@ -162,6 +188,9 @@ from .v2.api.router.idf_forecast_switch_routes import router as idf_forecast_swi
 from .v2.api.router.forecast_serve_routes import router as forecast_serve_router
 from .v2.api.router.demand_serve_historical_routes import router as demand_serve_historical_router
 from .v2.api.router.reports_forecast_routes import router as reports_forecast_router
+from .v2.api.router.reports_plf_paf_routes import router as reports_plf_paf_router
+from .v2.api.router.reports_shift_status_routes import router as reports_shift_status_router
+from .v2.api.router.urs_routes import router as urs_router
 from .v2.api.router.bid_market_routes import router as bid_market_router
 from .v2.api.router.job_execution_routes import router as job_execution_router
 from .v2.api.router.supply_manual_routes import router as supply_manual_router
@@ -172,10 +201,12 @@ from .v2.api.router.iex_api_detail_routes import router as iex_api_detail_router
 from .v2.api.router.api_key_management_routes import router as api_key_management_router 
 from .v2.api.router.exchange_trade_routes import router as exchange_trade_router
 from .v2.api.router.exchange_dsm_routes import router as exchange_dsm_router
+from .v2.api.router.exchange_report_routes import router as exchange_report_router
 from .v2.api.router.exchange_config_routes import router as exchange_config_router
 from .v2.api.router.realtimemarket_routes import router as realtimemarket_router
 from .v2.api.router.cron_orchestrator_routes import router as cron_orchestrator_router
 from .v2.api.router.power_exchange_parameter_routes import router as power_exchange_parameter_router
+from .v2.api.router.analytics_routes import router as analytics_router
 
 
 # Get environment from settings (which has proper defaults and validation)
@@ -303,6 +334,13 @@ app.add_middleware(
     allow_credentials=settings.CORS_ALLOW_CREDENTIALS,
     allow_methods=["*"],
     allow_headers=["*"],
+    # `allow_headers` governs the REQUEST; a response header stays unreadable to
+    # JavaScript unless it is exposed. Without this the analytics export saves under
+    # the client's own guess at a name: the server sends
+    # `Content-Disposition: attachment; filename="..."`, curl sees it, and the
+    # browser cannot — so a user-chosen file name silently never reached the file.
+    # Found by driving the real UI; the API had looked correct throughout.
+    expose_headers=["Content-Disposition"],
 )
 
 
@@ -344,6 +382,9 @@ v2_app.include_router(idf_forecast_switch_router)
 v2_app.include_router(forecast_serve_router)
 v2_app.include_router(demand_serve_historical_router)
 v2_app.include_router(reports_forecast_router)
+v2_app.include_router(reports_plf_paf_router)
+v2_app.include_router(reports_shift_status_router)
+v2_app.include_router(urs_router)
 v2_app.include_router(bid_market_router)
 v2_app.include_router(job_execution_router)
 v2_app.include_router(supply_manual_router)
@@ -354,10 +395,12 @@ v2_app.include_router(iex_api_detail_router)
 v2_app.include_router(api_key_management_router)
 v2_app.include_router(exchange_trade_router)
 v2_app.include_router(exchange_dsm_router)
+v2_app.include_router(exchange_report_router)
 v2_app.include_router(exchange_config_router)
 v2_app.include_router(realtimemarket_router)
 v2_app.include_router(cron_orchestrator_router)
 v2_app.include_router(power_exchange_parameter_router)
+v2_app.include_router(analytics_router)
 
 
 

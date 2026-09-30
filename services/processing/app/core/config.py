@@ -197,6 +197,34 @@ class Settings(BaseSettings):
     MONGODB_DAM_SCHEDULING_COLLECTION: str = "serve_dam_scheduling"
     MONGODB_DAM_SCHEDULING_STAGING_COLLECTION: str = "dam_scheduling_staging"
 
+    # Shift Status Report: per-block remarks typed on the screen
+    MONGODB_SHIFT_STATUS_REMARKS_COLLECTION: str = "shift_status_remarks"
+
+    # Analytics Dashboard
+    MONGODB_ANALYTICS_JOBS_COLLECTION: str = "analytics_export_jobs"
+    MONGODB_ANALYTICS_PREFS_COLLECTION: str = "analytics_user_preferences"
+    ANALYTICS_TIMEZONE: str = "Asia/Kolkata"
+    # Re-scaled 2026-09-20: see the docstring on analytics/budget.py for the
+    # measurements. INLINE is "short enough to hold the request open"; above it the
+    # file is built in the background with progress, not refused. MAX is a memory
+    # limit, not a rendering one.
+    ANALYTICS_CELLS_INLINE: int = 1_500_000
+    ANALYTICS_CELLS_INLINE_CAPPED: int = 3_000_000
+    ANALYTICS_CELLS_MAX: int = 20_000_000
+    ANALYTICS_MAX_CONCURRENT: int = 8
+    ANALYTICS_GROUP_CONCURRENCY: int = 4
+    ANALYTICS_QUERY_MAX_TIME_MS: int = 20_000
+    ANALYTICS_CACHE_TTL_SECONDS: int = 300
+    ANALYTICS_CACHE_TTL_PAST_SECONDS: int = 86_400
+    # Generated export files. Defaults to <repo>/exports so a fresh checkout works
+    # without root: a /var/lib default failed on first use with Errno 13 because the
+    # scheduler's service user cannot create it. PROD should override this to a
+    # dedicated, service-user-owned path (see docs/EPMS-nginx-changes.md).
+    ANALYTICS_EXPORT_DIR: str = str(Path(__file__).resolve().parents[4] / "exports")
+    ANALYTICS_EXPORT_RETENTION_HOURS: int = 72
+    ANALYTICS_JOB_RETENTION_DAYS: int = 90
+    ANALYTICS_EXPORT_DISK_BUDGET_MB: int = 5_120
+
     SERVER_DEPLOYMENT: bool = True
     
     @model_validator(mode='after')

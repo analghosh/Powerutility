@@ -15,6 +15,10 @@ from libs.utils.csv_date_parse import parse_ingestion_date
 
 logger = logging.getLogger(__name__)
 
+#: Marks a record as un-requisitioned surplus rather than a schedule or an
+#: entitlement. Shared with the supply processor, which routes on it.
+URS_TYPE = "URS"
+
 
 class GridIndiaParser(BaseParser):
     """
@@ -98,6 +102,30 @@ class GridIndiaParser(BaseParser):
                 "approval_no": None
             })
 
+            # Aggregation storage for URS: plant_id -> {'volume': [], 'sg_bl': []}.
+            #
+            # URS here is what was AVAILED - surplus actually scheduled to this
+            # utility from another beneficiary's un-requisitioned capacity, per
+            # selling plant. It arrives as its own FullschdList entry, keyed on
+            # SellerAcronym like any other schedule.
+            #
+            # Grid India omits these entries entirely on a day when no URS was
+            # drawn, which is why a payload can show none: the NetScheduleSummary
+            # URS row is then 96 blocks of zero. An empty screen on such a day is
+            # correct, not a fault.
+            #
+            # Counted into aggregated_sg as well, deliberately: the schedule a
+            # plant is running to includes what was drawn from URS, and every SG
+            # figure on this platform has always been that sum. This accumulator
+            # is additive - it records what the URS half was, which SG alone
+            # cannot tell you.
+            aggregated_urs = defaultdict(lambda: {
+                "volume": [0.0] * 96,
+                "sg_bl": [0.0] * 96,
+                "revision_no": full_schd_revision_no,
+                "approval_no": None
+            })
+
             # Aggregation storage for DC (from EntitlementList): plant_id -> {'volume': [], 'onbar': [], 'offbar': []}
             aggregated_dc = defaultdict(lambda: {
                 "volume": [0.0] * 96,
@@ -153,7 +181,12 @@ class GridIndiaParser(BaseParser):
                 for schd_item in full_schd_list:
                     schd_type = schd_item.get("EnergyScheduleTypeName")
                     plant_id = schd_item.get("SellerAcronym")
-                    full_schd_data = schd_item.get("FullScheduleData", {})
+                    # ``or {}`` rather than a .get default throughout this
+                    # block: Grid India ships these keys PRESENT and null on
+                    # every entry that does not use them, so the default never
+                    # fires and the next .get would raise on None - aborting
+                    # the whole payload, DC and SG included, over one row.
+                    full_schd_data = schd_item.get("FullScheduleData") or {}
 
                     if not plant_id:
                         continue
@@ -167,22 +200,33 @@ class GridIndiaParser(BaseParser):
 
                     data_source = {}
                     if schd_type == "ISGS":
-                        isgs_data = full_schd_data.get("ISGSFullScheduleJsonData", {})
+                        isgs_data = full_schd_data.get("ISGSFullScheduleJsonData") or {}
                         isgs_gen_type = isgs_data.get("ISGSGeneratorTypeName")
                         if isgs_gen_type == "THERMAL":
-                            data_source = isgs_data.get("ISGSThermalFullScheduleJsonData", {})
+                            data_source = isgs_data.get("ISGSThermalFullScheduleJsonData") or {}
                         elif isgs_gen_type == "NUCLEAR":
-                            data_source = isgs_data.get("ISGSNuclearFullScheduleJsonData", {})
+                            data_source = isgs_data.get("ISGSNuclearFullScheduleJsonData") or {}
                         elif isgs_gen_type == "HYDRO":
                             # Bhutan hydro imports (Punatsangchhu_II) arrive here. Without
                             # this branch data_source stays empty and the plant is written
                             # as 96 blocks of zero rather than skipped — a silent loss.
-                            data_source = isgs_data.get("ISGSHydroFullScheduleJsonData", {})
+                            data_source = isgs_data.get("ISGSHydroFullScheduleJsonData") or {}
                     elif schd_type == "URS":
-                        urs_data = full_schd_data.get("URSFullScheduleJsonData", {})
-                        data_source = urs_data.get("URSThermalFullScheduleJsonData", {})
+                        urs_data = full_schd_data.get("URSFullScheduleJsonData") or {}
+                        # Grid India splits URS by fuel the same way it splits
+                        # ISGS. Reading only the thermal spelling is how the
+                        # nuclear DC rows came to be zero for months; a URS
+                        # block for a hydro or gas seller would fail the same
+                        # way, as 96 blocks of zero rather than a skip.
+                        data_source = (
+                            urs_data.get("URSThermalFullScheduleJsonData")
+                            or urs_data.get("URSNuclearFullScheduleJsonData")
+                            or urs_data.get("URSHydroFullScheduleJsonData")
+                            or urs_data.get("URSGasFullScheduleJsonData")
+                            or {}
+                        )
                     elif schd_type == "OA_REMC":
-                        data_source = full_schd_data.get("OAFullScheduleJsonData", {})
+                        data_source = full_schd_data.get("OAFullScheduleJsonData") or {}
 
                     if data_source:
                         vol_list = data_source.get("TotalDrwBoundrySchdAmt") or \
@@ -197,6 +241,7 @@ class GridIndiaParser(BaseParser):
 
                     # Aggregate
                     entry = aggregated_sg[plant_id]
+                    urs_entry = aggregated_urs[plant_id] if schd_type == "URS" else None
                     # Update revision if we found one? (Usually global, but just in case)
                     # Accumulate values
                     for idx in range(96):
@@ -223,6 +268,10 @@ class GridIndiaParser(BaseParser):
                                 
                         entry["volume"][idx] += v
                         entry["sg_bl"][idx] += b
+
+                        if urs_entry is not None:
+                            urs_entry["volume"][idx] += v
+                            urs_entry["sg_bl"][idx] += b
 
                 # 4. Process EntitlementList (DC) — the final entitlement is the DC before-loss value
                 entitlement_list = group.get("EntitlementList", [])
@@ -301,6 +350,26 @@ class GridIndiaParser(BaseParser):
                     "SG", 
                     agg["volume"], 
                     agg["revision_no"], 
+                    agg["approval_no"],
+                    sg_beforelosses_list=agg["sg_bl"],
+                    schedule_published_time=schedule_published_time
+                )
+
+            # Append URS Aggregated Records.
+            #
+            # Emitted under their own dc_sg so they ride the existing raw-data
+            # transport without being mistaken for a schedule: the supply
+            # processor diverts them to urs_serve and they never reach
+            # supply_serve. Written last so that a failure here cannot cost the
+            # DC and SG records that were already appended above.
+            for plant_id, agg in aggregated_urs.items():
+                self._append_records(
+                    raw_data,
+                    date_str,
+                    plant_id,
+                    URS_TYPE,
+                    agg["volume"],
+                    agg["revision_no"],
                     agg["approval_no"],
                     sg_beforelosses_list=agg["sg_bl"],
                     schedule_published_time=schedule_published_time

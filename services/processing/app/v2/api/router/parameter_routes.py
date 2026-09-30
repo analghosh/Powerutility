@@ -5,7 +5,7 @@ CRUD endpoints for parameter management with JWT authentication
 
 from fastapi import APIRouter, Request, HTTPException, status, Depends, Query, Body
 from typing import Dict, Any, Optional, List, Union
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from datetime import datetime
 import logging
 
@@ -666,6 +666,296 @@ async def set_active_exchange(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to save active exchange"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Shift master
+# ---------------------------------------------------------------------------
+_SHIFT_TIMING_DESCRIPTION = (
+    "Start-end window on the 1-24 clock in IST, half-open [start, end). "
+    "Hours only ('1-8', '1-24', '22-6') means :00 on both ends. "
+    "With minutes: '9:30-18:15', '1:00-8:30'. "
+    "Hour 24 is end-of-day and only valid as 24:00. "
+    "A start later than the end wraps past midnight; equal start and end is a full day."
+)
+
+
+class ShiftCreate(BaseModel):
+    shift_name: str = Field(..., min_length=1, description="Unique shift name")
+    shift_timing: str = Field(
+        ...,
+        description=_SHIFT_TIMING_DESCRIPTION,
+        examples=["1-8", "1-24", "22-6", "9:30-18:15"],
+    )
+
+    @field_validator("shift_name")
+    @classmethod
+    def strip_shift_name(cls, value: str) -> str:
+        name = value.strip()
+        if not name:
+            raise ValueError("shift_name is required")
+        return name
+
+
+class ShiftUpdate(BaseModel):
+    shift_name: Optional[str] = Field(None, min_length=1, description="Unique shift name")
+    shift_timing: Optional[str] = Field(
+        None,
+        description=_SHIFT_TIMING_DESCRIPTION,
+        examples=["1-8", "1-24", "22-6", "9:30-18:15"],
+    )
+
+    @field_validator("shift_name")
+    @classmethod
+    def strip_shift_name(cls, value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return value
+        name = value.strip()
+        if not name:
+            raise ValueError("shift_name cannot be empty")
+        return name
+
+
+class ShiftResponse(BaseModel):
+    id: str
+    shift_name: str
+    shift_timing: str
+
+
+class ShiftListResponse(BaseModel):
+    shifts: List[ShiftResponse]
+    total: int
+    timestamp: Optional[str] = None
+    correlation_id: Optional[str] = None
+
+
+@router.get(
+    "/shifts",
+    response_model=ShiftListResponse,
+    status_code=status.HTTP_200_OK,
+    summary="List shifts",
+    description=(
+        "Returns all configured shift names and windows. "
+        "shift_timing is returned exactly as stored "
+        "('1-8' or '9:30-18:15')."
+    ),
+)
+async def get_shifts(
+    request: Request,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    user_id = user_context.get("user_id", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        shifts = await parameter_controller.get_shifts()
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="shifts_list",
+            message="Shifts fetched successfully",
+            correlation_id=correlation_id,
+            count=len(shifts),
+            success=True,
+        )
+        return {
+            "shifts": shifts,
+            "total": len(shifts),
+            "timestamp": datetime.now().isoformat(),
+            "correlation_id": correlation_id,
+        }
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ShiftsListError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id,
+        )
+        logger.exception("Error fetching shifts")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to fetch shifts",
+        )
+
+
+@router.post(
+    "/shifts",
+    response_model=ShiftResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create shift",
+    description=(
+        "Create a unique shift name with a 1-24 window. "
+        "Accepts hours only ('9-18', '1-8', '22-6') or hours and minutes "
+        "('9:30-18:15'). Hour 24 is only valid as 24:00."
+    ),
+)
+async def create_shift(
+    request: Request,
+    body: ShiftCreate,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        result = await parameter_controller.create_shift(
+            body.shift_name,
+            body.shift_timing,
+            user_id=user_id,
+        )
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="shift_create",
+            message="Shift created successfully",
+            username=username,
+            correlation_id=correlation_id,
+            shift_name=result.get("shift_name"),
+            success=True,
+        )
+        return result
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ShiftCreateError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id,
+        )
+        logger.exception("Error creating shift")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to create shift",
+        )
+
+
+@router.put(
+    "/shifts/{shift_id}",
+    response_model=ShiftResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Update shift",
+    description=(
+        "Update a shift name and/or window by id. "
+        "shift_timing accepts hours only or hours and minutes; "
+        "the stored string is kept as submitted for minute format."
+    ),
+)
+async def update_shift(
+    request: Request,
+    shift_id: str,
+    body: ShiftUpdate,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        update_data = body.model_dump(exclude_unset=True)
+        if not update_data:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update",
+            )
+        result = await parameter_controller.update_shift(
+            shift_id,
+            shift_name=update_data.get("shift_name"),
+            shift_timing=update_data.get("shift_timing"),
+            user_id=user_id,
+        )
+        if not result:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Shift with ID {shift_id} not found",
+            )
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="shift_update",
+            message="Shift updated successfully",
+            username=username,
+            correlation_id=correlation_id,
+            shift_id=shift_id,
+            success=True,
+        )
+        return result
+    except HTTPException:
+        raise
+    except ValueError as e:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ShiftUpdateError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id,
+        )
+        logger.exception("Error updating shift")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update shift",
+        )
+
+
+@router.delete(
+    "/shifts/{shift_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Delete shift",
+    description="Delete a shift by id.",
+)
+async def delete_shift(
+    request: Request,
+    shift_id: str,
+    user_context: Dict[str, Any] = Depends(get_user_context),
+    audit_logger: AuditLogger = Depends(get_audit_logger),
+):
+    user_id = user_context.get("user_id", "anonymous")
+    username = user_context.get("username", "anonymous")
+    correlation_id = user_context.get("correlation_id", "unknown")
+    try:
+        deleted = await parameter_controller.delete_shift(shift_id)
+        if not deleted:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Shift with ID {shift_id} not found",
+            )
+        audit_logger.log_user_action(
+            service="processing",
+            user_id=user_id,
+            action="shift_delete",
+            message="Shift deleted successfully",
+            username=username,
+            correlation_id=correlation_id,
+            shift_id=shift_id,
+            success=True,
+        )
+        return None
+    except HTTPException:
+        raise
+    except Exception as e:
+        audit_logger.log_error_event(
+            service="processing",
+            error_name="ShiftDeleteError",
+            error_message=str(e),
+            user_id=user_id,
+            correlation_id=correlation_id,
+        )
+        logger.exception("Error deleting shift")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to delete shift",
         )
 
 
