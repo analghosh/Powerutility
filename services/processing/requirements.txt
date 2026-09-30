@@ -29,3 +29,5 @@ openpyxl==3.1.2
 PyJWT==2.8.0
 orjson==3.9.6
 pika>=1.3.0
+# Reads the exchange Daily Obligation Report PDFs; imported at start-up.
+pdfplumber>=0.11.0
