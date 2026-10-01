@@ -39,7 +39,7 @@ COLUMNS = [
     ("DAY Ahead Forecast", None, "day_ahead_forecast", 13),
     ("Real Time Expected Forecast", None, "real_time_forecast", 14),
     ("Net Schedule (As per SRLDC)", None, "net_schedule", 14),
-    ("Actual Drawal", None, "actual_drawal", 12),
+    ("Actual Drawal (As per SRLDC)", None, "actual_drawal", 12),
     ("Under Drawl(-)\nOver Drawl (+)", None, "deviation", 13),
     ("I-DAM Status", "Bid", "idam_bid", 10),
     ("I-DAM Status", "Traded", "idam_traded", 10),
