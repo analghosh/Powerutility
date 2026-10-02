@@ -435,12 +435,15 @@ class ExchangeAPIClient:
         page_number = 0
         page_size = 0
         
+        # GDAM's book takes a Type after Status that DAM and HP-DAM do not (GDAM 2.1 §10.1).
+        status_and_type = f"{status},ALL" if self.market_type == "gdam" else status
+
         # Market-aware: dam/gdam/hpdam each expose their own singlebid endpoint.
         url = (
             f"{self.base_url}/{self.market_type}/api/v2/singlebid/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{product_id},"
-            f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+            f"{bid_area_id},{status_and_type},{exception_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
 
@@ -744,12 +747,15 @@ class ExchangeAPIClient:
             - BidType: 'S' for Single Bid, 'B' for Block Bid
             - OCFSourceBidCategory: For carried forward DAM bid from GDAM (Renewable/Solar)
         """
+        # GDAM's trades take a Type after BidAreaId that DAM and HP-DAM do not (GDAM 2.1 §10.5).
+        bid_area_and_type = f"{bid_area_id},ALL" if self.market_type == "gdam" else bid_area_id
+
         # Market-aware: dam/gdam/hpdam each expose their own trades endpoint.
         url = (
             f"{self.base_url}/{self.market_type}/api/v2/trades/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{from_period},{to_period},"
-            f"{buy_sell},{bid_area_id},{trade_id},{order_id},{page_number},{page_size}"
+            f"{buy_sell},{bid_area_and_type},{trade_id},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
 
@@ -1117,11 +1123,15 @@ class ExchangeAPIClient:
         Returns:
             {DAMBlockBidDetails: [], TotalRecord: int}
         """
+        # GDAM's block book has Type and FetchDuplicate where DAM has ExceptionId
+        # (GDAM 2.1 §10.3); "N" fetches all orders, not only duplicates.
+        after_status = "ALL,N" if self.market_type == "gdam" else exception_id
+
         url = (
             f"{self.base_url}/{self.market_type}/api/v2/blockbid/"
             f"{self.login_user_id},{self.participant_id},{delivery_date},"
             f"{self.login_user_id},{self.portfolio_id},{from_period},{to_period},"
-            f"{buy_sell},{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+            f"{buy_sell},{bid_area_id},{status},{after_status},{order_id},{page_number},{page_size}"
         )
         headers = self._get_headers()
 
