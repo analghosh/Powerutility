@@ -360,16 +360,18 @@ class SchedulerExchangeAPIClient:
         period = "ALL"
         bid_area_id = "S2"
         status = "ALL"
+        gdam_type = "ALL"
         exception_id = 0
         order_id = 0
         page_number = 0
         page_size = 0
 
+        # GDAM's book takes a Type after Status that DAM's does not (GDAM 2.1 §10.1).
         url = (
             f"{base_url}/gdam/api/v2/singlebid/"
             f"{login_user_id},{participant_id},{delivery_date},"
             f"{login_user_id},{portfolio_id},{period},"
-            f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+            f"{bid_area_id},{status},{gdam_type},{exception_id},{order_id},{page_number},{page_size}"
         )
 
         headers = {"Content-Type": "application/json"}
@@ -726,16 +728,18 @@ class SchedulerExchangeAPIClient:
         period = "ALL"
         bid_area_id = "S2"
         status = "Executed"
+        gdam_type = "ALL"
         exception_id = 0
         order_id = 0
         page_number = 0
         page_size = 0
 
+        # GDAM's book takes a Type after Status that DAM's does not (GDAM 2.1 §10.1).
         url = (
             f"{base_url}/gdam/api/v2/singlebid/"
             f"{login_user_id},{participant_id},{delivery_date},"
             f"{login_user_id},{portfolio_id},{period},"
-            f"{bid_area_id},{status},{exception_id},{order_id},{page_number},{page_size}"
+            f"{bid_area_id},{status},{gdam_type},{exception_id},{order_id},{page_number},{page_size}"
         )
 
         headers = {
