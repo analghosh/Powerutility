@@ -502,4 +502,55 @@ async def get_gdam_single_trade_book(
     return await gdam_bidding_controller.get_dam_single_trade_book(date)
 
 
+# Registered on the authenticated router only: it makes IEX calls, so it gets no
+# /public twin.
+@router.get(
+    "/run-live-sync",
+    summary="Trigger GDAM Bid Trade Live Sync",
+    response_description="GDAM bid trade live sync result from scheduler",
+    response_model=Dict[str, Any],
+)
+async def run_gdam_live_sync(
+    request: Request,
+    bid_status_date: Optional[str] = Query(
+        None,
+        description="Delivery date in YYYY-MM-DD format. If not provided, syncs the date IEX currently offers.",
+    ),
+):
+    """
+    Trigger GDAM bid trade live sync via the scheduler service, for the given
+    delivery date or, without one, the date IEX currently offers.
+    Proxies the request to the scheduler's BidTradeLiveSyncProcessor.execute_gdam_live_sync().
+    """
+    import httpx
+    from services.processing.app.core.config import settings
+
+    endpoint = f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/bid-trade-live-sync/trigger-gdam"
+    params = {"delivery_date": bid_status_date} if bid_status_date else None
+
+    try:
+        logger.info(f"[GDAM Live Sync] Calling scheduler service at {endpoint} for {bid_status_date or 'current date'}")
+        async with httpx.AsyncClient(timeout=300.0) as client:
+            response = await client.post(endpoint, params=params)
+    except Exception as e:
+        logger.error(f"[GDAM Live Sync] Error calling scheduler service: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to trigger GDAM live sync: {str(e)}",
+        )
+
+    if response.status_code != 200:
+        # Pass the scheduler's verdict through: 400 is a bad date, 502 a failed IEX fetch.
+        try:
+            detail = response.json().get("detail", response.text)
+        except ValueError:
+            detail = response.text
+        logger.error(f"[GDAM Live Sync] Scheduler service returned error: {response.status_code} - {detail}")
+        raise HTTPException(status_code=response.status_code, detail=detail)
+
+    result = response.json()
+    logger.info(f"[GDAM Live Sync] Received response from scheduler: status={result.get('status')}")
+    return result
+
+
 __all__ = ["router", "public_router"]
