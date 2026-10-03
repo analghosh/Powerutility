@@ -150,12 +150,15 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
         logger.info("TESTING LOGS: Entering execute_gdam_live_sync")
         return await self._execute_sync("gdam", delivery_date)
 
-    async def execute_hpdam_live_sync(self) -> Dict[str, Any]:
+    async def execute_hpdam_live_sync(self, delivery_date: Optional[int] = None) -> Dict[str, Any]:
         """
         Execute HPDAM live sync.
+
+        delivery_date is an IEX delivery-date timestamp; omitted, the sync takes the
+        date IEX currently offers (T+1), as for GDAM.
         """
         logger.info("TESTING LOGS: Entering execute_hpdam_live_sync")
-        return await self._execute_sync("hpdam")
+        return await self._execute_sync("hpdam", delivery_date)
 
     async def execute_rtm_live_sync(self) -> Dict[str, Any]:
         """
