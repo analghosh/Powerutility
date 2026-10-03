@@ -501,4 +501,29 @@ async def get_hpdam_single_trade_book(
     return await hpdam_bidding_controller.get_dam_single_trade_book(date)
 
 
+# Registered on the authenticated router only: it makes IEX calls, so it gets no
+# /public twin.
+@router.get(
+    "/run-live-sync",
+    summary="Trigger HPDAM Bid Trade Live Sync",
+    response_description="HPDAM bid trade live sync result from scheduler",
+    response_model=Dict[str, Any],
+)
+async def run_hpdam_live_sync(
+    request: Request,
+    bid_status_date: Optional[str] = Query(
+        None,
+        description="Delivery date in YYYY-MM-DD format. If not provided, syncs the date IEX currently offers.",
+    ),
+):
+    """
+    Trigger HPDAM bid trade live sync via the scheduler service, for the given
+    delivery date or, without one, the date IEX currently offers.
+    Proxies the request to the scheduler's BidTradeLiveSyncProcessor.execute_hpdam_live_sync().
+    """
+    from services.processing.app.v2.helpers.day_ahead_live_sync import proxy_day_ahead_live_sync
+
+    return await proxy_day_ahead_live_sync("hpdam", bid_status_date)
+
+
 __all__ = ["router", "public_router"]
