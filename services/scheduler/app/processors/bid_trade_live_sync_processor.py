@@ -139,12 +139,16 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
         logger.info("TESTING LOGS: Entering execute_dam_live_sync")
         return await self._execute_sync("dam")
 
-    async def execute_gdam_live_sync(self) -> Dict[str, Any]:
+    async def execute_gdam_live_sync(self, delivery_date: Optional[int] = None) -> Dict[str, Any]:
         """
         Execute GDAM live sync.
+
+        delivery_date is an IEX delivery-date timestamp. Omitted, the sync takes the
+        date IEX currently offers (T+1); given, it fetches that date instead, which is
+        how a day that has already traded can be pulled in again.
         """
         logger.info("TESTING LOGS: Entering execute_gdam_live_sync")
-        return await self._execute_sync("gdam")
+        return await self._execute_sync("gdam", delivery_date)
 
     async def execute_hpdam_live_sync(self) -> Dict[str, Any]:
         """
@@ -160,7 +164,7 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
         logger.info("TESTING LOGS: Entering execute_rtm_live_sync")
         return await self._execute_sync("rtm")
 
-    async def _execute_sync(self, market: str) -> Dict[str, Any]:
+    async def _execute_sync(self, market: str, delivery_date: Optional[int] = None) -> Dict[str, Any]:
         """
         Common execution logic for sync.
         """
@@ -174,7 +178,9 @@ class BidTradeLiveSyncProcessor(BaseProcessor):
             logger.info(f"TESTING LOGS: [{job_name}] Starting execution...")
 
             # 1. Get Delivery Date(s)
-            if cfg["is_multi_date"]:
+            if delivery_date is not None:
+                delivery_dates = [delivery_date]
+            elif cfg["is_multi_date"]:
                 delivery_dates = await cfg["get_delivery_dates"]()
             else:
                 d_int = await cfg["get_delivery_dates"]()
