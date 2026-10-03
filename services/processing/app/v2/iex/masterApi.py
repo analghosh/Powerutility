@@ -1102,9 +1102,17 @@ class ExchangeAPIClient:
         Returns:
             {DAMBlockBidDetails: [], TotalRecord: int}
         """
-        # GDAM's block book has Type and FetchDuplicate where DAM has ExceptionId
-        # (GDAM 2.1 §10.3); "N" fetches all orders, not only duplicates.
-        after_status = "ALL,N" if self.market_type == "gdam" else exception_id
+        # GDAM's and HP-DAM's block books have FetchDuplicate where DAM has ExceptionId,
+        # GDAM with a Type before it (GDAM 2.1 §10.3, HPDAM 2.0 §10.3); "N" fetches all
+        # orders, not only duplicates. Both take BuySell as 0 (both) / 1 / 2, not "ALL".
+        if self.market_type == "gdam":
+            after_status = "ALL,N"
+        elif self.market_type == "hpdam":
+            after_status = "N"
+        else:
+            after_status = exception_id
+        if self.market_type in ("gdam", "hpdam") and buy_sell == "ALL":
+            buy_sell = "0"
 
         url = (
             f"{self.base_url}/{self.market_type}/api/v2/blockbid/"
@@ -1124,7 +1132,7 @@ class ExchangeAPIClient:
             except Exception:
                 data = response.text
 
-            await self._log_to_db(url, {"method": "GET"}, headers, data, "dam", "block-bid", "getDamBlockBids", delivery_date)
+            await self._log_to_db(url, {"method": "GET"}, headers, data, self.market_type, "block-bid", "getDamBlockBids", delivery_date)
 
             response.raise_for_status()
 

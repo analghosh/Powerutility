@@ -522,35 +522,9 @@ async def run_gdam_live_sync(
     delivery date or, without one, the date IEX currently offers.
     Proxies the request to the scheduler's BidTradeLiveSyncProcessor.execute_gdam_live_sync().
     """
-    import httpx
-    from services.processing.app.core.config import settings
+    from services.processing.app.v2.helpers.day_ahead_live_sync import proxy_day_ahead_live_sync
 
-    endpoint = f"{settings.SCHEDULER_SERVICE_URL}/api/v1/scheduler/bid-trade-live-sync/trigger-gdam"
-    params = {"delivery_date": bid_status_date} if bid_status_date else None
-
-    try:
-        logger.info(f"[GDAM Live Sync] Calling scheduler service at {endpoint} for {bid_status_date or 'current date'}")
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            response = await client.post(endpoint, params=params)
-    except Exception as e:
-        logger.error(f"[GDAM Live Sync] Error calling scheduler service: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to trigger GDAM live sync: {str(e)}",
-        )
-
-    if response.status_code != 200:
-        # Pass the scheduler's verdict through: 400 is a bad date, 502 a failed IEX fetch.
-        try:
-            detail = response.json().get("detail", response.text)
-        except ValueError:
-            detail = response.text
-        logger.error(f"[GDAM Live Sync] Scheduler service returned error: {response.status_code} - {detail}")
-        raise HTTPException(status_code=response.status_code, detail=detail)
-
-    result = response.json()
-    logger.info(f"[GDAM Live Sync] Received response from scheduler: status={result.get('status')}")
-    return result
+    return await proxy_day_ahead_live_sync("gdam", bid_status_date)
 
 
 __all__ = ["router", "public_router"]
