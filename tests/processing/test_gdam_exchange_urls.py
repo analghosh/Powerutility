@@ -1,9 +1,10 @@
 """
-The GDAM book and trade URLs follow IEX GDAM API 2.1, not DAM's.
+The GDAM book and trade URLs follow IEX GDAM API 2.1, and HP-DAM's follow HPDAM API 2.0, not DAM's.
 
-GDAM's single bid book and trade book take a Type that DAM and HP-DAM do not, and its
-block bid book has Type and FetchDuplicate where DAM has ExceptionId. Sent with DAM's
-parameter list, IEX answers 500 and the GDAM live sync stores nothing.
+GDAM's single bid book and trade book take a Type that DAM and HP-DAM do not. GDAM's
+and HP-DAM's block bid books have FetchDuplicate where DAM has ExceptionId (GDAM's with a
+Type before it) and take BuySell as 0/1/2. Sent with DAM's parameter list, IEX answers
+500 and the GDAM live sync stores nothing.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -103,8 +104,9 @@ class TestProcessingTradeBook:
         ]
 
     @pytest.mark.asyncio
-    async def test_dam_keeps_its_thirteen_parameters(self):
-        url = await processing_url("dam", "get_dam_trade_book", bid_area_id="S2")
+    @pytest.mark.parametrize("market", ["dam", "hpdam"])
+    async def test_dam_and_hpdam_keep_their_thirteen_parameters(self, market):
+        url = await processing_url(market, "get_dam_trade_book", bid_area_id="S2")
         assert params_after(url, "/trades/") == [
             "EDPA1", "N2DL0PTC0000", str(DELIVERY_DATE), "EDPA1", "S2PY0PTC0136",
             "ALL", "ALL", "0", "S2", "0", "0", "0", "0",
@@ -115,9 +117,19 @@ class TestProcessingBlockBidBook:
     @pytest.mark.asyncio
     async def test_gdam_sends_type_and_fetch_duplicate_instead_of_exception_id(self):
         url = await processing_url("gdam", "get_dam_block_bids")
+        # BuySell is 0 (both): GDAM takes 0/1/2, not "ALL".
         assert params_after(url, "/blockbid/") == [
             "EDPA1", "N2DL0PTC0000", str(DELIVERY_DATE), "EDPA1", "S2PY0PTC0136",
-            "ALL", "ALL", "ALL", "ALL", "ALL", "ALL", "N", "0", "0", "0",
+            "ALL", "ALL", "0", "ALL", "ALL", "ALL", "N", "0", "0", "0",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_hpdam_sends_fetch_duplicate_instead_of_exception_id(self):
+        url = await processing_url("hpdam", "get_dam_block_bids")
+        # HPDAM 2.0 §10.3: ...,{Status},{FetchDuplicate},{OrderId},...; BuySell 0 (both).
+        assert params_after(url, "/blockbid/") == [
+            "EDPA1", "N2DL0PTC0000", str(DELIVERY_DATE), "EDPA1", "S2PY0PTC0136",
+            "ALL", "ALL", "0", "ALL", "ALL", "N", "0", "0", "0",
         ]
 
     @pytest.mark.asyncio
